@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+    Server IP/port/mode configuration. Manual IP entry rather than defaulting to
+    open-sanctuary.local — there's no confirmed evidence Roku's network stack resolves
+    mDNS hostnames (its own device-discovery ecosystem uses SSDP, not mDNS), the same
+    reason the Android TV app needs manual entry. See docs/CLIENT_PAIRING.md for how
+    this console's identity is discoverable once an IP is known.
+-->
+<component name="SettingsScreen" extends="Group">
+    <interface>
+        <field id="serverIp" type="string" value="" />
+        <field id="serverPort" type="string" value="8080" />
+        <!-- "live" | "foldback" -->
+        <field id="displayMode" type="string" value="live" />
+        <field id="closed" type="boolean" value="false" alwaysNotify="true" />
+        <function name="openDialog" />
+    </interface>
+
+    <children>
+        <Rectangle width="1920" height="1080" color="0x000000CC" />
+
+        <Rectangle translation="[460, 220]" width="1000" height="600" color="0x1A2228FF">
+            <Label translation="[40, 30]" text="OpenSanctuary Server Configuration" font="font:LargeBoldSystemFont" color="0x00E5FFFF" />
+            <Label translation="[40, 80]" text="Enter the IP address of your OpenSanctuary presentation computer:" font="font:SmallSystemFont" color="0xB0BEC5FF" />
+
+            <Label translation="[40, 140]" text="Server IP Address:" font="font:MediumBoldSystemFont" color="0xFFFFFFFF" />
+            <Rectangle id="ipBox" translation="[40, 180]" width="600" height="50" color="0x263238FF">
+                <Label id="ipText" translation="[16, 12]" font="font:MediumBoldSystemFont" color="0xFFA726FF" />
+            </Rectangle>
+
+            <Label translation="[670, 140]" text="Port:" font="font:MediumBoldSystemFont" color="0xFFFFFFFF" />
+            <Rectangle id="portBox" translation="[670, 180]" width="280" height="50" color="0x263238FF">
+                <Label id="portText" translation="[16, 12]" font="font:MediumBoldSystemFont" color="0xFFFFFFFF" />
+            </Rectangle>
+
+            <Label translation="[40, 260]" text="Display Mode:" font="font:MediumBoldSystemFont" color="0xFFFFFFFF" />
+            <ButtonGroup id="modeButtonGroup" translation="[40, 300]" layoutDirection="horiz" itemSpacings="[20]">
+                <Button id="btnLive" text="Live (FOH Projection)" minWidth="380" />
+                <Button id="btnFoldback" text="Foldback (Stage Monitor)" minWidth="420" />
+            </ButtonGroup>
+
+            <ButtonGroup id="actionButtonGroup" translation="[40, 440]" layoutDirection="horiz" itemSpacings="[20]">
+                <Button id="btnEditIp" text="Edit IP Address" minWidth="280" />
+                <Button id="btnConnect" text="Save &amp; Connect" minWidth="300" />
+                <Button id="btnCancel" text="Cancel" minWidth="200" />
+            </ButtonGroup>
+
+            <Label translation="[40, 540]" text="Tip: Press [*] (Options) on your Roku remote anytime to reopen this menu." font="font:SmallSystemFont" color="0x78909CFF" />
+        </Rectangle>
+    </children>
+
+    <script type="text/brightscript" uri="pkg:/components/SettingsScreen.brs" />
+</component>

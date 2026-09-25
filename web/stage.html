@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Stage Foldback Display - OpenSanctuary</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body, html {
+      width: 100vw;
+      height: 100vh;
+      background: #121316;
+      color: #F1F1F4;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    #stage-header {
+      height: clamp(48px, 6.5vh, 76px);
+      background: #1A1B20;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 clamp(12px, 1.8vw, 28px);
+      border-bottom: 2px solid #383944;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: clamp(8px, 1vw, 18px);
+    }
+    #song-info {
+      font-size: clamp(16px, 1.8vw, 26px);
+      font-weight: 700;
+      color: #FF5722;
+    }
+    .status-badge {
+      font-size: clamp(10px, 0.9vw, 14px);
+      font-weight: 800;
+      padding: clamp(3px, 0.4vh, 6px) clamp(6px, 0.7vw, 12px);
+      border-radius: 4px;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      display: none;
+    }
+    .badge-live { background: #2e7d32; color: #fff; }
+    .badge-black { background: #b71c1c; color: #fff; }
+    .badge-clear { background: #e65100; color: #fff; }
+    .badge-logo { background: #f57f17; color: #fff; }
+    .badge-media { background: #0288d1; color: #fff; }
+
+    #clock {
+      font-size: clamp(22px, 2.6vw, 38px);
+      font-weight: 800;
+      color: #FFA726;
+      font-variant-numeric: tabular-nums;
+    }
+    #stage-body {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 62% 38%;
+      padding: clamp(8px, 1.2vw, 20px);
+      gap: clamp(8px, 1.2vw, 20px);
+      background: #121316;
+    }
+    .stage-card {
+      background: #24252D;
+      border: 2px solid #383944;
+      border-radius: clamp(4px, 0.6vw, 10px);
+      display: flex;
+      flex-direction: column;
+      padding: clamp(10px, 1.2vw, 22px);
+      overflow: hidden;
+    }
+    .stage-card-title {
+      font-size: clamp(11px, 1vw, 15px);
+      font-weight: 800;
+      color: #8A8F9E;
+      margin-bottom: clamp(6px, 0.8vh, 14px);
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #current-slide {
+      font-size: 3.2vw;
+      font-weight: 700;
+      line-height: 1.35;
+      color: #F1F1F4;
+      white-space: pre-line;
+    }
+    #next-slide {
+      font-size: 1.6vw;
+      line-height: 1.35;
+      color: #8A8F9E;
+      white-space: pre-line;
+    }
+    #presenter-notes {
+      font-size: 1.3vw;
+      line-height: 1.4;
+      color: #00E5FF;
+      white-space: pre-line;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+  <div id="stage-header">
+    <div class="header-left">
+      <span id="song-info">OpenSanctuary</span>
+      <span id="badge-foh-live" class="status-badge badge-live">● LIVE</span>
+      <span id="badge-foh-black" class="status-badge badge-black">⬛ BLACKOUT</span>
+      <span id="badge-foh-clear" class="status-badge badge-clear">📄 CLEAR TEXT</span>
+      <span id="badge-foh-logo" class="status-badge badge-logo">⭐ LOGO</span>
+      <span id="badge-foh-media" class="status-badge badge-media">🎬 MEDIA PLAYING</span>
+    </div>
+    <span id="clock">12:00:00 PM</span>
+  </div>
+
+  <div id="stage-body">
+    <div class="stage-card">
+      <div class="stage-card-title" style="color: #FF5722;">
+        <span>▶ CURRENT SLIDE</span>
+        <span id="current-slide-label" style="font-size: 12px; opacity: 0.8;"></span>
+      </div>
+      <div id="current-slide">Waiting for service...</div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: clamp(8px, 1.2vw, 16px);">
+      <div class="stage-card" style="flex: 1;">
+        <div class="stage-card-title" style="color: #FFA726;">
+          <span>⏭ NEXT SLIDE</span>
+          <span id="next-slide-label" style="font-size: 12px; opacity: 0.8;"></span>
+        </div>
+        <div id="next-slide"></div>
+      </div>
+      <div class="stage-card" style="flex: 0.8; background: #1C2028; border-color: #00B0FF33;">
+        <div class="stage-card-title" style="color: #00E5FF;">
+          <span>📝 PRESENTER NOTES & PROMPTS</span>
+        </div>
+        <div id="presenter-notes" style="color: #E0F7FA; font-style: italic;">No presenter notes for this slide.</div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="dist/stage_output.js"></script>
+</body>
+</html>

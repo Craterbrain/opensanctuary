@@ -1,0 +1,118 @@
+package org.opensanctuary.tv
+
+import android.app.Dialog
+import android.content.Context
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.Window
+import android.widget.Button
+import android.widget.EditText
+import android.widget.RadioButton
+import android.widget.TextView
+import android.widget.Toast
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+class SettingsDialog(
+    context: Context,
+    private val onSave: (serverIp: String, port: Int, isStageMode: Boolean) -> Unit
+) : Dialog(context) {
+
+    private val prefs = context.getSharedPreferences("open_sanctuary_tv", Context.MODE_PRIVATE)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        requestWindowFeature(Window.FEATURE_NO_TITLE)
+
+        val view = LayoutInflater.from(context).inflate(R.layout.dialog_settings, null)
+        setContentView(view)
+
+        val editIp = view.findViewById<EditText>(R.id.editServerIp)
+        val editPort = view.findViewById<EditText>(R.id.editServerPort)
+        val rbFoh = view.findViewById<RadioButton>(R.id.rbFohLive)
+        val rbStage = view.findViewById<RadioButton>(R.id.rbStageView)
+        val btnSave = view.findViewById<Button>(R.id.btnSave)
+        val btnCancel = view.findViewById<Button>(R.id.btnCancel)
+        val btnScan = view.findViewById<Button>(R.id.btnScanLan)
+        val txtPairingStatus = view.findViewById<TextView>(R.id.txtPairingStatus)
+        val btnResetPairing = view.findViewById<Button>(R.id.btnResetPairing)
+
+        val savedIp = prefs.getString("server_ip", "") ?: ""
+        val savedPort = prefs.getInt("server_port", 8080)
+        val isStage = prefs.getBoolean("is_stage_mode", false)
+
+        editIp.setText(savedIp)
+        editPort.setText(savedPort.toString())
+        if (isStage) {
+            rbStage.isChecked = true
+        } else {
+            rbFoh.isChecked = true
+        }
+
+        fun refreshPairingStatus() {
+            val pairedId = prefs.getString("paired_instance_id", null)
+            txtPairingStatus.text = if (pairedId.isNullOrEmpty()) {
+                context.getString(R.string.not_paired)
+            } else {
+                "Paired to console: $pairedId"
+            }
+        }
+        refreshPairingStatus()
+
+        // STUB — see docs/CLIENT_PAIRING.md in the OS-Next repo. This only
+        // clears the stored pairing; nothing in this app reads or enforces
+        // paired_instance_id yet (that requires fetching /api/server-info on
+        // connect and comparing instance_id, not yet implemented here), so
+        // resetting it has no visible effect on connection behavior today.
+        // The button exists now so the preference key and UI location are
+        // already settled before that logic gets built.
+        btnResetPairing.setOnClickListener {
+            prefs.edit().remove("paired_instance_id").apply()
+            refreshPairingStatus()
+            Toast.makeText(context, "Pairing reset. This console will be paired again on next connect.", Toast.LENGTH_LONG).show()
+        }
+
+        btnScan.setOnClickListener {
+            btnScan.text = "Scanning..."
+            btnScan.isEnabled = false
+            CoroutineScope(Dispatchers.Main).launch {
+                val port = editPort.text.toString().toIntOrNull() ?: 8080
+                val found = NetworkDiscovery.scanLocalSubnet(context, port)
+                btnScan.text = context.getString(R.string.scan_network)
+                btnScan.isEnabled = true
+                if (found.isNotEmpty()) {
+                    editIp.setText(found.first())
+                    Toast.makeText(context, "Found server: ${found.first()}", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "No OpenSanctuary servers found on local network", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+
+        btnCancel.setOnClickListener {
+            dismiss()
+        }
+
+        btnSave.setOnClickListener {
+            val ip = editIp.text.toString().trim()
+            val port = editPort.text.toString().toIntOrNull() ?: 8080
+            val stageMode = rbStage.isChecked
+
+            if (ip.isEmpty()) {
+                Toast.makeText(context, "Please enter a valid IP address", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            prefs.edit()
+                .putString("server_ip", ip)
+                .putInt("server_port", port)
+                .putBoolean("is_stage_mode", stageMode)
+                .apply()
+
+            onSave(ip, port, stageMode)
+            dismiss()
+        }
+    }
+}

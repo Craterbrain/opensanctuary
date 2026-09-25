@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/rootContainer"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black"
+    android:keepScreenOn="true">
+
+    <!-- Dedicated Native Hardware-Accelerated Video Player Surface (ExoPlayer) -->
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/videoPlayerView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/black"
+        app:use_controller="false"
+        app:surface_type="surface_view"
+        app:resize_mode="fit"
+        android:visibility="gone" />
+
+    <!-- Live / Stage Screen Presentation WebView layered smoothly over Video Surface -->
+    <WebView
+        android:id="@+id/liveWebView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/transparent" />
+
+    <!-- Connection / Status Indicator Overlay -->
+    <LinearLayout
+        android:id="@+id/statusOverlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="#D9101418"
+        android:orientation="vertical"
+        android:padding="28dp"
+        android:gravity="center"
+        android:visibility="gone">
+
+        <ProgressBar
+            android:id="@+id/progressBar"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:indeterminateTint="@color/brand_cyan" />
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="center"
+            android:text="@string/connecting"
+            android:textColor="@color/white"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/statusHint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center"
+            android:text="@string/offline_msg"
+            android:textColor="@color/text_dim"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btnOpenSettings"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:backgroundTint="@color/brand_cyan"
+            android:focusable="true"
+            android:nextFocusDown="@id/btnOpenSettings"
+            android:nextFocusUp="@id/btnOpenSettings"
+            android:paddingStart="24dp"
+            android:paddingEnd="24dp"
+            android:text="@string/settings_title"
+            android:textColor="@color/black"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- TV Remote Quick Hint Toast (Fades out after launch) -->
+    <TextView
+        android:id="@+id/remoteHintToast"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="24dp"
+        android:background="#B3000000"
+        android:padding="8dp"
+        android:text="Press [MENU] or Long-Press [BACK] for Settings"
+        android:textColor="#80FFFFFF"
+        android:textSize="11sp" />
+
+</FrameLayout>

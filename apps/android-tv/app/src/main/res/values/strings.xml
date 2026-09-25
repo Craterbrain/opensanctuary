@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">OpenSanctuary Live TV</string>
+    <string name="connecting">Connecting to OpenSanctuary…</string>
+    <string name="offline_msg">No connection to OpenSanctuary server.\nPress [MENU] or [BACK] on remote for settings.</string>
+    <string name="server_ip_hint">Server IP / Hostname (e.g. 192.168.1.100)</string>
+    <string name="server_port_hint">Port (Default: 8080)</string>
+    <string name="mode_foh_live">FOH Projection Live View</string>
+    <string name="mode_stage_view">Stage Foldback / Confidence View</string>
+    <string name="settings_title">OpenSanctuary Display Settings</string>
+    <string name="save_and_connect">Save &amp; Connect</string>
+    <string name="scan_network">Scan Local Network</string>
+    <string name="cancel">Cancel</string>
+    <string name="reset_pairing">Reset Pairing</string>
+    <string name="not_paired">Not paired to a console yet</string>
+</resources>

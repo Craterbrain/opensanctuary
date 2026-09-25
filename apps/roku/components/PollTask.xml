@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+    Background worker polling GET /api/display-state on an interval and surfacing the
+    parsed result via a field the render-thread scene observes. This is Roku's own
+    documented idiom for live-ish data on current hardware: there is no WebSocket/SSE
+    support on any shipping Roku device (roWebSocket exists only in an NDA-gated OS 16
+    developer beta with no GA date), so polling is the correct approach, not a stopgap.
+-->
+<component name="PollTask" extends="Task">
+    <interface>
+        <field id="serverUrl" type="string" />
+        <field id="pollIntervalMs" type="integer" value="250" />
+        <field id="displayState" type="assocarray" />
+        <!-- "connecting" | "connected" | "timeout" | "error" | "no_url" -->
+        <field id="connectionStatus" type="string" value="connecting" />
+    </interface>
+
+    <script type="text/brightscript" uri="pkg:/components/PollTask.brs" />
+</component>

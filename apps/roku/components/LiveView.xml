@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+    Front-of-house / audience live output. A Poster, Video, or solid-color Rectangle
+    background (only one visible at a time, per `background_kind` from
+    GET /api/display-state) with a Label overlay for the current slide's text —
+    standard, low-risk SceneGraph compositing (Roku's own captions/trickplay overlays
+    use the same "Label on top of a playing Video" pattern).
+-->
+<component name="LiveView" extends="Group">
+    <interface>
+        <function name="setServerBase" />
+        <function name="applyState" />
+    </interface>
+
+    <children>
+        <Rectangle id="bgColorRect" width="1920" height="1080" color="0x102027FF" />
+        <Poster id="bgPoster" width="1920" height="1080" loadDisplayMode="scaleToFill" visible="false" />
+        <Video id="bgVideo" width="1920" height="1080" visible="false" />
+
+        <LayoutGroup
+            translation="[80, 60]"
+            itemSpacings="[20]"
+            layoutDirection="vert"
+            horizAlignment="center"
+            vertAlignment="center">
+            <Label
+                id="lyricsLabel"
+                width="1760"
+                height="860"
+                horizAlign="center"
+                vertAlign="center"
+                wrap="true"
+                maxLines="16"
+                lineSpacing="12"
+                color="0xFFFFFFFF"
+                font="font:LargeBoldSystemFont" />
+        </LayoutGroup>
+
+        <Rectangle id="footerBar" translation="[0, 1000]" width="1920" height="80" color="0x00000080">
+            <Label id="footerTitle" translation="[60, 24]" width="900" font="font:SmallBoldSystemFont" color="0xF1F1F4D9" />
+            <Label id="footerAuthor" translation="[960, 24]" width="900" horizAlign="right" font="font:SmallSystemFont" color="0xF1F1F4B3" />
+        </Rectangle>
+
+        <Rectangle id="alertBanner" translation="[460, 900]" width="1000" height="80" color="0xB71C1CE6" visible="false">
+            <Label id="alertText" translation="[0, 24]" width="1000" horizAlign="center" font="font:MediumBoldSystemFont" color="0xFFFFFFFF" />
+        </Rectangle>
+
+        <Label id="logoOverlay" width="1920" height="1080" horizAlign="center" vertAlign="center" text="OPENSANCTUARY" font="font:ExtraLargeBoldSystemFont" color="0x455A64FF" visible="false" />
+
+        <Rectangle id="blackoutOverlay" width="1920" height="1080" color="0x000000FF" visible="false" />
+    </children>
+
+    <script type="text/brightscript" uri="pkg:/components/LiveView.brs" />
+</component>

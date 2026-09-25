@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 680" width="100%" height="100%">
+  <defs>
+    <linearGradient id="vStackArchGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFA726" />
+      <stop offset="50%" stop-color="#FF5722" />
+      <stop offset="100%" stop-color="#D84315" />
+    </linearGradient>
+
+    <linearGradient id="vStackCrossGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFF8E1" />
+      <stop offset="35%" stop-color="#FFA726" />
+      <stop offset="100%" stop-color="#E64A19" />
+    </linearGradient>
+
+    <filter id="vStackGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Large Centered Gothic Arch & Cross -->
+  <g transform="translate(60, 20) scale(0.95)">
+    <circle cx="256" cy="245" r="140" fill="url(#vStackArchGrad)" opacity="0.14" filter="url(#vStackGlow)" />
+
+    <!-- Outer Arch -->
+    <path d="M138 410 V250 C138 160 195 90 256 60 C317 90 374 160 374 250 V410" 
+          fill="none" 
+          stroke="url(#vStackArchGrad)" 
+          stroke-width="32" 
+          stroke-linecap="round" 
+          stroke-linejoin="round" />
+
+    <!-- Inner Arch -->
+    <path d="M198 410 V270 C198 215 224 175 256 150 C288 175 314 215 314 270 V410" 
+          fill="none" 
+          stroke="#FFFFFF" 
+          stroke-width="18" 
+          stroke-linecap="round" 
+          opacity="0.95" />
+
+    <!-- Gothic Cross -->
+    <path d="M 256 142
+             C 260 156 270 163 280 161
+             C 273 171 268 180 268 188
+             L 268 214
+             L 294 214
+             C 302 214 311 209 321 202
+             C 319 213 326 223 340 226
+             C 326 229 319 239 321 250
+             C 311 243 302 238 294 238
+             L 268 238
+             L 268 316
+             C 268 324 273 333 280 343
+             C 270 341 260 348 256 362
+             C 252 348 242 341 232 343
+             C 239 333 244 324 244 316
+             L 244 238
+             L 218 238
+             C 210 238 201 243 191 250
+             C 193 239 186 229 172 226
+             C 186 223 193 213 191 202
+             C 201 209 210 214 218 214
+             L 244 214
+             L 244 188
+             C 244 180 239 171 232 161
+             C 242 163 252 156 256 142 Z" 
+          fill="url(#vStackCrossGrad)" />
+
+    <polygon points="256,216 266,226 256,236 246,226" fill="#FFFFFF" />
+  </g>
+
+  <!-- Stacked Wordmark -->
+  <g transform="translate(300, 520)" text-anchor="middle">
+    <text font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" 
+          font-size="64" 
+          font-weight="300" 
+          fill="#F1F1F4" 
+          letter-spacing="0.5">Open<tspan font-weight="800" fill="url(#vStackArchGrad)">Sanctuary</tspan></text>
+  </g>
+
+  <!-- Centered Tagline -->
+  <text x="300" y="575" 
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" 
+        font-size="16" 
+        font-weight="600" 
+        fill="#FF8A65" 
+        letter-spacing="4">OPEN-SOURCE WORSHIP PRODUCTION</text>
+
+  <!-- Sub-version or Engine Label -->
+  <text x="300" y="615" 
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" 
+        font-size="12" 
+        font-weight="500" 
+        fill="#8A8F9E" 
+        letter-spacing="2">CROSS-PLATFORM MEDIA ENGINE</text>
+</svg>

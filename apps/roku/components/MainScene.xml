@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="MainScene" extends="Scene">
+    <children>
+        <LiveView id="liveView" visible="true" />
+        <FoldbackView id="foldbackView" visible="false" />
+
+        <Rectangle id="statusBanner" translation="[460, 440]" width="1000" height="200" color="0x0A0D12F2" visible="false">
+            <Label id="statusBannerText" translation="[40, 50]" width="920" horizAlign="center" text="Connecting to OpenSanctuary Server..." font="font:MediumBoldSystemFont" color="0x00E5FFFF" />
+            <Label translation="[40, 110]" width="920" horizAlign="center" text="Press [*] on your Roku remote to configure the server address." font="font:SmallSystemFont" color="0xB0BEC5FF" />
+        </Rectangle>
+
+        <SettingsScreen id="settingsScreen" visible="false" />
+        <PollTask id="pollTask" />
+    </children>
+
+    <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />
+</component>

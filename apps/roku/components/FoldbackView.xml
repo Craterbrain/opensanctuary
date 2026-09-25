@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+    Stage foldback / confidence monitor: plain current/next/notes text panels for the
+    team on stage, analogous to web/stage.html. This is a reference view for the team,
+    not the audience-facing output, so it deliberately never blanks for blackout/clear
+    text/logo — it shows a small status badge instead (matching stage.html's own
+    is_blackout/is_clear_text/is_logo_override handling, which only ever toggles
+    badges, never hides its own text panels).
+-->
+<component name="FoldbackView" extends="Group">
+    <interface>
+        <function name="applyState" />
+    </interface>
+
+    <children>
+        <Rectangle width="1920" height="1080" color="0x0A0D12FF" />
+
+        <Rectangle translation="[0, 0]" width="1920" height="90" color="0x141E28FF">
+            <Label translation="[60, 26]" text="STAGE CONFIDENCE MONITOR" font="font:MediumBoldSystemFont" color="0x00E5FFFF" />
+            <Label id="statusBadge" translation="[1200, 26]" width="660" horizAlign="right" font="font:MediumBoldSystemFont" color="0xFFA726FF" />
+        </Rectangle>
+
+        <Rectangle translation="[60, 120]" width="1140" height="620" color="0x161F28FF">
+            <Label translation="[30, 20]" text="CURRENT SLIDE" font="font:SmallBoldSystemFont" color="0x00E676FF" />
+            <Label id="currentTitle" translation="[30, 60]" width="1080" font="font:MediumBoldSystemFont" color="0xFFFFFFFF" />
+            <Label id="currentText" translation="[30, 120]" width="1080" height="480" wrap="true" maxLines="10" lineSpacing="12" font="font:LargeBoldSystemFont" color="0xFFFFFFFF" />
+        </Rectangle>
+
+        <Rectangle translation="[60, 760]" width="1140" height="260" color="0x121920FF">
+            <Label translation="[30, 20]" text="SPEAKER NOTES" font="font:SmallBoldSystemFont" color="0xFFA726FF" />
+            <Label id="notesText" translation="[30, 55]" width="1080" height="190" wrap="true" maxLines="6" lineSpacing="6" font="font:MediumSystemFont" color="0xCFD8DCFF" />
+        </Rectangle>
+
+        <Rectangle translation="[1230, 120]" width="630" height="900" color="0x121920FF">
+            <Label translation="[30, 20]" text="NEXT SLIDE" font="font:SmallBoldSystemFont" color="0xFFA726FF" />
+            <Label id="nextTitle" translation="[30, 60]" width="570" font="font:SmallBoldSystemFont" color="0xB0BEC5FF" />
+            <Label id="nextText" translation="[30, 110]" width="570" height="780" wrap="true" maxLines="14" lineSpacing="8" font="font:MediumSystemFont" color="0xCFD8DCFF" />
+        </Rectangle>
+    </children>
+
+    <script type="text/brightscript" uri="pkg:/components/FoldbackView.brs" />
+</component>

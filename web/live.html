@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Live Display - OpenSanctuary</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body, html {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: #000000;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      user-select: none;
+      cursor: none;
+    }
+    #screen {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: center;
+      text-align: center;
+      padding: 3.5vh 4.5vw 2.2vh 4.5vw;
+      box-sizing: border-box;
+      position: relative;
+      background: linear-gradient(135deg, #181920, #22232c, #2a2228);
+      background-size: cover;
+      background-position: center;
+      transition: background 0.3s ease;
+      overflow: hidden;
+    }
+    #lyrics-container {
+      flex: 1;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      overflow: hidden;
+      min-height: 0;
+      padding: 1.5vh 1.5vw 3.5vh 1.5vw;
+      z-index: 10;
+      box-sizing: border-box;
+    }
+    #lyrics {
+      max-width: 96%;
+      max-height: 100%;
+      font-size: 3.8vw;
+      font-weight: 700;
+      line-height: 1.35;
+      color: #ffffff;
+      text-shadow: 0.3vw 0.3vw 0.6vw rgba(0, 0, 0, 0.95), 0 0 0.4vw #000;
+      white-space: pre-line;
+      z-index: 10;
+      transition: opacity 0.25s ease-in-out, transform 0.25s ease-in-out;
+      word-break: break-word;
+    }
+    /* An absolutely-positioned overlay rather than a flex-flow row: it used
+       to reserve a full-width 4.5vh strip at the bottom of #screen whether
+       or not the title/author text actually needed that much room, taking
+       that height away from #lyrics-container every single slide. Overlaying
+       it instead gives lyrics the full stage height to autofit into. Fully
+       transparent — no background chip — relying on the text-shadow alone
+       for legibility, same as the lyrics text itself. */
+    #footer {
+      position: absolute;
+      left: 4.5vw;
+      right: 4.5vw;
+      bottom: 1.4vh;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      font-size: 1.05vw;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.9);
+      text-shadow: 0.15vw 0.15vw 0.3vw rgba(0, 0, 0, 0.95), 0 0 0.2vw #000;
+      z-index: 10;
+      pointer-events: none;
+    }
+    #footer-title:empty, #footer-author:empty {
+      display: none;
+    }
+    #overlay-black {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #000000;
+      z-index: 30;
+      display: none;
+      opacity: 0;
+    }
+    #overlay-logo {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(circle, #2a201c 0%, #121316 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255, 167, 38, 0.6);
+      font-size: 5vw;
+      font-weight: 800;
+      letter-spacing: 0.8vw;
+      z-index: 25;
+      display: none;
+      text-shadow: 0.3vw 0.3vw 0.8vw rgba(0, 0, 0, 0.9);
+    }
+    #alert-banner {
+      position: absolute;
+      /* Driven by the Alerts & Nursery settings (alertPosition/alertFontSize) —
+         see applyDisplaySettings() in live_output.ts. Defaults match the
+         previous hardcoded bottom/2.8vw appearance exactly. */
+      top: var(--alert-top, auto);
+      bottom: var(--alert-bottom, 0);
+      left: 0;
+      right: 0;
+      background: rgba(18, 19, 22, 0.92);
+      border-top: 0.4vw solid #FFA726;
+      color: #FFA726;
+      font-size: var(--alert-font-size, 2.8vw);
+      font-weight: 800;
+      padding: 1.2vh 3vw;
+      text-align: center;
+      letter-spacing: 0.2vw;
+      z-index: 20;
+      display: none;
+      box-shadow: 0 -4px 15px rgba(0,0,0,0.7);
+    }
+    #screen-web-stream.ws-mode-background {
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+    #screen-web-stream.ws-mode-fullscreen {
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 29;
+    }
+    #screen-web-stream.ws-mode-pip {
+      right: 2.5vw;
+      bottom: 2.5vh;
+      width: 30vw;
+      height: 17vw;
+      z-index: 15;
+      border-radius: 0.6vw;
+      box-shadow: 0 0.4vw 1.5vw rgba(0, 0, 0, 0.7);
+      overflow: hidden;
+    }
+    video::-webkit-media-controls,
+    video::-webkit-media-controls-enclosure,
+    video::-webkit-media-controls-panel,
+    video::-webkit-media-controls-play-button,
+    video::-webkit-media-controls-start-playback-button {
+      display: none !important;
+      -webkit-appearance: none;
+    }
+
+    /* Animated slide background patterns — mirrored from style.css (this is
+       a separate document with no access to that stylesheet). See
+       core/presentation_helpers.ts's applyResolvedBackground. */
+    @keyframes bgPatternFloatingDust {
+      0%   { background-position: 0% 0%, 0% 0%, 0% 0%, 0% 0%, 0% 0%, 0 0; }
+      100% { background-position: 220px -220px, -180px -180px, 260px -130px, -100px -200px, 120px -240px, 0 0; }
+    }
+    @keyframes bgPatternDriftingClouds {
+      0%   { background-position: 0% 0%, 0% 0%, 0% 0%, 0% 0%, 0 0; }
+      100% { background-position: 700px 20px, -700px -10px, 500px 15px, -600px 5px, 0 0; }
+    }
+    @keyframes bgPatternGentleSnowfall {
+      0%   { background-position: 0% 0%, 0% 0%, 0% 0%, 0 0; }
+      100% { background-position: 40px 140px, -60px 200px, 20px 100px, 0 0; }
+    }
+    @keyframes bgPatternAuroraWaves {
+      0%   { background-position: 0% 0%, 0% 0%, 0% 0%, 0 0; }
+      50%  { background-position: 300px -40px, -250px 30px, 200px 20px, 0 0; }
+      100% { background-position: 0% 0%, 0% 0%, 0% 0%, 0 0; }
+    }
+    @keyframes bgPatternStarfieldDrift {
+      0%   { background-position: 0% 0%, 0% 0%, 0% 0%, 0 0; }
+      100% { background-position: 160px 80px, 120px 240px, 50px 50px, 0 0; }
+    }
+  </style>
+</head>
+<body>
+  <div id="screen" style="position: relative; overflow: hidden; background: #000;">
+    <video id="screen-video-bg" preload="none" muted playsinline="true" webkit-playsinline="true" x5-playsinline="true" style="display: none; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; z-index: 1; pointer-events: none;"></video>
+    <div id="screen-image-bg" style="display: none; position: absolute; inset: 0; width: 100%; height: 100%; background-size: cover; background-position: center; z-index: 1; pointer-events: none;"></div>
+    <audio id="screen-audio-bg" preload="auto" autoplay style="display: none;"></audio>
+    <iframe id="screen-web-stream" title="Live Web Stream" allow="autoplay; encrypted-media" style="display: none; position: absolute; border: 0; pointer-events: none; background: #000;"></iframe>
+    <div id="overlay-black"></div>
+    <div id="overlay-logo">OPENSANCTUARY</div>
+    <div id="lyrics-elements" style="display: none; position: absolute; inset: 0; z-index: 10; pointer-events: none;"></div>
+    <div id="reference-label" style="display: none; position: absolute; left: 4.5vw; right: 4.5vw; z-index: 11; text-align: center; font-weight: 600; color: #fff; text-shadow: 0.2vw 0.2vw 0.4vw rgba(0,0,0,0.9); pointer-events: none;"></div>
+    <div id="lyrics-container">
+      <div id="lyrics"></div>
+    </div>
+    <div id="footer">
+      <span id="footer-title"></span>
+      <span id="footer-author"></span>
+    </div>
+    <div id="alert-banner"></div>
+  </div>
+
+  <script type="module" src="dist/live_output.js"></script>
+</body>
+</html>

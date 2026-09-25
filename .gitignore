@@ -1,0 +1,36 @@
+/target
+/web/dist
+/dist
+**/node_modules/
+**/*.rs.bk
+*.db-shm
+*.db-wal
+*.db-journal
+.gradle/
+**/build/
+local.properties
+.spec-bootstrap/
+/web/songs/
+
+# User-downloaded/imported backgrounds (stock photos, downloaded videos) --
+# not ours to redistribute, and not source. Neither directory is referenced
+# by any default/built-in theme in code -- both are just downloaded content.
+/web/media/
+/web/images/
+vms/__pycache__/
+
+# Copyrighted / licensed content -- not ours to redistribute.
+# See BUILDING.md for how to populate these locally.
+/bibles/
+/songs/copyrighted.db
+/LCspring.ewpx
+
+# Internal planning doc, not part of the product.
+/specs/
+
+# Runtime library database (user's own imported content, not source).
+/library.db
+/library.db-*
+
+# Stray leftover, not needed for the build.
+/replacement.txt

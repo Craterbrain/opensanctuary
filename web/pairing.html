@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>OpenSanctuary • TV App Pairing Bridge</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <style>
+    :root {
+      --bg-dark: #0f1117;
+      --bg-card: #181b24;
+      --border-color: rgba(255, 255, 255, 0.12);
+      --accent: #ff5722;
+      --accent-glow: rgba(255, 87, 34, 0.4);
+      --success: #00e676;
+      --text-main: #f0f2f5;
+      --text-muted: #9ba1b0;
+      --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: var(--font-family);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .header {
+      text-align: center;
+      padding: 12px 0 6px;
+    }
+
+    .header h1 {
+      font-size: 20px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .header p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .session-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(0, 229, 255, 0.1);
+      border: 1px solid rgba(0, 229, 255, 0.25);
+      color: #00e5ff;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 11.5px;
+      font-family: monospace;
+      margin: 6px auto 0;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    }
+
+    .camera-viewport-wrap {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      max-height: 340px;
+      background: #000000;
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border-color);
+    }
+
+    video#camera-feed {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .reticle-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .reticle-box {
+      width: 65%;
+      height: 65%;
+      border: 2px dashed rgba(255, 87, 34, 0.85);
+      border-radius: 12px;
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+      position: relative;
+    }
+
+    .reticle-box::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+      animation: scanLaser 2s ease-in-out infinite alternate;
+    }
+
+    @keyframes scanLaser {
+      0% { top: 4%; }
+      100% { top: 96%; }
+    }
+
+    .camera-placeholder {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+      gap: 12px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 18px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-decoration: none;
+      width: 100%;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #ffffff;
+      box-shadow: 0 4px 14px var(--accent-glow);
+    }
+
+    .btn-primary:active {
+      transform: scale(0.98);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+      border: 1px solid var(--border-color);
+    }
+
+    .alert-banner {
+      padding: 12px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.4;
+      display: none;
+    }
+
+    .alert-banner--error {
+      background: rgba(255, 82, 82, 0.15);
+      border: 1px solid rgba(255, 82, 82, 0.35);
+      color: #ff5252;
+      display: block;
+    }
+
+    .alert-banner--success {
+      background: rgba(0, 230, 118, 0.15);
+      border: 1px solid rgba(0, 230, 118, 0.35);
+      color: #00e676;
+      display: block;
+    }
+
+    .success-card {
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 28px 16px;
+    }
+
+    .success-icon {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: rgba(0, 230, 118, 0.15);
+      border: 2px solid #00e676;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      color: #00e676;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      text-align: left;
+      margin-bottom: 12px;
+    }
+
+    .form-group label {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .form-input {
+      background: #12141c;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--text-main);
+      font-size: 14px;
+      outline: none;
+    }
+
+    .form-input:focus {
+      border-color: var(--accent);
+    }
+
+    .instructions {
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.5;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>📺 TV App Pairing Bridge</h1>
+      <p>Scan the pairing QR code displayed on your TV screen</p>
+      <div class="session-badge" id="session-badge">Checking session…</div>
+    </div>
+
+    <div id="alert-banner" class="alert-banner"></div>
+
+    <!-- Active Scanner Card -->
+    <div class="card" id="scanner-card">
+      <div class="camera-viewport-wrap" id="camera-viewport-wrap">
+        <video id="camera-feed" playsinline webkit-playsinline autoplay muted></video>
+        <div class="reticle-overlay" id="reticle-overlay">
+          <div class="reticle-box"></div>
+        </div>
+        <div class="camera-placeholder" id="camera-placeholder">
+          <div style="font-size: 36px;">📷</div>
+          <div style="font-size: 14px; font-weight: 600;">Camera Permission Needed</div>
+          <div style="font-size: 12px; color: var(--text-muted);">
+            Allow camera access so this phone can scan the TV screen.
+          </div>
+          <button class="btn btn-primary" id="btn-start-camera" style="margin-top: 8px;">
+            Start Camera Scanner
+          </button>
+        </div>
+      </div>
+
+      <div style="margin-top: 14px; display: flex; gap: 8px;">
+        <button class="btn btn-secondary" id="btn-snap-photo">
+          📸 Snap / Upload Photo
+        </button>
+        <button class="btn btn-secondary" id="btn-toggle-manual">
+          ✍ Manual TV Code
+        </button>
+        <input type="file" id="file-qr-input" accept="image/*" capture="environment" style="display: none;">
+      </div>
+    </div>
+
+    <!-- Manual Entry Card -->
+    <div class="card" id="manual-card" style="display: none;">
+      <h3 style="font-size: 15px; margin-bottom: 12px;">Enter TV Display Code Manually</h3>
+      <form id="manual-pairing-form">
+        <div class="form-group">
+          <label for="input-device-id">TV Device ID</label>
+          <input type="text" id="input-device-id" class="form-input" placeholder="e.g. android_tv_12345 or roku_abc" required>
+        </div>
+        <div class="form-group">
+          <label for="input-device-name">Display Name</label>
+          <input type="text" id="input-device-name" class="form-input" placeholder="e.g. Sanctuary Main TV" value="Sanctuary Main TV" required>
+        </div>
+        <div class="form-group">
+          <label for="select-platform">Client Platform</label>
+          <select id="select-platform" class="form-input">
+            <option value="android-tv">Android TV</option>
+            <option value="roku">Roku TV</option>
+            <option value="other">Other Display</option>
+          </select>
+        </div>
+        <button type="submit" class="btn btn-primary" id="btn-submit-manual" style="margin-top: 8px;">
+          Authorize Display
+        </button>
+      </form>
+    </div>
+
+    <!-- Success Confirmation Card -->
+    <div class="card success-card" id="success-card" style="display: none;">
+      <div class="success-icon">✓</div>
+      <h2 style="font-size: 18px; font-weight: 700; color: #00e676;">Display Successfully Paired!</h2>
+      <p style="font-size: 13px; color: var(--text-main); line-height: 1.5;" id="success-message">
+        Your TV has been authorized and will now begin receiving live presentations.
+      </p>
+      <div style="background: rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; width: 100%; font-size: 12px; text-align: left;" id="success-details">
+      </div>
+      <button class="btn btn-primary" id="btn-pair-another" style="margin-top: 8px;">
+        Pair Another Display
+      </button>
+    </div>
+
+    <!-- Guide & Invariants -->
+    <div class="instructions">
+      <strong>How it works:</strong><br>
+      1. Open the Android TV or Roku OpenSanctuary app on your sanctuary television.<br>
+      2. Point this phone's camera at the pairing code on the television screen.<br>
+      3. The display will automatically lock onto this console and transition to live worship view.<br><br>
+      <em>Note: Regular browser tabs (<code>live.html</code> / <code>stage.html</code>) are open access and do not require pairing.</em>
+    </div>
+  </div>
+
+  <script type="module" src="dist/pairing_scanner.js"></script>
+</body>
+</html>

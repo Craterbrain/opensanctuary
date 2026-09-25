@@ -1,0 +1,65 @@
+[package]
+name = "os-next"
+version = "0.2.0"
+edition = "2021"
+authors = ["OpenSanctuary Core Team"]
+description = "Next-Generation Church Presentation Engine in Rust"
+
+[dependencies]
+# Async Runtime & Networking
+tokio = { version = "1.38", features = ["full"] }
+axum = { version = "0.7", features = ["ws", "macros"] }
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["fs", "cors", "trace", "set-header"] }
+futures-util = "0.3"
+reqwest = { version = "0.12", features = ["json"] }
+mdns-sd = "0.11"
+get_if_addrs = "0.5"
+rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+rustls-pemfile = "2.1"
+
+# Serialization & Data
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.8", features = ["v4", "v5", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Storage & Archive
+rusqlite = { version = "0.31", features = ["bundled"] }
+zip = "0.6"
+flate2 = "1.0"
+keyring = "4.2"
+
+# Graphics & Rendering (wgpu)
+wgpu = { version = "0.20", optional = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+# CLI & Utilities
+clap = { version = "4.5", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+urlencoding = "2.1"
+base64 = "0.22"
+tempfile = "3.10"
+async-trait = "0.1"
+
+# Desktop Webview (Optional / Platform gated)
+tao = { version = "0.28", optional = true }
+wry = { version = "0.40", optional = true }
+pollster = "1.0.1"
+libloading = "0.9.0"
+
+[features]
+default = ["wgpu-render", "desktop-webview"]
+wgpu-render = ["dep:wgpu"]
+desktop-webview = ["dep:tao", "dep:wry"]
+
+[dev-dependencies]
+tokio-tungstenite = "0.24"
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+lto = "thin"

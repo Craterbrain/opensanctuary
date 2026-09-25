@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="favArchGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFA726" />
+      <stop offset="50%" stop-color="#FF5722" />
+      <stop offset="100%" stop-color="#D84315" />
+    </linearGradient>
+
+    <linearGradient id="favCrossGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFF8E1" />
+      <stop offset="35%" stop-color="#FFA726" />
+      <stop offset="100%" stop-color="#E64A19" />
+    </linearGradient>
+
+    <filter id="favGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="108" fill="#1A1B20" />
+  <rect width="504" height="504" x="4" y="4" rx="104" fill="none" stroke="#383944" stroke-width="4" />
+
+  <g transform="translate(0, 15)">
+    <circle cx="256" cy="245" r="130" fill="url(#favArchGrad)" opacity="0.18" filter="url(#favGlow)" />
+
+    <!-- Outer Arch -->
+    <path d="M148 400 V250 C148 165 200 100 256 70 C312 100 364 165 364 250 V400" 
+          fill="none" 
+          stroke="url(#favArchGrad)" 
+          stroke-width="28" 
+          stroke-linecap="round" 
+          stroke-linejoin="round" />
+
+    <!-- Inner Arch -->
+    <path d="M202 400 V270 C202 220 226 182 256 160 C286 182 310 220 310 270 V400" 
+          fill="none" 
+          stroke="#FFFFFF" 
+          stroke-width="16" 
+          stroke-linecap="round" 
+          opacity="0.95" />
+
+    <!-- Gothic Cross -->
+    <path d="M 256 150
+             C 260 162 269 168 278 166
+             C 272 175 267 183 267 190
+             L 267 214
+             L 291 214
+             C 298 214 306 210 315 204
+             C 313 213 319 222 331 224
+             C 319 227 313 236 315 245
+             C 306 239 298 235 291 235
+             L 267 235
+             L 267 308
+             C 267 315 272 323 278 332
+             C 269 330 260 336 256 348
+             C 252 336 243 330 234 332
+             C 240 323 245 315 245 308
+             L 245 235
+             L 221 235
+             C 214 235 206 239 197 245
+             C 199 236 193 227 181 224
+             C 193 222 199 213 197 204
+             C 206 210 214 214 221 214
+             L 245 214
+             L 245 190
+             C 245 183 240 175 234 166
+             C 243 168 252 162 256 150 Z" 
+          fill="url(#favCrossGrad)" />
+
+    <polygon points="256,218 265,227 256,236 247,227" fill="#FFFFFF" />
+  </g>
+</svg>
