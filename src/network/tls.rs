@@ -242,6 +242,20 @@ mod tests {
     // produce a false failure. Each still asserts its own thing.
     #[test]
     fn test_tls_private_key_storage_and_legacy_migration() {
+        // Needs a working OS keyring (Secret Service / Keychain / Credential
+        // Manager). Headless CI runners have none, so a write never reads
+        // back and the cert is regenerated on every call -- skip rather than
+        // fail there.
+        let probe_service = "OpenSanctuary:Test";
+        let probe_account = "keyring-probe";
+        let keyring_works = KeyringService::set_secret(probe_service, probe_account, "probe").is_ok()
+            && matches!(KeyringService::get_secret(probe_service, probe_account), Ok(Some(v)) if v == "probe");
+        let _ = KeyringService::delete_secret(probe_service, probe_account);
+        if !keyring_works {
+            eprintln!("skipping: no working OS keyring in this environment");
+            return;
+        }
+
         // 1. Regression test: the private key used to be stored under
         // `tlsKeyPem` in the plain settings table, which `GET /api/settings`
         // dumps wholesale to any unauthenticated caller. It must never land
