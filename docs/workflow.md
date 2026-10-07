@@ -16,7 +16,8 @@ how the app verifies updates is in `docs/update.md`.
 - The workflow has **not yet completed a full run**. A dry run on tag
   `v0.2.1-keytest` got past the version check, and the Windows job then failed
   installing Inno Setup under Wine for lack of a display (fixed with `xvfb-run`), then failed building for lack of
-  `llvm-lib` (fix: apt `llvm`, on `keytest`, not yet run). The Linux job passes. The
+  `llvm-lib` (fix: apt `llvm`, on `keytest`, not yet run; `keytest` is now version
+  `0.2.2-keytest`, so test it with tag `v0.2.2-keytest`). The Linux job passes. The
   remaining fixes (below) live on branch `keytest` and have not been merged to
   `main`. Land them on `main` before cutting a real release, or the release
   will fail the same way.
