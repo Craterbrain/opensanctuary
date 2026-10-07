@@ -119,6 +119,11 @@ jobs:
         with:
           bun-version: latest
 
+      # build.rs typechecks/bundles the web UI, which needs node_modules first.
+      - name: Install web dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
+
       - name: cargo build + test
         run: |
           cargo build --verbose
@@ -127,7 +132,7 @@ jobs:
       - name: web install + typecheck + build + test
         working-directory: web
         run: |
-          bun install
+          bun install --frozen-lockfile
           bunx playwright install --with-deps chromium
           bun run typecheck
           bun run build

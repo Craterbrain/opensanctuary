@@ -42,6 +42,11 @@ jobs:
         with:
           bun-version: latest
 
+      # build.rs typechecks/bundles the web UI, which needs node_modules first.
+      - name: Install web dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
+
       - name: cargo build
         run: cargo build --verbose
 
