@@ -2,17 +2,21 @@
   "name": "opensanctuary-web",
   "type": "module",
   "scripts": {
-    "build": "bun build src/main.ts --outdir dist --entry-naming 'bundle.[ext]' --target browser --sourcemap=external --minify && bun build src/live_output.ts --outdir dist --entry-naming 'live_output.[ext]' --target browser --sourcemap=external --minify && bun build src/stage_output.ts --outdir dist --entry-naming 'stage_output.[ext]' --target browser --sourcemap=external --minify && bun build src/remote_client.ts --outdir dist --entry-naming 'remote_client.[ext]' --target browser --sourcemap=external --minify && bun build src/pairing_scanner.ts --outdir dist --entry-naming 'pairing_scanner.[ext]' --target browser --sourcemap=external --minify",
+    "typecheck": "tsc --noEmit",
+    "build": "bun run typecheck && bun build src/main.ts --outdir dist --entry-naming 'bundle.[ext]' --target browser --sourcemap=external --minify && bun build src/live_output.ts --outdir dist --entry-naming 'live_output.[ext]' --target browser --sourcemap=external --minify && bun build src/stage_output.ts --outdir dist --entry-naming 'stage_output.[ext]' --target browser --sourcemap=external --minify && bun build src/remote_client.ts --outdir dist --entry-naming 'remote_client.[ext]' --target browser --sourcemap=external --minify && bun build src/pairing_scanner.ts --outdir dist --entry-naming 'pairing_scanner.[ext]' --target browser --sourcemap=external --minify",
+    "test": "bun test",
     "watch": "bun build src/main.ts --outdir dist --entry-naming 'bundle.[ext]' --target browser --sourcemap=external --watch & bun build src/live_output.ts --outdir dist --entry-naming 'live_output.[ext]' --target browser --sourcemap=external --watch & bun build src/stage_output.ts --outdir dist --entry-naming 'stage_output.[ext]' --target browser --sourcemap=external --watch & bun build src/remote_client.ts --outdir dist --entry-naming 'remote_client.[ext]' --target browser --sourcemap=external --watch & bun build src/pairing_scanner.ts --outdir dist --entry-naming 'pairing_scanner.[ext]' --target browser --sourcemap=external --watch & wait"
   },
   "dependencies": {
     "@atlaskit/pragmatic-drag-and-drop": "^3.1.0",
     "@atlaskit/pragmatic-drag-and-drop-hitbox": "^2.2.0",
     "jsqr": "^1.4.0",
+    "mediabunny": "^1.61.0",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@types/qrcode": "^1.5.6",
-    "playwright": "^1.63.0"
+    "playwright": "^1.63.0",
+    "typescript": "^7.0.2"
   }
 }

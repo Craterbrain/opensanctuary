@@ -10,6 +10,8 @@ describe("Schedule Drop Utilities", () => {
     expect(isSupportedScheduleFile("service.ewsx")).toBe(true);
     expect(isSupportedScheduleFile("SERVICE.EWSX")).toBe(true);
     expect(isSupportedScheduleFile("legacy.ews")).toBe(true);
+    expect(isSupportedScheduleFile("presentation.ewpx")).toBe(true);
+    expect(isSupportedScheduleFile("PRESENTATION.EWPX")).toBe(true);
     expect(isSupportedScheduleFile("service.osj")).toBe(true);
     expect(isSupportedScheduleFile("bundle.osz")).toBe(true);
     expect(isSupportedScheduleFile("BUNDLE.OSZ")).toBe(true);
@@ -23,6 +25,7 @@ describe("Schedule Drop Utilities", () => {
   test("isBinaryScheduleFile correctly discriminates binary archives", () => {
     expect(isBinaryScheduleFile("service.ewsx")).toBe(true);
     expect(isBinaryScheduleFile("legacy.ews")).toBe(true);
+    expect(isBinaryScheduleFile("presentation.ewpx")).toBe(true);
     expect(isBinaryScheduleFile("bundle.osz")).toBe(true);
 
     expect(isBinaryScheduleFile("service.osj")).toBe(false);

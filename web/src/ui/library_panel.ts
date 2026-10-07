@@ -15,7 +15,8 @@
  */
 import { draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { parseScriptureReference } from '../core/bible_parser';
-import { formatParallelSlide } from '../core/presentation_helpers.ts';
+import { escapeCssUrl, escapeHtml, formatParallelSlide, resolveSlideBackgroundElement } from '../core/presentation_helpers.ts';
+import { renderSlideVisual } from '../core/slide_render.ts';
 import { openThemeEditor, setThemeAsDefault, duplicateTheme, deleteThemeItem } from './theme_editor.ts';
 
 export interface LibraryPanelContext {
@@ -38,6 +39,9 @@ export interface LibraryPanelContext {
   escapeHtml(str: any): string;
   formatCssBackground(bg: string | null | undefined, defaultGradient?: string): string;
   showContextMenu(el: HTMLElement | null, x: number, y: number): void;
+  setContextMenuTarget(target: any): void;
+  setContextMenuTargetBible(bible: any): void;
+  setBibleVersionUserSelected(v: boolean): void;
   applyDefaultBibleVersionIfUnset(): void;
   formatMediaTime(sec: number): string;
   setAdhocPreview(item: any, tabName: string): void;
@@ -139,52 +143,56 @@ const btnToggleDualBible = document.getElementById('btn-toggle-dual-bible');
 // BIBLE TRANSLATION SELECTOR & SCRIPTURES ENGINE
 // ============================================================================
 export function updateSearchModeUI() {
-  const mode = currentSearchModes[ctx!.getCurrentTab()] || 'all';
+  if (!ctx) return;
+  const lp = ctx;
+  const mode = currentSearchModes[lp.getCurrentTab()] || 'all';
 
   if (searchModeIcon) {
-    if (ctx!.getCurrentTab() === 'scriptures') searchModeIcon.textContent = mode === 'reference' ? '📖' : '🔍';
-    else if (ctx!.getCurrentTab() === 'media') searchModeIcon.textContent = '🎬';
-    else if (ctx!.getCurrentTab() === 'presentations') searchModeIcon.textContent = '📊';
-    else if (ctx!.getCurrentTab() === 'themes') searchModeIcon.textContent = '🎨';
+    if (lp.getCurrentTab() === 'scriptures') searchModeIcon.textContent = mode === 'reference' ? '📖' : '🔍';
+    else if (lp.getCurrentTab() === 'media') searchModeIcon.textContent = '🎬';
+    else if (lp.getCurrentTab() === 'presentations') searchModeIcon.textContent = '📊';
+    else if (lp.getCurrentTab() === 'themes') searchModeIcon.textContent = '🎨';
     else searchModeIcon.textContent = '🔍';
   }
 
   if (resourceSearchInput) {
-    if (ctx!.getCurrentTab() === 'songs') {
+    if (lp.getCurrentTab() === 'songs') {
       if (mode === 'title') resourceSearchInput.placeholder = '🔍 Search Song Titles Only...';
       else if (mode === 'lyrics') resourceSearchInput.placeholder = '🔍 Search Full Lyrics Only...';
       else if (mode === 'ccli') resourceSearchInput.placeholder = '🔍 Search by CCLI # or Song ID...';
       else if (mode === 'genius' || activeCategory === 'genius-christian') resourceSearchInput.placeholder = '✨ Search Genius Christian & Worship Lyrics (e.g. Holy Forever, Way Maker)...';
       else resourceSearchInput.placeholder = '🔍 Search Titles, Lyrics, or CCLI #...';
-    } else if (ctx!.getCurrentTab() === 'scriptures') {
-      const activeObj = ctx!.getInstalledBibles().find(b => b.id === ctx!.getActiveBibleVersion()) || { abbreviation: 'All' };
+    } else if (lp.getCurrentTab() === 'scriptures') {
+      const activeObj = lp.getInstalledBibles().find(b => b.id === lp.getActiveBibleVersion()) || { abbreviation: 'All' };
       if (mode === 'reference') {
         resourceSearchInput.placeholder = `📖 Scripture in ${activeObj.abbreviation} (e.g. Jn 3 16, 1 Cor 13 4-8, Ps 23)...`;
       } else {
         resourceSearchInput.placeholder = `🔍 Keyword search in ${activeObj.abbreviation} (e.g. "grace and truth")...`;
       }
-    } else if (ctx!.getCurrentTab() === 'media') {
+    } else if (lp.getCurrentTab() === 'media') {
       resourceSearchInput.placeholder = '🔍 Search Media by name, tag, type...';
-    } else if (ctx!.getCurrentTab() === 'presentations') {
+    } else if (lp.getCurrentTab() === 'presentations') {
       resourceSearchInput.placeholder = '🔍 Search Presentations by title, slide content...';
-    } else if (ctx!.getCurrentTab() === 'themes') {
+    } else if (lp.getCurrentTab() === 'themes') {
       resourceSearchInput.placeholder = '🔍 Search Themes by name, font, style...';
     }
   }
 
   if (btnToggleDualBible) {
-    btnToggleDualBible.style.display = ctx!.getCurrentTab() === 'scriptures' ? 'inline-block' : 'none';
+    btnToggleDualBible.style.display = lp.getCurrentTab() === 'scriptures' ? 'inline-block' : 'none';
   }
   renderSearchModeMenu();
 }
 
 export function renderSearchModeMenu() {
   if (!searchModeMenu) return;
+  if (!ctx) return;
+  const lp = ctx;
   searchModeMenu.innerHTML = '';
-  const currentMode = currentSearchModes[ctx!.getCurrentTab()];
-  let options = [];
+  const currentMode = currentSearchModes[lp.getCurrentTab()];
+  let options: { id: string; label: string }[] = [];
 
-  if (ctx!.getCurrentTab() === 'songs') {
+  if (lp.getCurrentTab() === 'songs') {
     options = [
       { id: 'all', label: '🔍 All Fields (Default)' },
       { id: 'title', label: '📄 Title Only' },
@@ -192,24 +200,24 @@ export function renderSearchModeMenu() {
       { id: 'ccli', label: '🔢 CCLI # / Catalog ID' },
       { id: 'genius', label: '✨ Genius Christian Lyrics' }
     ];
-  } else if (ctx!.getCurrentTab() === 'scriptures') {
+  } else if (lp.getCurrentTab() === 'scriptures') {
     options = [
       { id: 'reference', label: '📖 Smart Reference Mode (e.g. Jn 3 16)' },
       { id: 'keyword', label: '🔍 Keyword / Phrase Search' }
     ];
-  } else if (ctx!.getCurrentTab() === 'media') {
+  } else if (lp.getCurrentTab() === 'media') {
     options = [
       { id: 'all', label: '🎬 All Media Types' },
       { id: 'videos', label: '🎥 Videos Only' },
       { id: 'images', label: '🖼️ Images Only' },
       { id: 'audio', label: '🎵 Audio Only' }
     ];
-  } else if (ctx!.getCurrentTab() === 'presentations') {
+  } else if (lp.getCurrentTab() === 'presentations') {
     options = [
       { id: 'all', label: '📊 All Fields (Title & Slides)' },
       { id: 'title', label: '📄 Title Only' }
     ];
-  } else if (ctx!.getCurrentTab() === 'themes') {
+  } else if (lp.getCurrentTab() === 'themes') {
     options = [
       { id: 'all', label: '🎨 All Fields' },
       { id: 'title', label: '🏷️ Theme Name Only' }
@@ -222,7 +230,7 @@ export function renderSearchModeMenu() {
     item.textContent = opt.label;
     item.addEventListener('click', (e) => {
       e.stopPropagation();
-      currentSearchModes[ctx!.getCurrentTab()] = opt.id;
+      currentSearchModes[lp.getCurrentTab()] = opt.id;
       if (searchModeDropdownWrap) searchModeDropdownWrap.classList.remove('open');
       updateSearchModeUI();
       filterAndRenderCatalog();
@@ -248,14 +256,16 @@ btnSearchClear?.addEventListener('click', () => {
 
 let currentLibraryTabRequestId = 0;
 
-export async function loadLibraryTab(tabName) {
+export async function loadLibraryTab(tabName?: string) {
+  if (!ctx) return;
+  const lp = ctx;
   const normTab = (tabName === 'song' || tabName === 'songs') ? 'songs'
     : ((tabName === 'scripture' || tabName === 'scriptures') ? 'scriptures'
     : ((tabName === 'presentation' || tabName === 'presentations') ? 'presentations'
     : ((tabName === 'theme' || tabName === 'themes') ? 'themes'
     : ((tabName === 'media') ? 'media' : (tabName || 'songs')))));
 
-  ctx!.setCurrentTab(normTab);
+  lp.setCurrentTab(normTab);
   activeCategory = 'all';
   if (resourceSearchInput && resourceSearchInput.value) {
     resourceSearchInput.value = '';
@@ -264,7 +274,7 @@ export async function loadLibraryTab(tabName) {
   updateSearchModeUI();
   const reqId = ++currentLibraryTabRequestId;
 
-  document.querySelectorAll('.tab-btn').forEach(btn => {
+  document.querySelectorAll<HTMLElement>('.tab-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tab === normTab);
   });
 
@@ -274,7 +284,7 @@ export async function loadLibraryTab(tabName) {
   document.getElementById('btn-resource-view-grid')?.classList.toggle('active', activeResourceViewMode === 'grid');
   document.getElementById('btn-resource-view-table')?.classList.toggle('active', activeResourceViewMode === 'table');
 
-  if (normTab === 'scriptures') ctx!.applyDefaultBibleVersionIfUnset();
+  if (normTab === 'scriptures') lp.applyDefaultBibleVersionIfUnset();
   renderCategoryTree(normTab);
 
   try {
@@ -296,7 +306,7 @@ export async function loadLibraryTab(tabName) {
   }
 }
 
-export function renderCategoryTree(tabName) {
+export function renderCategoryTree(tabName: string) {
   if (!categoryTreeContainer) return;
   categoryTreeContainer.innerHTML = '';
   const normTab = (tabName === 'song' || tabName === 'songs') ? 'songs'
@@ -305,10 +315,11 @@ export function renderCategoryTree(tabName) {
     : ((tabName === 'theme' || tabName === 'themes') ? 'themes'
     : ((tabName === 'media') ? 'media' : (tabName || 'songs')))));
 
-  if (normTab === 'scriptures') {
+  if (normTab === 'scriptures' && ctx) {
+    const lp = ctx;
     // 1. All Translations Node
     const allNode = document.createElement('div');
-    allNode.className = `bible-tree-node ${ctx!.getActiveBibleVersion() === 'all' ? 'active' : ''}`;
+    allNode.className = `bible-tree-node ${lp.getActiveBibleVersion() === 'all' ? 'active' : ''}`;
     allNode.innerHTML = `
       <div style="display: flex; align-items: center; gap: 6px;">
         <span>📖</span>
@@ -317,8 +328,8 @@ export function renderCategoryTree(tabName) {
       <span class="bible-lang-badge" style="font-size: 8.5px;">ALL</span>
     `;
     allNode.addEventListener('click', () => {
-      ctx!.setActiveBibleVersion('all');
-      bibleVersionUserSelected = true;
+      lp.setActiveBibleVersion('all');
+      lp.setBibleVersionUserSelected(true);
       document.querySelectorAll('.bible-tree-node').forEach(b => b.classList.remove('active'));
       allNode.classList.add('active');
       updateSearchModeUI();
@@ -336,7 +347,7 @@ export function renderCategoryTree(tabName) {
     headerNode.textContent = 'Installed Versions';
     categoryTreeContainer.appendChild(headerNode);
 
-    const availableBibles = ctx!.getInstalledBibles().filter(b => (b.verse_count === undefined || b.verse_count > 0));
+    const availableBibles = lp.getInstalledBibles().filter(b => (b.verse_count === undefined || b.verse_count > 0));
     if (availableBibles.length === 0) {
       const emptyNote = document.createElement('div');
       emptyNote.style.padding = '8px 12px';
@@ -346,11 +357,11 @@ export function renderCategoryTree(tabName) {
       categoryTreeContainer.appendChild(emptyNote);
     } else {
       availableBibles.forEach(bible => {
-        const isDefault = areTranslationsEquivalent(bible.id, ctx!.getAppOptions().defaultBibleVersion) ||
+        const isDefault = areTranslationsEquivalent(bible.id, lp.getAppOptions().defaultBibleVersion) ||
           Boolean(bible.isDefault) ||
           Boolean(bible.is_default) ||
-          (!ctx!.getAppOptions().defaultBibleVersion && bible === availableBibles[0]);
-        const isActive = bible.id === ctx!.getActiveBibleVersion();
+          (!lp.getAppOptions().defaultBibleVersion && bible === availableBibles[0]);
+        const isActive = bible.id === lp.getActiveBibleVersion();
 
         const nodeEl = document.createElement('div');
         nodeEl.className = `bible-tree-node ${isActive ? 'active' : ''}`;
@@ -358,18 +369,18 @@ export function renderCategoryTree(tabName) {
 
         nodeEl.innerHTML = `
           <div style="display: flex; align-items: center; gap: 6px; overflow: hidden;">
-            <span style="font-weight: 600; color: #fff;">${ctx!.escapeHtml(bible.abbreviation || bible.id)}</span>
-            <span style="font-size: 10px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${ctx!.escapeHtml(bible.name || bible.id)}</span>
+            <span style="font-weight: 600; color: #fff;">${lp.escapeHtml(bible.abbreviation || bible.id)}</span>
+            <span style="font-size: 10px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${lp.escapeHtml(bible.name || bible.id)}</span>
           </div>
           <div style="display: flex; align-items: center; gap: 4px;">
-            ${bible.language ? `<span class="bible-lang-badge" style="font-size: 8.5px;">${ctx!.escapeHtml(bible.language)}</span>` : ''}
+            ${bible.language ? `<span class="bible-lang-badge" style="font-size: 8.5px;">${lp.escapeHtml(bible.language)}</span>` : ''}
             ${isDefault ? '<span class="bible-default-badge" title="Default Translation">⭐</span>' : ''}
           </div>
         `;
 
         nodeEl.addEventListener('click', () => {
-          ctx!.setActiveBibleVersion(bible.id);
-          bibleVersionUserSelected = true;
+          lp.setActiveBibleVersion(bible.id);
+          lp.setBibleVersionUserSelected(true);
           document.querySelectorAll('.bible-tree-node').forEach(b => b.classList.remove('active'));
           nodeEl.classList.add('active');
           updateSearchModeUI();
@@ -379,8 +390,8 @@ export function renderCategoryTree(tabName) {
         nodeEl.addEventListener('contextmenu', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          contextMenuTargetBible = bible;
-          ctx!.showContextMenu(document.getElementById('bible-version-context-menu'), e.clientX, e.clientY);
+          lp.setContextMenuTargetBible(bible);
+          lp.showContextMenu(document.getElementById('bible-version-context-menu'), e.clientX, e.clientY);
         });
 
         categoryTreeContainer.appendChild(nodeEl);
@@ -409,7 +420,7 @@ export function renderCategoryTree(tabName) {
   }
 
   // Generic Category Tree for other tabs
-  let nodes = [];
+  let nodes: { id: string; label: string }[] = [];
   if (tabName === 'songs') {
     nodes = [
       { id: 'all', label: '📁 All Songs' },
@@ -466,7 +477,7 @@ export function renderCategoryTree(tabName) {
   });
 }
 
-export function areTranslationsEquivalent(t1, t2) {
+export function areTranslationsEquivalent(t1: unknown, t2: unknown) {
   if (!t1 || !t2) return false;
   const s1 = String(t1).toLowerCase().replace(/[\s\-_()]/g, '');
   const s2 = String(t2).toLowerCase().replace(/[\s\-_()]/g, '');
@@ -504,9 +515,10 @@ export function areTranslationsEquivalent(t1, t2) {
   return false;
 }
 
-export function getBibleAbbreviation(str) {
+export function getBibleAbbreviation(str: unknown) {
   if (!str) return 'KJV';
-  const b = ctx!.getInstalledBibles().find(x => areTranslationsEquivalent(x.id, str) || areTranslationsEquivalent(x.abbreviation, str) || areTranslationsEquivalent(x.name, str));
+  if (!ctx) return 'KJV';
+  const b = ctx.getInstalledBibles().find(x => areTranslationsEquivalent(x.id, str) || areTranslationsEquivalent(x.abbreviation, str) || areTranslationsEquivalent(x.name, str));
   if (b && b.abbreviation) return b.abbreviation;
   const s = String(str).trim();
   if (s.toLowerCase().includes('world english') || s.toLowerCase() === 'web' || s.toLowerCase() === 'world_english_bible') return 'WEB';
@@ -518,7 +530,7 @@ export function getBibleAbbreviation(str) {
   return s.length > 8 ? s.substring(0, 7) + '…' : s.toUpperCase();
 }
 
-export function normalizeBibleApiCode(str) {
+export function normalizeBibleApiCode(str: unknown) {
   if (!str) return 'kjv';
   const s = String(str).toLowerCase().replace(/[\s\-_()]/g, '');
   if (s.includes('worldenglish') || s === 'web') return 'web';
@@ -529,10 +541,11 @@ export function normalizeBibleApiCode(str) {
   return s.substring(0, 8);
 }
 
-export function scriptureMatchesVersion(sc, versionId) {
+export function scriptureMatchesVersion(sc: any, versionId: unknown) {
   if (!versionId || versionId === 'all') return true;
   if (areTranslationsEquivalent(sc.version, versionId)) return true;
-  const b = ctx!.getInstalledBibles().find(x => areTranslationsEquivalent(x.id, versionId) || areTranslationsEquivalent(x.abbreviation, versionId) || areTranslationsEquivalent(x.name, versionId));
+  if (!ctx) return false;
+  const b = ctx.getInstalledBibles().find(x => areTranslationsEquivalent(x.id, versionId) || areTranslationsEquivalent(x.abbreviation, versionId) || areTranslationsEquivalent(x.name, versionId));
   if (b) {
     return areTranslationsEquivalent(sc.version, b.abbreviation) || areTranslationsEquivalent(sc.version, b.id) || areTranslationsEquivalent(sc.version, b.name);
   }
@@ -541,47 +554,51 @@ export function scriptureMatchesVersion(sc, versionId) {
 
 if (btnToggleDualBible) {
   btnToggleDualBible.addEventListener('click', () => {
-    ctx!.setIsDualBibleMode(!ctx!.getIsDualBibleMode());
-    const pVersion = (ctx!.getSelectedLibraryItem() && ctx!.getSelectedLibraryItem().version ? ctx!.getSelectedLibraryItem().version : (ctx!.getActiveBibleVersion() !== 'all' ? ctx!.getActiveBibleVersion() : (ctx!.getInstalledBibles()[0] ? ctx!.getInstalledBibles()[0].abbreviation : 'Primary'))).trim();
+    if (!ctx) return;
+    const lp = ctx;
+    lp.setIsDualBibleMode(!lp.getIsDualBibleMode());
+    const pVersion = (lp.getSelectedLibraryItem() && lp.getSelectedLibraryItem().version ? lp.getSelectedLibraryItem().version : (lp.getActiveBibleVersion() !== 'all' ? lp.getActiveBibleVersion() : (lp.getInstalledBibles()[0] ? lp.getInstalledBibles()[0].abbreviation : 'Primary'))).trim();
 
-    if (ctx!.getIsDualBibleMode()) {
-      const otherInstalled = ctx!.getInstalledBibles().filter(b => 
+    if (lp.getIsDualBibleMode()) {
+      const otherInstalled = lp.getInstalledBibles().filter(b =>
         !areTranslationsEquivalent(b.id, pVersion) &&
         !areTranslationsEquivalent(b.abbreviation, pVersion) &&
         !areTranslationsEquivalent(b.name, pVersion)
       );
-      if (!ctx!.getSecondaryBibleVersion() || areTranslationsEquivalent(ctx!.getSecondaryBibleVersion(), pVersion)) {
+      if (!lp.getSecondaryBibleVersion() || areTranslationsEquivalent(lp.getSecondaryBibleVersion(), pVersion)) {
         if (otherInstalled.length > 0) {
-          ctx!.setSecondaryBibleVersion(otherInstalled[0].id);
+          lp.setSecondaryBibleVersion(otherInstalled[0].id);
         } else {
           const standardOnline = ['kjv', 'asv', 'web', 'bbe', 'hcsb'];
           const fallback = standardOnline.find(code => !areTranslationsEquivalent(code, pVersion));
-          ctx!.setSecondaryBibleVersion(fallback || 'asv');
+          lp.setSecondaryBibleVersion(fallback || 'asv');
         }
       }
     }
-    btnToggleDualBible.classList.toggle('active', ctx!.getIsDualBibleMode());
+    btnToggleDualBible.classList.toggle('active', lp.getIsDualBibleMode());
     const pAbbr = getBibleAbbreviation(pVersion);
-    const sAbbr = getBibleAbbreviation(ctx!.getSecondaryBibleVersion() || 'Parallel');
-    btnToggleDualBible.textContent = ctx!.getIsDualBibleMode()
+    const sAbbr = getBibleAbbreviation(lp.getSecondaryBibleVersion() || 'Parallel');
+    btnToggleDualBible.textContent = lp.getIsDualBibleMode()
       ? `👥 Dual: ${pAbbr} | ${sAbbr}`
       : '👥 Compare';
-    if (ctx!.getSelectedLibraryItem()) renderAssetPreview(ctx!.getSelectedLibraryItem(), 'scriptures');
+    if (lp.getSelectedLibraryItem()) renderAssetPreview(lp.getSelectedLibraryItem(), 'scriptures');
   });
 }
 
 // As-You-Type Query Engine & Filtering Logic
 
-let geniusSearchTimer = null;
+let geniusSearchTimer: ReturnType<typeof setTimeout> | null = null;
 
-export async function searchGeniusChristianSongs(query) {
+export async function searchGeniusChristianSongs(query: string) {
+  if (!ctx) return;
+  const lp = ctx;
   if (geniusSearchTimer) clearTimeout(geniusSearchTimer);
 
   const container = (activeResourceViewMode === 'table') ? catalogTableBody : catalogGrid;
   if (container) {
     container.innerHTML = `
       <div style="padding: 30px; text-align: center; color: #ffd700; font-weight: 500;">
-        <span style="font-size: 18px;">✨</span> Searching Genius for Christian lyrics matching "${ctx!.escapeHtml(query)}"...
+        <span style="font-size: 18px;">✨</span> Searching Genius for Christian lyrics matching "${lp.escapeHtml(query)}"...
       </div>`;
   }
 
@@ -594,7 +611,7 @@ export async function searchGeniusChristianSongs(query) {
           if (container) {
             container.innerHTML = `
               <div style="padding: 30px; text-align: center; color: var(--text-dim);">
-                <p>No Christian lyrics found on Genius for "${ctx!.escapeHtml(query)}".</p>
+                <p>No Christian lyrics found on Genius for "${lp.escapeHtml(query)}".</p>
                 <p style="font-size: 11px; margin-top: 4px;">Try searching by another title or artist.</p>
               </div>`;
           }
@@ -603,18 +620,20 @@ export async function searchGeniusChristianSongs(query) {
         }
       } else {
         if (container) {
-          container.innerHTML = `<div style="padding: 20px; text-align: center; color: #ff5252;">Error searching Genius: ${ctx!.escapeHtml(res.statusText)}</div>`;
+          container.innerHTML = `<div style="padding: 20px; text-align: center; color: #ff5252;">Error searching Genius: ${lp.escapeHtml(res.statusText)}</div>`;
         }
       }
     } catch (e) {
       if (container) {
-        container.innerHTML = `<div style="padding: 20px; text-align: center; color: #ff5252;">Network error: ${ctx!.escapeHtml(e.message)}</div>`;
+        container.innerHTML = `<div style="padding: 20px; text-align: center; color: #ff5252;">Network error: ${lp.escapeHtml(e instanceof Error ? e.message : String(e))}</div>`;
       }
     }
   }, 300);
 }
 
-export function renderGeniusHits(hits) {
+export function renderGeniusHits(hits: any[]) {
+  if (!ctx) return;
+  const lp = ctx;
   if (catalogItemCountEl) {
     catalogItemCountEl.textContent = `${hits.length} Genius songs`;
   }
@@ -627,20 +646,20 @@ export function renderGeniusHits(hits) {
     if (!catalogTableBody) return;
     catalogTableBody.innerHTML = '';
 
-    hits.forEach((hit, idx) => {
+    hits.forEach((hit: any, idx: number) => {
       const tr = document.createElement('tr');
       tr.dataset.id = hit.id;
-      tr.dataset.index = idx;
+      tr.dataset.index = String(idx);
       tr.tabIndex = 0;
       if (idx === 0) tr.classList.add('selected');
 
       const ccliBadge = hit.ccli_number
-        ? `<span style="background: rgba(0, 229, 255, 0.15); color: #00e5ff; border: 1px solid rgba(0, 229, 255, 0.4); font-size: 9.5px; padding: 2px 6px; border-radius: 3px; font-weight: 600; margin-left: 6px;">CCLI #${ctx!.escapeHtml(hit.ccli_number)}</span>`
+        ? `<span style="background: rgba(0, 229, 255, 0.15); color: #00e5ff; border: 1px solid rgba(0, 229, 255, 0.4); font-size: 9.5px; padding: 2px 6px; border-radius: 3px; font-weight: 600; margin-left: 6px;">CCLI #${lp.escapeHtml(hit.ccli_number)}</span>`
         : '';
 
       tr.innerHTML = `
-        <td style="font-weight: 600; color: #ffd700;">✨ ${ctx!.escapeHtml(hit.title)}</td>
-        <td>${ctx!.escapeHtml(hit.artist)}</td>
+        <td style="font-weight: 600; color: #ffd700;">✨ ${lp.escapeHtml(hit.title)}</td>
+        <td>${lp.escapeHtml(hit.artist)}</td>
         <td>
           <span style="background: rgba(255,215,0,0.15); color: #ffd700; border: 1px solid rgba(255,215,0,0.4); font-size: 9.5px; padding: 2px 6px; border-radius: 3px; font-weight: 600;">GENIUS</span>
           ${ccliBadge}
@@ -660,8 +679,8 @@ export function renderGeniusHits(hits) {
         e.preventDefault();
         e.stopPropagation();
         highlightCatalogRow(idx);
-        currentContextMenuTarget = { type: 'genius-hit', hit: hit };
-        ctx!.showContextMenu(document.getElementById('library-item-context-menu'), e.clientX, e.clientY);
+        lp.setContextMenuTarget({ type: 'genius-hit', hit: hit });
+        lp.showContextMenu(document.getElementById('library-item-context-menu'), e.clientX, e.clientY);
       });
 
       catalogTableBody.appendChild(tr);
@@ -674,24 +693,24 @@ export function renderGeniusHits(hits) {
     if (!catalogGrid) return;
     catalogGrid.innerHTML = '';
 
-    hits.forEach((hit, idx) => {
+    hits.forEach((hit: any, idx: number) => {
       const card = document.createElement('div');
       card.className = `catalog-grid-card ${idx === 0 ? 'selected' : ''}`;
       card.dataset.id = hit.id;
       card.tabIndex = 0;
 
       const thumbStyle = hit.thumbnail
-        ? `background-image: url('${hit.thumbnail}'); background-size: cover; background-position: center;`
+        ? `background-image: url('${escapeCssUrl(hit.thumbnail)}'); background-size: cover; background-position: center;`
         : `background: linear-gradient(135deg, #1f1c18, #473e34);`;
 
       const ccliTag = hit.ccli_number ? `#${hit.ccli_number}` : 'GENIUS';
 
       card.innerHTML = `
         <div class="grid-card-thumb" style="${thumbStyle}">
-          <span style="position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,0.7); color: #ffd700; font-size: 8.5px; padding: 1px 4px; border-radius: 2px;">${ctx!.escapeHtml(ccliTag)}</span>
+          <span style="position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,0.7); color: #ffd700; font-size: 8.5px; padding: 1px 4px; border-radius: 2px;">${lp.escapeHtml(ccliTag)}</span>
           ${hit.thumbnail ? '' : '✨'}
         </div>
-        <div class="grid-card-title">${ctx!.escapeHtml(hit.title)}</div>
+        <div class="grid-card-title">${lp.escapeHtml(hit.title)}</div>
       `;
 
       card.addEventListener('click', () => {
@@ -711,17 +730,18 @@ export function renderGeniusHits(hits) {
   }
 }
 
-export function renderGeniusPreview(hit) {
+export function renderGeniusPreview(hit: any) {
   if (!resourcePreviewMonitor) return;
+  if (!ctx) return;
   const ccliHtml = hit.ccli_number
-    ? `<div style="font-size: 11px; color: #00e5ff; font-weight: 600; margin-bottom: 8px;">🔢 CCLI Song #: ${ctx!.escapeHtml(hit.ccli_number)}</div>`
+    ? `<div style="font-size: 11px; color: #00e5ff; font-weight: 600; margin-bottom: 8px;">🔢 CCLI Song #: ${ctx.escapeHtml(hit.ccli_number)}</div>`
     : '';
 
   resourcePreviewMonitor.innerHTML = `
     <div class="asset-preview-content" style="background: linear-gradient(135deg, #181512, #2e261f, #141b24); font-family: Segoe UI, sans-serif; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 18px; color: #fff;">
       <div class="preview-badge" style="background: rgba(255,215,0,0.2); color: #ffd700; border: 1px solid #ffd700; margin-bottom: 8px; font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 700;">✨ GENIUS CHRISTIAN LYRICS</div>
-      <div style="font-size: 18px; font-weight: 700; margin-bottom: 4px;">${ctx!.escapeHtml(hit.title)}</div>
-      <div style="font-size: 13px; color: #ffd700; margin-bottom: 6px;">${ctx!.escapeHtml(hit.artist)}</div>
+      <div style="font-size: 18px; font-weight: 700; margin-bottom: 4px;">${ctx.escapeHtml(hit.title)}</div>
+      <div style="font-size: 13px; color: #ffd700; margin-bottom: 6px;">${ctx.escapeHtml(hit.artist)}</div>
       ${ccliHtml}
       <p style="font-size: 11.5px; color: #bbb; line-height: 1.5; max-width: 320px; margin-bottom: 14px;">
         Double-click or click below to automatically import all formatted lyrics slides into your Library & Schedule.
@@ -738,7 +758,9 @@ export function renderGeniusPreview(hit) {
   }
 }
 
-export async function importAndStageGeniusSong(hit, goLive = false) {
+export async function importAndStageGeniusSong(hit: any, goLive: boolean = false) {
+  if (!ctx) return;
+  const lp = ctx;
   try {
     const res = await fetch('/api/songs/genius/import', {
       method: 'POST',
@@ -754,16 +776,16 @@ export async function importAndStageGeniusSong(hit, goLive = false) {
       await loadLibraryTab('songs');
       addItemToSchedule('songs', song.id);
       if (goLive) {
-        setTimeout(() => ctx!.sendCommand({ GoLive: { item_index: null, slide_index: 0 } }), 100);
+        setTimeout(() => lp.sendCommand({ GoLive: { item_index: null, slide_index: 0 } }), 100);
       }
       const ccliMsg = song.ccli_number ? ` (CCLI #${song.ccli_number})` : '';
-      ctx!.showToast(`✓ Imported "${song.title}"${ccliMsg} with ${song.slides.length} slides from Genius!`, 'success');
+      lp.showToast(`✓ Imported "${song.title}"${ccliMsg} with ${song.slides.length} slides from Genius!`, 'success');
     } else {
       const err = await res.text();
-      ctx!.showToast(`Could not import lyrics from Genius: ${err}`, 'error');
+      lp.showToast(`Could not import lyrics from Genius: ${err}`, 'error');
     }
   } catch (e) {
-    ctx!.showToast(`Import error: ${e.message}`, 'error');
+    lp.showToast(`Import error: ${e instanceof Error ? e.message : String(e)}`, 'error');
   }
 }
 
@@ -781,7 +803,8 @@ export async function importAndStageGeniusSong(hit, goLive = false) {
  * Returns true if this was an online-images search (caller should stop).
  */
 export function tryHandleOnlineImagesEnter(): boolean {
-  if (ctx!.getCurrentTab() === 'media' && activeCategory === 'online-images') {
+  if (!ctx) return false;
+  if (ctx.getCurrentTab() === 'media' && activeCategory === 'online-images') {
     const q = resourceSearchInput ? resourceSearchInput.value.trim() : '';
     if (q) searchOnlineImages(q);
     return true;
@@ -790,6 +813,8 @@ export function tryHandleOnlineImagesEnter(): boolean {
 }
 
 export async function searchOnlineImages(query: string) {
+  if (!ctx) return;
+  const lp = ctx;
   // Triggered only by pressing Enter (see app_ui.ts's keydown handler) — these
   // hit paid/rate-limited external APIs, so there's no per-keystroke debounce
   // needed here, unlike the Genius search this was originally modeled on.
@@ -798,7 +823,7 @@ export async function searchOnlineImages(query: string) {
     catalogGrid.style.display = 'grid';
     catalogGrid.innerHTML = `
       <div style="grid-column: 1 / -1; padding: 30px; text-align: center; color: #64b5f6; font-weight: 500;">
-        <span style="font-size: 18px;">🌐</span> Searching Pexels &amp; Pixabay for "${ctx!.escapeHtml(query)}"...
+        <span style="font-size: 18px;">🌐</span> Searching Pexels &amp; Pixabay for "${lp.escapeHtml(query)}"...
       </div>`;
   }
 
@@ -811,7 +836,7 @@ export async function searchOnlineImages(query: string) {
         if (catalogGrid) {
           catalogGrid.innerHTML = `
             <div style="grid-column: 1 / -1; padding: 30px; text-align: center; color: var(--text-dim);">
-              <p>No online images found for "${ctx!.escapeHtml(query)}".</p>
+              <p>No online images found for "${lp.escapeHtml(query)}".</p>
               <p style="font-size: 11px; margin-top: 4px;">Check that a Pexels and/or Pixabay API key is configured in Options, and try another keyword.</p>
             </div>`;
         }
@@ -819,14 +844,16 @@ export async function searchOnlineImages(query: string) {
         renderOnlineImageHits(results);
       }
     } else {
-      if (catalogGrid) catalogGrid.innerHTML = `<div style="grid-column: 1 / -1; padding: 20px; text-align: center; color: #ff5252;">Error searching online images: ${ctx!.escapeHtml(res.statusText)}</div>`;
+      if (catalogGrid) catalogGrid.innerHTML = `<div style="grid-column: 1 / -1; padding: 20px; text-align: center; color: #ff5252;">Error searching online images: ${lp.escapeHtml(res.statusText)}</div>`;
     }
   } catch (e) {
-    if (catalogGrid) catalogGrid.innerHTML = `<div style="grid-column: 1 / -1; padding: 20px; text-align: center; color: #ff5252;">Network error: ${ctx!.escapeHtml(e.message)}</div>`;
+    if (catalogGrid) catalogGrid.innerHTML = `<div style="grid-column: 1 / -1; padding: 20px; text-align: center; color: #ff5252;">Network error: ${lp.escapeHtml(e instanceof Error ? e.message : String(e))}</div>`;
   }
 }
 
 export function renderOnlineImageHits(results: any[]) {
+  if (!ctx) return;
+  const lp = ctx;
   if (catalogItemCountEl) catalogItemCountEl.textContent = `${results.length} online images`;
   if (!catalogGrid) return;
   catalogGrid.innerHTML = '';
@@ -840,10 +867,10 @@ export function renderOnlineImageHits(results: any[]) {
     const providerLabel = (hit.provider || '').toUpperCase();
     const cardLabel = hit.tags || hit.photographer || providerLabel;
     card.innerHTML = `
-      <div class="grid-card-thumb" style="background-image: url('${hit.thumbnail_url}'); background-size: cover; background-position: center;">
-        <span style="position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,0.7); color: #64b5f6; font-size: 8.5px; padding: 1px 4px; border-radius: 2px;">${ctx!.escapeHtml(providerLabel)}</span>
+      <div class="grid-card-thumb" style="background-image: url('${escapeCssUrl(hit.thumbnail_url)}'); background-size: cover; background-position: center;">
+        <span style="position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,0.7); color: #64b5f6; font-size: 8.5px; padding: 1px 4px; border-radius: 2px;">${lp.escapeHtml(providerLabel)}</span>
       </div>
-      <div class="grid-card-title" title="${ctx!.escapeHtml(cardLabel)}">${ctx!.escapeHtml(cardLabel)}</div>
+      <div class="grid-card-title" title="${lp.escapeHtml(cardLabel)}">${lp.escapeHtml(cardLabel)}</div>
     `;
 
     card.addEventListener('click', () => {
@@ -864,15 +891,16 @@ export function renderOnlineImageHits(results: any[]) {
 
 export function renderOnlineImagePreview(hit: any) {
   if (!resourcePreviewMonitor) return;
+  if (!ctx) return;
   const attribution = hit.photographer
-    ? `Photo by ${ctx!.escapeHtml(hit.photographer)} on ${ctx!.escapeHtml((hit.provider || '').charAt(0).toUpperCase() + (hit.provider || '').slice(1))}`
-    : ctx!.escapeHtml(hit.provider || '');
+    ? `Photo by ${ctx.escapeHtml(hit.photographer)} on ${ctx.escapeHtml((hit.provider || '').charAt(0).toUpperCase() + (hit.provider || '').slice(1))}`
+    : ctx.escapeHtml(hit.provider || '');
   const tagsHtml = hit.tags
-    ? `<div style="font-size: 9.5px; color: #64b5f6; margin-bottom: 4px;">🏷️ ${ctx!.escapeHtml(hit.tags)}</div>`
+    ? `<div style="font-size: 9.5px; color: #64b5f6; margin-bottom: 4px;">🏷️ ${ctx.escapeHtml(hit.tags)}</div>`
     : '';
 
   resourcePreviewMonitor.innerHTML = `
-    <div class="asset-preview-content" style="background-image: url('${hit.thumbnail_url}'); background-size: cover; background-position: center; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; text-align: center; padding: 12px; color: #fff;">
+    <div class="asset-preview-content" style="background-image: url('${escapeCssUrl(hit.thumbnail_url)}'); background-size: cover; background-position: center; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; text-align: center; padding: 12px; color: #fff;">
       <div style="background: rgba(0,0,0,0.65); border-radius: 4px; padding: 8px 12px; width: 100%;">
         ${tagsHtml}
         <div style="font-size: 10.5px; color: #ddd; margin-bottom: 8px;">${attribution}</div>
@@ -888,8 +916,10 @@ export function renderOnlineImagePreview(hit: any) {
 }
 
 export async function importOnlineImage(hit: any) {
+  if (!ctx) return;
+  const lp = ctx;
   try {
-    ctx!.showToast(`Downloading image from ${hit.provider}...`, 'info');
+    lp.showToast(`Downloading image from ${hit.provider}...`, 'info');
     const res = await fetch('/api/media/online/import', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -897,8 +927,8 @@ export async function importOnlineImage(hit: any) {
     });
     if (res.ok) {
       const mediaItem = await res.json();
-      ctx!.showToast(`✓ Added "${mediaItem.name}" to your Media library!`, 'success');
-      if (ctx!.getCurrentTab() === 'media') {
+      lp.showToast(`✓ Added "${mediaItem.name}" to your Media library!`, 'success');
+      if (lp.getCurrentTab() === 'media') {
         try {
           const listRes = await fetch('/api/media');
           if (listRes.ok) activeLibraryItems = await listRes.json();
@@ -906,22 +936,24 @@ export async function importOnlineImage(hit: any) {
       }
     } else {
       const err = await res.text();
-      ctx!.showToast(`Could not import image: ${err}`, 'error');
+      lp.showToast(`Could not import image: ${err}`, 'error');
     }
   } catch (e) {
-    ctx!.showToast(`Import error: ${e.message}`, 'error');
+    lp.showToast(`Import error: ${e instanceof Error ? e.message : String(e)}`, 'error');
   }
 }
 
 export function filterAndRenderCatalog() {
+  if (!ctx) return;
+  const lp = ctx;
   const rawQuery = resourceSearchInput ? resourceSearchInput.value.trim() : '';
   const query = rawQuery.toLowerCase();
   if (btnSearchClear) btnSearchClear.style.display = rawQuery ? 'block' : 'none';
 
-  const mode = currentSearchModes[ctx!.getCurrentTab()] || 'all';
+  const mode = currentSearchModes[lp.getCurrentTab()] || 'all';
   let matchedOnlineReference = null;
 
-  if (ctx!.getCurrentTab() === 'media' && activeCategory === 'online-images') {
+  if (lp.getCurrentTab() === 'media' && activeCategory === 'online-images') {
     if (!query) {
       if (catalogItemCountEl) catalogItemCountEl.textContent = 'Online Image Search';
       if (catalogGrid) { catalogGrid.style.display = 'grid'; catalogGrid.innerHTML = `
@@ -946,7 +978,7 @@ export function filterAndRenderCatalog() {
     return;
   }
 
-  if (ctx!.getCurrentTab() === 'songs' && (mode === 'genius' || activeCategory === 'genius-christian')) {
+  if (lp.getCurrentTab() === 'songs' && (mode === 'genius' || activeCategory === 'genius-christian')) {
     if (!query) {
       if (catalogItemCountEl) catalogItemCountEl.textContent = 'Genius Search';
       const container = (activeResourceViewMode === 'table') ? catalogTableBody : catalogGrid;
@@ -970,14 +1002,14 @@ export function filterAndRenderCatalog() {
   }
 
   if (!query) {
-    if (ctx!.getCurrentTab() === 'scriptures') {
-      if (ctx!.getActiveBibleVersion() === 'all') {
+    if (lp.getCurrentTab() === 'scriptures') {
+      if (lp.getActiveBibleVersion() === 'all') {
         filteredLibraryItems = [...activeLibraryItems];
       } else {
-        filteredLibraryItems = activeLibraryItems.filter(sc => scriptureMatchesVersion(sc, ctx!.getActiveBibleVersion()));
+        filteredLibraryItems = activeLibraryItems.filter(sc => scriptureMatchesVersion(sc, lp.getActiveBibleVersion()));
         if (filteredLibraryItems.length === 0) filteredLibraryItems = [...activeLibraryItems];
       }
-    } else if (ctx!.getCurrentTab() === 'media') {
+    } else if (lp.getCurrentTab() === 'media') {
       const effectiveCategory = (activeCategory && activeCategory !== 'all' && activeCategory !== 'ytdlp-import')
         ? activeCategory
         : mode;
@@ -992,7 +1024,7 @@ export function filterAndRenderCatalog() {
     } else {
       filteredLibraryItems = [...activeLibraryItems];
     }
-  } else if (ctx!.getCurrentTab() === 'songs') {
+  } else if (lp.getCurrentTab() === 'songs') {
     if (rawQuery.length >= 2) {
       matchedOnlineReference = { type: 'genius', query: rawQuery };
     }
@@ -1000,30 +1032,33 @@ export function filterAndRenderCatalog() {
       const matchTitle = (s.title || '').toLowerCase().includes(query) || (s.alternate_title || '').toLowerCase().includes(query);
       const matchAuthor = (s.author || '').toLowerCase().includes(query);
       const matchCcli = (s.ccli_number || '').toLowerCase().includes(query) || (s.id || '').toLowerCase().includes(query);
-      const matchLyrics = s.slides && s.slides.some(sl => (sl.text || '').toLowerCase().includes(query));
+      const matchLyrics = s.slides && s.slides.some((sl: any) => (sl.text || '').toLowerCase().includes(query));
 
       if (mode === 'title') return matchTitle;
       if (mode === 'lyrics') return matchLyrics;
       if (mode === 'ccli') return matchCcli;
       return matchTitle || matchAuthor || matchCcli || matchLyrics;
     });
-  } else if (ctx!.getCurrentTab() === 'scriptures') {
+  } else if (lp.getCurrentTab() === 'scriptures') {
     if (mode === 'reference') {
       const parsedRef = parseScriptureReference(rawQuery);
       if (parsedRef.isReference) {
         matchedOnlineReference = parsedRef;
-        const matchingItems = [];
-        activeLibraryItems.forEach(sc => {
-          if (!scriptureMatchesVersion(sc, ctx!.getActiveBibleVersion())) return;
-          const matchBook = (sc.book || '').toLowerCase() === parsedRef.book.toLowerCase();
+        const matchingItems: any[] = [];
+        const refBook = parsedRef.book;
+        activeLibraryItems.forEach((sc: any) => {
+          if (!refBook) return;
+          if (!scriptureMatchesVersion(sc, lp.getActiveBibleVersion())) return;
+          const matchBook = (sc.book || '').toLowerCase() === refBook.toLowerCase();
           if (!matchBook) return;
           if (parsedRef.chapter && sc.chapter !== parsedRef.chapter) return;
 
           if (parsedRef.hasSpecificVerse) {
             const startV = parsedRef.verseStart;
+            if (startV === undefined || startV === null) return;
             const endV = parsedRef.verseEnd || startV;
             if (sc.verse_start <= startV && sc.verse_end >= startV) {
-              const specificVerses = (sc.verses || []).filter(v => v.verse_number >= startV && v.verse_number <= endV);
+              const specificVerses = (sc.verses || []).filter((v: any) => v.verse_number >= startV && v.verse_number <= endV);
               if (specificVerses.length > 0) {
                 const cleanBook = sc.book;
                 const refStr = (startV === endV)
@@ -1049,21 +1084,21 @@ export function filterAndRenderCatalog() {
         filteredLibraryItems = matchingItems;
       } else {
         filteredLibraryItems = activeLibraryItems.filter(sc => {
-          const matchVersion = scriptureMatchesVersion(sc, ctx!.getActiveBibleVersion());
+          const matchVersion = scriptureMatchesVersion(sc, lp.getActiveBibleVersion());
           return matchVersion && ((sc.reference || '').toLowerCase().includes(query)
             || (sc.book || '').toLowerCase().includes(query));
         });
       }
     } else {
       const qTokens = query.split(/\s+/).filter(Boolean);
-      const scored = [];
+      const scored: any[] = [];
       const seenIds = new Set();
 
-      activeLibraryItems.forEach(sc => {
-        if (!scriptureMatchesVersion(sc, ctx!.getActiveBibleVersion())) return;
+      activeLibraryItems.forEach((sc: any) => {
+        if (!scriptureMatchesVersion(sc, lp.getActiveBibleVersion())) return;
         if (!sc.verses || sc.verses.length === 0) return;
 
-        sc.verses.forEach(v => {
+        sc.verses.forEach((v: any) => {
           const textLower = (v.text || '').toLowerCase();
           let score = 0;
           if (textLower.includes(query)) {
@@ -1099,8 +1134,8 @@ export function filterAndRenderCatalog() {
       scored.sort((a, b) => b.score - a.score);
       filteredLibraryItems = scored.map(s => s.item);
     }
-  } else if (ctx!.getCurrentTab() === 'media') {
-    filteredLibraryItems = activeLibraryItems.filter(m => {
+  } else if (lp.getCurrentTab() === 'media') {
+    filteredLibraryItems = activeLibraryItems.filter((m: any) => {
       const matchName = (m.name || '').toLowerCase().includes(query);
       const matchPath = (m.file_path || '').toLowerCase().includes(query);
       const matchType = (m.media_type || '').toLowerCase().includes(query);
@@ -1117,18 +1152,18 @@ export function filterAndRenderCatalog() {
       if (effectiveCategory === 'feeds') return matchesSearch && (mTypeLower.includes('feed') || mTypeLower.includes('camera'));
       return matchesSearch;
     });
-  } else if (ctx!.getCurrentTab() === 'presentations') {
+  } else if (lp.getCurrentTab() === 'presentations') {
     filteredLibraryItems = activeLibraryItems.filter(p => {
       const matchTitle = (p.title || '').toLowerCase().includes(query);
       const matchAuthor = (p.author || '').toLowerCase().includes(query);
-      const matchSlides = p.slides && p.slides.some(s => (s.content || s.title || '').toLowerCase().includes(query));
+      const matchSlides = p.slides && p.slides.some((s: any) => (s.content || s.title || '').toLowerCase().includes(query));
       if (mode === 'title') return matchTitle;
       return matchTitle || matchAuthor || matchSlides;
     });
-  } else if (ctx!.getCurrentTab() === 'themes') {
-    const categoryMap = { 'song-themes': 'song', 'scripture-themes': 'scripture', 'presentation-themes': 'presentation' };
+  } else if (lp.getCurrentTab() === 'themes') {
+    const categoryMap: Record<string, string> = { 'song-themes': 'song', 'scripture-themes': 'scripture', 'presentation-themes': 'presentation' };
     const wantedCategory = categoryMap[activeCategory];
-    filteredLibraryItems = activeLibraryItems.filter(t => {
+    filteredLibraryItems = activeLibraryItems.filter((t: any) => {
       if (wantedCategory && (t.category || 'song') !== wantedCategory) return false;
       const matchName = (t.name || '').toLowerCase().includes(query);
       const matchFont = (t.font_family || '').toLowerCase().includes(query);
@@ -1138,17 +1173,18 @@ export function filterAndRenderCatalog() {
     });
   }
 
-  renderCatalog(filteredLibraryItems, ctx!.getCurrentTab(), matchedOnlineReference);
+  renderCatalog(filteredLibraryItems, lp.getCurrentTab(), matchedOnlineReference);
 }
 
-let currentCatalogItems = [];
+let currentCatalogItems: any[] = [];
 let catalogVisibleCount = 100;
 const CATALOG_BATCH_SIZE = 100;
 
 export function updateCatalogCountDisplay() {
   if (!catalogItemCountEl) return;
+  if (!ctx) return;
   const total = currentCatalogItems.length;
-  const tabLabel = ctx!.getCurrentTab() || 'items';
+  const tabLabel = ctx.getCurrentTab() || 'items';
   if (total > catalogVisibleCount) {
     catalogItemCountEl.textContent = `Showing ${catalogVisibleCount} of ${total} ${tabLabel}`;
   } else {
@@ -1157,6 +1193,8 @@ export function updateCatalogCountDisplay() {
 }
 
 export function loadMoreCatalogItems() {
+  if (!ctx) return;
+  const lp = ctx;
   if (catalogVisibleCount >= currentCatalogItems.length) return;
   const start = catalogVisibleCount;
   const end = Math.min(start + CATALOG_BATCH_SIZE, currentCatalogItems.length);
@@ -1167,9 +1205,9 @@ export function loadMoreCatalogItems() {
   updateCatalogCountDisplay();
 
   if (activeResourceViewMode === 'table') {
-    appendCatalogTableRows(nextBatch, ctx!.getCurrentTab(), start);
+    appendCatalogTableRows(nextBatch, lp.getCurrentTab(), start);
   } else {
-    appendCatalogGridCards(nextBatch, ctx!.getCurrentTab(), start);
+    appendCatalogGridCards(nextBatch, lp.getCurrentTab(), start);
   }
 }
 
@@ -1185,7 +1223,9 @@ if (catalogScrollBodyEl) {
   });
 }
 
-export function renderCatalog(items, tabName, matchedOnlineRef = null) {
+export function renderCatalog(items: any[], tabName: string, matchedOnlineRef: any = null) {
+  if (!ctx) return;
+  const lp = ctx;
   currentCatalogItems = items;
   catalogVisibleCount = Math.min(CATALOG_BATCH_SIZE, items.length);
 
@@ -1208,8 +1248,8 @@ export function renderCatalog(items, tabName, matchedOnlineRef = null) {
   if (items.length > 0) {
     // Preserve selection if previously selected item is still in filtered results
     let targetIdx = 0;
-    if (ctx!.getSelectedLibraryItem()) {
-      const foundIdx = items.findIndex(it => it.id === ctx!.getSelectedLibraryItem().id);
+    if (lp.getSelectedLibraryItem()) {
+      const foundIdx = items.findIndex(it => it.id === lp.getSelectedLibraryItem().id);
       if (foundIdx !== -1) {
         targetIdx = foundIdx;
       }
@@ -1223,43 +1263,45 @@ export function renderCatalog(items, tabName, matchedOnlineRef = null) {
   }
 }
 
-export function createCatalogTableRow(item, idx, tabName) {
+export function createCatalogTableRow(item: any, idx: number, tabName: string) {
+  if (!ctx) return document.createElement('tr');
+  const lp = ctx;
   const tr = document.createElement('tr');
   tr.dataset.id = item.id;
-  tr.dataset.index = idx;
+  tr.dataset.index = String(idx);
   tr.tabIndex = 0;
   if (idx === selectedCatalogIndex) tr.classList.add('selected');
 
   if (tabName === 'songs') {
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">🎵 ${ctx!.escapeHtml(item.title)}</td>
-      <td>${ctx!.escapeHtml(item.author || '')}</td>
-      <td style="color: var(--text-dim); font-size: 10px;">${ctx!.escapeHtml(item.ccli_number || item.copyright || '')}</td>
+      <td style="font-weight: 600; color: #fff;">🎵 ${lp.escapeHtml(item.title)}</td>
+      <td>${lp.escapeHtml(item.author || '')}</td>
+      <td style="color: var(--text-dim); font-size: 10px;">${lp.escapeHtml(item.ccli_number || item.copyright || '')}</td>
     `;
   } else if (tabName === 'scriptures') {
     const snippet = item.verses && item.verses.length > 0 ? item.verses[0].text : '';
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">📖 ${ctx!.escapeHtml(item.reference)}</td>
-      <td><span class="bible-lang-badge">${ctx!.escapeHtml(item.version)}</span></td>
-      <td style="color: var(--text-dim); font-size: 10.5px; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${ctx!.escapeHtml(snippet)}</td>
+      <td style="font-weight: 600; color: #fff;">📖 ${lp.escapeHtml(item.reference)}</td>
+      <td><span class="bible-lang-badge">${lp.escapeHtml(item.version)}</span></td>
+      <td style="color: var(--text-dim); font-size: 10.5px; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${lp.escapeHtml(snippet)}</td>
     `;
   } else if (tabName === 'media') {
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">🎬 ${ctx!.escapeHtml(item.name)}</td>
-      <td>${ctx!.escapeHtml(item.media_type || 'Image')}</td>
+      <td style="font-weight: 600; color: #fff;">🎬 ${lp.escapeHtml(item.name)}</td>
+      <td>${lp.escapeHtml(item.media_type || 'Image')}</td>
       <td>${item.duration_seconds ? item.duration_seconds + 's' : 'Still'}</td>
     `;
   } else if (tabName === 'presentations') {
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">📊 ${ctx!.escapeHtml(item.title)}</td>
-      <td>${ctx!.escapeHtml(item.author || 'Media')}</td>
+      <td style="font-weight: 600; color: #fff;">📊 ${lp.escapeHtml(item.title)}</td>
+      <td>${lp.escapeHtml(item.author || 'Media')}</td>
       <td>${item.slides ? item.slides.length : 1} slides</td>
     `;
   } else if (tabName === 'themes') {
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">🎨 ${ctx!.escapeHtml(item.name)}</td>
-      <td>${ctx!.escapeHtml(item.font_family || 'Segoe UI')} (${item.font_size || 38}px)</td>
-      <td>${ctx!.escapeHtml(item.background_type || 'Gradient')}</td>
+      <td style="font-weight: 600; color: #fff;">🎨 ${lp.escapeHtml(item.name)}</td>
+      <td>${lp.escapeHtml(item.font_family || 'Segoe UI')} (${item.font_size || 38}px)</td>
+      <td>${lp.escapeHtml(item.background_type || 'Gradient')}</td>
     `;
   }
 
@@ -1292,6 +1334,7 @@ export function createCatalogTableRow(item, idx, tabName) {
 
   tr.draggable = true;
   tr.addEventListener('dragstart', (e) => {
+    if (!e.dataTransfer) return;
     e.dataTransfer.setData('application/json', JSON.stringify({
       type: tabName === 'media' ? 'media-item' : (tabName === 'themes' ? 'theme-item' : 'catalog-item'),
       tabName: tabName,
@@ -1322,8 +1365,8 @@ export function createCatalogTableRow(item, idx, tabName) {
     selectedCatalogIndex = idx;
     highlightCatalogRow(idx);
     selectAndPreviewItem(item, tabName);
-    currentContextMenuTarget = { type: 'library-item', tab: tabName, item: item };
-    ctx!.showContextMenu(document.getElementById('library-item-context-menu'), e.clientX, e.clientY);
+    lp.setContextMenuTarget({ type: 'library-item', tab: tabName, item: item });
+    lp.showContextMenu(document.getElementById('library-item-context-menu'), e.clientX, e.clientY);
   });
 
   tr.addEventListener('keydown', (e) => {
@@ -1344,7 +1387,7 @@ export function createCatalogTableRow(item, idx, tabName) {
       e.preventDefault();
       if (e.ctrlKey) {
         addItemToSchedule(tabName, item.id);
-        setTimeout(() => ctx!.sendCommand({ GoLive: { item_index: null, slide_index: 0 } }), 100);
+        setTimeout(() => lp.sendCommand({ GoLive: { item_index: null, slide_index: 0 } }), 100);
       } else {
         addItemToSchedule(tabName, item.id);
       }
@@ -1354,7 +1397,7 @@ export function createCatalogTableRow(item, idx, tabName) {
   return tr;
 }
 
-export function appendCatalogTableRows(items, tabName, startIndex) {
+export function appendCatalogTableRows(items: any[], tabName: string, startIndex: number) {
   if (!catalogTableBody) return;
   items.forEach((item, i) => {
     const tr = createCatalogTableRow(item, startIndex + i, tabName);
@@ -1362,7 +1405,8 @@ export function appendCatalogTableRows(items, tabName, startIndex) {
   });
 }
 
-export function renderCatalogTable(items, tabName, matchedOnlineRef = null) {
+export function renderCatalogTable(items: any[], tabName: string, matchedOnlineRef: any = null) {
+  if (!ctx) return;
   const headers = document.getElementById('catalog-headers');
   if (!catalogTableBody) return;
 
@@ -1386,7 +1430,7 @@ export function renderCatalogTable(items, tabName, matchedOnlineRef = null) {
     promptTr.tabIndex = 0;
     promptTr.innerHTML = `
       <td colspan="3" style="padding: 10px; color: #ffd700; font-weight: 600; cursor: pointer; background: rgba(255,215,0,0.06);">
-        ✨ Search Genius for Christian Lyrics: "${ctx!.escapeHtml(matchedOnlineRef.query)}" ➔
+        ✨ Search Genius for Christian Lyrics: "${ctx.escapeHtml(matchedOnlineRef.query)}" ➔
       </td>
     `;
     promptTr.addEventListener('click', () => {
@@ -1410,14 +1454,14 @@ export function renderCatalogTable(items, tabName, matchedOnlineRef = null) {
   }
 
   if (matchedOnlineRef && items.length === 0 && tabName === 'scriptures') {
-    const fetchTrans = ctx!.getActiveBibleVersion() === 'all' ? (ctx!.getAppOptions().defaultBibleVersion || 'kjv') : ctx!.getActiveBibleVersion();
-    const activeObj = ctx!.getInstalledBibles().find(b => b.id === fetchTrans) || ctx!.getInstalledBibles()[0];
+    const fetchTrans = ctx.getActiveBibleVersion() === 'all' ? (ctx.getAppOptions().defaultBibleVersion || 'kjv') : ctx.getActiveBibleVersion();
+    const activeObj = ctx.getInstalledBibles().find(b => b.id === fetchTrans) || ctx.getInstalledBibles()[0];
     const promptTr = document.createElement('tr');
     promptTr.className = 'catalog-fetch-prompt-row';
     promptTr.tabIndex = 0;
     promptTr.innerHTML = `
       <td colspan="3" style="padding: 10px; color: #00e5ff; font-weight: 600;">
-        🌐 Fetch & Stage "${ctx!.escapeHtml(matchedOnlineRef.formatted)}" [${ctx!.escapeHtml(activeObj.abbreviation)}] from Online Scripture API ➔
+        🌐 Fetch & Stage "${ctx.escapeHtml(matchedOnlineRef.formatted)}" [${ctx.escapeHtml(activeObj.abbreviation)}] from Online Scripture API ➔
       </td>
     `;
     promptTr.addEventListener('click', () => fetchAndStageOnlineScripture(matchedOnlineRef.formatted, fetchTrans));
@@ -1431,21 +1475,28 @@ export function renderCatalogTable(items, tabName, matchedOnlineRef = null) {
   appendCatalogTableRows(items, tabName, 0);
 }
 
-export function highlightCatalogRow(idx) {
+export function highlightCatalogRow(idx: number) {
   if (!catalogTableBody) return;
   selectedCatalogIndex = idx;
-  const rows = catalogTableBody.querySelectorAll('tr');
+  // Exclude the decorative ".catalog-fetch-prompt-row" (Genius/online-fetch
+  // prompt), which `renderCatalogTable` prepends ahead of the real item
+  // rows -- otherwise `idx` (an item index, same semantics `createCatalogTableRow`
+  // uses) would be off by one against raw DOM row position whenever that
+  // prompt row is present.
+  const rows = catalogTableBody.querySelectorAll<HTMLElement>('tr:not(.catalog-fetch-prompt-row)');
   rows.forEach((r, i) => {
     r.classList.toggle('selected', i === idx);
     if (i === idx) r.focus();
   });
 }
 
-export function createCatalogGridCard(item, idx, tabName) {
+export function createCatalogGridCard(item: any, idx: number, tabName: string) {
+  if (!ctx) return document.createElement('div');
+  const lp = ctx;
   const card = document.createElement('div');
   card.className = 'catalog-grid-card';
   card.dataset.id = item.id;
-  card.dataset.index = idx;
+  card.dataset.index = String(idx);
   card.tabIndex = 0;
   if (idx === selectedCatalogIndex) card.classList.add('selected');
 
@@ -1469,8 +1520,8 @@ export function createCatalogGridCard(item, idx, tabName) {
 
   const defaultBadge = (tabName === 'themes' && item.is_default) ? '<span class="grid-card-default-badge" title="Default theme for this category">⭐</span>' : '';
   card.innerHTML = `
-    <div class="grid-card-thumb" style="background: ${bgStyle};">${icon}${defaultBadge}</div>
-    <div class="grid-card-title">${ctx!.escapeHtml(title)}</div>
+    <div class="grid-card-thumb" style="background: ${escapeHtml(bgStyle)};">${icon}${defaultBadge}</div>
+    <div class="grid-card-title">${lp.escapeHtml(title)}</div>
   `;
 
   if (tabName === 'themes') {
@@ -1478,7 +1529,7 @@ export function createCatalogGridCard(item, idx, tabName) {
       e.preventDefault();
       e.stopPropagation();
       contextMenuTargetTheme = item;
-      ctx!.showContextMenu(document.getElementById('theme-context-menu'), e.clientX, e.clientY);
+      lp.showContextMenu(document.getElementById('theme-context-menu'), e.clientX, e.clientY);
     });
   }
 
@@ -1516,6 +1567,7 @@ export function createCatalogGridCard(item, idx, tabName) {
 
   card.draggable = true;
   card.addEventListener('dragstart', (e) => {
+    if (!e.dataTransfer) return;
     e.dataTransfer.setData('application/json', JSON.stringify({
       type: tabName === 'media' ? 'media-item' : (tabName === 'themes' ? 'theme-item' : 'catalog-item'),
       tabName: tabName,
@@ -1554,8 +1606,8 @@ export function createCatalogGridCard(item, idx, tabName) {
     document.querySelectorAll('.catalog-grid-card').forEach(c => c.classList.remove('selected'));
     card.classList.add('selected');
     selectAndPreviewItem(item, tabName);
-    currentContextMenuTarget = { type: 'library-item', tab: tabName, item: item };
-    ctx!.showContextMenu(document.getElementById('library-item-context-menu'), e.clientX, e.clientY);
+    lp.setContextMenuTarget({ type: 'library-item', tab: tabName, item: item });
+    lp.showContextMenu(document.getElementById('library-item-context-menu'), e.clientX, e.clientY);
   });
 
   card.addEventListener('keydown', (e) => {
@@ -1568,7 +1620,7 @@ export function createCatalogGridCard(item, idx, tabName) {
   return card;
 }
 
-export function appendCatalogGridCards(items, tabName, startIndex) {
+export function appendCatalogGridCards(items: any[], tabName: string, startIndex: number) {
   if (!catalogGrid) return;
   items.forEach((item, i) => {
     const card = createCatalogGridCard(item, startIndex + i, tabName);
@@ -1576,7 +1628,7 @@ export function appendCatalogGridCards(items, tabName, startIndex) {
   });
 }
 
-export function renderCatalogGrid(items, tabName) {
+export function renderCatalogGrid(items: any[], tabName: string) {
   if (!catalogGrid) return;
 
   // Clean up previous Pragmatic DND listeners on catalog items
@@ -1602,40 +1654,42 @@ const STAGEABLE_TAB_TYPES: Record<string, string> = {
  * double-click-to-Live and the Go Live button work, exactly as they do for
  * a real staged schedule item. Themes (not a schedulable item type) still
  * use the lightweight ad-hoc preview. */
-export function selectAndPreviewItem(item, tabName) {
-  ctx!.setSelectedLibraryItem(item);
+export function selectAndPreviewItem(item: any, tabName: string) {
+  if (!ctx) return;
+  ctx.setSelectedLibraryItem(item);
   renderAssetPreview(item, tabName);
   const itemType = STAGEABLE_TAB_TYPES[tabName];
   if (itemType && item && item.id) {
-    ctx!.setAdhocPreview(null, '');
-    ctx!.sendCommand({ StageItem: { item_type: itemType, item_id: item.id } });
+    ctx.setAdhocPreview(null, '');
+    ctx.sendCommand({ StageItem: { item_type: itemType, item_id: item.id } });
   } else {
-    ctx!.setAdhocPreview(item, tabName);
+    ctx.setAdhocPreview(item, tabName);
   }
 }
 
-export function renderAssetPreview(item, tabName) {
+export function renderAssetPreview(item: any, tabName: string) {
   if (!item || !resourcePreviewMonitor) return;
+  if (!ctx) return;
+  const lp = ctx;
 
   let title = item.title || item.name || item.reference || '';
   let author = item.author || item.version || '';
   let sampleText = '';
   let bgStyle = 'linear-gradient(135deg, #0f2027, #203a43, #2c5364)';
+  let theme: any = null;
 
   if (item.slides && item.slides[0] && item.slides[0].background) {
     bgStyle = item.slides[0].background;
   } else if (item.theme_name) {
-    const t = ctx!.getAvailableThemes().find(x => x.name === item.theme_name);
-    if (t) bgStyle = t.bg;
+    const t = lp.getAvailableThemes().find(x => x.name === item.theme_name);
+    if (t) { bgStyle = t.bg; theme = t; }
   }
 
-  if (tabName === 'songs' && item.slides && item.slides.length > 0) {
-    sampleText = item.slides[0].text;
-  } else if (tabName === 'scriptures' && item.verses && item.verses.length > 0) {
+  if (tabName === 'scriptures' && item.verses && item.verses.length > 0) {
     const qLower = (resourceSearchInput ? resourceSearchInput.value : '').trim().toLowerCase();
     let targetVerseIdx = 0;
     if (qLower && item.verses.length > 1) {
-      const matchIdx = item.verses.findIndex(v => (v.text || '').toLowerCase().includes(qLower));
+      const matchIdx = item.verses.findIndex((v: any) => (v.text || '').toLowerCase().includes(qLower));
       if (matchIdx !== -1) targetVerseIdx = matchIdx;
     }
     const v1 = item.verses[targetVerseIdx] || item.verses[0];
@@ -1651,36 +1705,43 @@ export function renderAssetPreview(item, tabName) {
     } else {
       sampleText = `${v1.verse_number}. ${v1.text}`;
     }
-  } else if (tabName === 'presentations' && item.slides && item.slides.length > 0) {
-    sampleText = item.slides[0].content || item.slides[0].title;
   } else if (tabName === 'themes') {
     bgStyle = item.background || bgStyle;
     sampleText = `Sample Theme Typography\n${item.name}`;
+    theme = lp.getAvailableThemes().find(x => x.name === item.name) || null;
   }
 
+  // Songs/presentations preview their first real `Slide` record directly
+  // (same shape Preview/Live render) so positioned elements, background_v2,
+  // and reference_label all come along for free; scriptures/themes synthesize
+  // an equivalent flat-text slide from the sample text computed above.
+  const previewSlide = ((tabName === 'songs' || tabName === 'presentations') && item.slides && item.slides[0])
+    ? item.slides[0]
+    : { text: sampleText, elements: [], background: bgStyle };
+
   // Dual Translation Comparison Render in Scriptures Tab
-  if (tabName === 'scriptures' && ctx!.getIsDualBibleMode()) {
-    const pVersion = (item.version || (ctx!.getActiveBibleVersion() !== 'all' ? ctx!.getActiveBibleVersion() : (ctx!.getInstalledBibles()[0] ? ctx!.getInstalledBibles()[0].abbreviation : 'Primary'))).trim();
+  if (tabName === 'scriptures' && lp.getIsDualBibleMode()) {
+    const pVersion = (item.version || (lp.getActiveBibleVersion() !== 'all' ? lp.getActiveBibleVersion() : (lp.getInstalledBibles()[0] ? lp.getInstalledBibles()[0].abbreviation : 'Primary'))).trim();
     const pAbbr = getBibleAbbreviation(pVersion);
     
-    const otherInstalled = ctx!.getInstalledBibles().filter(b => 
+    const otherInstalled = lp.getInstalledBibles().filter(b => 
       !areTranslationsEquivalent(b.id, pVersion) &&
       !areTranslationsEquivalent(b.abbreviation, pVersion) &&
       !areTranslationsEquivalent(b.name, pVersion)
     );
     const standardOnline = ['kjv', 'asv', 'web', 'bbe', 'hcsb'];
 
-    if (!ctx!.getSecondaryBibleVersion() || 
-        areTranslationsEquivalent(ctx!.getSecondaryBibleVersion(), pVersion) ||
-        areTranslationsEquivalent(ctx!.getSecondaryBibleVersion(), item.version)) {
+    if (!lp.getSecondaryBibleVersion() || 
+        areTranslationsEquivalent(lp.getSecondaryBibleVersion(), pVersion) ||
+        areTranslationsEquivalent(lp.getSecondaryBibleVersion(), item.version)) {
       if (otherInstalled.length > 0) {
-        ctx!.setSecondaryBibleVersion(otherInstalled[0].id);
+        lp.setSecondaryBibleVersion(otherInstalled[0].id);
       } else {
         const fallback = standardOnline.find(code => !areTranslationsEquivalent(code, pVersion));
-        ctx!.setSecondaryBibleVersion(fallback || 'asv');
+        lp.setSecondaryBibleVersion(fallback || 'asv');
       }
     }
-    const sAbbr = getBibleAbbreviation(ctx!.getSecondaryBibleVersion() || 'Parallel');
+    const sAbbr = getBibleAbbreviation(lp.getSecondaryBibleVersion() || 'Parallel');
 
     if (btnToggleDualBible) {
       btnToggleDualBible.textContent = `👥 Dual: ${pAbbr} | ${sAbbr}`;
@@ -1692,11 +1753,11 @@ export function renderAssetPreview(item, tabName) {
       : (item.reference || '').replace(/\s*\([^)]*\)\s*/g, '').trim();
 
     let pickerOptions = '';
-    ctx!.getInstalledBibles().forEach(b => {
+    lp.getInstalledBibles().forEach(b => {
       const isPrimary = areTranslationsEquivalent(b.id, pVersion) || areTranslationsEquivalent(b.abbreviation, pVersion) || areTranslationsEquivalent(b.name, pVersion);
       if (!isPrimary) {
-        const isSel = areTranslationsEquivalent(b.id, ctx!.getSecondaryBibleVersion()) || areTranslationsEquivalent(b.abbreviation, ctx!.getSecondaryBibleVersion());
-        pickerOptions += `<option value="${ctx!.escapeHtml(b.id)}" ${isSel ? 'selected' : ''}>${ctx!.escapeHtml(b.abbreviation)} (Installed)</option>`;
+        const isSel = areTranslationsEquivalent(b.id, lp.getSecondaryBibleVersion()) || areTranslationsEquivalent(b.abbreviation, lp.getSecondaryBibleVersion());
+        pickerOptions += `<option value="${lp.escapeHtml(b.id)}" ${isSel ? 'selected' : ''}>${lp.escapeHtml(b.abbreviation)} (Installed)</option>`;
       }
     });
 
@@ -1705,16 +1766,16 @@ export function renderAssetPreview(item, tabName) {
         <div class="canvas-dual-split">
           <div class="canvas-dual-col">
             <div class="canvas-dual-header">
-              <div class="canvas-dual-ref">${ctx!.escapeHtml(cleanRef)}</div>
+              <div class="canvas-dual-ref">${lp.escapeHtml(cleanRef)}</div>
               <div class="canvas-dual-badge-row">
-                <span class="canvas-dual-badge primary">${ctx!.escapeHtml(pAbbr)}</span>
+                <span class="canvas-dual-badge primary">${lp.escapeHtml(pAbbr)}</span>
               </div>
             </div>
-            <div class="canvas-dual-text">${ctx!.escapeHtml(sampleText).replace(/\n/g, '<br>')}</div>
+            <div class="canvas-dual-text">${lp.escapeHtml(sampleText).replace(/\n/g, '<br>')}</div>
           </div>
           <div class="canvas-dual-col secondary-col">
             <div class="canvas-dual-header">
-              <div class="canvas-dual-ref">${ctx!.escapeHtml(cleanRef)}</div>
+              <div class="canvas-dual-ref">${lp.escapeHtml(cleanRef)}</div>
               <div class="canvas-dual-badge-row">
                 <select id="dual-secondary-picker" class="canvas-dual-picker">
                   ${pickerOptions}
@@ -1722,12 +1783,12 @@ export function renderAssetPreview(item, tabName) {
               </div>
             </div>
             <div class="canvas-dual-text" id="dual-secondary-text" style="color: #e0f2fe;">
-              Loading ${ctx!.escapeHtml(sAbbr)} translation...
+              Loading ${lp.escapeHtml(sAbbr)} translation...
             </div>
           </div>
         </div>
         <div class="canvas-footer" style="display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 8px; box-sizing: border-box;">
-          <span style="font-size: 10px;">Dual: <strong style="color:#ffa726">${ctx!.escapeHtml(pAbbr)}</strong> + <strong style="color:#00e5ff">${ctx!.escapeHtml(sAbbr)}</strong></span>
+          <span style="font-size: 10px;">Dual: <strong style="color:#ffa726">${lp.escapeHtml(pAbbr)}</strong> + <strong style="color:#00e5ff">${lp.escapeHtml(sAbbr)}</strong></span>
           <button id="btn-add-dual-to-schedule" class="btn" style="background: linear-gradient(135deg, #00e5ff, #00b0ff); color: #000; font-weight: 800; padding: 2px 8px; font-size: 10.5px; border: none; border-radius: 3px; cursor: pointer;">
             ➕ Add to Schedule
           </button>
@@ -1739,8 +1800,8 @@ export function renderAssetPreview(item, tabName) {
     if (picker) {
       picker.addEventListener('change', (e) => {
         e.stopPropagation();
-        ctx!.setSecondaryBibleVersion(e.target.value);
-        const newSAbbr = getBibleAbbreviation(ctx!.getSecondaryBibleVersion());
+        lp.setSecondaryBibleVersion((e.target as HTMLSelectElement).value);
+        const newSAbbr = getBibleAbbreviation(lp.getSecondaryBibleVersion());
         if (btnToggleDualBible) {
           btnToggleDualBible.textContent = `👥 Dual: ${pAbbr} | ${newSAbbr}`;
         }
@@ -1752,19 +1813,19 @@ export function renderAssetPreview(item, tabName) {
     if (addBtn) {
       addBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        addDualScriptureToSchedule(item, pVersion, ctx!.getSecondaryBibleVersion(), item.verses, currentDualSecondaryVerses);
+        addDualScriptureToSchedule(item, pVersion, lp.getSecondaryBibleVersion(), item.verses, currentDualSecondaryVerses);
       });
     }
 
     // 100% Local SQLite Database passage lookup
-    const passageUrl = `/api/bibles/passage?book=${encodeURIComponent(item.book || '')}&chapter=${item.chapter || 1}&version=${encodeURIComponent(ctx!.getSecondaryBibleVersion())}`;
+    const passageUrl = `/api/bibles/passage?book=${encodeURIComponent(item.book || '')}&chapter=${item.chapter || 1}&version=${encodeURIComponent(lp.getSecondaryBibleVersion())}`;
     fetch(passageUrl)
       .then(r => r.json())
       .then(localData => {
         const el = document.getElementById('dual-secondary-text');
         if (localData && localData.verses && localData.verses.length > 0) {
           currentDualSecondaryVerses = localData.verses;
-          const matchingVerses = localData.verses.filter(v => 
+          const matchingVerses = localData.verses.filter((v: any) =>
             v.verse_number >= item.verse_start && v.verse_number <= item.verse_end
           );
           const vList = matchingVerses.length > 0 ? matchingVerses : localData.verses;
@@ -1772,7 +1833,7 @@ export function renderAssetPreview(item, tabName) {
           const qLower = (resourceSearchInput ? resourceSearchInput.value : '').trim().toLowerCase();
           let targetIdx = 0;
           if (qLower && vList.length > 1) {
-            const foundIdx = vList.findIndex(v => (v.text || '').toLowerCase().includes(qLower));
+            const foundIdx = vList.findIndex((v: any) => (v.text || '').toLowerCase().includes(qLower));
             if (foundIdx !== -1) targetIdx = foundIdx;
           }
           
@@ -1787,7 +1848,7 @@ export function renderAssetPreview(item, tabName) {
             }
           }
           
-          if (el) el.innerHTML = ctx!.escapeHtml(sText).replace(/\n/g, '<br>');
+          if (el) el.innerHTML = lp.escapeHtml(sText).replace(/\n/g, '<br>');
         } else {
           if (el) el.textContent = `[${sAbbr} translation not available locally]`;
         }
@@ -1805,7 +1866,7 @@ export function renderAssetPreview(item, tabName) {
     if (mType.includes('video')) {
       resourcePreviewMonitor.innerHTML = `
         <div class="canvas-16-9" style="background: #000; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden;">
-          <video id="preview-video-element" src="${ctx!.escapeHtml(item.file_path)}" muted playsinline preload="metadata" style="width: 100%; height: 100%; object-fit: contain;"></video>
+          <video id="preview-video-element" src="${lp.escapeHtml(item.file_path)}" muted playsinline preload="metadata" style="width: 100%; height: 100%; object-fit: contain;"></video>
           <div class="preview-video-control-bar" style="position: absolute; bottom: 22px; left: 0; right: 0; background: rgba(10, 15, 20, 0.88); display: flex; align-items: center; gap: 6px; padding: 4px 8px; z-index: 5; border-top: 1px solid rgba(255,255,255,0.1);">
             <button class="btn" id="btn-preview-video-play" style="padding: 2px 8px; font-size: 10px; background: #00e5ff; color: #000; font-weight: 700; border: none; border-radius: 3px; cursor: pointer;">▶ Play</button>
             <button class="btn" id="btn-preview-video-stop" style="padding: 2px 8px; font-size: 10px; background: #37474f; color: #fff; font-weight: 700; border: none; border-radius: 3px; cursor: pointer;">⏹ Stop</button>
@@ -1814,16 +1875,16 @@ export function renderAssetPreview(item, tabName) {
             <button class="btn" id="btn-preview-video-mute" title="Mute/Unmute Preview Audio" style="background: transparent; border: none; font-size: 12px; cursor: pointer; color: #fff; padding: 0 4px;">🔊</button>
           </div>
           <div class="canvas-footer" style="background: rgba(0,0,0,0.85); position: absolute; bottom: 0; left: 0; right: 0; z-index: 4;">
-            <span>🎬 ${ctx!.escapeHtml(item.name)}</span>
-            <span>${ctx!.escapeHtml(item.media_type || 'Media')} ${item.duration_seconds ? '(' + item.duration_seconds + 's)' : ''}</span>
+            <span>🎬 ${lp.escapeHtml(item.name)}</span>
+            <span>${lp.escapeHtml(item.media_type || 'Media')} ${item.duration_seconds ? '(' + item.duration_seconds + 's)' : ''}</span>
           </div>
         </div>
       `;
 
-      const pVid = document.getElementById('preview-video-element');
+      const pVid = document.getElementById('preview-video-element') as HTMLVideoElement | null;
       const pPlayBtn = document.getElementById('btn-preview-video-play');
       const pStopBtn = document.getElementById('btn-preview-video-stop');
-      const pSeek = document.getElementById('preview-video-seek');
+      const pSeek = document.getElementById('preview-video-seek') as HTMLInputElement | null;
       const pTime = document.getElementById('preview-video-time');
       const pMuteBtn = document.getElementById('btn-preview-video-mute');
 
@@ -1858,8 +1919,8 @@ export function renderAssetPreview(item, tabName) {
         pVid.addEventListener('timeupdate', () => {
           if (pVid.duration && !isNaN(pVid.duration)) {
             const pct = (pVid.currentTime / pVid.duration) * 100;
-            if (pSeek) pSeek.value = pct;
-            if (pTime) pTime.textContent = `${ctx!.formatMediaTime(pVid.currentTime)} / ${ctx!.formatMediaTime(pVid.duration)}`;
+            if (pSeek) pSeek.value = String(pct);
+            if (pTime) pTime.textContent = `${lp.formatMediaTime(pVid.currentTime)} / ${lp.formatMediaTime(pVid.duration)}`;
           }
         });
 
@@ -1881,16 +1942,16 @@ export function renderAssetPreview(item, tabName) {
       resourcePreviewMonitor.innerHTML = `
         <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 10px; padding: 16px; background: #141f26;">
           <div style="font-size: 36px;">🎵</div>
-          <div style="font-weight: 700; color: #00e5ff; font-size: 13px; text-align: center; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${ctx!.escapeHtml(item.name)}</div>
-          <audio controls src="${ctx!.escapeHtml(item.file_path)}" style="width: 85%; height: 32px;"></audio>
+          <div style="font-weight: 700; color: #00e5ff; font-size: 13px; text-align: center; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${lp.escapeHtml(item.name)}</div>
+          <audio controls src="${lp.escapeHtml(item.file_path)}" style="width: 85%; height: 32px;"></audio>
         </div>`;
       return;
     } else {
       resourcePreviewMonitor.innerHTML = `
         <div class="canvas-16-9" style="background: #000; position: relative; display: flex; align-items: center; justify-content: center;">
-          <img src="${ctx!.escapeHtml(item.file_path)}" style="width: 100%; height: 100%; object-fit: contain;">
+          <img src="${lp.escapeHtml(item.file_path)}" style="width: 100%; height: 100%; object-fit: contain;">
           <div class="canvas-footer" style="background: rgba(0,0,0,0.75); position: absolute; bottom: 0; left: 0; right: 0;">
-            <span>🖼️ ${ctx!.escapeHtml(item.name)}</span>
+            <span>🖼️ ${lp.escapeHtml(item.name)}</span>
             <span>Image</span>
           </div>
         </div>
@@ -1899,35 +1960,35 @@ export function renderAssetPreview(item, tabName) {
     }
   }
 
-  const sampleLen = (sampleText || '').length;
-  const sampleLines = (sampleText || '').split('\n').length;
-  let sampleFontSize = '19px';
-  let sampleLineHeight = '1.4';
-  if (sampleLen > 320 || sampleLines >= 8) {
-    sampleFontSize = '12px';
-    sampleLineHeight = '1.25';
-  } else if (sampleLen > 180 || sampleLines >= 6) {
-    sampleFontSize = '14px';
-    sampleLineHeight = '1.3';
-  } else if (sampleLen > 90 || sampleLines >= 4) {
-    sampleFontSize = '16.5px';
-    sampleLineHeight = '1.35';
-  }
-
+  // Same scaffold (canvas box / elements overlay / lyrics container) and the
+  // same canonical renderer (core/slide_render.ts) Preview/Live use, instead
+  // of a hand-rolled escaper + a font-size lookup table keyed on character
+  // count — which can never generalize across box sizes, and never rendered
+  // positioned elements or background_v2 at all.
   resourcePreviewMonitor.innerHTML = `
-    <div class="canvas-16-9" style="background: ${ctx!.formatCssBackground(bgStyle)};">
+    <div class="canvas-16-9" id="resource-preview-canvas">
+      <div id="resource-preview-canvas-elements" style="display: none; position: absolute; inset: 0; z-index: 2; pointer-events: none;"></div>
       <div class="canvas-lyrics-container">
-        <div class="canvas-lyrics" style="font-size: ${sampleFontSize}; line-height: ${sampleLineHeight};">${ctx!.escapeHtml(sampleText).replace(/\n/g, '<br>')}</div>
+        <div class="canvas-lyrics" id="resource-preview-canvas-lyrics"></div>
       </div>
       <div class="canvas-footer">
-        <span>${ctx!.escapeHtml(title)}</span>
-        <span>${ctx!.escapeHtml(author)}</span>
+        <span>${lp.escapeHtml(title)}</span>
+        <span>${lp.escapeHtml(author)}</span>
       </div>
     </div>
   `;
+
+  const previewCanvasEl = document.getElementById('resource-preview-canvas') as HTMLElement | null;
+  const previewElementsEl = document.getElementById('resource-preview-canvas-elements') as HTMLElement | null;
+  const previewLyricsEl = document.getElementById('resource-preview-canvas-lyrics') as HTMLElement | null;
+  if (previewCanvasEl && previewLyricsEl) {
+    resolveSlideBackgroundElement(previewCanvasEl, previewSlide);
+    renderSlideVisual(previewCanvasEl, previewElementsEl, previewLyricsEl, previewSlide, theme);
+  }
 }
 
-export async function fetchAndStageOnlineScripture(query, translation = 'kjv') {
+export async function fetchAndStageOnlineScripture(query: string, translation: string = 'kjv') {
+  if (!ctx) return;
   try {
     const res = await fetch('/api/bibles/online/fetch', {
       method: 'POST',
@@ -1942,16 +2003,17 @@ export async function fetchAndStageOnlineScripture(query, translation = 'kjv') {
         addItemToSchedule('scriptures', targetId);
       }
     } else {
-      ctx!.showToast('Could not fetch online scripture for: ' + query, 'error');
+      ctx.showToast('Could not fetch online scripture for: ' + query, 'error');
     }
   } catch (e) {
-    ctx!.showToast('Fetch error: ' + e.message, 'error');
+    ctx.showToast('Fetch error: ' + (e instanceof Error ? e.message : String(e)), 'error');
   }
 }
 
 let lastAddedItemGuard = { id: '', time: 0 };
 
-export async function addItemToSchedule(tabName, itemId) {
+export async function addItemToSchedule(tabName: string, itemId: string) {
+  if (!ctx) return;
   const now = Date.now();
   if (lastAddedItemGuard.id === itemId && (now - lastAddedItemGuard.time) < 400) {
     console.warn(`[addItemToSchedule] Ignored duplicate add for ${itemId} within ${now - lastAddedItemGuard.time}ms`);
@@ -1959,7 +2021,7 @@ export async function addItemToSchedule(tabName, itemId) {
   }
   lastAddedItemGuard = { id: itemId, time: now };
 
-  const typeMap = {
+  const typeMap: Record<string, string> = {
     songs: 'song',
     scriptures: 'scripture',
     presentations: 'presentation',
@@ -1983,19 +2045,20 @@ export async function addItemToSchedule(tabName, itemId) {
     }
   }
 
-  ctx!.sendCommand({ AddToSchedule: { item_type: itemType, item_id: itemId } });
+  ctx.sendCommand({ AddToSchedule: { item_type: itemType, item_id: itemId } });
 }
 
-export async function addDualScriptureToSchedule(primaryItem, pVersionParam, sVersionParam, primaryVerses, secondaryVerses) {
+export async function addDualScriptureToSchedule(primaryItem: any, pVersionParam: any, sVersionParam: any, primaryVerses: any[], secondaryVerses: any[]) {
+  if (!ctx) return;
   if (!primaryItem) {
-    ctx!.showToast('No scripture selected to add', 'warning');
+    ctx.showToast('No scripture selected to add', 'warning');
     return;
   }
 
-  ctx!.showToast('Creating Dual Translation schedule item...', 'info');
+  ctx.showToast('Creating Dual Translation schedule item...', 'info');
 
-  const pVersion = (pVersionParam && pVersionParam !== 'all' ? pVersionParam : (primaryItem.version || (ctx!.getInstalledBibles()[0] ? ctx!.getInstalledBibles()[0].id : 'KJV'))).trim();
-  const sVersion = (sVersionParam && sVersionParam !== 'all' ? sVersionParam : (ctx!.getSecondaryBibleVersion() || (ctx!.getInstalledBibles()[1] ? ctx!.getInstalledBibles()[1].id : (ctx!.getInstalledBibles()[0] ? ctx!.getInstalledBibles()[0].id : 'ASV')))).trim();
+  const pVersion = (pVersionParam && pVersionParam !== 'all' ? pVersionParam : (primaryItem.version || (ctx.getInstalledBibles()[0] ? ctx.getInstalledBibles()[0].id : 'KJV'))).trim();
+  const sVersion = (sVersionParam && sVersionParam !== 'all' ? sVersionParam : (ctx.getSecondaryBibleVersion() || (ctx.getInstalledBibles()[1] ? ctx.getInstalledBibles()[1].id : (ctx.getInstalledBibles()[0] ? ctx.getInstalledBibles()[0].id : 'ASV')))).trim();
 
   const pAbbr = getBibleAbbreviation(pVersion);
   const sAbbr = getBibleAbbreviation(sVersion);
@@ -2106,7 +2169,7 @@ export async function addDualScriptureToSchedule(primaryItem, pVersionParam, sVe
   }
 
   if (slides.length === 0) {
-    ctx!.showToast('No verses available to create dual comparison', 'warning');
+    ctx.showToast('No verses available to create dual comparison', 'warning');
     return;
   }
 
@@ -2127,13 +2190,13 @@ export async function addDualScriptureToSchedule(primaryItem, pVersionParam, sVe
     if (res.ok) {
       const pres = await res.json();
       addItemToSchedule('presentations', pres.id);
-      ctx!.showToast(`✓ Added Dual Comparison (${pLabel} | ${sLabel}) to schedule!`, 'success');
+      ctx.showToast(`✓ Added Dual Comparison (${pLabel} | ${sLabel}) to schedule!`, 'success');
       filterAndRenderCatalog();
     } else {
       const errText = await res.text();
-      ctx!.showToast('Failed to add dual comparison: ' + (errText || res.statusText), 'error');
+      ctx.showToast('Failed to add dual comparison: ' + (errText || res.statusText), 'error');
     }
   } catch (err) {
-    ctx!.showToast('Error adding dual comparison: ' + err.message, 'error');
+    ctx.showToast('Error adding dual comparison: ' + (err instanceof Error ? err.message : String(err)), 'error');
   }
 }

@@ -1,45 +1,17 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { spawn, type Subprocess } from "bun";
-import { resolve, join } from "path";
-import { mkdtempSync, rmSync } from "fs";
-import { tmpdir } from "os";
+import { spawnTestServer, teardownTestServer, ensureArtifactDir, type SpawnedTestServer } from "./e2e_helpers";
 
 describe("E2E Live Test: Slide Editor Bulk Paste Upgrades", () => {
-  let serverProc: Subprocess;
+  let server: SpawnedTestServer;
   let browser: Browser;
   let page: Page;
-  let testDir: string;
-  let DB_PATH: string;
   const PORT = 9022;
-  const artifactDir = "/home/jasonb/.gemini/antigravity/brain/f8991531-6ae4-4b9a-9bd5-2b8c056c8256";
+  let artifactDir: string;
 
   beforeAll(async () => {
-    testDir = mkdtempSync(join(tmpdir(), "os-next-bulk-paste-e2e-"));
-    DB_PATH = join(testDir, "test.db");
-
-    const binaryPath = resolve(__dirname, "../../target/release/os-next");
-    serverProc = spawn([
-      binaryPath,
-      "--headless",
-      "--port", PORT.toString(),
-      "--db-path", DB_PATH,
-      "--web-dir", resolve(__dirname, "../")
-    ], {
-      cwd: resolve(__dirname, "../../"),
-      stdout: "ignore",
-      stderr: "ignore"
-    });
-
-    let ready = false;
-    for (let i = 0; i < 40; i++) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${PORT}/`);
-        if (res.ok) { ready = true; break; }
-      } catch (_) {}
-      await new Promise(r => setTimeout(r, 250));
-    }
-    if (!ready) throw new Error("Server failed to start in 10s");
+    server = await spawnTestServer({ port: PORT, tempPrefix: "os-next-bulk-paste-e2e-" });
+    artifactDir = ensureArtifactDir();
 
     browser = await chromium.launch({ headless: true });
     page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -47,16 +19,14 @@ describe("E2E Live Test: Slide Editor Bulk Paste Upgrades", () => {
 
     await page.goto(`http://127.0.0.1:${PORT}/`);
     await page.waitForFunction(() => (window as any).__APP_READY__ === true, { timeout: 15000 });
-    await page.waitForLoadState("networkidle");
+    // Not waitForLoadState("networkidle") -- the app's persistent time-sync
+    // WebSocket means "idle" may never fire; __APP_READY__ above is the
+    // real readiness signal (see main.ts).
   }, 45000);
 
   afterAll(async () => {
     if (browser) await browser.close();
-    if (serverProc) {
-      serverProc.kill();
-      await serverProc.exited;
-    }
-    try { rmSync(testDir, { recursive: true, force: true }); } catch (_) {}
+    await teardownTestServer(server);
   });
 
   test("Bulk Paste workflow: live counter badge, chord cleaning, CCLI extraction, and slide section tagging", async () => {

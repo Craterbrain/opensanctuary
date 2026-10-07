@@ -56,6 +56,7 @@ pub fn is_linux_interface_virtual(name: &str) -> bool {
 pub fn is_valid_interface_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 15
+        && name.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
 }
 
@@ -214,5 +215,40 @@ mod tests {
         assert_eq!(classify_linux_interface("wlan0"), NetworkInterfaceType::Wireless);
         assert_eq!(classify_linux_interface("wlp2s0"), NetworkInterfaceType::Wireless);
         assert_eq!(classify_linux_interface("docker0"), NetworkInterfaceType::Unknown);
+    }
+
+    #[test]
+    fn test_is_linux_interface_virtual_by_name_prefix() {
+        // Our own dedicated adapter names are always virtual, regardless of
+        // whether /sys/devices/virtual/net/<name> exists on this machine --
+        // real discovery only ever sees these names once the adapter is
+        // actually up, but the prefix check is what first routes a newly
+        // provisioned adapter into the "virtual" interface type.
+        assert!(is_linux_interface_virtual("os-macvlan0"));
+        assert!(is_linux_interface_virtual("os-vlan5"));
+    }
+
+    #[test]
+    fn test_is_linux_interface_virtual_false_for_nonexistent_interface() {
+        // A name that isn't one of our own prefixes and has no real sysfs
+        // entry on this machine (this interface was never created) must not
+        // be misclassified as virtual just because the plain filesystem
+        // check happened to fail some other way.
+        assert!(!is_linux_interface_virtual("os-next-test-does-not-exist-0"));
+    }
+
+    #[test]
+    fn test_read_linux_interface_mac_none_for_nonexistent_interface() {
+        // No /sys/class/net/<name>/address file to read -- must return None,
+        // not panic or fabricate a MAC.
+        assert_eq!(read_linux_interface_mac("os-next-test-does-not-exist-0"), None);
+    }
+
+    #[test]
+    fn test_read_linux_interface_is_up_defaults_true_for_nonexistent_interface() {
+        // No /sys/class/net/<name>/operstate file to read -- the conservative
+        // default is "up" (an interface discovery can't actually confirm
+        // either way shouldn't be silently treated as down/disabled).
+        assert!(read_linux_interface_is_up("os-next-test-does-not-exist-0"));
     }
 }

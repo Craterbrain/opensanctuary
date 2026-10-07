@@ -104,12 +104,10 @@ pub struct OnlineBibleCatalogItem {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct BibleApiResponse {
     reference: String,
     verses: Vec<BibleApiVerse>,
     translation_id: Option<String>,
-    translation_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -356,9 +354,9 @@ pub fn parse_scripture_reference(input: &str) -> Option<ParsedScriptureRef> {
         if let Ok(ch) = ch_str.parse::<u32>() {
             chapter = Some(ch);
         }
-        if let Some(dash_pos) = v_str.find('-').or_else(|| v_str.find('–')) {
+        if let Some((dash_pos, dash)) = v_str.char_indices().find(|&(_, c)| c == '-' || c == '–') {
             let vs_str = v_str[..dash_pos].trim();
-            let ve_str = v_str[dash_pos + 1..].trim();
+            let ve_str = v_str[dash_pos + dash.len_utf8()..].trim();
             if let Ok(vs) = vs_str.parse::<u32>() {
                 verse_start = Some(vs);
                 has_specific_verse = true;
@@ -380,9 +378,9 @@ pub fn parse_scripture_reference(input: &str) -> Option<ParsedScriptureRef> {
                 chapter = Some(ch);
             }
             let v_part = parts[1];
-            if let Some(dash_pos) = v_part.find('-').or_else(|| v_part.find('–')) {
+            if let Some((dash_pos, dash)) = v_part.char_indices().find(|&(_, c)| c == '-' || c == '–') {
                 let vs_str = v_part[..dash_pos].trim();
-                let ve_str = v_part[dash_pos + 1..].trim();
+                let ve_str = v_part[dash_pos + dash.len_utf8()..].trim();
                 if let Ok(vs) = vs_str.parse::<u32>() {
                     verse_start = Some(vs);
                     has_specific_verse = true;
@@ -658,10 +656,19 @@ impl FreeShowImporter {
     pub async fn download_full_bible(translation: &str) -> Result<Vec<ScriptureItem>, Box<dyn std::error::Error + Send + Sync>> {
         let trans_upper = translation.trim().to_uppercase();
         let url = format!("https://bolls.life/static/translations/{}.json", trans_upper);
-        
+
+        // A full translation is a single ~10-15MB JSON file (not fetched
+        // chapter-by-chapter), so this is one slow request rather than many
+        // fast ones -- but on a slow connection it's genuinely slow: observed
+        // ~46s for KJV (12.3MB) at ~260KB/s. 30s was tight enough to fail
+        // outright rather than just being unhurried, which matters a lot
+        // more now that this is first-time setup's one-click "get started"
+        // action -- a new user's very first action failing with a generic
+        // error is a bad first impression. 120s covers a much slower
+        // connection without leaving a hung request truly unbounded.
         let client = reqwest::Client::builder()
             .user_agent("OpenSanctuary/1.0 (Church Presentation Engine; https://github.com/opensanctuary)")
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(120))
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());

@@ -42,6 +42,7 @@ pub struct RtfDocument {
     /// used as a whole-block approximation since this app's `TextParagraphStyle` is one style
     /// per text element, not per RTF paragraph.
     pub alignment: Option<String>,
+    pub has_bullets: bool,
 }
 
 impl RtfDocument {
@@ -61,7 +62,7 @@ impl RtfDocument {
     /// Converts the parsed runs into this app's `TextRun` model, applying `TextRun::default()`
     /// for any attribute RTF never specified (color/font/size), and dropping empty runs.
     pub fn to_text_runs(&self) -> Vec<TextRun> {
-        self.runs
+        let mut runs: Vec<TextRun> = self.runs
             .iter()
             .filter(|r| !r.text.is_empty())
             .map(|r| {
@@ -81,7 +82,39 @@ impl RtfDocument {
                 }
                 tr
             })
-            .collect()
+            .collect();
+
+        // Collapse excessive newlines (3+ newlines -> 2)
+        for r in &mut runs {
+            while r.text.contains("\n\n\n") {
+                r.text = r.text.replace("\n\n\n", "\n\n");
+            }
+        }
+
+        // Trim leading blank lines across runs
+        while !runs.is_empty() {
+            if runs[0].text.trim().is_empty() {
+                runs.remove(0);
+            } else {
+                let trimmed = runs[0].text.trim_start_matches(|c| c == '\r' || c == '\n').to_string();
+                runs[0].text = trimmed;
+                break;
+            }
+        }
+
+        // Trim trailing blank lines across runs
+        while !runs.is_empty() {
+            let last_idx = runs.len() - 1;
+            if runs[last_idx].text.trim().is_empty() {
+                runs.pop();
+            } else {
+                let trimmed = runs[last_idx].text.trim_end_matches(|c| c == '\r' || c == '\n').to_string();
+                runs[last_idx].text = trimmed;
+                break;
+            }
+        }
+
+        runs
     }
 }
 
@@ -108,6 +141,7 @@ enum Dest {
     Skip,
     FontTable,
     ColorTable,
+    BulletText,
 }
 
 fn resolve_run(text: String, st: &CharState, font_table: &HashMap<i32, String>, color_table: &[(u8, u8, u8)]) -> RtfRun {
@@ -164,6 +198,12 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
     let mut runs: Vec<RtfRun> = Vec::new();
     let mut current_text = String::new();
     let mut alignment: Option<String> = None;
+    let mut pending_alignment: Option<String> = None;
+    let mut has_bullets = false;
+    let mut in_bullet = false;
+    let mut custom_bullet: Option<char> = None;
+    let mut doc_bullet_glyph: Option<char> = None;
+    let mut bullet_emitted_for_para = false;
 
     macro_rules! flush {
         () => {
@@ -174,16 +214,18 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
     }
 
     while i < bytes.len() {
-        let dest = *dest_stack.last().unwrap();
+        let dest = dest_stack.last().copied().unwrap_or(Dest::Normal);
         match bytes[i] {
             b'{' => {
                 char_stack.push(current_state.clone());
                 let mut new_dest = dest;
                 let mut j = i + 1;
-                if rtf[j..].starts_with("\\*") {
-                    new_dest = Dest::Skip;
+                let is_star = if rtf[j..].starts_with("\\*") {
                     j += 2;
-                }
+                    true
+                } else {
+                    false
+                };
                 if bytes.get(j) == Some(&b'\\') {
                     let word_start = j + 1;
                     let mut w = word_start;
@@ -191,7 +233,8 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
                         w += 1;
                     }
                     if w > word_start {
-                        match &rtf[word_start..w] {
+                        let word = &rtf[word_start..w];
+                        match word {
                             "fonttbl" => {
                                 new_dest = Dest::FontTable;
                                 ft_current_index = None;
@@ -201,12 +244,19 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
                                 new_dest = Dest::ColorTable;
                                 ct_pending = (None, None, None);
                             }
-                            word if new_dest != Dest::Skip && RTF_SKIP_DESTINATIONS.contains(&word) => {
+                            "sdbullettext" => {
+                                new_dest = Dest::BulletText;
+                            }
+                            _ if is_star || RTF_SKIP_DESTINATIONS.contains(&word) => {
                                 new_dest = Dest::Skip;
                             }
                             _ => {}
                         }
+                    } else if is_star {
+                        new_dest = Dest::Skip;
                     }
+                } else if is_star {
+                    new_dest = Dest::Skip;
                 }
                 dest_stack.push(new_dest);
                 i += 1;
@@ -220,6 +270,10 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
                         }
                     }
                     ft_current_name.clear();
+                } else if dest == Dest::BulletText {
+                    if let Some(bg) = custom_bullet {
+                        doc_bullet_glyph = Some(bg);
+                    }
                 }
                 flush!();
                 if let Some(prev) = char_stack.pop() {
@@ -236,13 +290,13 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
                 match next {
                     Some(b'\\') | Some(b'{') | Some(b'}') => {
                         let ch = next.unwrap() as char;
-                        push_char(dest, ch, &mut current_text, &mut ft_current_name);
+                        push_char(dest, ch, &mut current_text, &mut ft_current_name, &mut custom_bullet, &mut in_bullet, &mut bullet_emitted_for_para, &mut has_bullets, &mut alignment, &pending_alignment);
                         i += 2;
                     }
                     Some(b'\'') => {
                         if i + 4 <= bytes.len() {
-                            if let Ok(byte_val) = u8::from_str_radix(&rtf[i + 2..i + 4], 16) {
-                                push_char(dest, cp1252_to_char(byte_val), &mut current_text, &mut ft_current_name);
+                            if let Ok(byte_val) = u8::from_str_radix(rtf.get(i + 2..i + 4).unwrap_or(""), 16) {
+                                push_char(dest, cp1252_to_char(byte_val), &mut current_text, &mut ft_current_name, &mut custom_bullet, &mut in_bullet, &mut bullet_emitted_for_para, &mut has_bullets, &mut alignment, &pending_alignment);
                             }
                             i += 4;
                         } else {
@@ -283,7 +337,7 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
                             if let Some(n) = param {
                                 let code = if n < 0 { n + 65536 } else { n };
                                 if let Some(ch) = char::from_u32(code as u32) {
-                                    push_char(dest, ch, &mut current_text, &mut ft_current_name);
+                                    push_char(dest, ch, &mut current_text, &mut ft_current_name, &mut custom_bullet, &mut in_bullet, &mut bullet_emitted_for_para, &mut has_bullets, &mut alignment, &pending_alignment);
                                 }
                             }
                             i = (end + 1).min(bytes.len());
@@ -295,6 +349,34 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
                                 if dest == Dest::Normal {
                                     current_text.push('\n');
                                 }
+                                in_bullet = false;
+                                bullet_emitted_for_para = false;
+                                custom_bullet = doc_bullet_glyph;
+                            }
+                            "pard" => {
+                                in_bullet = false;
+                                bullet_emitted_for_para = false;
+                                custom_bullet = doc_bullet_glyph;
+                            }
+                            "sdbullettype" => {
+                                if param.unwrap_or(0) >= 0 {
+                                    in_bullet = true;
+                                    has_bullets = true;
+                                } else {
+                                    in_bullet = false;
+                                }
+                            }
+                            "sdlistlevel" => {
+                                if param.unwrap_or(0) >= 0 {
+                                    in_bullet = true;
+                                    has_bullets = true;
+                                } else {
+                                    in_bullet = false;
+                                }
+                            }
+                            "sdbullettext" => {
+                                in_bullet = true;
+                                has_bullets = true;
                             }
                             "tab" => {
                                 if dest == Dest::Normal {
@@ -357,24 +439,16 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
                                 }
                             }
                             "qc" => {
-                                if alignment.is_none() {
-                                    alignment = Some("center".to_string());
-                                }
+                                pending_alignment = Some("center".to_string());
                             }
                             "ql" => {
-                                if alignment.is_none() {
-                                    alignment = Some("left".to_string());
-                                }
+                                pending_alignment = Some("left".to_string());
                             }
                             "qr" => {
-                                if alignment.is_none() {
-                                    alignment = Some("right".to_string());
-                                }
+                                pending_alignment = Some("right".to_string());
                             }
                             "qj" => {
-                                if alignment.is_none() {
-                                    alignment = Some("justify".to_string());
-                                }
+                                pending_alignment = Some("justify".to_string());
                             }
                             _ => {}
                         }
@@ -412,9 +486,9 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
                         }
                     }
                     Dest::Skip => {}
-                    Dest::Normal => {
+                    Dest::Normal | Dest::BulletText => {
                         if c != b'\r' && c != b'\n' {
-                            current_text.push(c as char);
+                            push_char(dest, c as char, &mut current_text, &mut ft_current_name, &mut custom_bullet, &mut in_bullet, &mut bullet_emitted_for_para, &mut has_bullets, &mut alignment, &pending_alignment);
                         }
                     }
                 }
@@ -425,13 +499,49 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
 
     flush!();
 
-    RtfDocument { runs, alignment }
+    RtfDocument {
+        runs,
+        alignment: alignment.or(pending_alignment),
+        has_bullets,
+    }
 }
 
-fn push_char(dest: Dest, ch: char, current_text: &mut String, ft_current_name: &mut String) {
+fn push_char(
+    dest: Dest,
+    ch: char,
+    current_text: &mut String,
+    ft_current_name: &mut String,
+    custom_bullet: &mut Option<char>,
+    in_bullet: &mut bool,
+    bullet_emitted_for_para: &mut bool,
+    has_bullets: &mut bool,
+    alignment: &mut Option<String>,
+    pending_alignment: &Option<String>,
+) {
     match dest {
-        Dest::Normal => current_text.push(ch),
+        Dest::Normal => {
+            if !ch.is_whitespace() {
+                if alignment.is_none() && pending_alignment.is_some() {
+                    *alignment = pending_alignment.clone();
+                }
+                if *in_bullet && !*bullet_emitted_for_para {
+                    let glyph = custom_bullet.unwrap_or('•');
+                    current_text.push(glyph);
+                    current_text.push(' ');
+                    *bullet_emitted_for_para = true;
+                    *has_bullets = true;
+                }
+            }
+            current_text.push(ch);
+        }
         Dest::FontTable => ft_current_name.push(ch),
+        Dest::BulletText => {
+            if !ch.is_whitespace() {
+                *custom_bullet = Some(ch);
+                *in_bullet = true;
+                *has_bullets = true;
+            }
+        }
         Dest::ColorTable | Dest::Skip => {}
     }
 }
@@ -538,5 +648,45 @@ mod tests {
     fn blank_paragraph_lines_are_collapsed_in_plain_text() {
         let doc = parse_rtf(r"{\rtf1 First\par\par\par Second}");
         assert_eq!(doc.plain_text(), "First\nSecond");
+    }
+
+    #[test]
+    fn easyworship_bullet_tags_emit_bullet_points() {
+        let rtf = r"{\rtf1\ansi\deff0{\pard\sdbullettype0\ql Point one\par}{\pard\sdbullettype0\ql Point two\par}}";
+        let doc = parse_rtf(rtf);
+        assert!(doc.has_bullets);
+        assert_eq!(doc.plain_text(), "• Point one\n• Point two");
+        let runs = doc.to_text_runs();
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "• Point one\n");
+        assert_eq!(runs[1].text, "• Point two");
+    }
+
+    #[test]
+    fn custom_bullet_glyph_from_sdbullettext() {
+        let escape = format!("{}{}{}", '\\', 'u', 10033);
+        let rtf = format!(r"{{\rtf1\ansi\deff0{{\pard{{\*\sdbullettext {}?}}\ql Special point\par}}}}", escape);
+        let doc = parse_rtf(&rtf);
+        assert!(doc.has_bullets);
+        assert_eq!(doc.plain_text(), "✱ Special point");
+    }
+
+    #[test]
+    fn empty_bullet_paragraphs_do_not_emit_bullets_or_leading_lines() {
+        let rtf = r"{\rtf1\ansi\deff0{\pard\sdbullettype0\ql\par}{\pard\sdbullettype0\ql\par}{\pard\sdbullettype0\ql Real text\par}}";
+        let doc = parse_rtf(rtf);
+        assert!(doc.has_bullets);
+        assert_eq!(doc.plain_text(), "• Real text");
+        let runs = doc.to_text_runs();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text, "• Real text");
+    }
+
+    #[test]
+    fn sdlistlevel_negative_one_is_not_bullet() {
+        let rtf = r"{\rtf1\ansi\deff0{\pard\sdlistlevel-1\qc Title Here\par}{\pard\sdlistlevel0\ql Bullet item\par}}";
+        let doc = parse_rtf(rtf);
+        assert!(doc.has_bullets);
+        assert_eq!(doc.plain_text(), "Title Here\n• Bullet item");
     }
 }

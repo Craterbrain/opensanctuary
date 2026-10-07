@@ -1,5 +1,7 @@
 # Test VMs
 
+_Last edited: 2026-09-26 14:57_
+
 Two disposable sandbox VMs (unprivileged QEMU/KVM, `qemu:///session` — no host
 root needed) for testing platform-specific code that can't be validated on
 the host or under Wine. Run these **on demand** when you're touching
@@ -32,11 +34,12 @@ the VM instead of cross-compiling.
 ## Windows 10 — `vms/windows-test.sh`
 
 Fully automated: starts the VM if needed, waits for WinRM, cross-compiles
-the test binary locally with zig-as-mingw (`x86_64-pc-windows-gnu`, real
-Windows SEH unwinding so `panic=unwind` test builds link), excludes the
-target folder from Defender, pushes the exe + `WebView2Loader.dll` over
-WinRM, runs it on the VM, streams results, and exits with the real test exit
-code.
+the test binary locally via `cargo xwin` (`x86_64-pc-windows-msvc` -- see
+docs/installer.md and .cargo/config.toml for why this replaced the earlier
+mingw-w64 cross-compile), excludes the target folder from Defender, pushes
+the exe over WinRM (no `WebView2Loader.dll` needed -- statically linked on
+this target), runs it on the VM, streams results, and exits with the real
+test exit code.
 
 ```
 vms/windows-test.sh                              # all lib tests
@@ -51,12 +54,47 @@ vms/windows-test.sh check_hyperv_support          # filtered
   Defender silently truncating a growing unsigned exe mid-transfer, and
   orphaned `powershell.exe` processes left holding the file open after an
   interrupted transfer.
+- The VM has `AutoAdminLogon` configured for `tester`
+  (`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon`) — it boots
+  straight to an interactive desktop with zero manual interaction (no
+  password prompt, no lock-screen keypress needed). This isn't cosmetic:
+  the actual test run depends on it (see below).
+- The test binary itself is **not** run directly over the WinRM shell.
+  `win_pywinrm.py`'s `run_interactive()` instead registers and triggers a
+  Scheduled Task (`LogonType=Interactive`, `RunLevel=Highest`, principal
+  `tester`) that executes it inside that already-logged-on desktop session,
+  polls for a written exit-code file, then reads back stdout/exit code and
+  unregisters the task. Plain WinRM (`run()`, still used for the
+  Defender-exclusion/process-kill setup steps) stays a network-logon
+  session and can't be used for the test binary itself — see below.
 
-## Known flaky test on both VMs
+### Why the test binary needs a real interactive session
 
 `network::tls::tests::test_tls_private_key_storage_and_legacy_migration`
-sometimes fails on a *fresh* VM/session: it round-trips a cert through the
-OS keyring (GNOME Keyring / Windows Credential Manager), and a non-interactive
-remote session (SSH or WinRM) doesn't always have that unlocked/consistent
-the way a real interactive login does. Not a code bug — `linux-test.sh`
-already unlocks the keyring before testing; if it recurs, rerun once more.
+round-trips a cert/key through the OS keyring. Under a plain WinRM remote
+shell this failed **every time** (confirmed 3/3, not a flake) with a
+specific, diagnosed cause: Windows Credential Manager (DPAPI-backed)
+returns `ERROR_NO_SUCH_LOGON_SESSION` for any process whose logon session
+isn't a real interactive one, and WinRM's remote shell always runs under a
+network-logon session — no amount of retrying fixes it. `run_interactive()`
+(above) works around this by executing the exe inside the VM's real
+autologon desktop session instead, and the keyring test now passes cleanly
+(confirmed 67/67, including this test, via a full `windows-test.sh` run).
+This was never a bug in `get_or_create_tls_certificate` or the keyring
+service, only in how the test binary was being launched.
+
+## Shutting down
+
+`vms/shutdown.sh` stops every running `os-next-*` VM (graceful ACPI shutdown,
+falling back to a forced `virsh destroy` after 20s for one that doesn't
+respond -- these are disposable test sandboxes, so a forced stop is fine).
+Neither test script stops its VM when done, so run this when you're finished
+testing rather than leaving them idling.
+
+## Keyring test status on both VMs
+
+`network::tls::tests::test_tls_private_key_storage_and_legacy_migration`
+passes cleanly on both VMs now (see the Windows section above for what
+that took). On the Linux VM it's `linux-test.sh`'s existing GNOME Keyring
+unlock step that keeps it passing (confirmed 4/4 clean runs); if it ever
+does fail on Linux, rerun once before assuming it's a real regression.

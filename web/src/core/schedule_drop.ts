@@ -8,6 +8,7 @@
  */
 
 import { appStore } from './state';
+import { resolveHostSessionToken, hostTokenHeader } from './host_session.ts';
 
 export interface ScheduleDropOptions {
   panelSelector?: string;
@@ -17,12 +18,12 @@ export interface ScheduleDropOptions {
 
 export function isSupportedScheduleFile(filename: string): boolean {
   const lower = filename.toLowerCase();
-  return lower.endsWith('.ewsx') || lower.endsWith('.ews') || lower.endsWith('.osz') || lower.endsWith('.osj') || lower.endsWith('.json');
+  return lower.endsWith('.ewsx') || lower.endsWith('.ews') || lower.endsWith('.ewpx') || lower.endsWith('.osz') || lower.endsWith('.osj') || lower.endsWith('.json');
 }
 
 export function isBinaryScheduleFile(filename: string): boolean {
   const lower = filename.toLowerCase();
-  return lower.endsWith('.ewsx') || lower.endsWith('.ews') || lower.endsWith('.osz');
+  return lower.endsWith('.ewsx') || lower.endsWith('.ews') || lower.endsWith('.ewpx') || lower.endsWith('.osz');
 }
 
 export async function fileToBase64(file: File): Promise<string> {
@@ -31,7 +32,7 @@ export async function fileToBase64(file: File): Promise<string> {
   let binaryStr = '';
   const chunkSize = 8192;
   for (let i = 0; i < bytes.length; i += chunkSize) {
-    binaryStr += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    binaryStr += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
   }
   return btoa(binaryStr);
 }
@@ -59,9 +60,10 @@ export async function uploadScheduleFile(
     };
   }
 
+  await resolveHostSessionToken();
   const res = await fetch('/api/schedule/open', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...hostTokenHeader() },
     body: JSON.stringify(payload)
   });
 
@@ -78,13 +80,7 @@ export function setupScheduleDesktopDrop(options?: ScheduleDropOptions): () => v
   const panel = document.querySelector(panelSelector) as HTMLElement | null;
   if (!panel) return () => {};
 
-  const toast = options?.showToast || ((msg: string, type?: 'info' | 'success' | 'warning' | 'error') => {
-    if (typeof (window as any).showToast === 'function') {
-      (window as any).showToast(msg, type);
-    } else {
-      console.log(`[Toast ${type || 'info'}]: ${msg}`);
-    }
-  });
+  const toast = options?.showToast || (() => {});
 
   // Ensure drop overlay DOM exists inside panel
   let overlay = panel.querySelector('#schedule-drop-overlay') as HTMLElement | null;
@@ -177,7 +173,7 @@ export function setupScheduleDesktopDrop(options?: ScheduleDropOptions): () => v
     const file = files[0];
 
     if (!isSupportedScheduleFile(file.name)) {
-      toast(`Unsupported schedule format: "${file.name}". Expected .ewsx, .ews, .osz, or .osj file.`, 'warning');
+      toast(`Unsupported schedule format: "${file.name}". Expected .ewsx, .ews, .ewpx, .osz, or .osj file.`, 'warning');
       return;
     }
 
@@ -186,9 +182,6 @@ export function setupScheduleDesktopDrop(options?: ScheduleDropOptions): () => v
     try {
       const snapshot = await uploadScheduleFile(file, mode);
       appStore.setSnapshot(snapshot);
-      if (typeof (window as any).renderAll === 'function') {
-        (window as any).renderAll();
-      }
       if (options?.onLoaded) {
         options.onLoaded(snapshot, mode);
       }

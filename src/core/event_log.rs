@@ -26,7 +26,7 @@ impl EventLog {
     }
 
     pub fn load_history(&self, events: &[EventEnvelope]) {
-        let mut hist = self.history.write().unwrap();
+        let mut hist = self.history.write().unwrap_or_else(|e| e.into_inner());
         hist.clear();
         let start = if events.len() > self.max_history {
             events.len() - self.max_history
@@ -37,21 +37,21 @@ impl EventLog {
             hist.push_back(env.clone());
         }
         let max_seq = events.iter().map(|e| e.sequence_number).max().unwrap_or(0);
-        let mut seq_guard = self.sequence_counter.write().unwrap();
+        let mut seq_guard = self.sequence_counter.write().unwrap_or_else(|e| e.into_inner());
         if max_seq > *seq_guard {
             *seq_guard = max_seq;
         }
     }
 
     pub fn set_sequence(&self, seq: u64) {
-        let mut seq_guard = self.sequence_counter.write().unwrap();
+        let mut seq_guard = self.sequence_counter.write().unwrap_or_else(|e| e.into_inner());
         if seq > *seq_guard {
             *seq_guard = seq;
         }
     }
 
     pub fn append(&self, event: ShowEvent) -> EventEnvelope {
-        let mut seq_guard = self.sequence_counter.write().unwrap();
+        let mut seq_guard = self.sequence_counter.write().unwrap_or_else(|e| e.into_inner());
         *seq_guard += 1;
         let sequence_number = *seq_guard;
 
@@ -63,7 +63,7 @@ impl EventLog {
         };
 
         {
-            let mut hist = self.history.write().unwrap();
+            let mut hist = self.history.write().unwrap_or_else(|e| e.into_inner());
             if hist.len() >= self.max_history {
                 hist.pop_front();
             }
@@ -83,11 +83,11 @@ impl EventLog {
     }
 
     pub fn current_sequence(&self) -> u64 {
-        *self.sequence_counter.read().unwrap()
+        *self.sequence_counter.read().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn get_events_since(&self, since_sequence: u64) -> Vec<EventEnvelope> {
-        let hist = self.history.read().unwrap();
+        let hist = self.history.read().unwrap_or_else(|e| e.into_inner());
         hist.iter()
             .filter(|e| e.sequence_number > since_sequence)
             .cloned()
@@ -95,7 +95,7 @@ impl EventLog {
     }
 
     pub fn all_events(&self) -> Vec<EventEnvelope> {
-        let hist = self.history.read().unwrap();
+        let hist = self.history.read().unwrap_or_else(|e| e.into_inner());
         hist.iter().cloned().collect()
     }
 }

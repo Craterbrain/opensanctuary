@@ -1,9 +1,121 @@
 import { SlideEditor, EditorSlide, projectTextFromElements, applyArchetypeToSlide, splitTextToSlides, stripChordsAndAnnotations, BulkSplitRule } from './editor/index';
-import { resolveKeyboardShortcut, buildPairingUrl } from './core/presentation_helpers.ts';
+import { resolveKeyboardShortcut, buildPairingUrl, buildRemoteUrl, escapeHtml } from './core/presentation_helpers.ts';
 import { api } from './core/api_client.ts';
 import { SETTINGS_SCHEMA } from './core/settings_schema';
 import { setupScheduleDesktopDrop, uploadScheduleFile, fileToBase64 } from './core/schedule_drop';
+import { resolveHostSessionToken, hostTokenHeader } from './core/host_session.ts';
+import { initFirstTimeSetup, maybeShowFirstTimeSetup, showFirstTimeSetup } from './ui/first_time_setup.ts';
 import QRCode from 'qrcode';
+import {
+  addDualScriptureToSchedule,
+  addItemToSchedule,
+  filterAndRenderCatalog,
+  loadLibraryTab,
+  renderCategoryTree,
+  selectAndPreviewItem,
+  tryHandleOnlineImagesEnter,
+  updateSearchModeUI,
+  getActiveLibraryItems,
+  getActiveResourceViewMode,
+  getFilteredLibraryItems,
+  setActiveCategory,
+  setActiveResourceViewMode,
+} from './ui/library_panel.ts';
+import { parseScriptureReference } from './core/bible_parser.ts';
+import { resetOptionsModal, onSettingsSearchInput, saveNetworkSettings, refreshPairedDevicesAfterAdbProvision } from './ui/settings_dialog.ts';
+import { showToast } from './core/ui_utils.ts';
+import { openThemeEditor } from './ui/theme_editor.ts';
+import {
+  closeModal,
+  closeTopmostModal,
+  hideAllContextMenus,
+  initWebSocket,
+  loadAppOptions,
+  on,
+  refreshAvailableThemes,
+  refreshInstalledBibles,
+  renderAll,
+  renderSchedule,
+  resetAlertModal,
+  resetImportModal,
+  resetOpenModal,
+  resetSaveModal,
+  resetWebModal,
+  saveAppOptions,
+  sendCommand,
+  showContextMenu,
+  showModal,
+  registerUiCallbacks,
+  aboutModal,
+  activeBibleVersion,
+  activeImportMode,
+  activeLiveViewMode,
+  activeUndoPlaceholder,
+  alertModal,
+  alertTextInput,
+  appOptions,
+  availableThemes,
+  btnAlert,
+  btnBlack,
+  btnClear,
+  btnGoLive,
+  btnImport,
+  btnLiveStatus,
+  btnLogo,
+  btnNew,
+  btnOpen,
+  btnRemote,
+  btnSave,
+  btnStore,
+  btnToggleDualBible,
+  btnWeb,
+  collapsedGroupIds,
+  createItemAuthor,
+  createItemContent,
+  createItemCopyright,
+  createItemTitle,
+  createModal,
+  currentContextMenuTarget,
+  currentDualSecondaryVerses,
+  currentEditorType,
+  currentSnapshot,
+  currentTab,
+  deleteActiveSelectedItemWithUndo,
+  deleteSelectedSlideOrItem,
+  editingItemId,
+  expandedScheduleIndex,
+  handleImportBack,
+  handleOptionsBack,
+  importModal,
+  installedBibles,
+  isDualBibleMode,
+  liveSlideMatrixEl,
+  onlineBibleCatalog,
+  openModal,
+  optionsModal,
+  previewSlideMatrixEl,
+  remoteModal,
+  resetLastRenderedScheduleKey,
+  saveModal,
+  scheduleArticlesModal,
+  scheduleListEl,
+  secondaryBibleVersion,
+  selectedLibraryItem,
+  setActiveBibleVersion,
+  setActiveImportMode,
+  setActiveLiveViewMode,
+  setCurrentContextMenuTargetState,
+  setCurrentEditorType,
+  setCurrentSnapshot,
+  setEditingItemId,
+  setExpandedScheduleIndex,
+  setIsDualBibleMode,
+  setOnlineBibleCatalog,
+  shortcutsModal,
+  storeModal,
+  triggerUndoFromPlaceholder,
+  webModal,
+} from './app_core.ts';
 
 // These DOM elements are also declared in app_core.ts / library_panel.ts — a second,
 // idempotent document.getElementById lookup here is safe (both resolve to the same
@@ -30,20 +142,20 @@ if (resourceSearchInput) {
       filterAndRenderCatalog();
     } else if (e.key === 'ArrowDown' || e.key === 'Tab') {
       e.preventDefault();
-      if ((globalThis as any).getActiveResourceViewMode() === 'table') {
+      if (getActiveResourceViewMode() === 'table') {
         const firstRow = catalogTableBody ? catalogTableBody.querySelector('tr') : null;
         if (firstRow) firstRow.focus();
       } else {
-        const firstCard = catalogGrid ? catalogGrid.querySelector('.catalog-grid-card') : null;
+        const firstCard = catalogGrid ? catalogGrid.querySelector<HTMLElement>('.catalog-grid-card') : null;
         if (firstCard) firstCard.focus();
       }
     } else if (e.key === 'Enter') {
       if (tryHandleOnlineImagesEnter()) return;
-      const promptRow = catalogTableBody ? catalogTableBody.querySelector('.catalog-fetch-prompt-row') : null;
+      const promptRow = catalogTableBody ? catalogTableBody.querySelector<HTMLElement>('.catalog-fetch-prompt-row') : null;
       if (promptRow) {
         promptRow.click();
       } else {
-        const filtered = (globalThis as any).getFilteredLibraryItems();
+        const filtered = getFilteredLibraryItems();
         if (filtered.length > 0) {
           addItemToSchedule(currentTab, filtered[0].id);
         }
@@ -108,10 +220,10 @@ function buildBlankEditorSlide(type: string, index: number): EditorSlide {
 }
 
 function openSlideEditor(type = 'song') {
-  currentEditorType = type;
-  editingItemId = null;
+  setCurrentEditorType(type);
+  setEditingItemId(null);
 
-  document.querySelectorAll('.type-pill').forEach(pill => {
+  document.querySelectorAll<HTMLElement>('.type-pill').forEach(pill => {
     pill.classList.toggle('active', pill.dataset.type === type);
   });
 
@@ -137,15 +249,15 @@ function openSlideEditor(type = 'song') {
   getCanvasSlideEditor().open(studioSlides, 0, currentEditorType);
 }
 
-function editExistingItem(item, scheduleContext: { itemIndex: number; slideIndex?: number } | null = null) {
+function editExistingItem(item: any, scheduleContext: { itemIndex: number; slideIndex?: number } | null = null) {
   if (!item) return;
-  editingItemId = item.id;
+  setEditingItemId(item.id);
   editingScheduleContext = scheduleContext;
 
   const isPres = item.slides && item.slides[0] && item.slides[0].content !== undefined;
-  currentEditorType = item.item_type ? item.item_type.toLowerCase() : (isPres ? 'presentation' : 'song');
+  setCurrentEditorType(item.item_type ? item.item_type.toLowerCase() : (isPres ? 'presentation' : 'song'));
 
-  document.querySelectorAll('.type-pill').forEach(pill => {
+  document.querySelectorAll<HTMLElement>('.type-pill').forEach(pill => {
     pill.classList.toggle('active', pill.dataset.type === currentEditorType);
   });
 
@@ -156,7 +268,7 @@ function editExistingItem(item, scheduleContext: { itemIndex: number; slideIndex
 
   let editorSlides: EditorSlide[] = [];
   if (item.slides && item.slides.length > 0) {
-    editorSlides = item.slides.map((s, idx) => {
+    editorSlides = item.slides.map((s: any, idx: number) => {
       const bodyText = s.text || s.content || '';
       const layout = s.layout || (currentEditorType === 'presentation' ? (idx === 0 ? 'title' : 'title_body') : 'lyric');
       const base: EditorSlide = {
@@ -184,7 +296,7 @@ function editExistingItem(item, scheduleContext: { itemIndex: number; slideIndex
       return base;
     });
   } else if (item.verses && item.verses.length > 0) {
-    editorSlides = item.verses.map((v, idx) => {
+    editorSlides = item.verses.map((v: any, idx: number) => {
       const base: EditorSlide = {
         id: `verse-${idx}`,
         text: v.text,
@@ -353,12 +465,12 @@ on('btn-bulk-clean-chords', 'click', () => cleanBulkChords());
 on('create-item-content', 'input', () => updateBulkSlideCountBadge());
 on('bulk-split-rule', 'change', () => updateBulkSlideCountBadge());
 
-document.querySelectorAll('.type-pill').forEach(pill => {
+document.querySelectorAll<HTMLElement>('.type-pill').forEach(pill => {
   pill.addEventListener('click', () => {
     const newType = (pill as HTMLElement).dataset.type || 'song';
     if (createModal && createModal.style.display !== 'none' && canvasSlideEditor) {
-      currentEditorType = newType;
-      document.querySelectorAll('.type-pill').forEach(p => {
+      setCurrentEditorType(newType);
+      document.querySelectorAll<HTMLElement>('.type-pill').forEach(p => {
         p.classList.toggle('active', p.dataset.type === newType);
       });
       if (createItemTitle && (!createItemTitle.value || createItemTitle.value.startsWith('Untitled'))) {
@@ -392,8 +504,8 @@ function insertTagIntoBulkEditor(tag: string) {
   const textarea = createItemContent;
   if (!textarea) return;
   const tagStr = tag === '---' ? `\n\n---\n\n` : `\n\n${tag}\n`;
-  const start = textarea.selectionStart;
-  const end = textarea.selectionEnd;
+  const start = textarea.selectionStart ?? 0;
+  const end = textarea.selectionEnd ?? 0;
   textarea.value = textarea.value.substring(0, start) + tagStr + textarea.value.substring(end);
   const newPos = start + tagStr.length;
   textarea.setSelectionRange(newPos, newPos);
@@ -419,6 +531,14 @@ async function saveEditorItem(addToSchedule = false) {
   const editor = getCanvasSlideEditor();
   lastApplyResult = null;
   editor.apply();
+  // `editor.apply()` synchronously invokes the `onApply` callback registered when
+  // this editor was opened (line ~189), which reassigns `lastApplyResult` — but
+  // TypeScript's control-flow analysis can't see through that closure call, so it
+  // still thinks `lastApplyResult` is exactly `null` here. Re-assert the real
+  // declared type to read the value the callback actually set.
+  const applyResult = lastApplyResult as {
+    slides: EditorSlide[]; batchOps: any[]; hasChanges: boolean; activeIndex: number
+  } | null;
   studioSlides = editor.getAllSlides();
 
   if (!studioSlides.length) {
@@ -431,12 +551,12 @@ async function saveEditorItem(addToSchedule = false) {
   // of the REST save below (which persists all slides to the library). This
   // only covers the slide that was active when Save was clicked — matches
   // SlideEditor's own history model, which tracks one slide's diff at a time.
-  if (editingScheduleContext && lastApplyResult && lastApplyResult.hasChanges && lastApplyResult.batchOps.length > 0) {
+  if (editingScheduleContext && applyResult && applyResult.hasChanges && applyResult.batchOps.length > 0) {
     sendCommand({
       BatchSlideEdit: {
         item_index: editingScheduleContext.itemIndex,
-        slide_index: editingScheduleContext.slideIndex ?? lastApplyResult.activeIndex,
-        ops: lastApplyResult.batchOps
+        slide_index: editingScheduleContext.slideIndex ?? applyResult.activeIndex,
+        ops: applyResult.batchOps
       }
     });
   }
@@ -558,7 +678,7 @@ async function saveEditorItem(addToSchedule = false) {
       showToast(`Server error saving item: ${errText}`, 'error');
     }
   } catch (err) {
-    showToast(`Error saving item: ${err.message}`, 'error');
+    showToast(`Error saving item: ${err instanceof Error ? err.message : String(err)}`, 'error');
   }
 }
 
@@ -577,6 +697,7 @@ export function initTopMenubar() {
       e.stopPropagation();
       hideAllContextMenus();
       const dropdown = btn.parentElement;
+      if (!dropdown) return;
       const wasActive = dropdown.classList.contains('active');
       document.querySelectorAll('.menu-item-dropdown').forEach(d => d.classList.remove('active'));
       document.querySelectorAll('.ribbon-split-btn-wrap').forEach(d => d.classList.remove('open'));
@@ -631,7 +752,7 @@ export function initTopMenubar() {
     }
   });
   on('menu-view-dual-bible', 'click', () => {
-    isDualBibleMode = !isDualBibleMode;
+    setIsDualBibleMode(!isDualBibleMode);
     if (btnToggleDualBible) btnToggleDualBible.classList.toggle('active', isDualBibleMode);
     if (selectedLibraryItem && currentTab === 'scriptures') {
       selectAndPreviewItem(selectedLibraryItem, 'scriptures');
@@ -654,7 +775,7 @@ export function initTopMenubar() {
 }
 initTopMenubar();
 
-export function promptNewSectionHeader(insertIndex) {
+export function promptNewSectionHeader(insertIndex: number | null) {
   const title = prompt('Enter Service Section / Group Header Title (e.g. "Praise & Worship", "Message & Scripture", "Announcements"):', 'Praise & Worship');
   if (title && title.trim()) {
     const idx = (typeof insertIndex === 'number') ? insertIndex : null;
@@ -671,17 +792,17 @@ export function initRibbonControls() {
     btnNew.addEventListener('click', (e) => {
       e.stopPropagation();
       hideAllContextMenus();
-      const wrap = btnNew.parentElement;
+      const wrap = btnNew?.parentElement;
       if (wrap) wrap.classList.toggle('open');
     });
   }
 
   // Right-click on empty area of schedule list
   if (scheduleListEl) {
-    scheduleListEl.addEventListener('contextmenu', (e) => {
+    scheduleListEl.addEventListener('contextmenu', (e: any) => {
       if (e.target === scheduleListEl || (e.target.id === 'schedule-items-list' || (!e.target.closest('.schedule-item') && !e.target.closest('.schedule-child-item')))) {
         e.preventDefault();
-        currentContextMenuTarget = { type: 'schedule-panel' };
+        setCurrentContextMenuTargetState({ type: 'schedule-panel' });
         showContextMenu(document.getElementById('schedule-empty-context-menu'), e.clientX, e.clientY);
       }
     });
@@ -721,17 +842,17 @@ export function initRibbonControls() {
 
     addItemToSchedule('media', videoItem.id);
     loadLibraryTab('media');
-    (globalThis as any).setActiveCategory('videos');
+    setActiveCategory('videos');
     updateSearchModeUI();
     filterAndRenderCatalog();
     showToast(`Added "${videoItem.name}" to schedule`, 'success');
   });
   on('rb-new-camera', 'click', () => {
     loadLibraryTab('media');
-    (globalThis as any).setActiveCategory('feeds');
+    setActiveCategory('feeds');
     updateSearchModeUI();
     filterAndRenderCatalog();
-    const feed = ((globalThis as any).getActiveLibraryItems() || []).find(m => (m.media_type || '').toLowerCase().includes('feed') || (m.name || '').toLowerCase().includes('camera'));
+    const feed = (getActiveLibraryItems() || []).find(m => (m.media_type || '').toLowerCase().includes('feed') || (m.name || '').toLowerCase().includes('camera'));
     if (feed) {
       addItemToSchedule('media', feed.id);
       showToast(`Added ${feed.name} to schedule`, 'success');
@@ -760,7 +881,7 @@ export function initRibbonControls() {
   on(btnStore, 'click', () => { showModal(storeModal); });
   on(btnWeb, 'click', () => { resetWebModal(); showModal(webModal); });
   on('btn-add-web-to-schedule', 'click', async () => {
-    const urlInput = document.getElementById('web-stream-url');
+    const urlInput = document.getElementById('web-stream-url') as HTMLInputElement | null;
     const url = (urlInput ? urlInput.value : '').trim();
     if (!url) {
       showToast('Please enter a web URL or stream link', 'warning');
@@ -826,30 +947,31 @@ initRibbonControls();
 const SCHED_VIEW_CLASSES = ['sched-view-summary', 'sched-view-small', 'sched-view-medium', 'sched-view-large'];
 let currentSchedIconLevel = 2; // Default: Medium (2)
 
-function setScheduleIconViewLevel(level, notify = false) {
-  currentSchedIconLevel = Math.max(0, Math.min(3, parseInt(level, 10) || 0));
+function setScheduleIconViewLevel(level: string | number, notify = false) {
+  currentSchedIconLevel = Math.max(0, Math.min(3, parseInt(String(level), 10) || 0));
   try {
     localStorage.setItem('opensanctuary_sched_icon_level', currentSchedIconLevel.toString());
   } catch (e) {}
 
-  if (scheduleListEl) {
-    SCHED_VIEW_CLASSES.forEach(cls => scheduleListEl.classList.remove(cls));
-    scheduleListEl.classList.add(SCHED_VIEW_CLASSES[currentSchedIconLevel]);
+  const listEl = scheduleListEl;
+  if (listEl) {
+    SCHED_VIEW_CLASSES.forEach(cls => listEl.classList.remove(cls));
+    listEl.classList.add(SCHED_VIEW_CLASSES[currentSchedIconLevel]);
   }
 
-  const slider = document.getElementById('sched-view-slider');
-  if (slider) slider.value = currentSchedIconLevel;
+  const slider = document.getElementById('sched-view-slider') as HTMLInputElement | null;
+  if (slider) slider.value = String(currentSchedIconLevel);
 
-  document.querySelectorAll('.sched-tick-label').forEach(el => {
-    if (parseInt(el.dataset.level, 10) === currentSchedIconLevel) {
+  document.querySelectorAll<HTMLElement>('.sched-tick-label').forEach(el => {
+    if (parseInt(el.dataset.level || '', 10) === currentSchedIconLevel) {
       el.classList.add('active');
     } else {
       el.classList.remove('active');
     }
   });
 
-  document.querySelectorAll('.sched-view-btn').forEach(btn => {
-    if (parseInt(btn.dataset.level, 10) === currentSchedIconLevel) {
+  document.querySelectorAll<HTMLElement>('.sched-view-btn').forEach(btn => {
+    if (parseInt(btn.dataset.level || '', 10) === currentSchedIconLevel) {
       btn.classList.add('active');
     } else {
       btn.classList.remove('active');
@@ -874,10 +996,33 @@ setScheduleIconViewLevel(currentSchedIconLevel, false);
 // Dropdown toggle
 const schedViewMenuBtn = document.getElementById('btn-sched-view-menu');
 const schedViewDropdown = document.getElementById('sched-view-menu-dropdown');
+
+function positionSchedViewDropdown() {
+  if (!schedViewMenuBtn || !schedViewDropdown) return;
+  const rect = schedViewMenuBtn.getBoundingClientRect();
+  const dropdownWidth = 224;
+  schedViewDropdown.style.top = `${rect.bottom + 4}px`;
+
+  let left = rect.right - dropdownWidth;
+  if (left < 8) {
+    left = Math.max(8, rect.left);
+  }
+  if (left + dropdownWidth > window.innerWidth - 8) {
+    left = Math.max(8, window.innerWidth - dropdownWidth - 8);
+  }
+  schedViewDropdown.style.left = `${left}px`;
+}
+
 if (schedViewMenuBtn && schedViewDropdown) {
   schedViewMenuBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    schedViewDropdown.classList.toggle('show');
+    const willShow = !schedViewDropdown.classList.contains('show');
+    if (willShow) {
+      positionSchedViewDropdown();
+      schedViewDropdown.classList.add('show');
+    } else {
+      schedViewDropdown.classList.remove('show');
+    }
   });
 
   schedViewDropdown.addEventListener('click', (e) => {
@@ -889,24 +1034,36 @@ if (schedViewMenuBtn && schedViewDropdown) {
       schedViewDropdown.classList.remove('show');
     }
   });
+
+  window.addEventListener('resize', () => {
+    if (schedViewDropdown.classList.contains('show')) {
+      positionSchedViewDropdown();
+    }
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && schedViewDropdown.classList.contains('show')) {
+      schedViewDropdown.classList.remove('show');
+    }
+  });
 }
 
 // Slider input
 const schedSlider = document.getElementById('sched-view-slider');
 if (schedSlider) {
   schedSlider.addEventListener('input', (e) => {
-    setScheduleIconViewLevel(e.target.value, false);
+    setScheduleIconViewLevel((e.target as HTMLInputElement).value, false);
   });
   schedSlider.addEventListener('change', (e) => {
-    setScheduleIconViewLevel(e.target.value, true);
+    setScheduleIconViewLevel((e.target as HTMLInputElement).value, true);
   });
 }
 
 // Tick and preset clicks
-document.querySelectorAll('.sched-tick-label, .sched-view-btn').forEach(el => {
+document.querySelectorAll<HTMLElement>('.sched-tick-label, .sched-view-btn').forEach(el => {
   el.addEventListener('click', (e) => {
     e.stopPropagation();
-    const lvl = parseInt(el.dataset.level, 10);
+    const lvl = parseInt(el.dataset.level || '', 10);
     if (!isNaN(lvl)) {
       setScheduleIconViewLevel(lvl, true);
     }
@@ -915,8 +1072,8 @@ document.querySelectorAll('.sched-tick-label, .sched-view-btn').forEach(el => {
 
 // Schedule Panel Action Buttons
 on('btn-sched-collapse-all', 'click', () => {
-  const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
-  const hasHeaders = sched && sched.items && sched.items.some(it => {
+  const sched: any = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
+  const hasHeaders = sched && sched.items && sched.items.some((it: any) => {
     const t = (it.item_type || '').toLowerCase();
     return t === 'header' || t === 'group';
   });
@@ -927,22 +1084,22 @@ on('btn-sched-collapse-all', 'click', () => {
       showToast('✓ Expanded all groups', 'info');
     } else {
       // Collapse all groups
-      sched.items.forEach(it => {
+      sched.items.forEach((it: any) => {
         const t = (it.item_type || '').toLowerCase();
         if (t === 'header' || t === 'group') collapsedGroupIds.add(it.id);
       });
-      expandedScheduleIndex = null;
+      setExpandedScheduleIndex(null);
       showToast('✓ Collapsed all groups', 'info');
     }
   } else {
     if (expandedScheduleIndex !== null) {
-      expandedScheduleIndex = null; // collapse all
+      setExpandedScheduleIndex(null); // collapse all
     } else {
       const selIdx = currentSnapshot && currentSnapshot.state ? currentSnapshot.state.selected_item_index : null;
-      expandedScheduleIndex = (selIdx !== null && selIdx !== undefined) ? selIdx : 0;
+      setExpandedScheduleIndex((selIdx !== null && selIdx !== undefined) ? selIdx : 0);
     }
   }
-  lastRenderedScheduleKey = '';
+  resetLastRenderedScheduleKey();
   if (sched) renderSchedule(sched);
 });
 on('btn-sched-add', 'click', () => openSlideEditor('song'));
@@ -983,7 +1140,7 @@ on('btn-preview-view-list', 'click', () => {
 
 // Live Deck View Mode Switching (Matrix vs List)
 on('btn-live-view-matrix', 'click', () => {
-  activeLiveViewMode = 'matrix';
+  setActiveLiveViewMode('matrix');
   const bM = document.getElementById('btn-live-view-matrix');
   const bL = document.getElementById('btn-live-view-list');
   if (bM) bM.classList.add('active');
@@ -991,7 +1148,7 @@ on('btn-live-view-matrix', 'click', () => {
   if (liveSlideMatrixEl) liveSlideMatrixEl.className = 'slide-matrix matrix-mode';
 });
 on('btn-live-view-list', 'click', () => {
-  activeLiveViewMode = 'list';
+  setActiveLiveViewMode('list');
   const bM = document.getElementById('btn-live-view-matrix');
   const bL = document.getElementById('btn-live-view-list');
   if (bL) bL.classList.add('active');
@@ -1001,7 +1158,7 @@ on('btn-live-view-list', 'click', () => {
 
 // Resource View Mode Switching (Table vs Grid)
 on('btn-resource-view-table', 'click', () => {
-  (globalThis as any).setActiveResourceViewMode('table');
+  setActiveResourceViewMode('table');
   const bT = document.getElementById('btn-resource-view-table');
   const bG = document.getElementById('btn-resource-view-grid');
   if (bT) bT.classList.add('active');
@@ -1009,7 +1166,7 @@ on('btn-resource-view-table', 'click', () => {
   filterAndRenderCatalog();
 });
 on('btn-resource-view-grid', 'click', () => {
-  (globalThis as any).setActiveResourceViewMode('grid');
+  setActiveResourceViewMode('grid');
   const bT = document.getElementById('btn-resource-view-table');
   const bG = document.getElementById('btn-resource-view-grid');
   if (bG) bG.classList.add('active');
@@ -1020,18 +1177,11 @@ on('btn-resource-view-grid', 'click', () => {
 // Resource Add Button
 on('btn-resource-add', 'click', () => {
   if (currentTab === 'themes') {
-    (globalThis as any).openThemeEditor(null);
+    openThemeEditor(null);
     return;
   }
-  const typeMap = { songs: 'song', scriptures: 'scripture', presentations: 'presentation' };
+  const typeMap: Record<string, string> = { songs: 'song', scriptures: 'scripture', presentations: 'presentation' };
   openSlideEditor(typeMap[currentTab] || 'song');
-});
-
-// Preview to Schedule Button
-on(btnPreviewToSchedule, 'click', () => {
-  if (selectedLibraryItem) {
-    addItemToSchedule(currentTab, selectedLibraryItem.id);
-  }
 });
 
 // Open FOH Screen Link
@@ -1088,7 +1238,7 @@ async function loadScheduleFile(file: File, mode: 'replace' | 'append') {
   showToast(`Loading ${file.name}...`, 'info');
   try {
     const data = await uploadScheduleFile(file, mode);
-    currentSnapshot = data;
+    setCurrentSnapshot(data);
     renderAll(data);
     if (mode === 'append') {
       showToast(`✓ Successfully appended items from '${file.name}' to schedule`, 'success');
@@ -1111,17 +1261,18 @@ on('btn-load-sample-ewsx', 'click', async () => {
     let binaryStr = '';
     const chunkSize = 8192;
     for (let i = 0; i < bytes.length; i += chunkSize) {
-      binaryStr += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+      binaryStr += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
     }
     const b64 = btoa(binaryStr);
+    await resolveHostSessionToken();
     const apiRes = await fetch('/api/schedule/open', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...hostTokenHeader() },
       body: JSON.stringify({ file_name: 'test1.ewsx', file_data_base64: b64, mode })
     });
     if (apiRes.ok) {
       const data = await apiRes.json();
-      currentSnapshot = data;
+      setCurrentSnapshot(data);
       renderAll(data);
       showToast(mode === 'append' ? "✓ Appended EasyWorship sample schedule 'test1.ewsx' items" : "✓ Loaded EasyWorship sample schedule 'test1.ewsx'", 'success');
       closeModal(openModal);
@@ -1168,14 +1319,15 @@ on('btn-load-communion-service', 'click', () => {
   closeModal(openModal);
 });
 
-on('file-schedule-input', 'change', async (e) => {
-  const file = e.target.files[0];
+on('file-schedule-input', 'change', async (e: Event) => {
+  const target = e.target as HTMLInputElement;
+  const file = target.files?.[0];
   if (!file) return;
   const mode = getSelectedScheduleMode();
   try {
     await loadScheduleFile(file, mode);
   } finally {
-    e.target.value = '';
+    target.value = '';
   }
 });
 
@@ -1210,8 +1362,9 @@ on('btn-open-schedule-hub', 'click', () => {
 
 // Setup native OS desktop file drag-and-drop on #schedule-panel
 setupScheduleDesktopDrop({
+  showToast,
   onLoaded: (snapshot) => {
-    currentSnapshot = snapshot;
+    setCurrentSnapshot(snapshot);
     renderAll(snapshot);
   }
 });
@@ -1298,9 +1451,9 @@ on('btn-confirm-save', 'click', async () => {
 });
 
 // Catalog Zoom Slider
-on('catalog-zoom-slider', 'input', (e) => {
-  const sizeMap = { '1': '105px', '2': '140px', '3': '180px', '4': '225px' };
-  const val = e.target.value;
+on('catalog-zoom-slider', 'input', (e: Event) => {
+  const sizeMap: Record<string, string> = { '1': '105px', '2': '140px', '3': '180px', '4': '225px' };
+  const val = (e.target as HTMLInputElement).value;
   const grid = document.getElementById('catalog-grid');
   if (grid) {
     grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${sizeMap[val] || '140px'}, 1fr))`;
@@ -1316,7 +1469,7 @@ on('btn-store-open-bibles', 'click', () => {
 });
 
 // Web Streamer Modal Handlers
-function normalizeWebStreamUrl(rawUrl) {
+function normalizeWebStreamUrl(rawUrl: string) {
   try {
     const u = new URL(rawUrl);
     const host = u.hostname.replace(/^www\./, '').replace(/^m\./, '');
@@ -1348,8 +1501,8 @@ on('btn-stop-web-stream', 'click', () => {
   closeModal(webModal);
 });
 on('btn-apply-web-stream', 'click', () => {
-  const urlEl = document.getElementById('web-stream-url');
-  const modeEl = document.getElementById('web-overlay-mode');
+  const urlEl = document.getElementById('web-stream-url') as HTMLInputElement | null;
+  const modeEl = document.getElementById('web-overlay-mode') as HTMLSelectElement | null;
   const url = urlEl ? urlEl.value.trim() : '';
   const mode = modeEl ? modeEl.value : 'background';
   if (!url) {
@@ -1370,18 +1523,13 @@ export async function updateRemoteQrCode(): Promise<string> {
   const disp = document.getElementById('remote-url-display');
   const canvas = document.getElementById('remote-qr-canvas') as HTMLCanvasElement | null;
   const openBtn = document.getElementById('btn-open-mobile-remote') as HTMLAnchorElement | null;
-  const protocol = location.protocol || 'http:';
-  let targetUrl = `${protocol}//${location.hostname}:${location.port || '8080'}/remote`;
+  let targetUrl = buildRemoteUrl({}, location);
 
   try {
     const res = await fetch('/api/network/info');
     if (res.ok) {
       const data = await res.json();
-      const activePort = location.port || (data.port ? String(data.port) : '8080');
-      const activeHost = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
-        ? (data.lan_ip || location.hostname)
-        : location.hostname;
-      targetUrl = `${protocol}//${activeHost}:${activePort}/remote`;
+      targetUrl = buildRemoteUrl(data, location);
     }
   } catch (_) {}
 
@@ -1389,9 +1537,9 @@ export async function updateRemoteQrCode(): Promise<string> {
   // remote_client.ts) so a phone can't reach live control just by guessing
   // the URL; it has to actually scan this code. Carried in the URL fragment
   // (not a query param) so it never gets sent to the server in a Referer
-  // header or logged by a naive access log. Console-only server-side (see
-  // docs/GEMINI_COMMIT_REVIEW_2026-09-22.md #3) — api.pairing.remoteSession()
-  // attaches this page's host token automatically.
+  // header or logged by a naive access log. Console-only server-side —
+  // api.pairing.remoteSession() attaches this page's host token
+  // automatically.
   try {
     const pairData = await api.pairing.remoteSession();
     if (pairData && pairData.token) {
@@ -1419,44 +1567,45 @@ export async function updateRemoteQrCode(): Promise<string> {
   }
   return targetUrl;
 }
-try { (globalThis as any).updateRemoteQrCode = updateRemoteQrCode; } catch (_) {}
+try { globalThis.updateRemoteQrCode = updateRemoteQrCode; } catch (_) {}
 
-// Modal Tabs: Mobile Remote vs Pair TV App
-export function switchToRemoteTab() {
-  const tabRemote = document.getElementById('tab-remote-control');
-  const tabPair = document.getElementById('tab-pair-tv');
-  const panelRemote = document.getElementById('panel-remote-control');
-  const panelPair = document.getElementById('panel-pair-tv');
-  if (tabRemote && tabPair && panelRemote && panelPair) {
-    tabRemote.style.background = 'var(--os-accent, #ff5722)';
-    tabRemote.style.color = '#ffffff';
-    tabPair.style.background = 'transparent';
-    tabPair.style.color = 'var(--text-muted)';
-    panelRemote.style.display = 'block';
-    panelPair.style.display = 'none';
+// Modal Tabs: Mobile Remote vs Pair TV App vs Install via ADB
+const REMOTE_MODAL_TABS = [
+  { tabId: 'tab-remote-control', panelId: 'panel-remote-control' },
+  { tabId: 'tab-pair-tv', panelId: 'panel-pair-tv' },
+  { tabId: 'tab-adb-provision', panelId: 'panel-adb-provision' },
+];
+
+function activateRemoteModalTab(activeTabId: string) {
+  for (const { tabId, panelId } of REMOTE_MODAL_TABS) {
+    const tab = document.getElementById(tabId);
+    const panel = document.getElementById(panelId);
+    if (!tab || !panel) continue;
+    const active = tabId === activeTabId;
+    tab.style.background = active ? 'var(--os-accent, #ff5722)' : 'transparent';
+    tab.style.color = active ? '#ffffff' : 'var(--text-muted)';
+    panel.style.display = active ? 'block' : 'none';
   }
+}
+
+export function switchToRemoteTab() {
+  activateRemoteModalTab('tab-remote-control');
 }
 
 export function switchToPairingTab() {
-  const tabRemote = document.getElementById('tab-remote-control');
-  const tabPair = document.getElementById('tab-pair-tv');
-  const panelRemote = document.getElementById('panel-remote-control');
-  const panelPair = document.getElementById('panel-pair-tv');
-  if (tabRemote && tabPair && panelRemote && panelPair) {
-    tabPair.style.background = 'var(--os-accent, #ff5722)';
-    tabPair.style.color = '#ffffff';
-    tabRemote.style.background = 'transparent';
-    tabRemote.style.color = 'var(--text-muted)';
-    panelPair.style.display = 'block';
-    panelRemote.style.display = 'none';
-    updatePairingQrCode();
-  }
+  activateRemoteModalTab('tab-pair-tv');
+  updatePairingQrCode();
 }
-try { (globalThis as any).switchToPairingTab = switchToPairingTab; } catch (_) {}
-try { (globalThis as any).switchToRemoteTab = switchToRemoteTab; } catch (_) {}
+
+export function switchToAdbProvisionTab() {
+  activateRemoteModalTab('tab-adb-provision');
+  initAdbProvisionPanel();
+}
+try { globalThis.switchToRemoteTab = switchToRemoteTab; } catch (_) {}
 
 on('tab-remote-control', 'click', switchToRemoteTab);
 on('tab-pair-tv', 'click', switchToPairingTab);
+on('tab-adb-provision', 'click', switchToAdbProvisionTab);
 
 let activePairingSessionToken: string | null = null;
 
@@ -1504,7 +1653,7 @@ export async function updatePairingQrCode(forceNew: boolean = false): Promise<st
   }
   return targetUrl;
 }
-try { (globalThis as any).updatePairingQrCode = updatePairingQrCode; } catch (_) {}
+try { globalThis.updatePairingQrCode = updatePairingQrCode; } catch (_) {}
 
 on('btn-refresh-pairing-session', 'click', () => {
   updatePairingQrCode(true);
@@ -1523,12 +1672,120 @@ on('btn-copy-pairing-url', 'click', async () => {
   }
 });
 
+// Install via ADB (docs/CLIENT_PAIRING.md's ADB-driven sideload flow) — the
+// third tab of #remote-modal, alongside Mobile Remote / Pair TV App. Same
+// POST-to-start/GET-to-poll/`is_complete` shape as the yt-dlp background
+// import flow (see ytdlpPollingInterval in this file), not a new pattern.
+let adbProvisionPollingInterval: ReturnType<typeof setInterval> | null = null;
+let adbProvisionStatusChecked = false;
+
+function stopAdbProvisionPolling() {
+  if (adbProvisionPollingInterval) {
+    clearInterval(adbProvisionPollingInterval);
+    adbProvisionPollingInterval = null;
+  }
+}
+
+async function initAdbProvisionPanel() {
+  const startBtn = document.getElementById('btn-adb-provision-start') as HTMLButtonElement | null;
+  const statusEl = document.getElementById('adb-provision-status');
+  const warningEl = document.getElementById('adb-provision-unavailable');
+  if (adbProvisionStatusChecked) return;
+  adbProvisionStatusChecked = true;
+
+  try {
+    const status = await api.tvProvision.status();
+    if (!status.adb_available || !status.apk_available) {
+      if (warningEl) {
+        warningEl.style.display = 'block';
+        warningEl.textContent = !status.adb_available
+          ? '⚠️ adb was not found on this machine. Install Android platform-tools to use this feature.'
+          : '⚠️ No Android TV build is bundled with this install.';
+      }
+      if (startBtn) startBtn.disabled = true;
+    }
+  } catch (_) {
+    if (statusEl) statusEl.textContent = 'Could not check ADB availability.';
+  }
+}
+
+async function startAdbProvisioning() {
+  const ipInput = document.getElementById('adb-provision-ip') as HTMLInputElement | null;
+  const stageCheckbox = document.getElementById('adb-provision-stage-mode') as HTMLInputElement | null;
+  const nameInput = document.getElementById('adb-provision-name') as HTMLInputElement | null;
+  const startBtn = document.getElementById('btn-adb-provision-start') as HTMLButtonElement | null;
+  const statusEl = document.getElementById('adb-provision-status');
+
+  const ip = ipInput ? ipInput.value.trim() : '';
+  if (!ip) {
+    showToast('Enter the TV\'s IP address first.', 'warning');
+    return;
+  }
+
+  if (startBtn) startBtn.disabled = true;
+  if (statusEl) statusEl.innerHTML = '<span style="color: #00e5ff;">⏳ Starting…</span>';
+
+  try {
+    const startResult = await api.tvProvision.start({
+      ip,
+      is_stage_mode: stageCheckbox ? stageCheckbox.checked : false,
+      device_name: nameInput && nameInput.value.trim() ? nameInput.value.trim() : undefined,
+    });
+    if (!startResult || !startResult.task_id) {
+      throw new Error('Server did not return a task id for TV provisioning.');
+    }
+    const { task_id } = startResult;
+
+    stopAdbProvisionPolling();
+    let failCount = 0;
+    adbProvisionPollingInterval = setInterval(async () => {
+      try {
+        const progressResult = await api.tvProvision.progress(task_id);
+        failCount = 0;
+        if (!progressResult || !progressResult.progress) return;
+        const { progress } = progressResult;
+
+        if (statusEl) {
+          const color = progress.status === 'failed' ? '#ff5252' : progress.status === 'completed' ? '#00e676' : '#00e5ff';
+          statusEl.innerHTML = `<span style="color: ${color};">${escapeHtml(progress.message)}</span>`;
+        }
+
+        if (progress.is_complete) {
+          stopAdbProvisionPolling();
+          if (startBtn) startBtn.disabled = false;
+          if (progress.status === 'completed') {
+            showToast(progress.message, 'success');
+            // Refresh the Paired Devices list behind this modal so the
+            // newly self-authorized TV shows up without a manual re-open.
+            refreshPairedDevicesAfterAdbProvision();
+          } else if (progress.error) {
+            showToast(progress.error, 'error');
+          }
+        }
+      } catch (_) {
+        failCount++;
+        if (failCount >= 5) {
+          stopAdbProvisionPolling();
+          if (startBtn) startBtn.disabled = false;
+          if (statusEl) statusEl.innerHTML = '<span style="color: #ff5252;">❌ Lost connection while checking progress.</span>';
+        }
+      }
+    }, 1500);
+  } catch (err: any) {
+    if (startBtn) startBtn.disabled = false;
+    const message = (err && err.message) || 'Could not start provisioning.';
+    if (statusEl) statusEl.innerHTML = `<span style="color: #ff5252;">❌ ${escapeHtml(message)}</span>`;
+  }
+}
+
+on('btn-adb-provision-start', 'click', startAdbProvisioning);
+
 // Settings Modal Handlers (Edit > Options) — rendering is schema-driven (see
 // renderSettingsSidebar/renderSettingsContent in app_core.ts); this just wires the
 // search box and the generic Save that reads whatever the schema rendered.
 on('settings-search', 'input', () => {
   const el = document.getElementById('settings-search') as HTMLInputElement | null;
-  (globalThis as any).onSettingsSearchInput(el ? el.value : '');
+  onSettingsSearchInput(el ? el.value : '');
 });
 on('btn-close-options', 'click', () => closeModal(optionsModal));
 on('btn-options-back', 'click', handleOptionsBack);
@@ -1547,8 +1804,8 @@ on('btn-save-options', 'click', () => {
     }
   });
   saveAppOptions(newOpts);
-  if (typeof (globalThis as any).saveNetworkSettings === 'function') {
-    (globalThis as any).saveNetworkSettings();
+  if (typeof saveNetworkSettings === 'function') {
+    saveNetworkSettings();
   }
   closeModal(optionsModal);
 });
@@ -1561,7 +1818,7 @@ on('btn-close-about-footer', 'click', () => closeModal(aboutModal));
 on('btn-close-articles', 'click', () => closeModal(scheduleArticlesModal));
 on('btn-close-articles-footer', 'click', () => closeModal(scheduleArticlesModal));
 
-const ARTICLES_DATA = {
+const ARTICLES_DATA: Record<string, string> = {
   'article-overview': `
     <h2 style="color: #ffa726; margin-top: 0; display: flex; align-items: center; gap: 8px;">
       <span>🌟</span> 1. Schedule & Worship "Set List" Overview
@@ -1752,14 +2009,14 @@ const ARTICLES_DATA = {
   `
 };
 
-function renderArticle(articleId) {
+function renderArticle(articleId: string) {
   const content = ARTICLES_DATA[articleId] || ARTICLES_DATA['article-overview'];
   const pane = document.getElementById('articles-content-pane');
   if (pane) {
     pane.innerHTML = content;
     pane.scrollTop = 0;
   }
-  document.querySelectorAll('.article-nav-item').forEach(item => {
+  document.querySelectorAll<HTMLElement>('.article-nav-item').forEach(item => {
     if (item.dataset.article === articleId) {
       item.classList.add('active');
       item.style.color = '#fff';
@@ -1779,7 +2036,7 @@ function openScheduleGuideModal(initialArticle = 'article-overview') {
   showModal(scheduleArticlesModal);
 }
 
-document.querySelectorAll('.article-nav-item').forEach(navEl => {
+document.querySelectorAll<HTMLElement>('.article-nav-item').forEach(navEl => {
   navEl.addEventListener('click', () => {
     const artId = navEl.dataset.article;
     if (artId) renderArticle(artId);
@@ -1798,8 +2055,8 @@ const importViewGithub = document.getElementById('import-view-github');
 const importViewYtdlp = document.getElementById('import-view-ytdlp');
 const importViewLocal = document.getElementById('import-view-local');
 const apiBibleCatalogList = document.getElementById('api-bible-catalog-list');
-const apiBibleSearchInput = document.getElementById('api-bible-search-input');
-const apiBibleLangFilter = document.getElementById('api-bible-lang-filter');
+const apiBibleSearchInput = document.getElementById('api-bible-search-input') as HTMLInputElement | null;
+const apiBibleLangFilter = document.getElementById('api-bible-lang-filter') as HTMLInputElement | null;
 const apiBibleCountLabel = document.getElementById('api-bible-count-label');
 
 const ghRepoInput = document.getElementById('gh-repo-input') as HTMLInputElement | null;
@@ -1809,13 +2066,13 @@ const ghBibleCountLabel = document.getElementById('gh-bible-count-label');
 const ghBibleSourceLabel = document.getElementById('gh-bible-source-label');
 const ghBibleCatalogList = document.getElementById('gh-bible-catalog-list');
 
-const ytdlpUrlInput = document.getElementById('ytdlp-url-input');
-const btnYtdlpPaste = document.getElementById('btn-ytdlp-paste');
-const ytdlpBrowserSelect = document.getElementById('ytdlp-browser-select');
-const ytdlpAudioOnlyCheckbox = document.getElementById('ytdlp-audio-only-checkbox');
-const ytdlpSponsorblockCheckbox = document.getElementById('ytdlp-sponsorblock-checkbox');
-const btnYtdlpStartDownload = document.getElementById('btn-ytdlp-start-download');
-const btnYtdlpDownloadAndLive = document.getElementById('btn-ytdlp-download-and-live');
+const ytdlpUrlInput = document.getElementById('ytdlp-url-input') as HTMLInputElement | null;
+const btnYtdlpPaste = document.getElementById('btn-ytdlp-paste') as HTMLButtonElement | null;
+const ytdlpBrowserSelect = document.getElementById('ytdlp-browser-select') as HTMLInputElement | null;
+const ytdlpAudioOnlyCheckbox = document.getElementById('ytdlp-audio-only-checkbox') as HTMLInputElement | null;
+const ytdlpSponsorblockCheckbox = document.getElementById('ytdlp-sponsorblock-checkbox') as HTMLInputElement | null;
+const btnYtdlpStartDownload = document.getElementById('btn-ytdlp-start-download') as HTMLButtonElement | null;
+const btnYtdlpDownloadAndLive = document.getElementById('btn-ytdlp-download-and-live') as HTMLButtonElement | null;
 const ytdlpDownloadStatus = document.getElementById('ytdlp-download-status');
 const ytdlpProgressContainer = document.getElementById('ytdlp-progress-container');
 const ytdlpProgressFill = document.getElementById('ytdlp-progress-fill');
@@ -1886,7 +2143,7 @@ function openImportModal(initialMode = 'api') {
 }
 
 function setImportMode(mode: string) {
-  activeImportMode = mode;
+  setActiveImportMode(mode);
   if (tabBtnApi) tabBtnApi.classList.toggle('active', mode === 'api');
   if (tabBtnGithub) tabBtnGithub.classList.toggle('active', mode === 'github');
   if (tabBtnYtdlp) tabBtnYtdlp.classList.toggle('active', mode === 'ytdlp');
@@ -1907,7 +2164,7 @@ if (tabBtnGithub) on(tabBtnGithub, 'click', () => {
 if (tabBtnYtdlp) on(tabBtnYtdlp, 'click', () => setImportMode('ytdlp'));
 if (tabBtnLocal) on(tabBtnLocal, 'click', () => setImportMode('local'));
 
-let ytdlpPollingInterval = null;
+let ytdlpPollingInterval: ReturnType<typeof setInterval> | null = null;
 
 function stopYtdlpPolling() {
   if (ytdlpPollingInterval) {
@@ -2061,7 +2318,7 @@ async function handleYtDlpDownload(goLiveAfter = false) {
     if (ytdlpDownloadStatus) {
       ytdlpDownloadStatus.innerHTML = `
         <div style="color: #ff5252;">
-          ❌ Initialization error: ${escapeHtml(err.message)}
+          ❌ Initialization error: ${escapeHtml(err instanceof Error ? err.message : String(err))}
         </div>`;
     }
   }
@@ -2079,7 +2336,7 @@ if (ytdlpUrlInput) {
 }
 
 
-const ISO_LANG_MAP = {
+const ISO_LANG_MAP: Record<string, string> = {
   eng: "English", en: "English",
   spa: "Spanish", es: "Spanish", esp: "Spanish",
   fra: "French", fr: "French", fre: "French",
@@ -2116,7 +2373,7 @@ const ISO_LANG_MAP = {
   jpn: "Japanese", ja: "Japanese"
 };
 
-function cleanLanguageName(raw) {
+function cleanLanguageName(raw: any) {
   if (!raw) return "English";
   const str = String(raw).trim();
   const lower = str.toLowerCase();
@@ -2145,16 +2402,16 @@ async function loadOnlineBibleCatalog() {
     if (res.ok) {
       const data = await res.json();
       const rawList = Array.isArray(data) ? data : (data.catalog || getPopularBibleCatalog());
-      onlineBibleCatalog = deduplicateBibleCatalog(rawList);
+      setOnlineBibleCatalog(deduplicateBibleCatalog(rawList));
       populateBibleLanguageFilter(onlineBibleCatalog);
       renderOnlineBibleCatalog(onlineBibleCatalog);
     } else {
-      onlineBibleCatalog = deduplicateBibleCatalog(getPopularBibleCatalog());
+      setOnlineBibleCatalog(deduplicateBibleCatalog(getPopularBibleCatalog()));
       populateBibleLanguageFilter(onlineBibleCatalog);
       renderOnlineBibleCatalog(onlineBibleCatalog);
     }
   } catch (err) {
-    onlineBibleCatalog = deduplicateBibleCatalog(getPopularBibleCatalog());
+    setOnlineBibleCatalog(deduplicateBibleCatalog(getPopularBibleCatalog()));
     populateBibleLanguageFilter(onlineBibleCatalog);
     renderOnlineBibleCatalog(onlineBibleCatalog);
   }
@@ -2183,7 +2440,7 @@ function getPopularBibleCatalog() {
   ];
 }
 
-function deduplicateBibleCatalog(items) {
+function deduplicateBibleCatalog(items: any[]) {
   if (!Array.isArray(items)) return [];
   const map = new Map();
 
@@ -2229,11 +2486,11 @@ function deduplicateBibleCatalog(items) {
   });
 }
 
-function populateBibleLanguageFilter(items) {
+function populateBibleLanguageFilter(items: any[]) {
   if (!apiBibleLangFilter) return;
   const currentVal = (apiBibleLangFilter.value || 'all').toLowerCase();
 
-  const counts = {};
+  const counts: Record<string, number> = {};
   for (const item of items) {
     const l = cleanLanguageName(item.language) || 'English';
     counts[l] = (counts[l] || 0) + 1;
@@ -2250,17 +2507,17 @@ function populateBibleLanguageFilter(items) {
   let optionsHtml = `<option value="all">🌐 All Languages (${items.length})</option>`;
   for (const l of langs) {
     const isSelected = l.toLowerCase() === currentVal ? 'selected' : '';
-    optionsHtml += `<option value="${l.toLowerCase()}" ${isSelected}>${escapeHtml(l)} (${counts[l]})</option>`;
+    optionsHtml += `<option value="${escapeHtml(l.toLowerCase())}" ${isSelected}>${escapeHtml(l)} (${counts[l]})</option>`;
   }
   apiBibleLangFilter.innerHTML = optionsHtml;
 }
 
-function renderOnlineBibleCatalog(items) {
+function renderOnlineBibleCatalog(items: any[]) {
   if (!apiBibleCatalogList) return;
   const query = apiBibleSearchInput ? apiBibleSearchInput.value.trim().toLowerCase() : '';
   const selectedLang = apiBibleLangFilter ? apiBibleLangFilter.value.toLowerCase() : 'all';
 
-  const filtered = (items || []).filter(b => {
+  const filtered = (items || []).filter((b: any) => {
     const matchQuery = !query || 
       (b.name || '').toLowerCase().includes(query) ||
       (b.abbreviation || '').toLowerCase().includes(query) ||
@@ -2282,7 +2539,7 @@ function renderOnlineBibleCatalog(items) {
     return;
   }
 
-  filtered.forEach(b => {
+  filtered.forEach((b: any) => {
     const itemEl = document.createElement('div');
     itemEl.className = 'freeshow-bible-item';
 
@@ -2303,7 +2560,7 @@ function renderOnlineBibleCatalog(items) {
       <button class="btn-install-bible" data-abbr="${escapeHtml(b.abbreviation || b.id)}">Install / Download</button>
     `;
 
-    const btn = itemEl.querySelector('.btn-install-bible');
+    const btn = itemEl.querySelector<HTMLButtonElement>('.btn-install-bible');
     if (btn) {
       btn.addEventListener('click', async () => {
         const transId = (b.abbreviation || b.id || 'kjv').toUpperCase();
@@ -2328,7 +2585,7 @@ function renderOnlineBibleCatalog(items) {
             btn.classList.add('installed');
             btn.textContent = '✓ Ready';
             await refreshInstalledBibles();
-            activeBibleVersion = transId.toLowerCase();
+            setActiveBibleVersion(transId.toLowerCase());
             renderCategoryTree('scriptures');
             updateSearchModeUI();
             await loadLibraryTab('scriptures');
@@ -2341,7 +2598,7 @@ function renderOnlineBibleCatalog(items) {
             btn.textContent = 'Install / Download';
           }
         } catch (err) {
-          showToast(`Network error downloading Bible: ${err.message}`, 'error');
+          showToast(`Network error downloading Bible: ${err instanceof Error ? err.message : String(err)}`, 'error');
           btn.disabled = false;
           btn.textContent = 'Install / Download';
         }
@@ -2352,9 +2609,9 @@ function renderOnlineBibleCatalog(items) {
   });
 }
 
-let bibleSearchDebounceTimer = null;
+let bibleSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 on(apiBibleSearchInput, 'input', () => {
-  clearTimeout(bibleSearchDebounceTimer);
+  clearTimeout(bibleSearchDebounceTimer ?? undefined);
   bibleSearchDebounceTimer = setTimeout(() => {
     renderOnlineBibleCatalog(onlineBibleCatalog);
   }, 150);
@@ -2477,7 +2734,7 @@ function renderGitHubBibleCatalog(items: any[]) {
             btn.classList.add('installed');
             btn.textContent = '✓ Ready';
             await refreshInstalledBibles();
-            activeBibleVersion = transId.toLowerCase();
+            setActiveBibleVersion(transId.toLowerCase());
             renderCategoryTree('scriptures');
             updateSearchModeUI();
             await loadLibraryTab('scriptures');
@@ -2490,7 +2747,7 @@ function renderGitHubBibleCatalog(items: any[]) {
             btn.textContent = 'Install / Download';
           }
         } catch (err: any) {
-          showToast(`Network error downloading Bible: ${err.message}`, 'error');
+          showToast(`Network error downloading Bible: ${err instanceof Error ? err.message : String(err)}`, 'error');
           btn.disabled = false;
           btn.textContent = 'Install / Download';
         }
@@ -2514,8 +2771,8 @@ if (ghVersionsPathInput) {
 }
 
 // FreeShow .fsb File Import
-on('file-freeshow-fsb', 'change', async (e) => {
-  const file = e.target.files[0];
+on('file-freeshow-fsb', 'change', async (e: Event) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
   if (!file) return;
   showToast(`Importing ${file.name}...`, 'info');
 
@@ -2538,13 +2795,13 @@ on('file-freeshow-fsb', 'change', async (e) => {
       showToast(`Import error: ${err}`, 'error');
     }
   } catch (err) {
-    showToast(`File read error: ${err.message}`, 'error');
+    showToast(`File read error: ${err instanceof Error ? err.message : String(err)}`, 'error');
   }
 });
 
 // OpenLP SQLite Import (songs.sqlite / *.sqlite Bible)
-on('file-openlp-import', 'change', async (e) => {
-  const file = e.target.files[0];
+on('file-openlp-import', 'change', async (e: Event) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
   if (!file) return;
   const statusEl = document.getElementById('openlp-import-status');
   if (statusEl) {
@@ -2591,13 +2848,13 @@ on('file-openlp-import', 'change', async (e) => {
     }
     showToast(`OpenLP import failed: ${err.message}`, 'error');
   } finally {
-    e.target.value = '';
+    (e.target as HTMLInputElement).value = '';
   }
 });
 
 // FreeShow Show (.show / .json) Import
-on('file-freeshow-show-import', 'change', async (e) => {
-  const file = e.target.files[0];
+on('file-freeshow-show-import', 'change', async (e: Event) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
   if (!file) return;
   const statusEl = document.getElementById('freeshow-show-import-status');
   if (statusEl) {
@@ -2647,13 +2904,13 @@ on('file-freeshow-show-import', 'change', async (e) => {
     }
     showToast(`FreeShow import failed: ${err.message}`, 'error');
   } finally {
-    e.target.value = '';
+    (e.target as HTMLInputElement).value = '';
   }
 });
 
 // PowerPoint (.pptx) Import
-on('file-pptx-import', 'change', async (e) => {
-  const file = e.target.files[0];
+on('file-pptx-import', 'change', async (e: Event) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
   if (!file) return;
   const statusEl = document.getElementById('pptx-import-status');
   if (statusEl) {
@@ -2699,7 +2956,7 @@ on('file-pptx-import', 'change', async (e) => {
     }
     showToast(`PowerPoint import failed: ${err.message}`, 'error');
   } finally {
-    e.target.value = '';
+    (e.target as HTMLInputElement).value = '';
   }
 });
 
@@ -2752,7 +3009,7 @@ on('btn-openlp-autodetect', 'click', async () => {
 });
 
 // Tab Navigation Event Listeners
-document.querySelectorAll('.tab-btn').forEach(btn => {
+document.querySelectorAll<HTMLElement>('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     loadLibraryTab(btn.dataset.tab);
   });
@@ -2803,18 +3060,13 @@ document.addEventListener('keydown', (e) => {
       // succeed without deleteStudioSlide existing would still do nothing, and wiring
       // up a real "delete the whole slide" action here would double up destructively
       // with the canvas's own selected-element deletion on the same keypress.
-      if (typeof (window as any).deleteSelectedSlideOrItem === 'function') {
-        const handled = (window as any).deleteSelectedSlideOrItem();
-        if (handled) break;
-      }
-      if (typeof (window as any).deleteActiveSelectedItemWithUndo === 'function') {
-        (window as any).deleteActiveSelectedItemWithUndo();
-      }
+      if (deleteSelectedSlideOrItem()) break;
+      deleteActiveSelectedItemWithUndo();
       break;
 
     case 'undo':
-      if (typeof (window as any).triggerUndoFromPlaceholder === 'function' && (window as any).activeUndoPlaceholder) {
-        (window as any).triggerUndoFromPlaceholder();
+      if (activeUndoPlaceholder) {
+        triggerUndoFromPlaceholder();
       } else {
         sendCommand(resolved.command);
         showToast('↩ Undo', 'info');
@@ -2858,6 +3110,10 @@ document.addEventListener('keydown', (e) => {
       break;
 
     case 'save_schedule':
+      quickSaveSchedule();
+      break;
+
+    case 'save_schedule_as':
       resetSaveModal();
       showModal(saveModal);
       break;
@@ -2960,22 +3216,24 @@ function initWorkspaceResizers() {
 
   // 1. Schedule vs Preview Vertical Resizing
   if (schedPrevSplitter && schedulePanel) {
-    schedPrevSplitter.addEventListener('mousedown', (e) => {
+    const splitter = schedPrevSplitter;
+    const panel = schedulePanel;
+    splitter.addEventListener('mousedown', (e) => {
       e.preventDefault();
-      schedPrevSplitter.classList.add('active-dragging');
+      splitter.classList.add('active-dragging');
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
       const startX = e.clientX;
-      const startWidth = schedulePanel.getBoundingClientRect().width;
+      const startWidth = panel.getBoundingClientRect().width;
 
-      function onMouseMove(ev) {
+      function onMouseMove(ev: MouseEvent) {
         const delta = ev.clientX - startX;
         const newWidth = Math.max(140, Math.min(window.innerWidth - 450, startWidth + delta));
-        schedulePanel.style.width = `${newWidth}px`;
+        panel.style.width = `${newWidth}px`;
       }
 
       function onMouseUp() {
-        schedPrevSplitter.classList.remove('active-dragging');
+        splitter.classList.remove('active-dragging');
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
         window.removeEventListener('mousemove', onMouseMove);
@@ -2990,26 +3248,29 @@ function initWorkspaceResizers() {
 
   // 2. Preview vs Live Vertical Resizing
   if (prevLiveSplitter && previewPanel && liveOutputPanel) {
-    prevLiveSplitter.addEventListener('mousedown', (e) => {
+    const splitter = prevLiveSplitter;
+    const prevPanel = previewPanel;
+    const livePanel = liveOutputPanel;
+    splitter.addEventListener('mousedown', (e) => {
       e.preventDefault();
-      prevLiveSplitter.classList.add('active-dragging');
+      splitter.classList.add('active-dragging');
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
       const startX = e.clientX;
-      const startPrevWidth = previewPanel.getBoundingClientRect().width;
-      const startLiveWidth = liveOutputPanel.getBoundingClientRect().width;
+      const startPrevWidth = prevPanel.getBoundingClientRect().width;
+      const startLiveWidth = livePanel.getBoundingClientRect().width;
       const totalWidth = startPrevWidth + startLiveWidth;
 
-      function onMouseMove(ev) {
+      function onMouseMove(ev: MouseEvent) {
         const delta = ev.clientX - startX;
         const newPrevWidth = Math.max(180, Math.min(totalWidth - 180, startPrevWidth + delta));
         const newLiveWidth = totalWidth - newPrevWidth;
-        previewPanel.style.flex = `${newPrevWidth}`;
-        liveOutputPanel.style.flex = `${newLiveWidth}`;
+        prevPanel.style.flex = `${newPrevWidth}`;
+        livePanel.style.flex = `${newLiveWidth}`;
       }
 
       function onMouseUp() {
-        prevLiveSplitter.classList.remove('active-dragging');
+        splitter.classList.remove('active-dragging');
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
         window.removeEventListener('mousemove', onMouseMove);
@@ -3024,24 +3285,26 @@ function initWorkspaceResizers() {
 
   // 3. Middle Tier vs Bottom Tier Vertical Resizing (Dragging UP increases bottom tier, DOWN decreases it)
   if (midBottomSplitter && bottomTier) {
-    midBottomSplitter.addEventListener('mousedown', (e) => {
+    const splitter = midBottomSplitter;
+    const tier = bottomTier;
+    splitter.addEventListener('mousedown', (e) => {
       e.preventDefault();
-      midBottomSplitter.classList.add('active-dragging');
+      splitter.classList.add('active-dragging');
       document.body.style.cursor = 'row-resize';
       document.body.style.userSelect = 'none';
       const startY = e.clientY;
-      const startHeight = bottomTier.getBoundingClientRect().height;
+      const startHeight = tier.getBoundingClientRect().height;
 
-      function onMouseMove(ev) {
+      function onMouseMove(ev: MouseEvent) {
         const delta = startY - ev.clientY; // UP is positive, DOWN is negative
         const maxAllowed = Math.max(220, window.innerHeight - 240);
         const newHeight = Math.max(120, Math.min(maxAllowed, startHeight + delta));
-        bottomTier.style.flex = 'none';
-        bottomTier.style.height = `${newHeight}px`;
+        tier.style.flex = 'none';
+        tier.style.height = `${newHeight}px`;
       }
 
       function onMouseUp() {
-        midBottomSplitter.classList.remove('active-dragging');
+        splitter.classList.remove('active-dragging');
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
         window.removeEventListener('mousemove', onMouseMove);
@@ -3056,24 +3319,26 @@ function initWorkspaceResizers() {
 
   // 4. Preview Monitor Height Resizing
   if (prevMonitorSplitter && previewViewportWrap) {
-    prevMonitorSplitter.addEventListener('mousedown', (e) => {
+    const splitter = prevMonitorSplitter;
+    const viewportWrap = previewViewportWrap;
+    splitter.addEventListener('mousedown', (e) => {
       e.preventDefault();
-      prevMonitorSplitter.classList.add('active-dragging');
+      splitter.classList.add('active-dragging');
       document.body.style.cursor = 'row-resize';
       document.body.style.userSelect = 'none';
       const startY = e.clientY;
-      const startHeight = previewViewportWrap.getBoundingClientRect().height;
+      const startHeight = viewportWrap.getBoundingClientRect().height;
 
-      function onMouseMove(ev) {
+      function onMouseMove(ev: MouseEvent) {
         const delta = ev.clientY - startY; // DOWN is positive, UP is negative
         const panelH = previewPanel ? previewPanel.getBoundingClientRect().height : 500;
         const maxAllowed = Math.max(120, Math.floor(panelH * 0.65));
         const newHeight = Math.max(80, Math.min(maxAllowed, startHeight + delta));
-        previewViewportWrap.style.height = `${newHeight}px`;
+        viewportWrap.style.height = `${newHeight}px`;
       }
 
       function onMouseUp() {
-        prevMonitorSplitter.classList.remove('active-dragging');
+        splitter.classList.remove('active-dragging');
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
         window.removeEventListener('mousemove', onMouseMove);
@@ -3088,24 +3353,26 @@ function initWorkspaceResizers() {
 
   // 5. Live Monitor Height Resizing
   if (liveMonitorSplitter && liveViewportWrap) {
-    liveMonitorSplitter.addEventListener('mousedown', (e) => {
+    const splitter = liveMonitorSplitter;
+    const viewportWrap = liveViewportWrap;
+    splitter.addEventListener('mousedown', (e) => {
       e.preventDefault();
-      liveMonitorSplitter.classList.add('active-dragging');
+      splitter.classList.add('active-dragging');
       document.body.style.cursor = 'row-resize';
       document.body.style.userSelect = 'none';
       const startY = e.clientY;
-      const startHeight = liveViewportWrap.getBoundingClientRect().height;
+      const startHeight = viewportWrap.getBoundingClientRect().height;
 
-      function onMouseMove(ev) {
+      function onMouseMove(ev: MouseEvent) {
         const delta = ev.clientY - startY; // DOWN is positive, UP is negative
         const panelH = liveOutputPanel ? liveOutputPanel.getBoundingClientRect().height : 500;
         const maxAllowed = Math.max(120, Math.floor(panelH * 0.65));
         const newHeight = Math.max(80, Math.min(maxAllowed, startHeight + delta));
-        liveViewportWrap.style.height = `${newHeight}px`;
+        viewportWrap.style.height = `${newHeight}px`;
       }
 
       function onMouseUp() {
-        liveMonitorSplitter.classList.remove('active-dragging');
+        splitter.classList.remove('active-dragging');
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
         window.removeEventListener('mousemove', onMouseMove);
@@ -3119,6 +3386,39 @@ function initWorkspaceResizers() {
   }
 }
 
+// Polls the background yt-dlp self-updater's last result
+// (src/network/ytdlp_updater.rs) and surfaces a toast only for the
+// noteworthy cases -- a real update or a real error -- not the routine
+// silent majority (already current, or deferring to a system install).
+// Deduped via localStorage so a page reload (or the 20-minute re-poll
+// below) doesn't re-toast the same outcome repeatedly.
+async function checkYtdlpUpdaterStatus() {
+  const STORAGE_KEY = 'os_ytdlp_updater_last_toasted';
+  try {
+    const { status } = await api.ytdlpUpdater.status();
+    if (!status || (!status.updated && !status.error)) return;
+
+    const marker = status.error ? `error:${status.message}` : `updated:${status.version}`;
+    let lastToasted: string | null = null;
+    try {
+      lastToasted = localStorage.getItem(STORAGE_KEY);
+    } catch (_) { /* private browsing / storage blocked -- just skip dedupe */ }
+    if (marker === lastToasted) return;
+
+    if (status.error) {
+      showToast(`yt-dlp updater: ${status.message}`, 'warning', 6000);
+    } else {
+      showToast(`✓ yt-dlp updated to ${status.version}`, 'success');
+    }
+    try {
+      localStorage.setItem(STORAGE_KEY, marker);
+    } catch (_) { /* best-effort dedupe only */ }
+  } catch (_) {
+    // Best-effort background notification, not a critical path -- a failed
+    // status poll shouldn't itself show an error toast.
+  }
+}
+
 // Initialize on page load
 initWebSocket();
 loadAppOptions();
@@ -3127,40 +3427,41 @@ refreshInstalledBibles();
 loadLibraryTab('songs');
 initWorkspaceResizers();
 loadOnlineBibleCatalog();
+initFirstTimeSetup();
+checkYtdlpUpdaterStatus();
+setInterval(checkYtdlpUpdaterStatus, 20 * 60 * 1000);
+maybeShowFirstTimeSetup();
 
 // Expose for inline HTML onclick handlers
 (window as any).showToast = showToast;
 
-// Expose all ui functions and variables to global scope for app_core.ts
-try { (globalThis as any).normalizeFontSizePercent = normalizeFontSizePercent; } catch (_) {}
-try { (globalThis as any).getStudioThemeBg = getStudioThemeBg; } catch (_) {}
-try { (globalThis as any).createDefaultStudioSlide = createDefaultStudioSlide; } catch (_) {}
-try { (globalThis as any).openSlideEditor = openSlideEditor; } catch (_) {}
-try { (globalThis as any).editExistingItem = editExistingItem; } catch (_) {}
-try { (globalThis as any).renderStudioFilmstrip = renderStudioFilmstrip; } catch (_) {}
-try { (globalThis as any).renderStudioActiveCanvas = renderStudioActiveCanvas; } catch (_) {}
-try { (globalThis as any).autoResizeStudioCanvasTextareas = autoResizeStudioCanvasTextareas; } catch (_) {}
-try { (globalThis as any).updateFilmstripCard = updateFilmstripCard; } catch (_) {}
-try { (globalThis as any).moveStudioSlide = moveStudioSlide; } catch (_) {}
-try { (globalThis as any).applyThemeToAllSlides = applyThemeToAllSlides; } catch (_) {}
-try { (globalThis as any).openBulkOverlay = openBulkOverlay; } catch (_) {}
-try { (globalThis as any).closeBulkOverlay = closeBulkOverlay; } catch (_) {}
-try { (globalThis as any).convertBulkTextToSlides = convertBulkTextToSlides; } catch (_) {}
-try { (globalThis as any).insertTagIntoBulkEditor = insertTagIntoBulkEditor; } catch (_) {}
-try { (globalThis as any).saveEditorItem = saveEditorItem; } catch (_) {}
-try { (globalThis as any).promptNewSectionHeader = promptNewSectionHeader; } catch (_) {}
-try { (globalThis as any).setScheduleIconViewLevel = setScheduleIconViewLevel; } catch (_) {}
-try { (globalThis as any).renderArticle = renderArticle; } catch (_) {}
-try { (globalThis as any).openScheduleGuideModal = openScheduleGuideModal; } catch (_) {}
+// Not the raw `ytdlpPollingInterval` variable -- a one-time snapshot of it
+// would go stale the instant the real (module-local) interval changes, which
+// is exactly what left app_core.ts's resetImportModal() unable to actually
+// cancel the poll. Expose the function itself instead: it always closes
+// over this module's live variable.
+
+// Hands these back to app_core.ts once all are declared -- see
+// registerUiCallbacks in app_core.ts for why this isn't a static import.
+registerUiCallbacks({
+  stopYtdlpPolling,
+  editExistingItem,
+  openImportModal,
+  openSlideEditor,
+  promptNewSectionHeader,
+  renderOnlineBibleCatalog,
+  setImportMode,
+  switchToPairingTab,
+  switchToAdbProvisionTab,
+  showFirstTimeSetup,
+});
+
+// Exposed on window for Playwright E2E tests that drive the running app
+// directly (tests/e2e_bulk_paste.test.ts, e2e_slide_templates.test.ts,
+// e2e_image_crop.test.ts, e2e_rich_text_selection.test.ts, etc.), outside this
+// module graph entirely -- not needed by any in-repo module.
 try { (globalThis as any).openImportModal = openImportModal; } catch (_) {}
-try { (globalThis as any).setImportMode = setImportMode; } catch (_) {}
-try { (globalThis as any).handleYtDlpDownload = handleYtDlpDownload; } catch (_) {}
-try { (globalThis as any).loadOnlineBibleCatalog = loadOnlineBibleCatalog; } catch (_) {}
-try { (globalThis as any).getPopularBibleCatalog = getPopularBibleCatalog; } catch (_) {}
-try { (globalThis as any).renderOnlineBibleCatalog = renderOnlineBibleCatalog; } catch (_) {}
-try { (globalThis as any).initWorkspaceResizers = initWorkspaceResizers; } catch (_) {}
-try { (globalThis as any).studioSlides = studioSlides; } catch (_) {}
-try { (globalThis as any).getCanvasSlideEditor = getCanvasSlideEditor; } catch (_) {}
+try { (globalThis as any).openSlideEditor = openSlideEditor; } catch (_) {}
 try { (globalThis as any).getCanvasSlideEditorDebugState = () => ({ hasEditor: !!canvasSlideEditor, editingScheduleContext, activeSlideElements: canvasSlideEditor ? canvasSlideEditor.getActiveSlide().elements.map((e: any) => ({ id: e.id, transform: e.transform, block: e.type === 'TextBlock' ? e.block : undefined })) : null }); } catch (_) {}
 try { (globalThis as any).__debugApplyTextStyle = (update: any) => canvasSlideEditor?.applyTextStyle(update); } catch (_) {}
 try {
@@ -3172,28 +3473,3 @@ try {
     return true;
   };
 } catch (_) {}
-try { (globalThis as any).SCHED_VIEW_CLASSES = SCHED_VIEW_CLASSES; } catch (_) {}
-try { (globalThis as any).currentSchedIconLevel = currentSchedIconLevel; } catch (_) {}
-try { (globalThis as any).schedViewMenuBtn = schedViewMenuBtn; } catch (_) {}
-try { (globalThis as any).schedViewDropdown = schedViewDropdown; } catch (_) {}
-try { (globalThis as any).schedSlider = schedSlider; } catch (_) {}
-try { (globalThis as any).ARTICLES_DATA = ARTICLES_DATA; } catch (_) {}
-try { (globalThis as any).tabBtnApi = tabBtnApi; } catch (_) {}
-try { (globalThis as any).tabBtnYtdlp = tabBtnYtdlp; } catch (_) {}
-try { (globalThis as any).tabBtnLocal = tabBtnLocal; } catch (_) {}
-try { (globalThis as any).importViewApi = importViewApi; } catch (_) {}
-try { (globalThis as any).importViewYtdlp = importViewYtdlp; } catch (_) {}
-try { (globalThis as any).importViewLocal = importViewLocal; } catch (_) {}
-try { (globalThis as any).apiBibleCatalogList = apiBibleCatalogList; } catch (_) {}
-try { (globalThis as any).apiBibleSearchInput = apiBibleSearchInput; } catch (_) {}
-try { (globalThis as any).ytdlpUrlInput = ytdlpUrlInput; } catch (_) {}
-try { (globalThis as any).btnYtdlpPaste = btnYtdlpPaste; } catch (_) {}
-try { (globalThis as any).ytdlpBrowserSelect = ytdlpBrowserSelect; } catch (_) {}
-try { (globalThis as any).ytdlpAudioOnlyCheckbox = ytdlpAudioOnlyCheckbox; } catch (_) {}
-try { (globalThis as any).ytdlpSponsorblockCheckbox = ytdlpSponsorblockCheckbox; } catch (_) {}
-try { (globalThis as any).btnYtdlpStartDownload = btnYtdlpStartDownload; } catch (_) {}
-try { (globalThis as any).btnYtdlpDownloadAndLive = btnYtdlpDownloadAndLive; } catch (_) {}
-try { (globalThis as any).ytdlpDownloadStatus = ytdlpDownloadStatus; } catch (_) {}
-try { (globalThis as any).ytdlpProgressContainer = ytdlpProgressContainer; } catch (_) {}
-try { (globalThis as any).ytdlpProgressFill = ytdlpProgressFill; } catch (_) {}
-try { (globalThis as any).ytdlpPollingInterval = ytdlpPollingInterval; } catch (_) {}

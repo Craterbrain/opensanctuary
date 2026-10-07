@@ -3,7 +3,7 @@ import { createDefaultTextBlock } from './text_block';
 import { createDefaultShape } from './shape_library';
 import { createDefaultLine } from './line_tool';
 import { createDefaultTable } from './table';
-import { applyResolvedBackground } from '../core/presentation_helpers';
+import { applyResolvedBackground, backgroundPresetDataString } from '../core/presentation_helpers';
 
 export type ArrangeAction = 'bringToFront' | 'sendToBack' | 'bringForward' | 'sendBackward';
 export type AlignAction = 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom';
@@ -37,8 +37,8 @@ export interface SlideTemplateSummary {
 
 /**
  * The ribbon's framework — every group, button, select, and divider — is
- * static markup in index.html (#slide-editor-ribbon; see
- * docs/FRONTEND_ARCHITECTURE.md [ARCH:slide-editor-shell]). This class binds
+ * static markup in index.html (#slide-editor-ribbon [ARCH:slide-editor-shell]).
+ * This class binds
  * to that existing DOM by id and wires up behavior; it does not construct
  * the toolbar's structure. The two exceptions are content that's genuinely
  * data-driven rather than fixed layout: the font-family <option> list (from
@@ -641,7 +641,7 @@ export class EditorToolbar {
       aRow.className = 'w-full flex items-center gap-2 p-1 rounded hover:bg-zinc-800 border border-zinc-800 text-left cursor-pointer';
       const preview = document.createElement('div');
       preview.className = 'w-8 h-5 rounded border border-zinc-700 flex-none overflow-hidden';
-      applyResolvedBackground(preview, (a.background as any).data);
+      applyResolvedBackground(preview, backgroundPresetDataString(a));
       const label = document.createElement('span');
       label.className = 'text-[11px] text-zinc-300 truncate';
       label.textContent = a.name;

@@ -34,3 +34,13 @@ vms/__pycache__/
 
 # Stray leftover, not needed for the build.
 /replacement.txt
+
+# Local test release-signing keypair (docs/update.md) -- disposable, for
+# testing the update/verify mechanism only. Never the real production key;
+# regenerate anytime with `cargo run --example sign_release -- generate-keypair`.
+/.test-signing-key/
+
+# The real production release-signing keypair (docs/keys.md). Gitignored as
+# a safety net, not a substitute for generating it outside the repo in the
+# first place -- never intended to be committed under any circumstances.
+/.release-signing-key/

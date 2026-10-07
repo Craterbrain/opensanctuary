@@ -53,8 +53,14 @@ pub fn section_id_to_ew_type_and_number(section_id: &str, default_index: usize) 
     } else if lower.starts_with("ending") {
         ('E', s.trim_start_matches(|c: char| !c.is_numeric()))
     } else {
-        let first = s.chars().next().unwrap().to_ascii_uppercase();
-        (first, &s[1..])
+        // `&s[1..]` would panic on a byte index that isn't a UTF-8 char
+        // boundary whenever `s` starts with a multi-byte character (e.g. a
+        // non-Latin section tag/label) -- `Chars::as_str()` gives the
+        // remainder after advancing past the first `char`, which is always
+        // a valid boundary regardless of how many bytes that char took.
+        let mut chars = s.chars();
+        let first = chars.next().unwrap().to_ascii_uppercase();
+        (first, chars.as_str())
     };
 
     let type_code = match prefix_char {
@@ -73,22 +79,50 @@ pub fn section_id_to_ew_type_and_number(section_id: &str, default_index: usize) 
 /// real formatting to represent — matches `Slide::synthesize_v2_if_needed`'s own
 /// "only populate when needed" convention, so a plain-text slide still gets the
 /// generic default element synthesized later rather than a redundant explicit one here.
-fn text_block_from_rtf(doc: &rtf::RtfDocument) -> Option<SlideElement> {
-    let runs = doc.to_text_runs();
+fn text_block_from_rtf(
+    doc: &rtf::RtfDocument,
+    transform: ElementTransform,
+    autofit: bool,
+    el_style: i32,
+) -> Option<SlideElement> {
+    let mut runs = doc.to_text_runs();
     if runs.is_empty() {
         return None;
     }
+
+    if !autofit {
+        for run in &mut runs {
+            if run.font_size_pt >= 70.0 {
+                run.font_size_pt = if el_style == 6 { 48.0 } else { 36.0 };
+            }
+        }
+    }
+
     Some(SlideElement::TextBlock {
         id: format!("el_{}", uuid::Uuid::new_v4()),
-        transform: ElementTransform::default(),
+        transform,
         block: TextBlock {
             runs,
             paragraph_style: TextParagraphStyle {
-                align: doc.alignment.clone().unwrap_or_else(|| "center".to_string()),
+                align: doc.alignment.clone().unwrap_or_else(|| {
+                    if doc.has_bullets {
+                        "left".to_string()
+                    } else if el_style == 6 {
+                        "center".to_string()
+                    } else {
+                        "left".to_string()
+                    }
+                }),
+                bullet_kind: if doc.has_bullets {
+                    "disc".to_string()
+                } else {
+                    "none".to_string()
+                },
+                line_height: 1.25,
                 ..Default::default()
             },
             effects: ElementEffects::default(),
-            autofit: true,
+            autofit,
         },
     })
 }
@@ -336,6 +370,12 @@ impl EwsxManager {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let mut res_id = 1;
         let mut bg_res_id = 1;
+        // A running counter across the whole schedule, not `(p_idx * 100) +
+        // s_idx + 1`: that formula collided (item N's rowid range starts
+        // overlapping item N-1's) for any item with 100+ slides -- e.g. a
+        // long Psalm split one verse per slide -- aborting the whole export
+        // on a UNIQUE constraint violation.
+        let mut next_slide_rowid: i64 = 1;
         for (p_idx, item) in schedule.items.iter().enumerate() {
             let p_type = if item.item_type == "song" { 6 } else { 1 };
             tx.execute(
@@ -368,7 +408,8 @@ impl EwsxManager {
                     rusqlite::params![p_idx + 1, type_code, num, rtf_content],
                 ).map_err(|e| e.to_string())?;
 
-                let slide_rowid = (p_idx * 100) + s_idx + 1;
+                let slide_rowid = next_slide_rowid;
+                next_slide_rowid += 1;
                 tx.execute(
                     "INSERT INTO slide (rowid, presentation_id, title, order_index)
                      VALUES (?1, ?2, ?3, ?4);",
@@ -493,8 +534,7 @@ impl EwsxManager {
             // A. Check for manifest.json / schedule.json
             for json_name in &["manifest.json", "schedule.json"] {
                 if let Ok(mut manifest_file) = archive.by_name(json_name) {
-                    let mut content = String::new();
-                    if manifest_file.read_to_string(&mut content).is_ok() {
+                    if let Ok(content) = crate::storage::media_sniff::read_capped_string(&mut manifest_file, crate::storage::media_sniff::MAX_ZIP_TEXT_BYTES) {
                         if let Ok(sched) = serde_json::from_str::<Schedule>(&content) {
                             return Ok(sched);
                         }
@@ -505,8 +545,7 @@ impl EwsxManager {
             // B. Check for native EasyWorship main.db (or any .db database inside zip)
             for db_name in &["main.db", "Songs.db", "songs.db", "schedule.db", "presentation.db"] {
                 if let Ok(mut db_file) = archive.by_name(db_name) {
-                    let mut db_bytes = Vec::new();
-                    if db_file.read_to_end(&mut db_bytes).is_ok() {
+                    if let Ok(db_bytes) = crate::storage::media_sniff::read_capped_bytes(&mut db_file, crate::storage::media_sniff::MAX_ZIP_DB_BYTES) {
                         if let Ok(sched) = Self::parse_ewsx_sqlite(&db_bytes, title_hint) {
                             return Ok(sched);
                         }
@@ -519,8 +558,7 @@ impl EwsxManager {
                 if let Ok(mut file) = archive.by_index(i) {
                     let name = file.name().to_lowercase();
                     if name.ends_with(".db") || name.ends_with(".sqlite") {
-                        let mut db_bytes = Vec::new();
-                        if file.read_to_end(&mut db_bytes).is_ok() {
+                        if let Ok(db_bytes) = crate::storage::media_sniff::read_capped_bytes(&mut file, crate::storage::media_sniff::MAX_ZIP_DB_BYTES) {
                             if let Ok(sched) = Self::parse_ewsx_sqlite(&db_bytes, title_hint) {
                                 return Ok(sched);
                             }
@@ -531,8 +569,7 @@ impl EwsxManager {
 
             // C. Check for Schedule.xml
             if let Ok(mut xml_file) = archive.by_name("Schedule.xml") {
-                let mut xml_str = String::new();
-                if xml_file.read_to_string(&mut xml_str).is_ok() {
+                if let Ok(xml_str) = crate::storage::media_sniff::read_capped_string(&mut xml_file, crate::storage::media_sniff::MAX_ZIP_TEXT_BYTES) {
                     if let Ok(sched) = Self::parse_schedule_xml(&xml_str) {
                         return Ok(sched);
                     }
@@ -544,8 +581,7 @@ impl EwsxManager {
                 if let Ok(mut file) = archive.by_index(i) {
                     let name = file.name().to_lowercase();
                     if name.ends_with(".osj") || name == "service_data.json" || name.ends_with("/service_data.json") {
-                        let mut osj_str = String::new();
-                        if file.read_to_string(&mut osj_str).is_ok() {
+                        if let Ok(osj_str) = crate::storage::media_sniff::read_capped_string(&mut file, crate::storage::media_sniff::MAX_ZIP_TEXT_BYTES) {
                             if let Ok(sched) = crate::storage::OpenLPImporter::import_openlp_service_json(&osj_str) {
                                 if !sched.items.is_empty() {
                                     return Ok(sched);
@@ -561,8 +597,7 @@ impl EwsxManager {
                 if let Ok(mut file) = archive.by_index(i) {
                     let name = file.name().to_lowercase();
                     if name.ends_with(".show") || name.ends_with(".project") {
-                        let mut show_str = String::new();
-                        if file.read_to_string(&mut show_str).is_ok() {
+                        if let Ok(show_str) = crate::storage::media_sniff::read_capped_string(&mut file, crate::storage::media_sniff::MAX_ZIP_TEXT_BYTES) {
                             if let Ok(sched) = crate::storage::FreeShowShowImporter::import_show_json_str(&show_str, media_dir) {
                                 if !sched.items.is_empty() {
                                     return Ok(sched);
@@ -647,7 +682,23 @@ impl EwsxManager {
         // used for Verses/PlayOrder above rather than assuming one fixed schema.
         const BG_IMAGE_TABLES: &[&str] = &["resource_image", "resource_media_image", "image"];
         const BG_VIDEO_TABLES: &[&str] = &["resource_video", "resource_media_video", "video"];
-        const BG_PATH_COLUMNS: &[&str] = &["file_path", "path", "filename", "file_name", "url", "src", "location"];
+        const BG_PATH_COLUMNS: &[&str] = &["original_filename", "file_path", "path", "filename", "file_name", "url", "src", "location"];
+        let clean_bg_path = |p: String| -> String {
+            let trimmed = p.trim();
+            if let Some(rest) = trimmed.strip_prefix("<images>") {
+                rest.to_string()
+            } else if let Some(rest) = trimmed.strip_prefix("<videos>") {
+                rest.to_string()
+            } else if trimmed.starts_with('<') {
+                if let Some(idx) = trimmed.find('>') {
+                    trimmed[idx + 1..].to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            } else {
+                trimmed.to_string()
+            }
+        };
         let resolve_background = |resource_id: i64| -> Option<SlideBackground> {
             let try_tables = |tables: &[&str]| -> Option<String> {
                 for t in tables {
@@ -662,8 +713,9 @@ impl EwsxManager {
                     };
                     let sql = format!("SELECT \"{}\" FROM \"{}\" WHERE resource_id = ?1 OR rowid = ?1 LIMIT 1;", col, tbl);
                     if let Ok(path) = conn.query_row(&sql, rusqlite::params![resource_id], |r| r.get::<_, String>(0)) {
-                        if !path.trim().is_empty() {
-                            return Some(path.trim().to_string());
+                        let clean = clean_bg_path(path);
+                        if !clean.is_empty() {
+                            return Some(clean);
                         }
                     }
                 }
@@ -695,10 +747,10 @@ impl EwsxManager {
             if find_table("slide").is_none() || find_table("element").is_none() {
                 return Vec::new();
             }
-            let sql = "SELECT s.order_index, e.background_resource_id
+            let sql = "SELECT s.order_index, COALESCE(e.background_resource_id, CASE WHEN e.element_type IN (1, 2, 3) THEN e.foreground_resource_id ELSE NULL END) as res_id
                        FROM slide s
                        JOIN element e ON e.slide_id = s.rowid
-                       WHERE s.presentation_id = ?1 AND e.background_resource_id IS NOT NULL
+                       WHERE s.presentation_id = ?1 AND (e.background_resource_id IS NOT NULL OR (e.element_type IN (1, 2, 3) AND e.foreground_resource_id IS NOT NULL))
                        ORDER BY s.order_index ASC;";
             let mut pairs = Vec::new();
             if let Ok(mut stmt) = conn.prepare(sql) {
@@ -758,7 +810,7 @@ impl EwsxManager {
                         let (t_code, num, words) = r;
                         let (clean, elements) = if words.starts_with("{\\rtf") {
                             let doc = rtf::parse_rtf(&words);
-                            (doc.plain_text(), text_block_from_rtf(&doc))
+                            (doc.plain_text(), text_block_from_rtf(&doc, ElementTransform::default(), true, 3))
                         } else {
                             (words.trim().to_string(), None)
                         };
@@ -852,6 +904,10 @@ impl EwsxManager {
 
                 for p_res in pres_rows {
                     let (rowid, title_opt, author_opt, p_type) = p_res.map_err(|e| e.to_string())?;
+                    // Skip EasyWorship themes / master templates (type 12)
+                    if p_type == Some(12) {
+                        continue;
+                    }
                     let title = title_opt.unwrap_or_else(|| "Untitled Item".to_string());
                     let author = author_opt.unwrap_or_default();
                     let item_type = if p_type == Some(6) { "song".to_string() } else { "presentation".to_string() };
@@ -882,98 +938,185 @@ impl EwsxManager {
                         apply_backgrounds_to_slides(&mut item.slides, rowid);
                     }
 
-                    // If no slides loaded from Verses table, try slide + element + resource_text.
-                    // For real songs (presentation_type = 6), EasyWorship marks the actual lyric
-                    // text element with element_style_type = 4, distinct from other text elements
-                    // on the same slide (e.g. secondary captions) — matching OpenLP's importer.
-                    // Other presentation types don't follow that convention (this sample file's
-                    // announcement slides use style types 6/3, never 4), so the extra filter is
-                    // only applied for songs.
+                    // If no slides loaded from Verses table, extract per-slide from slide + element + resource_text/resource_image
                     if item.slides.is_empty() && find_table("slide").is_some() {
-                        let style_filter = if item.item_type == "song" { " AND e.element_style_type = 4" } else { "" };
-                        let sql = format!(
-                            "SELECT rt.rtf, s.title, s.order_index, e.background_resource_id
-                             FROM slide as s
-                             LEFT JOIN element as e ON e.slide_id = s.rowid AND e.element_type = 6{style_filter}
-                             LEFT JOIN resource_text as rt ON rt.resource_id = e.foreground_resource_id
-                             WHERE s.presentation_id = ?1
-                             ORDER BY s.order_index ASC, s.rowid ASC;"
+                        let s_cols = get_cols("slide");
+                        let has_theme_uid = s_cols.iter().any(|c| c.eq_ignore_ascii_case("theme_slide_uid"));
+                        let theme_col = if has_theme_uid { ", s.theme_slide_uid" } else { ", '' as theme_slide_uid" };
+                        let slide_query = format!(
+                            "SELECT s.rowid, s.title, s.order_index{} FROM slide s WHERE s.presentation_id = ?1 ORDER BY s.order_index ASC, s.rowid ASC;",
+                            theme_col
                         );
-                        let mut slide_stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
 
-                        let slide_rows = slide_stmt.query_map([rowid], |srow| {
-                            Ok((
-                                srow.get::<_, Option<String>>(0)?,
-                                srow.get::<_, Option<String>>(1)?,
-                                srow.get::<_, Option<i32>>(2)?,
-                                srow.get::<_, Option<i64>>(3)?,
-                            ))
-                        }).map_err(|e| e.to_string())?;
+                        if let Ok(mut slide_stmt) = conn.prepare(&slide_query) {
+                            let slide_rows = slide_stmt.query_map([rowid], |srow| {
+                                Ok((
+                                    srow.get::<_, i64>(0)?,
+                                    srow.get::<_, Option<String>>(1)?,
+                                    srow.get::<_, Option<i32>>(2)?,
+                                    srow.get::<_, Option<String>>(3)?,
+                                ))
+                            }).map_err(|e| e.to_string())?;
 
-                        let mut seen_texts = std::collections::HashSet::new();
-                        let mut slide_count = 0;
+                            for s_res in slide_rows {
+                                let (s_id, slide_title_opt, _order_idx, theme_uid_opt) = s_res.map_err(|e| e.to_string())?;
 
-                        for s_res in slide_rows {
-                            let (rtf_opt, slide_title_opt, _, bg_resource_id) = s_res.map_err(|e| e.to_string())?;
-                            if let Some(rtf_text) = rtf_opt {
-                                let doc = rtf::parse_rtf(&rtf_text);
-                                let clean = doc.plain_text();
-                                if !clean.is_empty() && !seen_texts.contains(&clean) {
-                                    seen_texts.insert(clean.clone());
-                                    slide_count += 1;
+                                let is_master = theme_uid_opt.as_deref().map(|u| {
+                                    let upper = u.to_uppercase();
+                                    upper == "MASTER" || upper == "PRESENTATION"
+                                }).unwrap_or(false);
 
-                                    let raw_title = slide_title_opt.as_deref().unwrap_or("");
-                                    let (t_code, num) = if !raw_title.trim().is_empty() {
-                                        section_id_to_ew_type_and_number(raw_title, slide_count - 1)
-                                    } else if clean.to_lowercase().starts_with("chorus") {
-                                        (2, 1)
-                                    } else if clean.to_lowercase().starts_with("bridge") {
-                                        (3, 1)
-                                    } else if clean.to_lowercase().starts_with("ending") {
-                                        (4, 1)
-                                    } else {
-                                        (1, slide_count as i64)
-                                    };
+                                let elem_query = "SELECT e.element_type, e.element_style_type, e.foreground_resource_id, e.background_resource_id, rt.rtf, e.x, e.y, e.width, e.height, e.order_index
+                                                  FROM element e
+                                                  LEFT JOIN resource_text rt ON rt.resource_id = e.foreground_resource_id AND e.element_type = 6
+                                                  WHERE e.slide_id = ?1
+                                                  ORDER BY e.order_index ASC, e.rowid ASC;";
 
-                                    let section_id = format!("{}{}", ew_type_code_to_prefix(t_code), num);
-                                    let label = if !raw_title.trim().is_empty() {
-                                        raw_title.to_string()
-                                    } else {
-                                        ew_type_code_to_label(t_code, num)
-                                    };
+                                let mut title_text: Option<String> = None;
+                                let mut body_texts: Vec<String> = Vec::new();
+                                let mut slide_elements: Vec<SlideElement> = Vec::new();
+                                let mut bg_resource_id: Option<i64> = None;
 
-                                    let elements = text_block_from_rtf(&doc);
-                                    let has_elements = elements.is_some();
-                                    let mut slide = Slide {
-                                        text: clean,
-                                        header: Some(label.clone()),
-                                        label: Some(label),
-                                        background: None,
-                                        notes: None,
-                                        tag: Some(section_id),
-                                        elements: elements.into_iter().collect(),
-                                        slide_document_version: if has_elements { 1 } else { 0 },
-                                        ..Default::default()
-                                    };
-                                    if let Some(id) = bg_resource_id {
-                                        if let Some(bg) = resolve_background(id) {
-                                            apply_background(&mut slide, bg);
+                                if let Ok(mut elem_stmt) = conn.prepare(elem_query) {
+                                    if let Ok(elem_rows) = elem_stmt.query_map([s_id], |erow| {
+                                        Ok((
+                                            erow.get::<_, Option<i32>>(0)?.unwrap_or(0),
+                                            erow.get::<_, Option<i32>>(1)?.unwrap_or(0),
+                                            erow.get::<_, Option<i64>>(2)?,
+                                            erow.get::<_, Option<i64>>(3)?,
+                                            erow.get::<_, Option<String>>(4)?,
+                                            erow.get::<_, Option<f64>>(5)?,
+                                            erow.get::<_, Option<f64>>(6)?,
+                                            erow.get::<_, Option<f64>>(7)?,
+                                            erow.get::<_, Option<f64>>(8)?,
+                                            erow.get::<_, Option<i32>>(9)?,
+                                        ))
+                                    }) {
+                                        for el in elem_rows.flatten() {
+                                            let (el_type, el_style, fg_id, bg_id, rtf_opt, raw_x, raw_y, raw_w, raw_h, order_idx) = el;
+                                            if bg_id.is_some() {
+                                                bg_resource_id = bg_id;
+                                            } else if (el_type == 1 || el_type == 2 || el_type == 3) && fg_id.is_some() {
+                                                bg_resource_id = fg_id;
+                                            }
+
+                                            if el_type == 6 {
+                                                // For real songs, EasyWorship marks the actual
+                                                // lyric text element with element_style_type = 4,
+                                                // distinct from other text elements on the same
+                                                // slide (e.g. secondary captions/translations) --
+                                                // matching OpenLP's importer. Title (style 6) is
+                                                // handled below regardless. Other presentation
+                                                // types don't follow that convention, so the
+                                                // filter only applies to songs.
+                                                if item.item_type == "song" && el_style != 4 && el_style != 6 {
+                                                    continue;
+                                                }
+                                                if let Some(rtf_str) = rtf_opt {
+                                                    let doc = rtf::parse_rtf(&rtf_str);
+                                                    let clean = doc.plain_text();
+                                                    if !clean.is_empty() {
+                                                        let el_x = raw_x.unwrap_or(0.05);
+                                                        let el_y = raw_y.unwrap_or(0.07);
+                                                        let el_w = raw_w.unwrap_or(0.90);
+                                                        let el_h = raw_h.unwrap_or(0.86);
+
+                                                        let transform = ElementTransform {
+                                                            x: el_x.clamp(0.0, 1.0),
+                                                            y: el_y.clamp(0.0, 1.0),
+                                                            w: if el_w > 0.005 { el_w.clamp(0.0, 1.0) } else { 0.90 },
+                                                            h: if el_h > 0.005 { el_h.clamp(0.0, 1.0) } else { 0.86 },
+                                                            rotation_deg: 0.0,
+                                                            z_index: order_idx.unwrap_or(0),
+                                                            locked: false,
+                                                            opacity: 1.0,
+                                                        };
+
+                                                        // item_type here is only ever "song" or
+                                                        // "presentation" (assigned a few lines up
+                                                        // from `p_type`) -- scripture has no
+                                                        // EasyWorship presentation_type and never
+                                                        // reaches this importer.
+                                                        let autofit = item.item_type == "song";
+
+                                                        if let Some(block) = text_block_from_rtf(&doc, transform, autofit, el_style) {
+                                                            slide_elements.push(block);
+                                                        }
+                                                        if el_style == 6 {
+                                                            title_text = Some(clean);
+                                                        } else {
+                                                            body_texts.push(clean);
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
-                                    item.slides.push(slide);
                                 }
+
+                                if is_master && title_text.is_none() && body_texts.is_empty() {
+                                    continue;
+                                }
+
+                                if title_text.is_none() && body_texts.is_empty() && bg_resource_id.is_none() {
+                                    continue;
+                                }
+
+                                let slide_idx = item.slides.len();
+                                let (label, tag) = if item.item_type == "song" {
+                                    let s_num = (slide_idx + 1) as i64;
+                                    (ew_type_code_to_label(1, s_num), format!("{}{}", ew_type_code_to_prefix(1), s_num))
+                                } else {
+                                    (format!("Slide {}", slide_idx + 1), format!("S{}", slide_idx + 1))
+                                };
+
+                                let final_text = match (&title_text, body_texts.is_empty()) {
+                                    (Some(t), false) => format!("{}\n\n{}", t, body_texts.join("\n\n")),
+                                    (Some(t), true) => t.clone(),
+                                    (None, false) => body_texts.join("\n\n"),
+                                    (None, true) => String::new(),
+                                };
+
+                                let raw_slide_title = slide_title_opt.as_deref().unwrap_or("").trim();
+                                let header = title_text.clone()
+                                    .or_else(|| if !raw_slide_title.is_empty() { Some(raw_slide_title.to_string()) } else { None })
+                                    .or_else(|| Some(label.clone()));
+
+                                let has_elements = !slide_elements.is_empty();
+                                let mut slide = Slide {
+                                    text: final_text,
+                                    header,
+                                    label: Some(label),
+                                    tag: Some(tag),
+                                    elements: slide_elements,
+                                    slide_document_version: if has_elements { 1 } else { 0 },
+                                    ..Default::default()
+                                };
+
+                                if let Some(bg_id) = bg_resource_id {
+                                    if let Some(bg) = resolve_background(bg_id) {
+                                        apply_background(&mut slide, bg);
+                                    }
+                                }
+
+                                item.slides.push(slide);
                             }
                         }
                     }
 
                     if item.slides.is_empty() {
+                        let (def_label, def_tag) = if item.item_type == "song" {
+                            ("Verse 1".to_string(), "V1".to_string())
+                        } else {
+                            ("Slide 1".to_string(), "S1".to_string())
+                        };
                         item.slides.push(Slide {
                             text: title.clone(),
-                            header: Some("Slide 1".to_string()),
-                            label: Some("V1".to_string()),
+                            header: Some(def_label.clone()),
+                            label: Some(def_label),
                             background: None,
                             notes: None,
-                            tag: Some("V1".to_string()),
+                            tag: Some(def_tag),
                             ..Default::default()
                         });
                     }
@@ -1149,7 +1292,7 @@ impl EwsxManager {
                     let doc = rtf::parse_rtf(rtf_str);
                     let clean = doc.plain_text();
                     if !clean.is_empty() {
-                        text_blocks.push((clean, text_block_from_rtf(&doc)));
+                        text_blocks.push((clean, text_block_from_rtf(&doc, ElementTransform::default(), true, 3)));
                     }
                 }
             } else {
@@ -1194,7 +1337,7 @@ impl EwsxManager {
         }
 
         // Fallback: extract ASCII title from header
-        let title_bytes = if bytes.len() > 60 { &bytes[38..80] } else { b"Sample Schedule" };
+        let title_bytes = bytes.get(38..80).filter(|_| bytes.len() > 60).unwrap_or(b"Sample Schedule");
         let title = extract_cstring(title_bytes);
 
         let slides = vec![Slide {

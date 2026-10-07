@@ -1,5 +1,6 @@
-import { EditorSlide, SlideBackground } from './types';
-import { applyResolvedBackground, isVideoBackground } from '../core/presentation_helpers';
+import { EditorSlide } from './types';
+import { resolveSlideBackgroundElement } from '../core/presentation_helpers';
+import { renderSlideVisual } from '../core/slide_render';
 
 export interface ThumbnailCallbacks {
   onSelectSlide: (index: number) => void;
@@ -375,32 +376,36 @@ export class FilmstripSidebar {
     thumbView.style.padding = '4px';
     thumbView.style.boxSizing = 'border-box';
 
-    this.renderThumbnailBackground(thumbView, slide.background_v2, slide.background);
+    resolveSlideBackgroundElement(thumbView, slide);
 
-    // Mini content preview text
-    const textPreview = document.createElement('div');
-    textPreview.style.fontSize = '8px';
-    textPreview.style.lineHeight = '1.2';
-    textPreview.style.color = '#ffffff';
-    textPreview.style.textAlign = 'center';
-    textPreview.style.wordBreak = 'break-word';
-    textPreview.style.display = '-webkit-box';
-    textPreview.style.webkitLineClamp = '3';
-    textPreview.style.webkitBoxOrient = 'vertical';
-    textPreview.style.overflow = 'hidden';
-    textPreview.style.textShadow = '1px 1px 2px rgba(0,0,0,0.8)';
-    textPreview.style.pointerEvents = 'none';
+    // Positioned-elements overlay, matching the Preview/Live canvas structure
+    // (see app_core.ts's #preview-canvas-elements / #live-canvas-elements).
+    const elementsEl = document.createElement('div');
+    elementsEl.style.position = 'absolute';
+    elementsEl.style.inset = '0';
+    elementsEl.style.display = 'none';
+    elementsEl.style.pointerEvents = 'none';
+    thumbView.appendChild(elementsEl);
 
-    // Get text from elements or text field
-    let previewContent = slide.text || '';
-    if (!previewContent && slide.elements) {
-      const textEls = slide.elements.filter(e => e.type === 'TextBlock');
-      if (textEls.length > 0) {
-        previewContent = (textEls[0] as any).block.runs.map((r: any) => r.text).join(' ');
-      }
-    }
-    textPreview.textContent = previewContent || '(Empty Slide)';
-    thumbView.appendChild(textPreview);
+    // Flat-text fallback, used when the slide has no positioned elements.
+    const lyricsEl = document.createElement('div');
+    lyricsEl.style.fontSize = '8px';
+    lyricsEl.style.fontWeight = '700';
+    lyricsEl.style.color = '#ffffff';
+    lyricsEl.style.textAlign = 'center';
+    lyricsEl.style.wordBreak = 'break-word';
+    lyricsEl.style.whiteSpace = 'pre-line';
+    lyricsEl.style.maxWidth = '96%';
+    lyricsEl.style.maxHeight = '100%';
+    lyricsEl.style.overflow = 'hidden';
+    lyricsEl.style.textShadow = '1px 1px 2px rgba(0,0,0,0.8)';
+    lyricsEl.style.pointerEvents = 'none';
+    thumbView.appendChild(lyricsEl);
+
+    // Same canonical renderer Preview/Live use — renders positioned elements
+    // (images/video/shapes/tables/text) when present, otherwise autofits the
+    // flat text. No resolved theme is available in this context.
+    renderSlideVisual(thumbView, elementsEl, lyricsEl, slide, null);
 
     card.appendChild(thumbView);
 
@@ -445,53 +450,6 @@ export class FilmstripSidebar {
     });
 
     return card;
-  }
-
-  private renderThumbnailBackground(el: HTMLElement, bgV2?: SlideBackground, legacyBg?: string): void {
-    if (bgV2) {
-      switch (bgV2.kind) {
-        case 'Solid':
-          // Also covers the "pattern:<name>" animated marker — the
-          // filmstrip thumbnail gets the real (tiny) drifting animation too.
-          applyResolvedBackground(el, bgV2.data);
-          break;
-        case 'Gradient': {
-          el.style.animation = '';
-          el.style.backgroundImage = '';
-          const { kind, stops, angle_deg } = bgV2.data;
-          const stopStr = stops.map(s => `${s.color} ${s.offset * 100}%`).join(', ');
-          el.style.background = kind === 'radial'
-            ? `radial-gradient(circle, ${stopStr})`
-            : `linear-gradient(${angle_deg ?? 180}deg, ${stopStr})`;
-          break;
-        }
-        case 'Image':
-          el.style.animation = '';
-          el.style.backgroundImage = '';
-          el.style.background = `url("${bgV2.data.file_path}") center/cover no-repeat`;
-          break;
-        case 'Video':
-          el.style.animation = '';
-          el.style.backgroundImage = '';
-          el.style.background = '#0d1117';
-          break;
-        default:
-          el.style.animation = '';
-          el.style.backgroundImage = '';
-          el.style.background = '#0a0a0c';
-          break;
-      }
-    } else if (legacyBg) {
-      if (isVideoBackground(legacyBg)) {
-        el.style.animation = '';
-        el.style.backgroundImage = '';
-        el.style.background = '#0d1117';
-      } else {
-        applyResolvedBackground(el, legacyBg);
-      }
-    } else {
-      applyResolvedBackground(el, null);
-    }
   }
 }
 

@@ -37,6 +37,19 @@
         android:gravity="center"
         android:visibility="gone">
 
+        <!-- Manual pairing QR (docs/CLIENT_PAIRING.md's two-way bridge):
+             shown only when there's no ADB-provisioned pairing_session_token
+             and no stored device_token yet; see PairingManager.kt. -->
+        <ImageView
+            android:id="@+id/pairingQrImage"
+            android:layout_width="220dp"
+            android:layout_height="220dp"
+            android:layout_marginBottom="16dp"
+            android:background="@color/white"
+            android:padding="8dp"
+            android:visibility="gone"
+            android:contentDescription="@string/pairing_qr_description" />
+
         <ProgressBar
             android:id="@+id/progressBar"
             android:layout_width="48dp"

@@ -1,0 +1,89 @@
+[package]
+name = "os-next-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tempfile = "3.10"
+
+[dependencies.os-next]
+path = ".."
+
+# Use independent workspace for fuzzers
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "pptx_import"
+path = "fuzz_targets/pptx_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ewsx_import"
+path = "fuzz_targets/ewsx_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "openlp_service_json"
+path = "fuzz_targets/openlp_service_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "openlp_theme"
+path = "fuzz_targets/openlp_theme.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "openlp_otz"
+path = "fuzz_targets/openlp_otz.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "freeshow_show_import"
+path = "fuzz_targets/freeshow_show_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "freeshow_fsb"
+path = "fuzz_targets/freeshow_fsb.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "scripture_ref"
+path = "fuzz_targets/scripture_ref.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "genius_lyrics"
+path = "fuzz_targets/genius_lyrics.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rtf_parse"
+path = "fuzz_targets/rtf_parse.rs"
+test = false
+doc = false
+bench = false

@@ -4,6 +4,69 @@ version = "0.2.0"
 edition = "2021"
 authors = ["OpenSanctuary Core Team"]
 description = "Next-Generation Church Presentation Engine in Rust"
+license = "MIT"
+repository = "https://github.com/Craterbrain/opensanctuary"
+
+# `.deb` packaging (docs/installer.md). Build with `cargo deb` (`cargo install
+# cargo-deb` first) -- produces target/debian/opensanctuary_<version>-1_amd64.deb.
+# Installed binary is named `opensanctuary`, not `os-next`, matching the
+# product's own branding everywhere else (README, LICENSE, this desktop file).
+[package.metadata.deb]
+name = "opensanctuary"
+depends = "libwebkit2gtk-4.1-0, libgtk-3-0, libjavascriptcoregtk-4.1-0"
+# Optional, not required to run the app -- BUILDING.md's "Online media
+# import (yt-dlp + ffmpeg)" section. `apt install ./opensanctuary.deb`
+# installs both by default (Debian's "Recommends" is opt-out, unlike
+# "Suggests"), but `apt install --no-install-recommends` or removing them
+# later leaves the app itself working fine -- the Media tab's "import from
+# URL" just stops working (no yt-dlp), or imported H.264 video doesn't get
+# converted to VP9 (no ffmpeg).
+recommends = "ffmpeg, yt-dlp"
+section = "sound"
+priority = "optional"
+extended-description = """\
+Next-generation church presentation engine: show scheduling, live/stage/ \
+remote multi-display output, EasyWorship/OpenLP import, and theming."""
+assets = [
+    { source = "target/release/os-next", dest = "usr/bin/opensanctuary", mode = "755" },
+    { source = "packaging/opensanctuary.desktop", dest = "usr/share/applications/opensanctuary.desktop", mode = "644" },
+    { source = "web/favicon.svg", dest = "usr/share/icons/hicolor/scalable/apps/opensanctuary.svg", mode = "644" },
+    { source = "packaging/icons/16x16.png", dest = "usr/share/icons/hicolor/16x16/apps/opensanctuary.png", mode = "644" },
+    { source = "packaging/icons/32x32.png", dest = "usr/share/icons/hicolor/32x32/apps/opensanctuary.png", mode = "644" },
+    { source = "packaging/icons/48x48.png", dest = "usr/share/icons/hicolor/48x48/apps/opensanctuary.png", mode = "644" },
+    { source = "packaging/icons/64x64.png", dest = "usr/share/icons/hicolor/64x64/apps/opensanctuary.png", mode = "644" },
+    { source = "packaging/icons/128x128.png", dest = "usr/share/icons/hicolor/128x128/apps/opensanctuary.png", mode = "644" },
+    { source = "packaging/icons/256x256.png", dest = "usr/share/icons/hicolor/256x256/apps/opensanctuary.png", mode = "644" },
+    { source = "packaging/icons/512x512.png", dest = "usr/share/icons/hicolor/512x512/apps/opensanctuary.png", mode = "644" },
+    { source = "packaging/icons/256x256.png", dest = "usr/share/pixmaps/opensanctuary.png", mode = "644" },
+
+    { source = "web/index.html", dest = "usr/share/opensanctuary/web/index.html", mode = "644" },
+    { source = "web/live.html", dest = "usr/share/opensanctuary/web/live.html", mode = "644" },
+    { source = "web/stage.html", dest = "usr/share/opensanctuary/web/stage.html", mode = "644" },
+    { source = "web/remote.html", dest = "usr/share/opensanctuary/web/remote.html", mode = "644" },
+    { source = "web/pairing.html", dest = "usr/share/opensanctuary/web/pairing.html", mode = "644" },
+    { source = "web/style.css", dest = "usr/share/opensanctuary/web/style.css", mode = "644" },
+    { source = "web/favicon.svg", dest = "usr/share/opensanctuary/web/favicon.svg", mode = "644" },
+    { source = "web/favicon.ico", dest = "usr/share/opensanctuary/web/favicon.ico", mode = "644" },
+    { source = "web/favicon.png", dest = "usr/share/opensanctuary/web/favicon.png", mode = "644" },
+    { source = "web/logo-banner.svg", dest = "usr/share/opensanctuary/web/logo-banner.svg", mode = "644" },
+
+    { source = "web/dist/*.js", dest = "usr/share/opensanctuary/web/dist/", mode = "644" },
+    { source = "web/plugins/hello_world.js", dest = "usr/share/opensanctuary/web/plugins/hello_world.js", mode = "644" },
+
+    # ADB-sideloadable Android TV client (docs/CLIENT_PAIRING.md) -- built by
+    # apps/android-tv/build_apk.sh, staged to this path by
+    # packaging/build-deb-in-container.sh before this runs. Resolved at
+    # runtime by src/storage/paths.rs::resolve_tv_apk_path().
+    { source = "target/tv-client/opensanctuary-tv.apk", dest = "usr/share/opensanctuary/tv-client/opensanctuary-tv.apk", mode = "644" },
+    # NOT songs/public_domain.db: it would sit under the read-only install
+    # path, but songs_dir resolves to the per-user data directory (see
+    # docs/paths.md) -- SQLite just creates an empty db there instead of
+    # ever reading this one. A real install starts with zero song content,
+    # same as zero Bible content; first-time setup's "point at an existing
+    # folder" is today's way to add either. Bundling this file here would
+    # silently do nothing, so it's left out rather than shipped misleadingly.
+]
 
 [dependencies]
 # Async Runtime & Networking
@@ -22,9 +85,18 @@ rustls-pemfile = "2.1"
 
 # Serialization & Data
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# Pinned <1.0.147: serde_json 1.0.147 switched its float-to-string
+# algorithm from the long-established `ryu` crate to a new one, `zmij`.
+# `zmij`'s float formatting reliably segfaults (0xC0000005, confirmed via a
+# real crash dump + addr2line against a debug build) when this project is
+# cross-compiled to x86_64-pc-windows-gnu via zig-as-mingw (see
+# docs/installer.md) -- not yet reported upstream; reproduce and report
+# before ever bumping past this pin. `=` so a bare `cargo update` can't
+# silently reintroduce it.
+serde_json = "=1.0.145"
 uuid = { version = "1.8", features = ["v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
 
 # Storage & Archive
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -50,13 +122,28 @@ tao = { version = "0.28", optional = true }
 wry = { version = "0.40", optional = true }
 pollster = "1.0.1"
 libloading = "0.9.0"
+dirs = "7.0.0"
+rfd = { version = "0.17.2", optional = true }
+minisign-verify = "0.3.0"
+# Pure-Rust GPG *verification only* (no `gpg` binary needed -- matters on
+# Windows, where it isn't preinstalled the way it often is on Linux/macOS).
+# yt-dlp signs its releases with GPG, not minisign, so this is the GPG
+# analogue of minisign-verify above for src/network/ytdlp_updater.rs.
+gpgrv = "0.5"
+open = { version = "5.4.4", optional = true }
+sha2 = "0.11.0"
+semver = "1.0.28"
+qrcode = { version = "0.14.1", default-features = false }
 
 [features]
 default = ["wgpu-render", "desktop-webview"]
 wgpu-render = ["dep:wgpu"]
-desktop-webview = ["dep:tao", "dep:wry"]
+desktop-webview = ["dep:tao", "dep:wry", "dep:rfd", "open"]
+rfd = ["dep:rfd"]
+open = ["dep:open"]
 
 [dev-dependencies]
+minisign = "0.10.0"
 tokio-tungstenite = "0.24"
 
 [profile.release]

@@ -1,5 +1,7 @@
 # OS-Next Plugin System
 
+_Last edited: 2026-09-16 20:04_
+
 OS-Next has **two separate, independent plugin systems** — one in the Rust backend, one in the
 TypeScript frontend. They don't share code, a manifest format, or a lifecycle. Pick the one that
 matches what you're extending: intercept/observe the show engine (backend), or extend the

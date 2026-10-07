@@ -14,9 +14,9 @@ pub const SETTING_KEY_TLS_ENABLED: &str = "httpsEnabled";
 pub const SETTING_KEY_TLS_PORT: &str = "httpsPort";
 pub const SETTING_KEY_TLS_CERT_PEM: &str = "tlsCertPem";
 /// Legacy-only: the private key used to live under this settings key, which
-/// `GET /api/settings` dumps wholesale to any unauthenticated caller — see
-/// docs/GEMINI_COMMIT_REVIEW_2026-09-22.md #1. It's only referenced now to
-/// detect and migrate an old deployment's key out of the settings table.
+/// `GET /api/settings` dumps wholesale to any unauthenticated caller. It's
+/// only referenced now to detect and migrate an old deployment's key out of
+/// the settings table.
 const LEGACY_SETTING_KEY_TLS_KEY_PEM: &str = "tlsKeyPem";
 /// The private key itself now lives in the OS keyring (Keychain / Credential
 /// Manager / Secret Service) via `KeyringService`, the same password-manager
@@ -102,22 +102,30 @@ pub fn get_or_create_tls_certificate(
         .filter(|k| !k.trim().is_empty());
 
     if let (Some(cert), Some(key)) = (&cert, &keyring_key) {
-        return Ok((cert.clone(), key.clone()));
+        if validate_tls_keypair(cert, key) {
+            return Ok((cert.clone(), key.clone()));
+        } else {
+            tracing::warn!("Stored TLS certificate and OS keyring private key do not match (KeyMismatch) — regenerating consistent pair");
+        }
     }
 
     // One-time migration: an older build stored the private key in the
     // plaintext settings table, where GET /api/settings dumps it to any
-    // unauthenticated caller (docs/GEMINI_COMMIT_REVIEW_2026-09-22.md #1).
-    // If a cert already exists but the keyring doesn't have a key yet,
-    // move a legacy key into the keyring instead of needlessly generating
-    // (and having every already-paired client distrust) a brand new cert.
+    // unauthenticated caller. If a cert already exists but the keyring
+    // doesn't have a key yet, move a legacy key into the keyring instead of
+    // needlessly generating (and having every already-paired client
+    // distrust) a brand new cert.
     if let Some(cert) = &cert {
         if let Ok(Some(legacy_key)) = db.get_setting(LEGACY_SETTING_KEY_TLS_KEY_PEM) {
             if !legacy_key.trim().is_empty() {
-                if KeyringService::set_secret(TLS_KEYRING_SERVICE, TLS_KEYRING_ACCOUNT, &legacy_key).is_ok() {
+                if validate_tls_keypair(cert, &legacy_key) {
+                    if KeyringService::set_secret(TLS_KEYRING_SERVICE, TLS_KEYRING_ACCOUNT, &legacy_key).is_ok() {
+                        let _ = db.delete_setting(LEGACY_SETTING_KEY_TLS_KEY_PEM);
+                        tracing::info!("Migrated TLS private key out of the settings table into the OS keyring");
+                        return Ok((cert.clone(), legacy_key));
+                    }
+                } else {
                     let _ = db.delete_setting(LEGACY_SETTING_KEY_TLS_KEY_PEM);
-                    tracing::info!("Migrated TLS private key out of the settings table into the OS keyring");
-                    return Ok((cert.clone(), legacy_key));
                 }
             }
         }
@@ -125,6 +133,50 @@ pub fn get_or_create_tls_certificate(
 
     // Generate fresh certificate and store
     regenerate_tls_certificate(db, hostname, interfaces)
+}
+
+/// SHA-256 fingerprint of a cert's raw DER bytes, as lowercase hex -- used
+/// to let the Android TV app verify it's actually talking to *this*
+/// console's certificate rather than trusting any self-signed cert handed
+/// to it (`src/network/adb.rs::provision`'s `cert_fingerprint` intent
+/// extra; `PairingManager.kt` pins and checks it on every connection). Not
+/// a secret -- this is exactly what a human would read off a padlock
+/// icon's "certificate details," just delivered through an already-trusted
+/// channel (the ADB launch, or the TV's own screen) instead of asking the
+/// operator to compare hex strings by eye.
+pub fn cert_fingerprint_sha256(cert_pem: &str) -> Result<String, String> {
+    let certs_res: Result<Vec<rustls::pki_types::CertificateDer>, _> =
+        rustls_pemfile::certs(&mut cert_pem.as_bytes()).collect();
+    let certs = certs_res.map_err(|e| format!("Failed to parse certificate PEM: {e}"))?;
+    let cert = certs.first().ok_or("No certificate found in PEM")?;
+
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(cert.as_ref());
+    let digest = hasher.finalize();
+    Ok(digest.iter().map(|b| format!("{:02x}", b)).collect())
+}
+
+/// Validates whether a given certificate and private key PEM match and form a valid Rustls configuration.
+pub fn validate_tls_keypair(cert_pem: &str, key_pem: &str) -> bool {
+    let certs_res: Result<Vec<rustls::pki_types::CertificateDer>, _> =
+        rustls_pemfile::certs(&mut cert_pem.as_bytes()).collect();
+    let certs = match certs_res {
+        Ok(c) if !c.is_empty() => c,
+        _ => return false,
+    };
+
+    let key = match rustls_pemfile::private_key(&mut key_pem.as_bytes()) {
+        Ok(Some(k)) => k,
+        _ => return false,
+    };
+
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    if let Ok(builder) = rustls::ServerConfig::builder_with_provider(provider).with_safe_default_protocol_versions() {
+        builder.with_no_client_auth().with_single_cert(certs, key).is_ok()
+    } else {
+        false
+    }
 }
 
 /// Regenerates a fresh self-signed TLS certificate with updated SANs and persists it —
@@ -163,6 +215,26 @@ pub async fn create_rustls_config(
 mod tests {
     use super::*;
 
+    #[test]
+    fn cert_fingerprint_is_stable_and_changes_with_a_different_cert() {
+        let (cert_a, _key_a) = generate_self_signed_cert("test-sanctuary", &[]).unwrap();
+        let (cert_b, _key_b) = generate_self_signed_cert("test-sanctuary", &[]).unwrap();
+
+        let fp_a1 = cert_fingerprint_sha256(&cert_a).unwrap();
+        let fp_a2 = cert_fingerprint_sha256(&cert_a).unwrap();
+        assert_eq!(fp_a1, fp_a2, "hashing the same cert twice must be deterministic");
+        assert_eq!(fp_a1.len(), 64, "sha256 hex should be 64 chars");
+        assert!(fp_a1.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+
+        let fp_b = cert_fingerprint_sha256(&cert_b).unwrap();
+        assert_ne!(fp_a1, fp_b, "two independently generated certs must not collide");
+    }
+
+    #[test]
+    fn cert_fingerprint_rejects_garbage_input() {
+        assert!(cert_fingerprint_sha256("not a certificate").is_err());
+    }
+
     // Both scenarios below share the same real OS keyring entry (it's
     // process/machine-wide state, not scoped per-database the way SQLite
     // is) — combined into one test function so `cargo test`'s default
@@ -170,12 +242,12 @@ mod tests {
     // produce a false failure. Each still asserts its own thing.
     #[test]
     fn test_tls_private_key_storage_and_legacy_migration() {
-        // 1. Regression test for docs/GEMINI_COMMIT_REVIEW_2026-09-22.md #1:
-        // the private key used to be stored under `tlsKeyPem` in the plain
-        // settings table, which `GET /api/settings` dumps wholesale to any
-        // unauthenticated caller. It must never land there again, and a
-        // second call must return the SAME cert/key rather than
-        // regenerating — proving the keyring-backed key round-trips.
+        // 1. Regression test: the private key used to be stored under
+        // `tlsKeyPem` in the plain settings table, which `GET /api/settings`
+        // dumps wholesale to any unauthenticated caller. It must never land
+        // there again, and a second call must return the SAME cert/key
+        // rather than regenerating — proving the keyring-backed key
+        // round-trips.
         let test_dir = tempfile::tempdir().unwrap();
         let db_path = test_dir.path().join("test_tls.db");
         let db = Database::new(db_path.to_str().unwrap()).unwrap();
@@ -217,6 +289,21 @@ mod tests {
 
         let settings2 = db2.get_settings().unwrap();
         assert!(settings2.get(LEGACY_SETTING_KEY_TLS_KEY_PEM).is_none());
+
+        // 3. KeyMismatch detection and auto-regeneration: if the database has
+        // an existing certificate, but the keyring has a different key (e.g. from
+        // another machine profile, restored db, or test run), get_or_create_tls_certificate
+        // must detect the mismatch, regenerate a matching keypair, and succeed.
+        let (cert_mismatched, _) = generate_self_signed_cert("host_a", &[]).unwrap();
+        let (_, key_mismatched) = generate_self_signed_cert("host_b", &[]).unwrap();
+        db2.set_setting(SETTING_KEY_TLS_CERT_PEM, &cert_mismatched).unwrap();
+        let _ = KeyringService::set_secret(TLS_KEYRING_SERVICE, TLS_KEYRING_ACCOUNT, &key_mismatched);
+
+        assert!(!validate_tls_keypair(&cert_mismatched, &key_mismatched));
+
+        let (fixed_cert, fixed_key) = get_or_create_tls_certificate(&db2, "legacyhost", &[]).unwrap();
+        assert!(validate_tls_keypair(&fixed_cert, &fixed_key));
+        assert_ne!(fixed_cert, cert_mismatched);
 
         // Don't leave a test entry behind in the developer's real OS keyring.
         let _ = KeyringService::delete_secret(TLS_KEYRING_SERVICE, TLS_KEYRING_ACCOUNT);

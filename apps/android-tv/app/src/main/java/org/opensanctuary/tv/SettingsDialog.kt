@@ -17,7 +17,9 @@ import kotlinx.coroutines.withContext
 
 class SettingsDialog(
     context: Context,
-    private val onSave: (serverIp: String, port: Int, isStageMode: Boolean) -> Unit
+    private val pairingManager: PairingManager,
+    private val onSave: (serverIp: String, port: Int, isStageMode: Boolean) -> Unit,
+    private val onResetPairing: () -> Unit,
 ) : Dialog(context) {
 
     private val prefs = context.getSharedPreferences("open_sanctuary_tv", Context.MODE_PRIVATE)
@@ -40,7 +42,7 @@ class SettingsDialog(
         val btnResetPairing = view.findViewById<Button>(R.id.btnResetPairing)
 
         val savedIp = prefs.getString("server_ip", "") ?: ""
-        val savedPort = prefs.getInt("server_port", 8080)
+        val savedPort = prefs.getInt("server_port", 8443)
         val isStage = prefs.getBoolean("is_stage_mode", false)
 
         editIp.setText(savedIp)
@@ -52,8 +54,9 @@ class SettingsDialog(
         }
 
         fun refreshPairingStatus() {
-            val pairedId = prefs.getString("paired_instance_id", null)
-            txtPairingStatus.text = if (pairedId.isNullOrEmpty()) {
+            val pairedId = pairingManager.getStoredInstanceId()
+            val hasToken = pairingManager.getStoredDeviceToken() != null
+            txtPairingStatus.text = if (!hasToken || pairedId.isNullOrEmpty()) {
                 context.getString(R.string.not_paired)
             } else {
                 "Paired to console: $pairedId"
@@ -61,24 +64,24 @@ class SettingsDialog(
         }
         refreshPairingStatus()
 
-        // STUB — see docs/CLIENT_PAIRING.md in the OS-Next repo. This only
-        // clears the stored pairing; nothing in this app reads or enforces
-        // paired_instance_id yet (that requires fetching /api/server-info on
-        // connect and comparing instance_id, not yet implemented here), so
-        // resetting it has no visible effect on connection behavior today.
-        // The button exists now so the preference key and UI location are
-        // already settled before that logic gets built.
+        // Clears the stored device_token/instance_id (PairingManager.clearPairing)
+        // and re-runs MainActivity's connect logic (onResetPairing), which --
+        // finding no stored token anymore -- falls straight into the manual
+        // QR-and-poll pairing screen. Deliberate and explicit only, per
+        // docs/CLIENT_PAIRING.md's "Resetting a pairing": never automatic.
         btnResetPairing.setOnClickListener {
-            prefs.edit().remove("paired_instance_id").apply()
+            pairingManager.clearPairing()
             refreshPairingStatus()
-            Toast.makeText(context, "Pairing reset. This console will be paired again on next connect.", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "Pairing reset. Scan the QR shown on this TV to pair it again.", Toast.LENGTH_LONG).show()
+            dismiss()
+            onResetPairing()
         }
 
         btnScan.setOnClickListener {
             btnScan.text = "Scanning..."
             btnScan.isEnabled = false
             CoroutineScope(Dispatchers.Main).launch {
-                val port = editPort.text.toString().toIntOrNull() ?: 8080
+                val port = editPort.text.toString().toIntOrNull() ?: 8443
                 val found = NetworkDiscovery.scanLocalSubnet(context, port)
                 btnScan.text = context.getString(R.string.scan_network)
                 btnScan.isEnabled = true
@@ -97,12 +100,19 @@ class SettingsDialog(
 
         btnSave.setOnClickListener {
             val ip = editIp.text.toString().trim()
-            val port = editPort.text.toString().toIntOrNull() ?: 8080
+            val port = editPort.text.toString().toIntOrNull() ?: 8443
             val stageMode = rbStage.isChecked
 
             if (ip.isEmpty()) {
                 Toast.makeText(context, "Please enter a valid IP address", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
+            }
+
+            // A pin established for the old address has no bearing on
+            // whatever's at the new one -- see
+            // PairingManager.clearPinnedCertFingerprint's doc comment.
+            if (ip != savedIp || port != savedPort) {
+                pairingManager.clearPinnedCertFingerprint()
             }
 
             prefs.edit()

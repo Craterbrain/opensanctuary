@@ -10,7 +10,7 @@ import java.net.Socket
 
 object NetworkDiscovery {
 
-    suspend fun scanLocalSubnet(context: Context, port: Int = 8080): List<String> = withContext(Dispatchers.IO) {
+    suspend fun scanLocalSubnet(context: Context, port: Int = 8443): List<String> = withContext(Dispatchers.IO) {
         val foundIps = mutableListOf<String>()
         try {
             val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager

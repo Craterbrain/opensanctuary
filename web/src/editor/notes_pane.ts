@@ -34,9 +34,8 @@ export class NotesPane {
   }
 
   private render(): void {
-    // [ARCH:slide-editor-shell] See docs/FRONTEND_ARCHITECTURE.md's "known
-    // traps" section — this comment documents trap #2 (a leftover CSS class
-    // fighting live-JS sizing).
+    // [ARCH:slide-editor-shell] A leftover CSS class fights live-JS sizing
+    // here if it's ever reintroduced.
     // Note: className is 'editor-notes-pane' only — a stray legacy
     // 'studio-notes-drawer' class used to also get applied here, which
     // carries its own `max-height: 120px` rule (style.css) left over from an

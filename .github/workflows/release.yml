@@ -1,0 +1,292 @@
+# Builds and publishes a signed OpenSanctuary release: a Linux `.deb`, a
+# generic Linux tarball, and a Windows installer + portable zip -- see
+# docs/update.md (verification model) and docs/installer.md (what each
+# artifact is and why).
+#
+# Trigger: push a tag matching `v*.*.*` (e.g. `v0.3.0`), or run manually
+# (workflow_dispatch) against an existing tag to rebuild/republish without
+# pushing a new one.
+#
+# Jobs:
+#   test          -- cargo build/test + web typecheck/build/test, gating the
+#                     two platform builds below (needs: test) -- a tag whose
+#                     commit doesn't pass the test suite can't produce a
+#                     release. See .github/workflows/ci.yml for the same
+#                     checks running on every push/PR instead of just here.
+#   build-linux   -- the .deb + generic tarball, from the same reproducible
+#                     container build packaging/build-deb.sh already uses
+#                     locally (CONTAINER_ENGINE=docker instead of podman --
+#                     GitHub-hosted ubuntu runners ship Docker, not Podman).
+#   build-windows -- the installer + portable zip, via the exact same
+#                     cargo-xwin + Wine + Inno Setup pipeline
+#                     packaging/build-windows-installer.sh uses locally.
+#                     Runs on ubuntu-latest (not windows-latest): reuses the
+#                     already-verified local script unmodified instead of
+#                     maintaining a second, native-Windows build path that
+#                     could silently drift from what's actually tested.
+#   sign-and-publish -- needs both builds (so one checksums.txt/signature
+#                     covers every artifact in the release, matching
+#                     docs/update.md's model exactly, not one manifest per
+#                     platform), signs with minisign, publishes the GitHub
+#                     Release.
+#
+# Setting up the secrets/variable below for the first time? Follow
+# docs/keys.md step by step, not just this comment.
+#
+# Required repo secrets (not yet set -- sign-and-publish will fail closed
+# until they are, not silently skip signing):
+#   MINISIGN_SECRET_KEY -- contents of the release signing key file
+#                          (docs/update.md "Release signing key" --
+#                          `minisign -G -p opensanctuary_release.pub -s
+#                          opensanctuary_release.key`, paste opensanctuary_release.key's
+#                          contents verbatim).
+#   MINISIGN_PASSWORD   -- that key's passphrase.
+#
+# Required repo *variable* (Settings -> Secrets and variables -> Actions ->
+# Variables, not Secrets -- this one is meant to be public, same reasoning
+# as docs/update.md's "Publishing the public key" section):
+#   MINISIGN_PUBLIC_KEY_B64 -- the base64 public key string
+#                          (opensanctuary_release.pub's second line, or
+#                          what `minisign -G` printed). Used below purely to
+#                          re-verify the signature this workflow just
+#                          produced before publishing -- deliberately NOT
+#                          the same constant as `RELEASE_PUBLIC_KEY_B64` in
+#                          src/network/updater.rs, which is a separate,
+#                          manual update the app itself needs once real
+#                          keys are in place (see that constant's own
+#                          comment). Hardcoding this workflow to match
+#                          today's test key would silently break the day a
+#                          real production key replaces it.
+#
+# NOT yet verified against a real GitHub Actions run (this repo isn't
+# public / these workflows haven't executed yet) -- the individual pieces
+# (the container build, the cargo-xwin + Wine + Inno Setup pipeline, the
+# minisign-action signing step) are each independently real and tested
+# locally or against their own published usage docs, but this exact
+# end-to-end wiring hasn't run for real yet. Dry-run via workflow_dispatch
+# against a test tag before trusting it for a real release.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and (re-)publish'
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Read-only by default; only sign-and-publish gets contents: write (below).
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Run the test suite before any release build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # The in-app updater (src/network/updater.rs) refuses a release whose
+      # signed .deb filename doesn't carry the release tag's version, and the
+      # filename comes from Cargo.toml -- so a mismatched tag would publish a
+      # release no installed copy can ever update to.
+      - name: Tag must match the Cargo.toml version
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          CARGO_VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')
+          if [ "$TAG" != "v$CARGO_VERSION" ]; then
+            echo "::error::Tag $TAG does not match Cargo.toml version $CARGO_VERSION (expected v$CARGO_VERSION)" >&2
+            exit 1
+          fi
+
+      - name: Install system dependencies (BUILDING.md)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: cargo build + test
+        run: |
+          cargo build --verbose
+          cargo test --verbose
+
+      - name: web install + typecheck + build + test
+        working-directory: web
+        run: |
+          bun install
+          bunx playwright install --with-deps chromium
+          bun run typecheck
+          bun run build
+          bun test
+
+  build-linux:
+    name: Linux (.deb + generic tarball)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Build .deb + generic tarball in the pinned container
+        run: CONTAINER_ENGINE=docker packaging/build-deb.sh
+
+      - name: Stage release assets
+        run: |
+          mkdir -p release-dist
+          cp target/debian/*.deb release-dist/
+          cp target/release-artifacts/*.tar.gz release-dist/
+          ls -la release-dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-release-assets
+          path: release-dist/*
+          if-no-files-found: error
+
+  build-windows:
+    name: Windows (installer + portable zip)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust (stable) with the MSVC cross target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install cargo-xwin
+        run: cargo install cargo-xwin --locked
+
+      - name: Install Bun (web UI build)
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Install Java + Android SDK (for the TV client APK)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android command-line tools
+        env:
+          ANDROID_HOME: /opt/android-sdk
+        run: |
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -fsSL -o /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+      - name: Accept licenses + install SDK platform/build-tools
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Install clang/lld (cargo-xwin's linker) and Wine (for Inno Setup)
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld wine wine32 wine64 unzip
+
+      - name: Install Inno Setup 6 under Wine
+        run: |
+          curl -fsSL -o /tmp/innosetup.exe https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe
+          wine /tmp/innosetup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+
+      - name: Build installer + portable zip
+        run: packaging/build-windows-installer.sh
+
+      - name: Stage release assets
+        run: |
+          mkdir -p release-dist
+          cp target/installer/opensanctuary-setup-x64.exe release-dist/
+          cp target/release-artifacts/opensanctuary-windows-x64-*.zip release-dist/
+          ls -la release-dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-assets
+          path: release-dist/*
+          if-no-files-found: error
+
+  sign-and-publish:
+    name: Checksum, sign, and publish release
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all platform artifacts into one flat directory
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List what's being released
+        run: ls -la dist/
+
+      - name: Compute checksums.txt
+        working-directory: dist
+        run: sha256sum -- * > checksums.txt
+
+      - name: Confirm signing secrets are actually set
+        env:
+          HAS_KEY: ${{ secrets.MINISIGN_SECRET_KEY != '' }}
+          HAS_PASSWORD: ${{ secrets.MINISIGN_PASSWORD != '' }}
+        run: |
+          if [ "$HAS_KEY" != "true" ] || [ "$HAS_PASSWORD" != "true" ]; then
+            echo "::error::MINISIGN_SECRET_KEY and/or MINISIGN_PASSWORD repo secrets are not set -- see this workflow's header comment. Refusing to publish an unsigned release." >&2
+            exit 1
+          fi
+
+      # Signs dist/checksums.txt -> dist/checksums.txt.minisig using the two
+      # repo secrets documented at the top of this file. Fails closed (the
+      # job fails, nothing gets published) if either secret is unset --
+      # never falls back to publishing an unsigned release.
+      - name: Sign checksums.txt
+        uses: thomasdesr/minisign-action@5b0c52ffbc0ddf2210273cd2f13d5cfb8c5d32dd # v1
+        with:
+          args: -Sm dist/checksums.txt
+          minisign_key: ${{ secrets.MINISIGN_SECRET_KEY }}
+          password: ${{ secrets.MINISIGN_PASSWORD }}
+
+      - name: Verify the signature we just produced, before publishing anything
+        env:
+          MINISIGN_PUBLIC_KEY_B64: ${{ vars.MINISIGN_PUBLIC_KEY_B64 }}
+        run: |
+          if [ -z "$MINISIGN_PUBLIC_KEY_B64" ]; then
+            echo "::error::MINISIGN_PUBLIC_KEY_B64 repo variable is not set -- see this workflow's header comment" >&2
+            exit 1
+          fi
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends minisign
+          minisign -V -P "$MINISIGN_PUBLIC_KEY_B64" -m dist/checksums.txt -x dist/checksums.txt.minisig
+
+      - name: Create/update the GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/*

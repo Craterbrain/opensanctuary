@@ -1,45 +1,27 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { spawn, type Subprocess } from "bun";
-import { resolve, join } from "path";
-import { mkdtempSync, rmSync } from "fs";
-import { tmpdir } from "os";
+import { resolve } from "path";
+import { spawnTestServer, teardownTestServer, ensureArtifactDir, type SpawnedTestServer } from "./e2e_helpers";
 
 describe("E2E Live Test: Background Picker Videos Tab & Video Background Playback", () => {
-  let serverProc: Subprocess;
+  let server: SpawnedTestServer;
   let browser: Browser;
   let page: Page;
-  let testDir: string;
-  let DB_PATH: string;
   const PORT = 9015;
-  const artifactDir = "/home/jasonb/.gemini/antigravity/brain/f8991531-6ae4-4b9a-9bd5-2b8c056c8256";
+  let artifactDir: string;
 
   beforeAll(async () => {
-    testDir = mkdtempSync(join(tmpdir(), "os-next-video-picker-e2e-"));
-    DB_PATH = join(testDir, "test.db");
-
-    const binaryPath = resolve(__dirname, "../../target/release/os-next");
-    serverProc = spawn([
-      binaryPath,
-      "--headless",
-      "--port", PORT.toString(),
-      "--db-path", DB_PATH,
-      "--web-dir", resolve(__dirname, "../")
-    ], {
-      cwd: resolve(__dirname, "../../"),
-      stdout: "ignore",
-      stderr: "ignore"
+    artifactDir = ensureArtifactDir();
+    server = await spawnTestServer({
+      port: PORT,
+      tempPrefix: "os-next-video-picker-e2e-",
+      // Media (downloaded/searched backgrounds) lives alongside the database
+      // by default now, not under web_dir (docs/paths.md) -- this test
+      // exercises the video picker against the repo's real sample video
+      // fixture at web/media/videos, so point media-dir at it explicitly
+      // rather than the fresh per-test tmp dir --db-path would otherwise imply.
+      extraArgs: ["--media-dir", resolve(__dirname, "../media")],
     });
-
-    let ready = false;
-    for (let i = 0; i < 40; i++) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${PORT}/`);
-        if (res.ok) { ready = true; break; }
-      } catch (_) {}
-      await new Promise(r => setTimeout(r, 250));
-    }
-    if (!ready) throw new Error("Server failed to start in 10s");
 
     browser = await chromium.launch({ headless: true });
     page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -47,16 +29,14 @@ describe("E2E Live Test: Background Picker Videos Tab & Video Background Playbac
 
     await page.goto(`http://127.0.0.1:${PORT}/`);
     await page.waitForFunction(() => (window as any).__APP_READY__ === true, { timeout: 15000 });
-    await page.waitForLoadState("networkidle");
+    // Not waitForLoadState("networkidle") -- the app's persistent time-sync
+    // WebSocket means "idle" may never fire; __APP_READY__ above is the
+    // real readiness signal (see main.ts).
   }, 45000);
 
   afterAll(async () => {
     if (browser) await browser.close();
-    if (serverProc) {
-      serverProc.kill();
-      await serverProc.exited;
-    }
-    try { rmSync(testDir, { recursive: true, force: true }); } catch (_) {}
+    await teardownTestServer(server);
   });
 
   test("Video Background workflow: modal tabs, library grid, URL preview, canvas playback, and properties browse", async () => {

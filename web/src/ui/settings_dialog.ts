@@ -13,9 +13,11 @@ import {
   DISPLAY_CONTENT_SOURCES,
   createDefaultDisplayOutput,
 } from "../core/display_config.ts";
-import { debounce } from "../core/ui_utils.ts";
-import { api } from "../core/api_client.ts";
+import { debounce, showToast } from "../core/ui_utils.ts";
+import { api, UpdateCheckResult } from "../core/api_client.ts";
 import { escapeHtml } from "../core/presentation_helpers.ts";
+import { closeModal, showConfirmDialog } from "./dialog_manager.ts";
+import { openCcliReportModal } from "./ccli_report_modal.ts";
 
 export interface SettingsContext {
   getAppOptions: () => Record<string, any>;
@@ -24,6 +26,9 @@ export interface SettingsContext {
   areTranslationsEquivalent: (a: string, b: string) => boolean;
   getDisplayOutputs: () => DisplayOutputConfig[];
   saveDisplayOutputs: (outputs: DisplayOutputConfig[]) => Promise<void> | void;
+  switchToPairingTab: () => void;
+  switchToAdbProvisionTab: () => void;
+  showFirstTimeSetup: () => void;
 }
 
 interface MonitorInfo {
@@ -43,9 +48,23 @@ interface DisplayStatus {
   height: number | null;
 }
 
+/** Settings whose value is a filesystem directory -- get a "Browse…" button next to the text field. */
+const DIRECTORY_PICKER_KEYS = new Set(['biblesDirectory', 'songsDirectory', 'mediaCacheDirectory']);
+
 let activeSettingsCategory = 'general';
 let settingsSearchQuery = '';
-let settingsServerInfo: { instance_id?: string; version?: string } | null = null;
+let settingsServerInfo: {
+  instance_id?: string;
+  version?: string;
+  data_dir?: string;
+  bibles_dir?: string;
+  songs_dir?: string;
+  media_dir?: string;
+} | null = null;
+/** Populated alongside `settingsServerInfo` by `loadSettingsServerInfo()` -- the
+ * automated check flow's cached result (docs/update.md), shown inline next to
+ * the `appVersion` row. `undefined` until the first load attempt completes. */
+let settingsUpdateStatus: UpdateCheckResult | null | undefined = undefined;
 let currentContext: SettingsContext | null = null;
 
 let displaysAvailable = false;
@@ -59,9 +78,22 @@ export function initSettingsDialog(context: SettingsContext) {
 
 function getSettingValue(key: string): string {
   if (key === 'serverInstanceId') return (settingsServerInfo && settingsServerInfo.instance_id) || '(unavailable)';
-  if (key === 'appVersion') return (settingsServerInfo && settingsServerInfo.version) || '';
+  if (key === 'appVersion') {
+    const version = (settingsServerInfo && settingsServerInfo.version) || '';
+    const latest = settingsUpdateStatus?.latest;
+    return latest ? `${version}  —  Update available: v${latest.version}` : version;
+  }
+  if (key === 'dataDirectory') return (settingsServerInfo && settingsServerInfo.data_dir) || '(unavailable)';
   const options = currentContext ? currentContext.getAppOptions() : {};
-  return options[key] != null ? String(options[key]) : '';
+  const stored = options[key] != null ? String(options[key]) : '';
+  // biblesDirectory/songsDirectory/mediaCacheDirectory: pre-fill with the
+  // currently-effective resolved path (docs/paths.md) when no explicit
+  // override has been saved, so the field shows what's actually in use
+  // rather than looking blank/unset.
+  if (!stored && key === 'biblesDirectory') return (settingsServerInfo && settingsServerInfo.bibles_dir) || '';
+  if (!stored && key === 'songsDirectory') return (settingsServerInfo && settingsServerInfo.songs_dir) || '';
+  if (!stored && key === 'mediaCacheDirectory') return (settingsServerInfo && settingsServerInfo.media_dir) || '';
+  return stored;
 }
 
 function settingMatchesSearch(def: SettingDef, q: string): boolean {
@@ -118,6 +150,22 @@ export function renderSettingRow(def: SettingDef, highlight: boolean): HTMLEleme
       btn.addEventListener('click', () => {
         window.open('/live.html', 'os-next-live-output', 'width=1920,height=1080');
       });
+    } else if (def.key === 'rerunFirstTimeSetup') {
+      btn.addEventListener('click', () => {
+        const optionsModalEl = document.getElementById('options-modal');
+        if (optionsModalEl) closeModal(optionsModalEl);
+        currentContext?.showFirstTimeSetup?.();
+      });
+    } else if (def.key === 'checkForUpdates') {
+      btn.addEventListener('click', () => checkForUpdates(btn));
+    } else if (def.key === 'installUpdateFromFile') {
+      btn.addEventListener('click', () => installUpdateFromFile(btn));
+    } else if (def.key === 'moveDataDirectory') {
+      btn.addEventListener('click', () => handleMoveDataDirectory(btn));
+    } else if (def.key === 'revealDataDirectory') {
+      btn.addEventListener('click', () => handleRevealDataDirectory(btn));
+    } else if (def.key === 'ccliReport') {
+      btn.addEventListener('click', () => openCcliReportModal());
     }
     controlWrap.appendChild(btn);
   } else if (def.control === 'select') {
@@ -151,11 +199,230 @@ export function renderSettingRow(def: SettingDef, highlight: boolean): HTMLEleme
     input.placeholder = def.placeholder || '';
     input.value = getSettingValue(def.key);
     if (def.control === 'password') input.autocomplete = 'off';
-    controlWrap.appendChild(input);
+
+    if (DIRECTORY_PICKER_KEYS.has(def.key)) {
+      const group = document.createElement('div');
+      group.style.display = 'flex';
+      group.style.gap = '8px';
+      group.style.alignItems = 'center';
+      input.style.flex = '1';
+      group.appendChild(input);
+
+      const browseBtn = document.createElement('button');
+      browseBtn.className = 'btn';
+      browseBtn.type = 'button';
+      browseBtn.textContent = 'Browse…';
+      browseBtn.addEventListener('click', async () => {
+        browseBtn.disabled = true;
+        try {
+          const result = await api.system.pickFolder();
+          if (!result.available) {
+            showToast('Folder picker is only available in the desktop app — type the path instead.', 'warning');
+          } else if (result.path) {
+            input.value = result.path;
+          }
+        } catch (_) {
+          showToast('Could not open the folder picker.', 'error');
+        } finally {
+          browseBtn.disabled = false;
+        }
+      });
+      group.appendChild(browseBtn);
+
+      controlWrap.appendChild(group);
+    } else {
+      controlWrap.appendChild(input);
+    }
   }
 
   row.appendChild(controlWrap);
   return row;
+}
+
+/** Settings > About > "Check for Updates" (docs/update.md) -- forces a real,
+ * right-now check (the background task in main.rs already does this
+ * periodically; this is for "did that just happen" / "check again right
+ * now" on demand). Offers to download-and-install immediately when a newer
+ * release is found, going straight through the same verified download path
+ * a Linux `.deb` install uses -- no separate "download" button. */
+export async function checkForUpdates(btn: HTMLButtonElement): Promise<void> {
+  btn.disabled = true;
+  try {
+    const result = await api.updates.check();
+    settingsUpdateStatus = result.status;
+    renderSettingsContent();
+
+    if (result.status.error) {
+      showToast(`Could not check for updates: ${result.status.error}`, 'error');
+      return;
+    }
+    const latest = result.status.latest;
+    if (!latest) {
+      const note = result.throttled ? ' (already checked moments ago)' : '';
+      showToast(`You're up to date (v${result.status.current_version})${note}.`, 'success');
+      return;
+    }
+    showConfirmDialog(
+      'Update Available',
+      `v${latest.version} is available (you're on v${result.status.current_version}). Download and install now?`,
+      'This downloads the verified installer and hands it to your system\'s own installer -- OpenSanctuary never installs anything with elevated privileges itself.',
+      async () => { await downloadAndInstallUpdate(); },
+      'Download & Install'
+    );
+  } catch (_) {
+    showToast('Could not check for updates.', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+export async function downloadAndInstallUpdate(): Promise<void> {
+  try {
+    const result = await api.updates.downloadAndInstall();
+    if (!result.ok) {
+      showToast(`Could not install update: ${result.error || 'unknown error'}`, 'error');
+      return;
+    }
+    showToast(`Opened your system's installer for v${result.version}. Restart OpenSanctuary once it finishes.`, 'success');
+  } catch (_) {
+    showToast('Could not download the update.', 'error');
+  }
+}
+
+/** Settings > About > "Install Update from File" (docs/update.md) -- the manual
+ * fallback path: pick a release you already downloaded yourself. Useful on
+ * platforms the automated download-and-install path doesn't cover yet
+ * (Windows/macOS), or for installing without waiting for a check. */
+async function installUpdateFromFile(btn: HTMLButtonElement): Promise<void> {
+  btn.disabled = true;
+  try {
+    const picked = await api.system.pickFile();
+    if (!picked.available) {
+      showToast('Picking a file is only available in the desktop app.', 'warning');
+      return;
+    }
+    if (!picked.path) return; // canceled
+    await applyLocalUpdate(picked.path, false);
+  } catch (_) {
+    showToast('Could not open the file picker.', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function applyLocalUpdate(path: string, force: boolean): Promise<void> {
+  try {
+    const result = await api.updates.applyLocal({ path, force });
+    const status = result.checksum.status;
+
+    if (result.needs_confirmation) {
+      const detail = status === 'mismatch'
+        ? `The file's checksum doesn't match what checksums.txt expects (expected ${result.checksum.expected}, got ${result.checksum.actual}). This could mean a corrupted or tampered download.`
+        : `checksums.txt.minisig didn't verify: ${result.checksum.reason}. The checksum file itself isn't trustworthy.`;
+      showConfirmDialog(
+        'Checksum Verification Failed',
+        'This file did not pass verification. Install it anyway?',
+        detail,
+        async () => { await applyLocalUpdate(path, true); },
+        'Install Anyway'
+      );
+      return;
+    }
+
+    if (!result.ok) {
+      showToast(`Could not open installer: ${result.error || 'unknown error'}`, 'error');
+      return;
+    }
+
+    const note = status === 'verified_and_signed' ? ' (signature verified ✓)'
+      : status === 'checksum_matched_unsigned' ? ' (checksum matched)'
+      : status === 'no_entry_for_file' ? ' (no matching entry in checksums.txt)'
+      : '';
+    showToast(`Opened your system's installer for the update${note}. Restart OpenSanctuary once it finishes.`, 'success');
+  } catch (_) {
+    showToast('Could not apply the update.', 'error');
+  }
+}
+
+/**
+ * Settings > Storage > "Move Data Directory" (docs/paths.md) -- relocates data directory
+ * to a new destination folder with SHA-256 verification and optional source cleanup.
+ */
+async function handleRevealDataDirectory(btn: HTMLButtonElement): Promise<void> {
+  btn.disabled = true;
+  try {
+    const res = await api.system.revealDataDir();
+    if (!res.ok) {
+      showToast(res.error || 'Could not open the file manager.', 'error');
+    }
+  } catch (_) {
+    showToast('Could not open the file manager.', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function handleMoveDataDirectory(btn: HTMLButtonElement): Promise<void> {
+  btn.disabled = true;
+  try {
+    let targetPath: string | null = null;
+    const picked = await api.system.pickFolder();
+    if (picked.available && picked.path) {
+      targetPath = picked.path;
+    } else if (!picked.available) {
+      targetPath = window.prompt('Enter destination directory path to move data into:');
+    }
+    if (!targetPath || !targetPath.trim()) {
+      return;
+    }
+    targetPath = targetPath.trim();
+
+    // Ask if original directory should be deleted after SHA verify
+    const deleteSource = window.confirm(
+      `Delete original data directory after copy and SHA-256 verification?\n\n` +
+      `• Click 'OK' to delete the original directory once verified.\n` +
+      `• Click 'Cancel' to keep the original directory intact as a backup.`
+    );
+
+    const detailText = deleteSource
+      ? `All files will be copied to "${targetPath}" and verified via SHA-256 checksums. Upon successful verification, the original directory files will be deleted. An application restart is required to load from the new location.`
+      : `All files will be copied to "${targetPath}" and verified via SHA-256 checksums. The original directory will be kept as a backup. An application restart is required to load from the new location.`;
+
+    const acceptText = deleteSource ? 'Relocate & Delete Original' : 'Relocate & Keep Backup';
+
+    showConfirmDialog(
+      'Move Data Directory',
+      `Move data directory to "${targetPath}"?`,
+      detailText,
+      async () => {
+        btn.disabled = true;
+        const originalText = btn.textContent;
+        btn.textContent = 'Relocating…';
+        showToast('Copying files and verifying SHA-256 checksums…', 'info');
+        try {
+          const res = await api.system.moveDataDir(targetPath!, deleteSource);
+          if (res.ok) {
+            const cleanupMsg = res.source_deleted ? 'Original directory cleaned up.' : 'Original directory kept as backup.';
+            showToast(`Data directory moved (${res.files_copied} files verified). ${cleanupMsg} Please restart OpenSanctuary.`, 'success');
+            await loadSettingsServerInfo();
+            renderSettingsContent();
+          } else {
+            showToast('Failed to move data directory.', 'error');
+          }
+        } catch (err: any) {
+          showToast(`Failed to move data directory: ${err?.message || err}`, 'error');
+        } finally {
+          btn.disabled = false;
+          btn.textContent = originalText;
+        }
+      },
+      acceptText
+    );
+  } catch (err: any) {
+    showToast(`Could not initiate folder selection: ${err?.message || err}`, 'error');
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 export function renderSettingsContent() {
@@ -214,6 +481,14 @@ export async function loadSettingsServerInfo() {
   try {
     settingsServerInfo = await api.system.serverInfo();
   } catch (_) { /* About panel just shows "(unavailable)" */ }
+  try {
+    const result = await api.updates.status();
+    settingsUpdateStatus = result.status;
+  } catch (_) {
+    // Not fatal -- the appVersion row just omits the "Update available"
+    // suffix (e.g. not console-authenticated yet, or offline).
+  }
+  return settingsServerInfo;
 }
 
 export function resetOptionsModal() {
@@ -534,6 +809,7 @@ export interface NetworkState {
   https_enabled?: boolean;
   pairing_url?: string;
   mdns_pairing_url?: string;
+  public_https_url?: string | null;
 }
 
 let networkLoaded = false;
@@ -565,6 +841,7 @@ async function fetchNetworkState() {
         https_enabled: !!(infoData.https_enabled ?? ifaceData.https_enabled),
         pairing_url: infoData.pairing_url,
         mdns_pairing_url: infoData.mdns_pairing_url,
+        public_https_url: infoData.public_https_url ?? null,
       };
     }
   } catch (err) {
@@ -576,8 +853,7 @@ async function fetchNetworkState() {
 /**
  * POST /api/settings now holds back `networkHostname`/`networkPort` when they
  * collide with something already on the network, reporting it in a
- * `_conflicts` field rather than saving silently — see
- * docs/GEMINI_COMMIT_REVIEW_2026-09-22.md #5. This surfaces that to the
+ * `_conflicts` field rather than saving silently. This surfaces that to the
  * operator and, if they explicitly confirm, resubmits the exact same
  * payload with `_confirmOverrides` so the server saves it anyway. Returns
  * false only if a conflict was reported and the operator declined to
@@ -610,6 +886,7 @@ async function resolveSettingsConflicts(
 export async function saveNetworkSettings(): Promise<boolean> {
   const hostInput = document.getElementById('network-hostname-input') as HTMLInputElement | null;
   const portInput = document.getElementById('network-port-input') as HTMLInputElement | null;
+  const publicUrlInput = document.getElementById('network-public-https-url-input') as HTMLInputElement | null;
   const broadcastAllInput = document.getElementById('network-broadcast-all-toggle') as HTMLInputElement | null;
   const checkboxes = document.querySelectorAll<HTMLInputElement>('.network-iface-checkbox');
   const cspSelect = document.getElementById('setting-securityCspMode') as HTMLSelectElement | null;
@@ -618,7 +895,7 @@ export async function saveNetworkSettings(): Promise<boolean> {
 
   // Guard: If network settings were never loaded, or no inputs are mounted and settings aren't dirty,
   // do not overwrite existing backend settings with defaults.
-  if (!hostInput && !portInput && !broadcastAllInput && !cspSelect && !corsSelect && !frameSelect && checkboxes.length === 0 && !networkSettingsDirty) {
+  if (!hostInput && !portInput && !publicUrlInput && !broadcastAllInput && !cspSelect && !corsSelect && !frameSelect && checkboxes.length === 0 && !networkSettingsDirty) {
     return true;
   }
 
@@ -629,6 +906,7 @@ export async function saveNetworkSettings(): Promise<boolean> {
         networkHostname: networkState.hostname,
         networkPort: String(networkState.port),
         networkBroadcastAll: networkState.broadcast_all ? 'true' : 'false',
+        publicHttpsUrl: networkState.public_https_url || '',
       };
       if (cspSelect) dirtyPayload.securityCspMode = cspSelect.value;
       if (corsSelect) dirtyPayload.securityCorsMode = corsSelect.value;
@@ -646,6 +924,7 @@ export async function saveNetworkSettings(): Promise<boolean> {
 
   const hostname = hostInput ? hostInput.value.trim() : (networkState?.hostname || 'opensanctuary');
   const port = portInput ? portInput.value.trim() : String(networkState?.port || 8080);
+  const publicHttpsUrl = publicUrlInput ? publicUrlInput.value.trim() : (networkState?.public_https_url || '');
   const broadcastAll = broadcastAllInput ? broadcastAllInput.checked : (networkState?.broadcast_all ?? true);
 
   // Collect enabled interfaces
@@ -662,6 +941,7 @@ export async function saveNetworkSettings(): Promise<boolean> {
       networkHostname: hostname,
       networkPort: port,
       networkBroadcastAll: broadcastAll ? 'true' : 'false',
+      publicHttpsUrl,
     };
     if (cspSelect) savePayload.securityCspMode = cspSelect.value;
     if (corsSelect) savePayload.securityCorsMode = corsSelect.value;
@@ -691,6 +971,7 @@ export async function saveNetworkSettings(): Promise<boolean> {
       networkState.hostname = hostname;
       networkState.port = parseInt(port, 10) || 8080;
       networkState.broadcast_all = broadcastAll;
+      networkState.public_https_url = publicHttpsUrl || null;
     }
 
     networkSettingsDirty = false;
@@ -733,7 +1014,7 @@ function renderNetworkSettings(content: HTMLElement) {
   ipStat.innerHTML = `
     <div class="network-overview-stat-label">Active LAN IP</div>
     <div class="network-overview-stat-value">
-      ${networkState.lan_ip || '127.0.0.1'}
+      ${escapeHtml(networkState.lan_ip || '127.0.0.1')}
       ${networkState.is_dedicated ? ' <span class="network-badge network-badge--success">Dedicated IP</span>' : ''}
     </div>
   `;
@@ -743,7 +1024,7 @@ function renderNetworkSettings(content: HTMLElement) {
   portStat.className = 'network-overview-stat';
   portStat.innerHTML = `
     <div class="network-overview-stat-label">Active Port</div>
-    <div class="network-overview-stat-value">${networkState.port}</div>
+    <div class="network-overview-stat-value">${escapeHtml(networkState.port)}</div>
   `;
   overviewCard.appendChild(portStat);
 
@@ -751,7 +1032,7 @@ function renderNetworkSettings(content: HTMLElement) {
   hostnameStat.className = 'network-overview-stat';
   hostnameStat.innerHTML = `
     <div class="network-overview-stat-label">Host Name</div>
-    <div class="network-overview-stat-value">${networkState.hostname}.local</div>
+    <div class="network-overview-stat-value">${escapeHtml(networkState.hostname)}.local</div>
   `;
   overviewCard.appendChild(hostnameStat);
 
@@ -761,7 +1042,7 @@ function renderNetworkSettings(content: HTMLElement) {
     <div class="network-overview-stat-label">Dedicated MAC</div>
     <div class="network-overview-stat-value">
       ${networkState.dedicated_active
-        ? `<span class="network-badge network-badge--success">Active (${networkState.dedicated_adapter?.mac_address || 'Virtual'})</span>`
+        ? `<span class="network-badge network-badge--success">Active (${escapeHtml(networkState.dedicated_adapter?.mac_address || 'Virtual')})</span>`
         : '<span class="network-badge network-badge--info">Disabled (Host System)</span>'}
     </div>
   `;
@@ -773,7 +1054,7 @@ function renderNetworkSettings(content: HTMLElement) {
     <div class="network-overview-stat-label">HTTPS (Secure Plane)</div>
     <div class="network-overview-stat-value">
       ${networkState.https_enabled && networkState.https_port
-        ? `<span class="network-badge network-badge--success">Active (Port ${networkState.https_port})</span>`
+        ? `<span class="network-badge network-badge--success">Active (Port ${escapeHtml(networkState.https_port)})</span>`
         : '<span class="network-badge network-badge--info">Disabled</span>'}
     </div>
   `;
@@ -798,7 +1079,7 @@ function renderNetworkSettings(content: HTMLElement) {
     errBanner.style.padding = '10px 12px';
     errBanner.style.width = '100%';
     errBanner.style.boxSizing = 'border-box';
-    errBanner.innerHTML = `⚠️ <strong>Error:</strong> ${networkElevationError}`;
+    errBanner.innerHTML = `⚠️ <strong>Error:</strong> ${escapeHtml(networkElevationError)}`;
     content.appendChild(errBanner);
   }
 
@@ -869,7 +1150,7 @@ function renderNetworkSettings(content: HTMLElement) {
       const data = await api.network.checkHostname(name);
       if (data.conflict_detected) {
         hostBadge.className = 'network-badge network-badge--warning';
-        hostBadge.innerHTML = `⚠️ In use by ${data.conflicting_ip || 'another device'}`;
+        hostBadge.innerHTML = `⚠️ In use by ${escapeHtml(data.conflicting_ip || 'another device')}`;
         if (data.suggested_hostname) {
           const sugBtn = document.createElement('button');
           sugBtn.className = 'btn btn-xs';
@@ -908,6 +1189,78 @@ function renderNetworkSettings(content: HTMLElement) {
   hostInputRow.appendChild(bcastStatus);
   hostnameCard.appendChild(hostInputRow);
   content.appendChild(hostnameCard);
+
+  // 2b. Public HTTPS URL card (docs/TUNNELS.md -- Caddy reverse proxy with a
+  // real Let's Encrypt cert). Optional: an empty value just means "not set,
+  // keep using the self-signed cert everywhere," so the badge stays quiet
+  // until there's actually something to check.
+  const publicUrlCard = document.createElement('div');
+  publicUrlCard.className = 'network-card';
+
+  const publicUrlTitle = document.createElement('div');
+  publicUrlTitle.className = 'network-card-title';
+  publicUrlTitle.innerHTML = '<span>🌐</span> Public HTTPS URL';
+  publicUrlCard.appendChild(publicUrlTitle);
+
+  const publicUrlDesc = document.createElement('div');
+  publicUrlDesc.className = 'network-card-desc';
+  publicUrlDesc.textContent = 'A trusted public domain (e.g. a Caddy reverse proxy with a real certificate) to prefer over the self-signed certificate in the Remote Console banner/QR, TV/mobile pairing, and /api/network/info. Leave blank to keep using the self-signed cert.';
+  publicUrlCard.appendChild(publicUrlDesc);
+
+  const publicUrlInputRow = document.createElement('div');
+  publicUrlInputRow.className = 'network-input-row';
+
+  const publicUrlInputEl = document.createElement('input');
+  publicUrlInputEl.type = 'text';
+  publicUrlInputEl.className = 'search-input';
+  publicUrlInputEl.id = 'network-public-https-url-input';
+  publicUrlInputEl.style.maxWidth = '320px';
+  publicUrlInputEl.placeholder = 'https://connect.yourchurch.org';
+  publicUrlInputEl.value = networkState.public_https_url || '';
+
+  const publicUrlBadge = document.createElement('span');
+  publicUrlBadge.className = 'network-badge network-badge--info';
+  publicUrlBadge.id = 'network-public-https-url-badge';
+  publicUrlBadge.style.display = 'none';
+
+  const probePublicUrl = debounce(async (url: string) => {
+    const trimmed = url.trim();
+    if (!trimmed) {
+      publicUrlBadge.style.display = 'none';
+      return;
+    }
+    try {
+      const data = await api.network.checkPublicUrl(trimmed);
+      publicUrlBadge.style.display = 'inline-flex';
+      if (data.reachable) {
+        publicUrlBadge.className = 'network-badge network-badge--success';
+        publicUrlBadge.textContent = `✓ ${data.message || 'Reachable'}`;
+      } else {
+        publicUrlBadge.className = 'network-badge network-badge--warning';
+        publicUrlBadge.textContent = `⚠️ ${data.message || 'Not reachable yet'}`;
+      }
+    } catch (_) {
+      publicUrlBadge.style.display = 'inline-flex';
+      publicUrlBadge.className = 'network-badge network-badge--info';
+      publicUrlBadge.textContent = 'Could not verify';
+    }
+  }, 500);
+
+  publicUrlInputEl.addEventListener('input', () => {
+    networkSettingsDirty = true;
+    publicUrlBadge.className = 'network-badge network-badge--info';
+    publicUrlBadge.style.display = publicUrlInputEl.value.trim() ? 'inline-flex' : 'none';
+    publicUrlBadge.textContent = 'Checking…';
+    probePublicUrl(publicUrlInputEl.value);
+  });
+  if (publicUrlInputEl.value.trim()) {
+    probePublicUrl(publicUrlInputEl.value);
+  }
+
+  publicUrlInputRow.appendChild(publicUrlInputEl);
+  publicUrlInputRow.appendChild(publicUrlBadge);
+  publicUrlCard.appendChild(publicUrlInputRow);
+  content.appendChild(publicUrlCard);
 
   // 3. HTTP & Remote Port Card
   const portCard = document.createElement('div');
@@ -1106,7 +1459,7 @@ function renderNetworkSettings(content: HTMLElement) {
   const macStatusPill = document.createElement('span');
   if (networkState.dedicated_active) {
     macStatusPill.className = 'network-badge network-badge--success';
-    macStatusPill.innerHTML = `✓ Active • IP: ${networkState.dedicated_adapter?.ipv4 || 'Leased'} • MAC: ${networkState.dedicated_adapter?.mac_address || '—'}`;
+    macStatusPill.innerHTML = `✓ Active • IP: ${escapeHtml(networkState.dedicated_adapter?.ipv4 || 'Leased')} • MAC: ${escapeHtml(networkState.dedicated_adapter?.mac_address || '—')}`;
   } else {
     macStatusPill.className = 'network-badge network-badge--info';
     macStatusPill.textContent = 'Inactive (Sharing Host IP & MAC)';
@@ -1165,7 +1518,7 @@ function renderNetworkSettings(content: HTMLElement) {
 
     const title = document.createElement('div');
     title.className = 'network-iface-title';
-    title.innerHTML = `<span>${icon}</span> <span>${iface.display_name}</span>`;
+    title.innerHTML = `<span>${icon}</span> <span>${escapeHtml(iface.display_name)}</span>`;
 
     const statusBadge = document.createElement('span');
     statusBadge.className = 'network-badge ' + (iface.is_up ? 'network-badge--success' : 'network-badge--info');
@@ -1178,9 +1531,9 @@ function renderNetworkSettings(content: HTMLElement) {
     const meta = document.createElement('div');
     meta.className = 'network-iface-meta';
     meta.innerHTML = `
-      <div>IP : ${iface.ipv4 || 'None'}</div>
-      <div>MAC: ${iface.mac_address || '—'}</div>
-      ${iface.netmask ? `<div>Mask: ${iface.netmask}</div>` : ''}
+      <div>IP : ${escapeHtml(iface.ipv4 || 'None')}</div>
+      <div>MAC: ${escapeHtml(iface.mac_address || '—')}</div>
+      ${iface.netmask ? `<div>Mask: ${escapeHtml(iface.netmask)}</div>` : ''}
     `;
     iCard.appendChild(meta);
 
@@ -1469,13 +1822,26 @@ export function renderPairedDevicesSettings(content: HTMLElement) {
   pairBtn.addEventListener('click', () => {
     const remoteModal = document.getElementById('remote-modal');
     if (remoteModal) {
-      if (typeof (globalThis as any).switchToPairingTab === 'function') {
-        (globalThis as any).switchToPairingTab();
-      }
+      currentContext?.switchToPairingTab?.();
       remoteModal.classList.add('active');
     }
   });
   overviewCard.appendChild(pairBtn);
+
+  // Install via ADB Button -- sideload without the Play Store (docs/CLIENT_PAIRING.md).
+  const adbProvisionBtn = document.createElement('button');
+  adbProvisionBtn.className = 'btn btn-secondary';
+  adbProvisionBtn.id = 'btn-paired-devices-adb-provision';
+  adbProvisionBtn.innerHTML = '📲 Install via ADB';
+  adbProvisionBtn.style.marginLeft = '8px';
+  adbProvisionBtn.addEventListener('click', () => {
+    const remoteModal = document.getElementById('remote-modal');
+    if (remoteModal) {
+      currentContext?.switchToAdbProvisionTab?.();
+      remoteModal.classList.add('active');
+    }
+  });
+  overviewCard.appendChild(adbProvisionBtn);
 
   content.appendChild(overviewCard);
 
@@ -1504,9 +1870,7 @@ export function renderPairedDevicesSettings(content: HTMLElement) {
     emptyPairBtn.addEventListener('click', () => {
       const remoteModal = document.getElementById('remote-modal');
       if (remoteModal) {
-        if (typeof (globalThis as any).switchToPairingTab === 'function') {
-          (globalThis as any).switchToPairingTab();
-        }
+        currentContext?.switchToPairingTab?.();
         remoteModal.classList.add('active');
       }
     });
@@ -1604,6 +1968,16 @@ export function renderPairedDevicesSettings(content: HTMLElement) {
     </div>
   `;
   content.appendChild(infoBanner);
+}
+
+// Called from app_ui.ts's ADB-provisioning wizard once a device finishes
+// self-authorizing, so the Paired Devices tab reflects it without the
+// operator needing to close and reopen Settings.
+export async function refreshPairedDevicesAfterAdbProvision() {
+  const content = document.getElementById('settings-content');
+  if (!content || activeSettingsCategory !== 'paired-devices') return;
+  await fetchPairedDevicesState();
+  renderPairedDevicesSettings(content);
 }
 
 

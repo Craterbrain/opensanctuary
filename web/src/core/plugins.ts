@@ -8,7 +8,6 @@ export class PluginManager {
     private plugins: Map<string, any> = new Map();
 
     constructor(contextObj: any = null) {
-        console.log("[PluginManager] Initialized.");
         const target = contextObj || (typeof window !== 'undefined' ? window : (globalThis as any));
         if (target) {
             target.OS = target.OS || {};
@@ -67,12 +66,10 @@ export class PluginManager {
 
     async loadLocalPlugin(path: string) {
         try {
-            console.log(`[PluginManager] Loading plugin from ${path}...`);
             const module = await import(path);
             if (module.default && typeof module.default.init === 'function') {
                 const name = module.default.name || path;
                 this.registerPlugin(name, module.default);
-                console.log(`[PluginManager] Successfully loaded plugin: ${name}`);
             }
         } catch (e) {
             console.error(`[PluginManager] Failed to load plugin ${path}:`, e);

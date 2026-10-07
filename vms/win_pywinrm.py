@@ -130,12 +130,83 @@ def run(remote_cmd):
     return r.status_code
 
 
+TASK_NAME = "OSNextTestRun"
+OUT_LOG = r"C:\os-next-test\output.log"
+EXIT_FILE = r"C:\os-next-test\exitcode.txt"
+
+
+def run_interactive(exe_cmd, task_user="tester", timeout_sec=180):
+    """Runs a command line via a Scheduled Task configured with
+    LogonType=Interactive + RunLevel=Highest, so it executes inside the
+    already-logged-on user's real interactive session instead of a fresh
+    WinRM remote shell.
+
+    Why this exists: `run()` above spawns commands under WinRM's own
+    network-logon session, which Windows Credential Manager (DPAPI-backed)
+    rejects with ERROR_NO_SUCH_LOGON_SESSION -- confirmed by instrumenting
+    the keyring test directly. WinRM has no way to attach to, or borrow a
+    token from, an already-open interactive session; a Scheduled Task with
+    an Interactive-logon principal is the standard way to actually execute
+    *inside* that session instead. Requires task_user to already have an
+    active interactive logon at the time this runs -- this VM is set up
+    with autologon (an admin PowerShell open at boot), which satisfies that.
+    """
+    s = new_session()
+    setup_ps = (
+        f'$ErrorActionPreference = "Stop"; $ProgressPreference = "SilentlyContinue"; '
+        f'Unregister-ScheduledTask -TaskName "{TASK_NAME}" -Confirm:$false -ErrorAction SilentlyContinue; '
+        f'Remove-Item "{OUT_LOG}" -ErrorAction SilentlyContinue; '
+        f'Remove-Item "{EXIT_FILE}" -ErrorAction SilentlyContinue; '
+        f"$action = New-ScheduledTaskAction -Execute \"cmd.exe\" -Argument '/c {exe_cmd} > {OUT_LOG} 2>&1 & echo %ERRORLEVEL% > {EXIT_FILE}'; "
+        f'$principal = New-ScheduledTaskPrincipal -UserId "{task_user}" -LogonType Interactive -RunLevel Highest; '
+        f'Register-ScheduledTask -TaskName "{TASK_NAME}" -Action $action -Principal $principal -Force | Out-Null; '
+        f'Start-ScheduledTask -TaskName "{TASK_NAME}"'
+    )
+    r = s.run_ps(setup_ps)
+    if r.status_code != 0:
+        raise RuntimeError(f"failed to register/start interactive scheduled task: {r.std_err.decode(errors='replace')}")
+
+    t0 = time.time()
+    found = False
+    while time.time() - t0 < timeout_sec:
+        s2 = new_session()
+        r = s2.run_ps(f'Test-Path "{EXIT_FILE}"')
+        if r.std_out.decode().strip() == "True":
+            found = True
+            break
+        time.sleep(2)
+
+    s3 = new_session()
+    if not found:
+        info = s3.run_ps(f'(Get-ScheduledTaskInfo -TaskName "{TASK_NAME}").LastTaskResult')
+        raise RuntimeError(
+            f"interactive scheduled task did not produce an exit code within {timeout_sec}s -- "
+            f"is {task_user} actually logged on interactively right now? "
+            f"LastTaskResult={info.std_out.decode(errors='replace').strip()}"
+        )
+
+    out = s3.run_ps(f'Get-Content "{OUT_LOG}" -Raw -ErrorAction SilentlyContinue')
+    sys.stdout.write(out.std_out.decode(errors="replace"))
+    sys.stderr.write(out.std_err.decode(errors="replace"))
+
+    exit_r = s3.run_ps(f'Get-Content "{EXIT_FILE}" -Raw')
+    exit_str = exit_r.std_out.decode().strip()
+
+    s3.run_ps(f'Unregister-ScheduledTask -TaskName "{TASK_NAME}" -Confirm:$false -ErrorAction SilentlyContinue')
+
+    if not exit_str.isdigit():
+        raise RuntimeError(f"could not parse exit code from {EXIT_FILE}: {exit_str!r}")
+    return int(exit_str)
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1]
     if cmd == "push":
         push_file(sys.argv[2], sys.argv[3])
     elif cmd == "run":
         sys.exit(run(sys.argv[2]))
+    elif cmd == "run_interactive":
+        sys.exit(run_interactive(sys.argv[2]))
     else:
         print(f"unknown command {cmd}", file=sys.stderr)
         sys.exit(2)

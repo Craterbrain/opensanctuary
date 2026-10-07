@@ -3,6 +3,12 @@
  * Invariant: inv.element.transform-normalized (x, y, w, h in 0.0..=1.0)
  */
 
+// NOTE: ElementTransform / TextBlock / SlideElement below are hand-mirrored by
+// src/core/models.rs (same names) — there's no shared schema or codegen between
+// them. If you add/rename/remove a field here, make the matching edit there too,
+// or the two sides will silently drift (wire JSON that (de)serializes fine on
+// one side but is missing/misread on the other).
+
 export interface ElementTransform {
   x: number; // 0.0 .. 1.0 (relative to 16:9 canvas width)
   y: number; // 0.0 .. 1.0 (relative to 16:9 canvas height)
@@ -232,10 +238,30 @@ export interface EditorSlide {
   reference_label?: string;
 }
 
-export interface SlideEditOp {
-  op_type: string;
-  payload: any;
-}
+/**
+ * One edit within a `BatchSlideEdit` (see `EditorHistoryManager.computeBatchOps`
+ * below, the only real producer of these on the wire). Mirrors the Rust
+ * `#[serde(tag = "op_type", content = "payload")]` enum of the same name in
+ * src/core/commands.rs field-for-field -- an "adjacently tagged" enum
+ * produces exactly `{op_type: "...", payload: {...}}`, same as this type
+ * already needs to construct by hand, so this is a type-safety hardening
+ * with no wire-format change: a typo'd field name or wrong payload shape is
+ * now a compile error here instead of a silent `tracing::warn!`-and-drop on
+ * the Rust side.
+ */
+export type SlideEditOp =
+  | { op_type: 'AddElement'; payload: SlideElement }
+  | { op_type: 'RemoveElement'; payload: { element_id: string } }
+  | { op_type: 'UpdateTransform'; payload: { element_id: string; transform: ElementTransform } }
+  | { op_type: 'UpdateTextBlockContent'; payload: { element_id: string; runs: TextRun[]; paragraph_style?: TextParagraphStyle } }
+  | { op_type: 'UpdateElementEffects'; payload: { element_id: string; effects: ElementEffects } }
+  | { op_type: 'ReorderElements'; payload: { element_id: string; to_z: number } }
+  | { op_type: 'GroupElements'; payload: { element_ids: string[] } }
+  | { op_type: 'UngroupElements'; payload: { group_id: string } }
+  | { op_type: 'SetSpeakerNotes'; payload: { notes: string } }
+  | { op_type: 'SetCcliMetadata'; payload: { metadata: CcliMetadata } }
+  | { op_type: 'SetBackground'; payload: { background: SlideBackground } }
+  | { op_type: 'SetTransition'; payload: { transition: SlideTransition } };
 
 export interface TextStyleUpdate {
   font_family?: string;

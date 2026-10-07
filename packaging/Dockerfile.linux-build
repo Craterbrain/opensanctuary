@@ -1,0 +1,70 @@
+# Reproducible build environment for the Linux .deb release (docs/installer.md,
+# docs/update.md's glibc-floor discussion).
+#
+# Base: Ubuntu 22.04 "jammy", NOT the older/lower-glibc Debian 11 "bullseye"
+# that would be the natural first guess from glibc alone. Confirmed directly
+# against packages.debian.org/packages.ubuntu.com: bullseye (and Ubuntu 20.04
+# "focal") do not ship `libwebkit2gtk-4.1-dev` at all -- WebKitGTK 4.1 (the
+# libsoup3 ABI this app's [package.metadata.deb] `depends` already requires)
+# first appears in Debian 12 "bookworm" and Ubuntu 22.04 "jammy". Between
+# those two, jammy has the OLDER glibc (2.35, vs. bookworm's 2.36) -- building
+# on bookworm would produce a binary requiring glibc >= 2.36, which is newer
+# than jammy/Mint 21's own glibc and would fail to even start there. jammy is
+# the actual floor once both constraints (glibc AND webkit2gtk-4.1
+# availability) are accounted for: it covers Ubuntu 22.04+/Mint 21+, Debian
+# 12+ (newer glibc than jammy's), and every currently-supported Fedora
+# release (always newer glibc than a comparable-year Ubuntu/Debian).
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    build-essential \
+    pkg-config \
+    libwebkit2gtk-4.1-dev \
+    libgtk-3-dev \
+    libjavascriptcoregtk-4.1-dev \
+    libssl-dev \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Rust via rustup, not Ubuntu's own (much older) packaged rustc -- "stable"
+# resolves independently of the base OS, same as every dev machine building
+# this project today.
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+RUN cargo install cargo-deb --locked
+
+# Bun, for the frontend build step (`bun run build`) build-deb-in-container.sh
+# runs, matching build-deb.sh's existing (host) steps exactly.
+ENV BUN_INSTALL=/usr/local/bun \
+    PATH=/usr/local/bun/bin:$PATH
+RUN curl -fsSL https://bun.sh/install | bash
+
+# Android SDK, for building the TV client APK (apps/android-tv/build_apk.sh)
+# that ships as a sibling release asset (see docs/CLIENT_PAIRING.md's
+# ADB-provisioning plan) -- built once here rather than per-platform, since
+# an APK is cross-platform bytecode+resources, not a native binary; both
+# build-deb-in-container.sh and build-windows-installer.sh just stage
+# whichever one of them builds it first. JDK 17 matches this Android
+# project's own `jvmToolchain(17)` and AGP 9's minimum JDK requirement.
+# The project's own `gradlew` brings its own pinned Gradle -- only the SDK
+# itself (platform + build-tools for compileSdk 36, matching
+# apps/android-tv/app/build.gradle.kts) needs installing here.
+RUN apt-get update && apt-get install -y --no-install-recommends openjdk-17-jdk-headless && rm -rf /var/lib/apt/lists/*
+ENV ANDROID_HOME=/opt/android-sdk \
+    ANDROID_SDK_ROOT=/opt/android-sdk
+RUN mkdir -p "$ANDROID_HOME/cmdline-tools" \
+    && curl -fsSL -o /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+    && unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools" \
+    && mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest" \
+    && rm /tmp/cmdline-tools.zip
+ENV PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
+RUN yes | sdkmanager --licenses > /dev/null \
+    && sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+WORKDIR /src

@@ -5,7 +5,7 @@
 // the canvas editor itself uses (see web/src/editor/*.ts), so what an operator
 // designs in the editor is exactly what plays live: no separate rendering
 // logic is implemented here.
-import { CanvasProjection, projectRect, NormalizedRect } from './canvas_projection';
+import { CanvasProjection, computeCanvasProjection, projectRect, NormalizedRect } from './canvas_projection';
 import { renderTextBlockDOM } from '../editor/text_block';
 import { renderImageDOM } from '../editor/image_tools';
 import { renderVideoDOM } from '../editor/video_tools';
@@ -13,6 +13,7 @@ import { renderShapeDOM } from '../editor/shape_library';
 import { renderLineDOM } from '../editor/line_tool';
 import { renderTableDOM } from '../editor/table';
 import { autoFitLyrics } from './autofit';
+import { escapeHtml, parseParallelSlide, applyThemeTypography, type ThemeDefinition } from './presentation_helpers';
 
 // Kept structurally compatible with web/src/editor/types.ts's SlideElement,
 // but declared loosely here since this module must also run against slides
@@ -37,8 +38,8 @@ export interface RenderableElement {
   stroke_width?: number;
   line_kind?: string;
   color?: string;
-  start_arrow?: string;
-  end_arrow?: string;
+  start_arrow?: boolean;
+  end_arrow?: boolean;
   rows?: number;
   cols?: number;
   cells?: string[][];
@@ -63,9 +64,11 @@ function createElementNode(el: RenderableElement, projection: CanvasProjection):
   node.style.pointerEvents = 'none';
 
   switch (el.type) {
-    case 'TextBlock':
-      renderTextBlockDOM(node, el.block, false);
+    case 'TextBlock': {
+      const scale = projection.contentH > 0 ? projection.contentH / 1080 : 1;
+      renderTextBlockDOM(node, el.block, false, undefined, scale);
       break;
+    }
     case 'Image':
       renderImageDOM(node, {
         file_path: el.file_path!,
@@ -89,7 +92,7 @@ function createElementNode(el: RenderableElement, projection: CanvasProjection):
     case 'Shape':
       renderShapeDOM(node, {
         shape_kind: el.shape_kind!,
-        fill_color: el.fill_color,
+        fill_color: el.fill_color!,
         stroke_color: el.stroke_color,
         stroke_width: el.stroke_width,
         opacity: el.transform.opacity
@@ -98,7 +101,7 @@ function createElementNode(el: RenderableElement, projection: CanvasProjection):
     case 'Line':
       renderLineDOM(node, {
         line_kind: el.line_kind!,
-        color: el.color,
+        color: el.color!,
         stroke_width: el.stroke_width,
         start_arrow: el.start_arrow,
         end_arrow: el.end_arrow,
@@ -153,5 +156,82 @@ export function renderSlideElements(
         autoFitLyrics(elNode, textInner, { minFontSize: 14, maxFontSize: 100 });
       }
     }
+  }
+}
+
+/**
+ * Formats a slide's flat `text` field into lyrics HTML, splitting a
+ * parallel-translation slide into its dual-column layout.
+ */
+export function formatSlideLyricsHtml(textContent: string): string {
+  if (!textContent) return '';
+  const parsed = parseParallelSlide(textContent);
+  if (parsed.isParallel) {
+    return `<div class="dual-slide-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; text-align: left; align-items: start;">
+      <div class="dual-slide-col primary" style="background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 4px; border-left: 2px solid #ffa726; font-size: 0.9em; white-space: pre-line;">${escapeHtml(parsed.leftText)}</div>
+      <div class="dual-slide-col secondary" style="background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 4px; border-left: 2px solid #00e5ff; font-size: 0.9em; white-space: pre-line;">${escapeHtml(parsed.rightText)}</div>
+    </div>`;
+  }
+  return escapeHtml(textContent).replace(/\n/g, '<br>');
+}
+
+/**
+ * Sets `lyricsEl`'s HTML and binary-searches a font size that actually fits
+ * its container. A fixed font-size-by-character-count bucket table can never
+ * generalize across window sizes/containers — this is why every lyrics
+ * surface (Slide Editor canvas, Live, Preview, projector output) measures
+ * the real container instead. Invariant: inv.text.autofit-single-source
+ */
+export function applyAutoFitLyrics(lyricsEl: HTMLElement, html: string): void {
+  lyricsEl.innerHTML = html;
+  autoFitLyrics(lyricsEl.parentElement, lyricsEl, { minFontSize: 12 });
+}
+
+/**
+ * Renders one slide's actual content into a viewport — the single canonical
+ * "how does a slide look" entry point, shared by every non-editing surface
+ * (Slide Editor filmstrip, Resources tab preview, operator Preview/Live
+ * canvases) so they can never independently drift apart on how a slide
+ * looks. If the slide has real positioned elements (text runs, images,
+ * shapes, lines, tables — the normal case for anything built in the Slide
+ * Editor), it renders them exactly as authored via `renderSlideElements`
+ * against a projection of the *actual* canvas box; otherwise it falls back
+ * to the flattened single-textbox autofit path.
+ *
+ * NOTE: live_output.ts (the actual projector/FOH output, not an operator-
+ * facing surface) has its OWN independent copy of this same
+ * elements-vs-flat-text branch -- it isn't calling this function, because it
+ * also needs extra cases this one doesn't (parallel-text layout, pinned
+ * reference label positioning). If the elements-vs-flat-text decision logic
+ * itself changes (not just styling), check live_output.ts's branch too.
+ */
+export function renderSlideVisual(
+  canvasEl: HTMLElement,
+  elementsEl: HTMLElement | null,
+  lyricsEl: HTMLElement,
+  slide: any,
+  theme: ThemeDefinition | null = null
+): void {
+  applyThemeTypography(lyricsEl, theme);
+  // Compact preview surfaces always show the reference inline (no separate
+  // pinned-overlay element here, unlike live_output.ts's real FOH output) —
+  // good enough for a non-broadcast working view.
+  const isScriptureTheme = !!(theme && theme.category === 'scripture');
+  const inlinePrefix = (isScriptureTheme && slide && slide.reference_label) ? `${slide.reference_label}  ` : '';
+
+  const hasPositionedElements = !!(slide && slide.elements && slide.elements.length > 0);
+  if (hasPositionedElements && elementsEl) {
+    lyricsEl.style.opacity = '0';
+    elementsEl.style.display = 'block';
+    const projection = computeCanvasProjection(canvasEl.clientWidth, canvasEl.clientHeight, { authoredAspect: 16 / 9 });
+    renderSlideElements(elementsEl, slide.elements, projection);
+  } else {
+    if (elementsEl) {
+      elementsEl.style.display = 'none';
+      elementsEl.innerHTML = '';
+    }
+    lyricsEl.style.opacity = '1';
+    const textContent = slide ? (slide.text || '') : '';
+    applyAutoFitLyrics(lyricsEl, formatSlideLyricsHtml(inlinePrefix ? `${inlinePrefix}${textContent}` : textContent));
   }
 }

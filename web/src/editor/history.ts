@@ -119,9 +119,14 @@ export class EditorHistoryManager {
             });
           }
           if (JSON.stringify(prev.block.effects) !== JSON.stringify(el.block.effects)) {
+            // `effects` is optional on TextBlock (a block can have none set
+            // at all) but the wire op always needs the key present -- `{}`
+            // round-trips as "no effects" on the Rust side (every
+            // ElementEffects field defaults independently), so this is a
+            // real fallback, not just a type-checker workaround.
             ops.push({
               op_type: 'UpdateElementEffects',
-              payload: { element_id: el.id, effects: el.block.effects }
+              payload: { element_id: el.id, effects: el.block.effects || {} }
             });
           }
         }

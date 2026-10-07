@@ -6,10 +6,11 @@
  * built with drag-and-drop between and within both lists.
  */
 import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
-import { type ArrangementEntry } from '../core/presentation_helpers';
+import { type ArrangementEntry, isPrimaryDropTarget } from '../core/presentation_helpers';
+import type { ToastType } from '../core/ui_utils';
 
 export interface ArrangementModalContext {
-  showToast: (message: string, type?: string) => void;
+  showToast: (message: string, type?: ToastType) => void;
   showModal: (el: HTMLElement) => void;
   closeModal: (el: HTMLElement) => void;
   sendCommand: (cmd: any) => void;
@@ -461,7 +462,14 @@ function renderArrangementModalPanes() {
       dropTargetForElements({
         element: playListEl,
         getData: () => ({ type: 'play-list-container' }),
-        onDrop: ({ source }) => {
+        onDrop: ({ source, location }) => {
+          // A card's own drop target already handled this drop if it was
+          // the innermost target dropped on -- without this guard, dropping
+          // on a card fires both the card's insert-at-position handler AND
+          // this container's append-to-end handler, adding the section twice.
+          if (!isPrimaryDropTarget(playListEl, location.current.dropTargets)) {
+            return;
+          }
           const data = source.data;
           if (data.type === 'master-section') {
             const mIdx = data.masterIndex as number;

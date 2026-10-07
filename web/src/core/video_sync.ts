@@ -67,7 +67,6 @@ export class VideoSyncController {
             this.video.playbackRate = decision.playbackRate;
         } else if (decision.tier === 2) {
             if (Math.abs(this.video.playbackRate - decision.playbackRate) > 0.01) {
-                console.log(`[VideoSync] Rate adjusted to ${decision.playbackRate.toFixed(3)}x. Drift: ${decision.driftMs.toFixed(1)}ms`);
                 this.video.playbackRate = decision.playbackRate;
             }
         } else {

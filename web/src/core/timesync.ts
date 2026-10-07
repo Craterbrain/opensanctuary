@@ -6,9 +6,7 @@ export class TimeSync {
     private offsetMs: number = 0;
     private isSynced: boolean = false;
 
-    constructor() {
-        console.log("[TimeSync] Initializing...");
-    }
+    constructor() {}
 
     /**
      * Perform an NTP-style ping sequence to align clocks.
@@ -42,7 +40,6 @@ export class TimeSync {
         if (offsets.length > 0) {
             this.offsetMs = computeMedianOffset(offsets);
             this.isSynced = true;
-            console.log(`[TimeSync] Synchronized. Offset: ${this.offsetMs}ms. (Server is ${this.offsetMs > 0 ? 'ahead' : 'behind'})`);
         } else {
             console.error("[TimeSync] Failed to synchronize clock with server.");
         }

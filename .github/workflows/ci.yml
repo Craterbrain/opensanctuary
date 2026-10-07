@@ -1,0 +1,79 @@
+# Continuous tests on every push/PR to the real development branch --
+# catches regressions at review time instead of only at release-tag time
+# (see release.yml's own `test` job for that narrower, later gate).
+#
+# Jobs:
+#   rust     -- cargo build/test/clippy, with the GTK/WebKit dev headers
+#               BUILDING.md documents for a local build. Also needs Bun
+#               installed: build.rs runs `bun run build` as part of every
+#               `cargo build` (see docs/TYPECHECKING.md), so the web UI
+#               bundle has to exist before the Rust server can even start.
+#   frontend -- bun typecheck/build/test (web/). The test suite includes
+#               Playwright-driven e2e tests, so Chromium has to be
+#               installed first.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (build, test, clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies (BUILDING.md)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Bun (build.rs runs `bun run build` on every cargo build)
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: cargo build
+        run: cargo build --verbose
+
+      - name: cargo test
+        run: cargo test --verbose
+
+      # Informational only for now -- this repo has pre-existing clippy
+      # warnings that haven't been cleaned up yet, so this doesn't fail the
+      # build on them. Flip to a hard failure once that backlog is clear.
+      - name: cargo clippy
+        run: cargo clippy --all-targets || true
+
+  frontend:
+    name: Frontend (typecheck, build, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - run: bun install
+
+      - name: Install Playwright's browser (used by the e2e test suite)
+        run: bunx playwright install --with-deps chromium
+
+      - run: bun run typecheck
+
+      - run: bun run build
+
+      - run: bun test

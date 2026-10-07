@@ -18,11 +18,34 @@ import {
   resolveThemeAt,
   applyThemeTypography,
   escapeHtml,
+  safeHttpUrl,
   ThemeDefinition,
   DEFAULT_THEMES
 } from './core/presentation_helpers';
 import { clock } from './core/timesync';
 import { createEngineWebSocket, EngineWebSocketClient } from './core/ws_client';
+import {
+  WebCodecsPlayer,
+  isWebCodecsSupported,
+  canPlayWithWebCodecs,
+  type WebCodecsSyncState,
+} from './core/webcodecs_player';
+
+/** Bridge injected by the Android TV app's WebView (apps/android-tv/.../MainActivity.kt,
+ * AndroidTVBridge) when running there -- highest-priority renderer: native ExoPlayer
+ * hardware decode, since the TV's WebView Chromium version isn't guaranteed to support
+ * WebCodecs at all. Absent in every other context (desktop browser, Stage display, etc). */
+interface AndroidTVBridge {
+  playBackgroundVideo(url: string, startAtEpochMs: number, loop: boolean, muted: boolean): void;
+  stopBackgroundVideo(): void;
+  setVolume(volume: number): void;
+}
+declare global {
+  interface Window {
+    AndroidTV?: AndroidTVBridge;
+  }
+}
+const androidTvBridge: AndroidTVBridge | undefined = window.AndroidTV;
 
 export class NtpClock {
   now(): number {
@@ -337,6 +360,7 @@ const logoEl = document.getElementById('overlay-logo')!;
 const alertEl = document.getElementById('alert-banner')!;
 const screenEl = document.getElementById('screen')!;
 const videoBgEl = document.getElementById('screen-video-bg') as HTMLVideoElement;
+const videoCanvasEl = document.getElementById('screen-video-canvas') as HTMLCanvasElement;
 const imageBgEl = document.getElementById('screen-image-bg')!;
 const audioBgEl = document.getElementById('screen-audio-bg') as HTMLAudioElement;
 const webStreamEl = document.getElementById('screen-web-stream') as HTMLIFrameElement;
@@ -351,6 +375,100 @@ if (videoBgEl) {
   videoBgEl.addEventListener('canplay', () => timecodeSyncer.syncNow(false));
 }
 
+// --- Three-tier video background renderer selection ---
+// 1. window.AndroidTV bridge present -> native ExoPlayer (see AndroidTVBridge above).
+// 2. WebCodecs supported + this specific file opens/decodes -> WebCodecsPlayer
+//    (frame-accurate, no pitch-bend/judder -- see core/webcodecs_player.ts).
+// 3. Otherwise -> the original videoBgEl + TimecodeSyncEngine path, unchanged.
+type VideoRenderer = 'legacy' | 'webcodecs' | 'androidtv';
+let activeRenderer: VideoRenderer = androidTvBridge ? 'androidtv' : 'legacy';
+let wcPlayer: WebCodecsPlayer | null = null;
+let currentVideoSrcKey: string | null = null;
+let currentAndroidTvAnchorKey: string | null = null;
+let rendererSwitchToken = 0;
+
+function disposeWebCodecsPlayer() {
+  if (wcPlayer) {
+    wcPlayer.dispose();
+    wcPlayer = null;
+  }
+  videoCanvasEl.style.display = 'none';
+}
+
+function teardownVideoRenderers() {
+  rendererSwitchToken++; // invalidate any in-flight switchVideoRenderer() call
+  disposeWebCodecsPlayer();
+  if (currentAndroidTvAnchorKey !== null) {
+    currentAndroidTvAnchorKey = null;
+    androidTvBridge?.stopBackgroundVideo();
+  }
+  currentVideoSrcKey = null;
+  activeRenderer = androidTvBridge ? 'androidtv' : 'legacy';
+}
+
+async function switchVideoRenderer(url: string, fit: 'contain' | 'cover') {
+  const token = ++rendererSwitchToken;
+  disposeWebCodecsPlayer();
+  activeRenderer = 'legacy';
+
+  if (!isWebCodecsSupported()) return;
+  try {
+    const playable = await canPlayWithWebCodecs(url);
+    if (token !== rendererSwitchToken || !playable) return;
+
+    videoCanvasEl.width = screenEl.clientWidth || 1920;
+    videoCanvasEl.height = screenEl.clientHeight || 1080;
+    const player = await WebCodecsPlayer.create(videoCanvasEl, url, {
+      fit,
+      onEnded: () => {
+        if (blackEl) {
+          blackEl.style.transition = 'opacity 0.8s ease-in-out';
+          blackEl.style.opacity = '1';
+          blackEl.style.display = 'block';
+        }
+      },
+    });
+    if (token !== rendererSwitchToken) {
+      player.dispose();
+      return;
+    }
+    wcPlayer = player;
+    activeRenderer = 'webcodecs';
+    videoBgEl.style.display = 'none';
+    videoCanvasEl.style.display = 'block';
+  } catch (e) {
+    console.warn('[WebCodecsPlayer] falling back to <video> for this file:', e);
+    activeRenderer = 'legacy';
+  }
+}
+
+/** Mirrors TimecodeSyncEngine.setMasterState/calculateTargetTime's anchor math
+ * (above), translated into the pre-resolved form WebCodecsPlayer.applySyncState
+ * expects, since that class does its own continuous clock-driven frame
+ * selection instead of being polled/nudged the way the <video> element is. */
+function toWebCodecsSyncState(mediaPlayback: any, isDedicatedMedia: boolean): WebCodecsSyncState {
+  const loop = !isDedicatedMedia || !!mediaPlayback.is_looping;
+  const muted = !isDedicatedMedia || (mediaPlayback.is_muted !== undefined ? !!mediaPlayback.is_muted : false);
+  const volume = mediaPlayback.volume !== undefined ? Number(mediaPlayback.volume) : 1.0;
+
+  const prerollTargetPts =
+    mediaPlayback.preroll_target_pts !== undefined && mediaPlayback.preroll_target_pts !== null
+      ? Number(mediaPlayback.preroll_target_pts)
+      : null;
+  if (prerollTargetPts !== null) {
+    return { isPlaying: false, baseTimeSec: prerollTargetPts, startAnchorEpochMs: clock.now(), isFutureScheduled: false, loop, muted, volume };
+  }
+
+  const baseTimeSec = Number(mediaPlayback.current_time) || 0;
+  const timestamp = Number(mediaPlayback.timestamp_ms) || clock.now();
+  const startAtEpochMs = mediaPlayback.start_at_epoch_ms ? Number(mediaPlayback.start_at_epoch_ms) : null;
+  const startAnchorEpochMs = startAtEpochMs || timestamp;
+  const isFutureScheduled = !!startAtEpochMs && clock.now() < startAtEpochMs;
+  const isPlaying = !!mediaPlayback.is_playing;
+
+  return { isPlaying, baseTimeSec, startAnchorEpochMs, isFutureScheduled, loop, muted, volume };
+}
+
 try {
   mediaSyncChannel = new BroadcastChannel('opensanctuary_media_sync');
   mediaSyncChannel.postMessage({ action: 'output_ready' });
@@ -363,6 +481,8 @@ try {
       if (d.action === 'close') {
         fadeToBlack(0.5);
         timecodeSyncer.setMasterState(null, false);
+        wcPlayer?.applySyncState(null);
+        androidTvBridge?.stopBackgroundVideo();
         setTimeout(() => {
           if (videoBgEl) { videoBgEl.pause(); videoBgEl.currentTime = 0; }
           if (audioBgEl) { audioBgEl.pause(); audioBgEl.currentTime = 0; }
@@ -371,6 +491,8 @@ try {
       }
       if (d.action === 'stop') {
         timecodeSyncer.setMasterState(null, false);
+        wcPlayer?.applySyncState(null);
+        androidTvBridge?.stopBackgroundVideo();
         if (videoBgEl) { videoBgEl.pause(); videoBgEl.currentTime = 0; }
         if (audioBgEl) { audioBgEl.pause(); audioBgEl.currentTime = 0; }
         return;
@@ -390,7 +512,7 @@ try {
   console.warn('BroadcastChannel not available in live display:', e);
 }
 
-window.addEventListener('click', () => {
+function unmuteOnUserGesture() {
   if (videoBgEl && videoBgEl.muted && !videoBgEl.loop) {
     videoBgEl.muted = false;
     if (videoBgEl.paused) videoBgEl.play().catch(() => {});
@@ -399,17 +521,12 @@ window.addEventListener('click', () => {
     audioBgEl.muted = false;
     if (audioBgEl.paused) audioBgEl.play().catch(() => {});
   }
-});
-window.addEventListener('keydown', () => {
-  if (videoBgEl && videoBgEl.muted && !videoBgEl.loop) {
-    videoBgEl.muted = false;
-    if (videoBgEl.paused) videoBgEl.play().catch(() => {});
-  }
-  if (audioBgEl && audioBgEl.muted) {
-    audioBgEl.muted = false;
-    if (audioBgEl.paused) audioBgEl.play().catch(() => {});
-  }
-});
+  // AudioContext (WebCodecsPlayer's audio path) can only start/resume from a
+  // real user gesture, same browser autoplay-policy reason as the above.
+  wcPlayer?.resumeAudioContext();
+}
+window.addEventListener('click', unmuteOnUserGesture);
+window.addEventListener('keydown', unmuteOnUserGesture);
 
 // Thin wrapper around the canonical autoFitLyrics (core/autofit.ts) bound to
 // this page's fixed lyrics container/target — this used to be its own,
@@ -470,13 +587,14 @@ function renderSnapshot(snapshot: any) {
       alertEl.style.display = 'none';
     }
 
-    if (state.web_stream && state.web_stream.url) {
+    const webStreamUrl = state.web_stream ? safeHttpUrl(state.web_stream.url) : null;
+    if (state.web_stream && webStreamUrl) {
       const wsMode = state.web_stream.mode || 'background';
       webStreamEl.className = `ws-mode-${wsMode}`;
       webStreamEl.style.display = 'block';
-      if (lastWebStreamUrl !== state.web_stream.url) {
-        lastWebStreamUrl = state.web_stream.url;
-        webStreamEl.src = state.web_stream.url;
+      if (lastWebStreamUrl !== webStreamUrl) {
+        lastWebStreamUrl = webStreamUrl;
+        webStreamEl.src = webStreamUrl;
       }
     } else if (lastWebStreamUrl !== null) {
       lastWebStreamUrl = null;
@@ -520,6 +638,13 @@ function renderSnapshot(snapshot: any) {
         // shapes, lines, tables) instead of the flattened single-textbox
         // fallback below — this is what makes the canvas editor's free-form
         // layouts actually show up on the projector output.
+        //
+        // NOTE: app_core.ts's renderSlideVisual() has its OWN independent copy
+        // of this same elements-vs-flat-text branch, for the operator's Preview/
+        // Live canvases — it isn't shared with this file because this branch here
+        // has extra cases that one doesn't need (parallel-text layout, pinned
+        // reference label). If the elements-vs-flat-text decision logic itself
+        // changes (not just output-specific styling), check app_core.ts too.
         lyricsEl.innerHTML = '';
         lyricsElementsEl.style.display = 'block';
         const projection = computeCanvasProjection(screenEl.clientWidth, screenEl.clientHeight, { authoredAspect: 16 / 9 });
@@ -575,31 +700,80 @@ function renderSnapshot(snapshot: any) {
       lyricsContainerEl.style.marginTop = '';
     }
 
-    const isDedicatedMedia = state.live_item && state.live_item.item_type === 'Media';
+    const isDedicatedMedia = state.live_item && state.live_item.item_type === 'media';
 
     if (isVideoBackground(currentBg)) {
-      if (videoBgEl) {
-        const isMuted = !isDedicatedMedia || (state.media_playback ? (state.media_playback.is_muted || false) : false);
-        videoBgEl.muted = isMuted;
-        videoBgEl.loop = !isDedicatedMedia || (state.media_playback ? (state.media_playback.is_looping || false) : false);
-        videoBgEl.style.objectFit = isDedicatedMedia ? 'contain' : 'cover';
-        if (state.media_playback && state.media_playback.volume !== undefined) {
-          videoBgEl.volume = state.media_playback.volume;
+      const fit: 'contain' | 'cover' = isDedicatedMedia ? 'contain' : 'cover';
+      const encodedUrl = encodeURI(currentBg);
+      const srcKey = `${encodedUrl}|${fit}`;
+      const isMuted = !isDedicatedMedia || (state.media_playback ? (state.media_playback.is_muted || false) : false);
+      const isLooping = !isDedicatedMedia || (state.media_playback ? (state.media_playback.is_looping || false) : false);
+      const volume = state.media_playback && state.media_playback.volume !== undefined ? state.media_playback.volume : 1.0;
+
+      if (androidTvBridge) {
+        // Tier 1: native ExoPlayer, driven once per anchor change -- it owns
+        // its own drift correction from there (TvClock + ported 3-tier logic,
+        // apps/android-tv's AndroidTVBridge), same self-correcting contract
+        // WebCodecsPlayer.applySyncState has below.
+        activeRenderer = 'androidtv';
+        disposeWebCodecsPlayer();
+        if (videoBgEl) { videoBgEl.style.display = 'none'; videoBgEl.pause(); }
+        androidTvBridge.setVolume(volume);
+        if (state.media_playback && state.media_playback.is_playing) {
+          const startAnchorEpochMs = state.media_playback.start_at_epoch_ms || state.media_playback.timestamp_ms || clock.now();
+          const anchorKey = `${srcKey}|${startAnchorEpochMs}|${isLooping}|${isMuted}`;
+          if (currentAndroidTvAnchorKey !== anchorKey) {
+            currentAndroidTvAnchorKey = anchorKey;
+            androidTvBridge.playBackgroundVideo(encodedUrl, startAnchorEpochMs, isLooping, isMuted);
+          }
+        } else if (currentAndroidTvAnchorKey !== null) {
+          currentAndroidTvAnchorKey = null;
+          androidTvBridge.stopBackgroundVideo();
+        }
+      } else {
+        // Tiers 2/3: try WebCodecsPlayer once per distinct file, falling back
+        // to the legacy <video> + TimecodeSyncEngine path on any failure.
+        if (currentVideoSrcKey !== srcKey) {
+          currentVideoSrcKey = srcKey;
+          void switchVideoRenderer(encodedUrl, fit);
         }
 
-        const encodedUrl = encodeURI(currentBg);
-        if (videoBgEl.dataset.src !== currentBg) {
-          videoBgEl.dataset.src = currentBg;
-          videoBgEl.preload = 'auto';
-          videoBgEl.src = encodedUrl;
-          videoBgEl.load();
-        }
-        videoBgEl.style.display = 'block';
+        if (activeRenderer === 'webcodecs' && wcPlayer) {
+          if (videoBgEl) { videoBgEl.style.display = 'none'; videoBgEl.pause(); }
+          if (state.media_playback) {
+            wcPlayer.applySyncState(toWebCodecsSyncState(state.media_playback, isDedicatedMedia));
+          } else if (!isDedicatedMedia) {
+            wcPlayer.applySyncState({
+              isPlaying: true,
+              baseTimeSec: 0,
+              startAnchorEpochMs: clock.now(),
+              isFutureScheduled: false,
+              loop: true,
+              muted: isMuted,
+              volume,
+            });
+          }
+        } else if (videoBgEl) {
+          videoBgEl.muted = isMuted;
+          videoBgEl.loop = isLooping;
+          videoBgEl.style.objectFit = fit;
+          if (state.media_playback && state.media_playback.volume !== undefined) {
+            videoBgEl.volume = state.media_playback.volume;
+          }
 
-        if (state.media_playback) {
-          timecodeSyncer.setMasterState(state.media_playback, isDedicatedMedia);
-        } else if (!isDedicatedMedia && videoBgEl.paused) {
-          videoBgEl.play().catch(() => {});
+          if (videoBgEl.dataset.src !== currentBg) {
+            videoBgEl.dataset.src = currentBg;
+            videoBgEl.preload = 'auto';
+            videoBgEl.src = encodedUrl;
+            videoBgEl.load();
+          }
+          videoBgEl.style.display = 'block';
+
+          if (state.media_playback) {
+            timecodeSyncer.setMasterState(state.media_playback, isDedicatedMedia);
+          } else if (!isDedicatedMedia && videoBgEl.paused) {
+            videoBgEl.play().catch(() => {});
+          }
         }
       }
       imageBgEl.style.display = 'none';
@@ -608,6 +782,7 @@ function renderSnapshot(snapshot: any) {
       screenEl.style.animation = '';
       screenEl.style.background = '#000';
     } else if (isCameraFeed(currentBg)) {
+      teardownVideoRenderers();
       timecodeSyncer.setMasterState(null, false);
       imageBgEl.style.display = 'none';
       audioBgEl.pause();
@@ -634,6 +809,7 @@ function renderSnapshot(snapshot: any) {
       }
     } else if (extractImageUrl(currentBg)) {
       const liveImgUrl = extractImageUrl(currentBg)!;
+      teardownVideoRenderers();
       timecodeSyncer.setMasterState(null, false);
       if (videoBgEl) {
         if (videoBgEl.srcObject) {
@@ -653,6 +829,7 @@ function renderSnapshot(snapshot: any) {
       screenEl.style.animation = '';
       screenEl.style.background = '#000';
     } else if (isAudioMedia(currentBg)) {
+      teardownVideoRenderers();
       if (videoBgEl) {
         if (videoBgEl.srcObject) {
           try { (videoBgEl.srcObject as MediaStream).getTracks().forEach(t => t.stop()); } catch (e) {}
@@ -683,6 +860,7 @@ function renderSnapshot(snapshot: any) {
         }
       }
     } else {
+      teardownVideoRenderers();
       if (videoBgEl) {
         if (videoBgEl.srcObject) {
           try { (videoBgEl.srcObject as MediaStream).getTracks().forEach(t => t.stop()); } catch (e) {}
@@ -717,6 +895,8 @@ function connect() {
       isDisconnectBlackout = true;
       fadeToBlack(0.5);
       timecodeSyncer.setMasterState(null, false);
+      wcPlayer?.applySyncState(null);
+      androidTvBridge?.stopBackgroundVideo();
       setTimeout(() => {
         if (videoBgEl && !videoBgEl.paused) videoBgEl.pause();
         if (audioBgEl && !audioBgEl.paused) audioBgEl.pause();

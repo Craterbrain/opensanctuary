@@ -1,0 +1,7 @@
+untrusted comment: minisign public key 80DBAA0356AE9867
+RWRnmK5WA6rbgDlBqOj4+R+5vQK/wGsexQQ2NsjgUPiqkC5iUUZMmk42
+
+OpenSanctuary release signing public key (minisign). Generated 2026-10-06.
+Every release's checksums.txt is signed with the matching secret key
+(checksums.txt.minisig). Compare against RELEASE_PUBLIC_KEY_B64 in
+src/network/updater.rs and PUBLIC_KEY in packaging/install.sh.

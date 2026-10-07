@@ -1,22 +1,23 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { spawn, type Subprocess } from "bun";
+import { spawn } from "bun";
 import { resolve, join } from "path";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
+import { spawnTestServer, waitForServerReady, teardownTestServer, ensureArtifactDir, type SpawnedTestServer } from "./e2e_helpers";
 
 describe("E2E Visual Comparison: Linux vs Windows Release Binaries", () => {
-  let linuxProc: Subprocess;
-  let winProc: Subprocess;
+  let linuxServer: SpawnedTestServer;
+  let winServer: SpawnedTestServer;
   let browser: Browser;
   let linuxPage: Page;
   let winPage: Page;
-  let linuxTestDir: string;
-  let winTestDir: string;
+  let linuxHostToken: string;
+  let winHostToken: string;
 
   const LINUX_PORT = 9061;
   const WIN_PORT = 9062;
-  const artifactDir = "/home/jasonb/.gemini/antigravity/brain/f8991531-6ae4-4b9a-9bd5-2b8c056c8256";
+  let artifactDir: string;
 
   const sampleHymn = {
     id: "hymn_comparison",
@@ -62,72 +63,61 @@ describe("E2E Visual Comparison: Linux vs Windows Release Binaries", () => {
   };
 
   beforeAll(async () => {
-    linuxTestDir = mkdtempSync(join(tmpdir(), "os-next-linux-comp-"));
-    winTestDir = mkdtempSync(join(tmpdir(), "os-next-win-comp-"));
+    artifactDir = ensureArtifactDir();
 
-    const linuxBin = resolve(__dirname, "../../target/release/os-next");
-    const winBin = resolve(__dirname, "../../target/x86_64-pc-windows-gnu/release/os-next.exe");
-    const webDir = resolve(__dirname, "../");
-
-    // 1. Spawn native Linux server
-    linuxProc = spawn([
-      linuxBin,
-      "--headless",
-      "--port", LINUX_PORT.toString(),
-      "--db-path", join(linuxTestDir, "linux.db"),
-      "--web-dir", webDir
-    ], {
-      cwd: resolve(__dirname, "../../"),
-      stdout: "ignore",
-      stderr: "ignore"
+    // 1. Spawn native Linux server -- the standard shape `spawnTestServer` covers.
+    linuxServer = await spawnTestServer({
+      port: LINUX_PORT,
+      tempPrefix: "os-next-linux-comp-",
+      readyPath: "/api/network/info",
     });
 
-    // 2. Spawn Windows server via Wine
-    winProc = spawn([
+    // 2. Spawn Windows server via Wine -- bespoke (a different binary run
+    // through `wine`, with its own relative --web-dir), so this one builds
+    // its own temp dir/process rather than going through `spawnTestServer`;
+    // still uses the shared `waitForServerReady` poll.
+    const winTestDir = mkdtempSync(join(tmpdir(), "os-next-win-comp-"));
+    const winBin = resolve(__dirname, "../../target/x86_64-pc-windows-gnu/release/os-next.exe");
+    const winProc = spawn([
       "wine",
       winBin,
       "--headless",
+      "--skip-first-time-setup",
       "--port", WIN_PORT.toString(),
       "--db-path", join(winTestDir, "win.db"),
       "--web-dir", "web"
     ], {
       cwd: resolve(__dirname, "../../"),
-      stdout: "ignore",
-      stderr: "ignore"
+      stdout: "pipe",
+      stderr: "pipe"
     });
-
-    // Wait for Linux server
-    let linuxReady = false;
-    for (let i = 0; i < 40; i++) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${LINUX_PORT}/api/network/info`);
-        if (res.ok) { linuxReady = true; break; }
-      } catch (_) {}
-      await new Promise(r => setTimeout(r, 250));
+    try {
+      await waitForServerReady(WIN_PORT, { path: "/api/network/info" });
+    } catch (e) {
+      try { winProc.kill(); } catch (_) {}
+      throw e;
     }
-    if (!linuxReady) throw new Error("Linux server failed to start in 10s");
+    winServer = { proc: winProc, testDir: winTestDir, dbPath: join(winTestDir, "win.db"), port: WIN_PORT };
 
-    // Wait for Windows server
-    let winReady = false;
-    for (let i = 0; i < 40; i++) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${WIN_PORT}/api/network/info`);
-        if (res.ok) { winReady = true; break; }
-      } catch (_) {}
-      await new Promise(r => setTimeout(r, 250));
-    }
-    if (!winReady) throw new Error("Windows server failed to start in 10s");
+    // /api/command now requires the host token for callers with no paired-
+    // device token (docs/CLIENT_PAIRING.md) -- each server instance has its
+    // own token, fetched here the same way a real console tab on 127.0.0.1
+    // would (see web/tests/e2e_remote_mobile.test.ts for the same pattern).
+    linuxHostToken = (await (await fetch(`http://127.0.0.1:${LINUX_PORT}/api/internal/host-token`)).json()).host_token;
+    winHostToken = (await (await fetch(`http://127.0.0.1:${WIN_PORT}/api/internal/host-token`)).json()).host_token;
 
-    // Seed schedule on both servers
+    // Seed schedule on both servers -- before either console page below
+    // exists, so there's no real console yet to contend with for the "one
+    // console at a time" lock (docs/CLIENT_PAIRING.md); any session id works.
     await fetch(`http://127.0.0.1:${LINUX_PORT}/api/command`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-host-token": linuxHostToken, "x-console-session-id": "e2e-compare-seed" },
       body: JSON.stringify({ AddToSchedule: sampleHymn })
     });
 
     await fetch(`http://127.0.0.1:${WIN_PORT}/api/command`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-host-token": winHostToken, "x-console-session-id": "e2e-compare-seed" },
       body: JSON.stringify({ AddToSchedule: sampleHymn })
     });
 
@@ -144,17 +134,13 @@ describe("E2E Visual Comparison: Linux vs Windows Release Binaries", () => {
 
   afterAll(async () => {
     if (browser) await browser.close();
-    if (linuxProc) {
-      linuxProc.kill();
-      await linuxProc.exited;
-    }
-    if (winProc) {
-      winProc.kill();
-      await winProc.exited;
-    }
-    try { rmSync(linuxTestDir, { recursive: true, force: true }); } catch (_) {}
-    try { rmSync(winTestDir, { recursive: true, force: true }); } catch (_) {}
-  });
+    await teardownTestServer(linuxServer);
+    await teardownTestServer(winServer);
+    // Explicit timeout: bun's default hook timeout (5000ms) can be tight
+    // for killing two real server processes -- one of them wine-wrapped,
+    // which can take longer than the native binary to actually exit -- plus
+    // removing two temp dirs.
+  }, 15000);
 
   test("Action 1: Home Console & Presentation / Live State Display", async () => {
     // Navigate both pages
@@ -227,32 +213,21 @@ describe("E2E Visual Comparison: Linux vs Windows Release Binaries", () => {
   }, 30000);
 
   test("Action 3: Schedule & Slide Navigation (Live Presentation Output)", async () => {
-    // Go live on schedule item 0, slide 0
-    await fetch(`http://127.0.0.1:${LINUX_PORT}/api/command`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ GoLive: { item_index: 0, slide_index: 0 } })
-    });
-    await fetch(`http://127.0.0.1:${WIN_PORT}/api/command`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ GoLive: { item_index: 0, slide_index: 0 } })
-    });
+    // By this point both linuxPage/winPage are real, already-authenticated
+    // consoles each holding the "one console at a time" lock on their own
+    // server (docs/CLIENT_PAIRING.md) via their own real WS connection --
+    // route through their own `window.sendCommand` (exposed by app_core.ts)
+    // rather than a separate Node-side fetch with a different session id,
+    // which would just get rejected as a second, different console.
+    await linuxPage.evaluate(() => (window as any).sendCommand({ GoLive: { item_index: 0, slide_index: 0 } }));
+    await winPage.evaluate(() => (window as any).sendCommand({ GoLive: { item_index: 0, slide_index: 0 } }));
 
     await linuxPage.waitForTimeout(400);
     await winPage.waitForTimeout(400);
 
     // Advance to next slide (Chorus)
-    await fetch(`http://127.0.0.1:${LINUX_PORT}/api/command`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ NextSlide: null })
-    });
-    await fetch(`http://127.0.0.1:${WIN_PORT}/api/command`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ NextSlide: null })
-    });
+    await linuxPage.evaluate(() => (window as any).sendCommand({ NextSlide: null }));
+    await winPage.evaluate(() => (window as any).sendCommand({ NextSlide: null }));
 
     await linuxPage.waitForTimeout(500);
     await winPage.waitForTimeout(500);

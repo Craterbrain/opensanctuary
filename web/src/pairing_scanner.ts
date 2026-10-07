@@ -1,4 +1,5 @@
 import jsQR from 'jsqr';
+import { escapeHtml } from './core/presentation_helpers';
 
 /**
  * Universal Mobile QR-Bridge Scanner for OpenSanctuary Client Pairing.
@@ -63,16 +64,6 @@ import jsQR from 'jsqr';
 
   function hideAlert() {
     if (alertBanner) alertBanner.style.display = 'none';
-  }
-
-  function escapeHtml(str: any): string {
-    if (!str) return '';
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
   }
 
   // Initialize Session Badge
@@ -182,7 +173,7 @@ import jsQR from 'jsqr';
   }
 
   // Auto-start camera if session token is present
-  if (sessionToken && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+  if (sessionToken && navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
     startCamera().catch(() => {});
   }
 
@@ -245,7 +236,6 @@ import jsQR from 'jsqr';
         if (!isScanning) return;
 
         if (detectedValue) {
-          console.log('Successfully decoded QR code:', detectedValue);
           handleScannedData(detectedValue);
           return; // Stop animation loop once handled
         }
@@ -443,11 +433,10 @@ import jsQR from 'jsqr';
 
   // Pair Another Display — reuses the same session token for as many
   // devices as the technician can authorize within its window, rather than
-  // minting a fresh one from the phone itself. Minting is console-only now
-  // (docs/GEMINI_COMMIT_REVIEW_2026-09-22.md #3): the phone was never meant
-  // to hold the credential that does that, so the session the console
-  // handed it via the QR (`?key=...`) simply stays valid across multiple
-  // authorizations instead of being single-use — see
+  // minting a fresh one from the phone itself. Minting is console-only now:
+  // the phone was never meant to hold the credential that does that, so the
+  // session the console handed it via the QR (`?key=...`) simply stays
+  // valid across multiple authorizations instead of being single-use — see
   // `validate_pairing_session` in src/api/ws.rs. If it's expired by the
   // time they scan the next TV, `authorize` below will fail plainly and
   // ask them to get a fresh QR from the console.

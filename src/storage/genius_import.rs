@@ -145,10 +145,19 @@ impl GeniusImporter {
         custom_title: Option<&str>,
         custom_artist: Option<&str>,
     ) -> Result<Song, Box<dyn std::error::Error + Send + Sync>> {
+        // Only ever fetch a genius.com page: this runs server-side with a
+        // caller-supplied URL, so anything else would be an SSRF primitive
+        // into the host's LAN/loopback services.
+        if !is_genius_url(url) {
+            return Err("URL must be an https://genius.com/... lyrics page".into());
+        }
+
         let client = reqwest::Client::builder()
             .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             .timeout(std::time::Duration::from_secs(30))
             .connect_timeout(std::time::Duration::from_secs(10))
+            // Don't follow a redirect off genius.com either.
+            .redirect(reqwest::redirect::Policy::none())
             .build()?;
 
         let html = client.get(url).send().await?.error_for_status()?.text().await?;
@@ -342,4 +351,28 @@ pub fn parse_genius_lyrics_to_song(title: &str, artist: &str, raw_lyrics: &str) 
     }
 
     song
+}
+
+/// `https://genius.com/...` or `https://www.genius.com/...` only, with no
+/// userinfo/port tricks (`https://genius.com@evil/`, `https://genius.com:80@...`).
+fn is_genius_url(url: &str) -> bool {
+    let Some(rest) = url.trim().strip_prefix("https://") else { return false };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    authority == "genius.com" || authority == "www.genius.com"
+}
+
+#[cfg(test)]
+mod genius_url_tests {
+    use super::is_genius_url;
+
+    #[test]
+    fn only_plain_genius_https_urls_pass() {
+        assert!(is_genius_url("https://genius.com/Hillsong-united-oceans-lyrics"));
+        assert!(is_genius_url("https://www.genius.com/x"));
+        assert!(!is_genius_url("http://genius.com/x"));
+        assert!(!is_genius_url("https://genius.com@127.0.0.1/x"));
+        assert!(!is_genius_url("https://genius.com.evil.test/x"));
+        assert!(!is_genius_url("https://127.0.0.1:8080/api/settings"));
+        assert!(!is_genius_url("file:///etc/passwd"));
+    }
 }

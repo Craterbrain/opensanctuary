@@ -1,0 +1,13 @@
+# Windows builds go through `cargo xwin` (docs/installer.md) targeting
+# x86_64-pc-windows-msvc, not a mingw-w64 toolchain -- two independent mingw
+# toolchains (zig-as-mingw, and real mingw-w64-gcc) both produced a real
+# access-violation crash specifically around WebView2Loader.dll's dllimport
+# thunk. `windows-msvc` sidesteps it entirely: webview2-com-sys statically
+# links WebView2LoaderStatic on MSVC instead of dynamically importing
+# WebView2Loader.dll, so the whole broken code path is never emitted.
+#
+# +crt-static avoids needing the VC++ Redistributable (VCRUNTIME140*.dll) on
+# the target machine -- confirmed to matter: a stock Windows 10 test VM with
+# no redistributable installed failed to launch without this.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -1,45 +1,17 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { spawn, type Subprocess } from "bun";
-import { resolve, join } from "path";
-import { mkdtempSync, rmSync } from "fs";
-import { tmpdir } from "os";
+import { spawnTestServer, teardownTestServer, ensureArtifactDir, type SpawnedTestServer } from "./e2e_helpers";
 
 describe("E2E Live Test: Mobile Remote Control Webpage", () => {
-  let serverProc: Subprocess;
+  let server: SpawnedTestServer;
   let browser: Browser;
   let page: Page;
-  let testDir: string;
-  let DB_PATH: string;
   const PORT = 9028;
-  const artifactDir = "/home/jasonb/.gemini/antigravity/brain/f8991531-6ae4-4b9a-9bd5-2b8c056c8256";
+  let artifactDir: string;
 
   beforeAll(async () => {
-    testDir = mkdtempSync(join(tmpdir(), "os-next-remote-mobile-e2e-"));
-    DB_PATH = join(testDir, "test.db");
-
-    const binaryPath = resolve(__dirname, "../../target/release/os-next");
-    serverProc = spawn([
-      binaryPath,
-      "--headless",
-      "--port", PORT.toString(),
-      "--db-path", DB_PATH,
-      "--web-dir", resolve(__dirname, "../")
-    ], {
-      cwd: resolve(__dirname, "../../"),
-      stdout: "ignore",
-      stderr: "ignore"
-    });
-
-    let ready = false;
-    for (let i = 0; i < 40; i++) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${PORT}/`);
-        if (res.ok) { ready = true; break; }
-      } catch (_) {}
-      await new Promise(r => setTimeout(r, 250));
-    }
-    if (!ready) throw new Error("Server failed to start in 10s");
+    server = await spawnTestServer({ port: PORT, tempPrefix: "os-next-remote-mobile-e2e-" });
+    artifactDir = ensureArtifactDir();
 
     browser = await chromium.launch({ headless: true });
     // Mobile Viewport (iPhone 14 / Pixel 7: 390x844)
@@ -53,11 +25,7 @@ describe("E2E Live Test: Mobile Remote Control Webpage", () => {
 
   afterAll(async () => {
     if (browser) await browser.close();
-    if (serverProc) {
-      serverProc.kill();
-      await serverProc.exited;
-    }
-    try { rmSync(testDir, { recursive: true, force: true }); } catch (_) {}
+    await teardownTestServer(server);
   });
 
   test("Mobile remote loads, auto-connects to WebSocket, and handles full control navigation", async () => {
@@ -105,28 +73,37 @@ describe("E2E Live Test: Mobile Remote Control Webpage", () => {
       arrangement: []
     };
 
+    // /api/command now requires the host token for callers with no paired-
+    // device token (docs/CLIENT_PAIRING.md), same as /api/pairing/remote-
+    // session below — this test's own fetch is on 127.0.0.1, so it can
+    // fetch that token the same way a real console browser tab would.
+    const hostTokenRes = await fetch(`http://127.0.0.1:${PORT}/api/internal/host-token`);
+    const hostTokenData = await hostTokenRes.json();
+    expect(typeof hostTokenData.host_token).toBe("string");
+
+    // /api/command also enforces "one console at a time" now
+    // (docs/CLIENT_PAIRING.md) -- x-console-session-id identifies this
+    // caller as one console; nothing else in this test ever claims the
+    // lock (the mobile page below is a paired remote, not a console), so
+    // any non-empty id works.
+    const consoleSessionId = "e2e-remote-mobile-test-console";
     await fetch(`http://127.0.0.1:${PORT}/api/command`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-host-token": hostTokenData.host_token, "x-console-session-id": consoleSessionId },
       body: JSON.stringify({ AddToSchedule: sampleHymn })
     });
 
     // Go live with item
     await fetch(`http://127.0.0.1:${PORT}/api/command`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-host-token": hostTokenData.host_token, "x-console-session-id": consoleSessionId },
       body: JSON.stringify({ GoLive: { item_index: 0, slide_index: 0 } })
     });
 
     // 2. Navigate to /remote (testing short URL redirect), carrying a real
     // paired-device token the same way the console's QR code does — /remote
-    // now requires pairing (see docs/GEMINI_COMMIT_REVIEW_2026-09-22.md).
-    // Minting that token is console-only server-side, gated behind the host
-    // session token — this test's own fetch is on 127.0.0.1, so it can
-    // fetch that the same way a real console browser tab would.
-    const hostTokenRes = await fetch(`http://127.0.0.1:${PORT}/api/internal/host-token`);
-    const hostTokenData = await hostTokenRes.json();
-    expect(typeof hostTokenData.host_token).toBe("string");
+    // now requires pairing. Minting that token is console-only server-side,
+    // gated behind the same host session token fetched above.
 
     const pairRes = await fetch(`http://127.0.0.1:${PORT}/api/pairing/remote-session`, {
       method: "POST",

@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach, afterAll } from 'bun:test';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
 import { SETTINGS_CATEGORIES } from '../src/core/settings_schema.ts';
@@ -6,15 +6,21 @@ import { api } from '../src/core/api_client.ts';
 import { renderPairedDevicesSettings, resetOptionsModal } from '../src/ui/settings_dialog.ts';
 import pairingContract from '../../../spec-db-rs/contracts/client_pairing.schema.json';
 
-// Several describe blocks below stub globalThis.fetch/document per-test but
-// never restore them once the file's last test runs, which used to leak a
-// mocked fetch forward into whichever unrelated e2e test file bun happened
-// to run next in the same process — a real network call in that other file
-// would silently get intercepted and resolve to '{}' instead of hitting the
-// real server. Restoring both here once, after everything in this file has
-// run, closes that regardless of which describe block finishes last.
+// Several describe blocks below stub globalThis.fetch/document per-test.
+// bun runs every test file in one process, and (as observed directly: this
+// is what was breaking every e2e_*.test.ts file whenever the full suite ran
+// together, never in isolation) it does not wait for one file to fully
+// finish before starting another's async work -- so a mock installed here
+// and left in place even between this file's OWN tests is a real window for
+// an unrelated, concurrently-scheduled test elsewhere to observe it instead
+// of the real global. `afterEach` closes that window immediately after
+// every single test in this file, not just once at the very end.
 const ORIGINAL_FETCH = globalThis.fetch;
 const ORIGINAL_DOCUMENT = (globalThis as any).document;
+afterEach(() => {
+  globalThis.fetch = ORIGINAL_FETCH;
+  (globalThis as any).document = ORIGINAL_DOCUMENT;
+});
 afterAll(() => {
   globalThis.fetch = ORIGINAL_FETCH;
   (globalThis as any).document = ORIGINAL_DOCUMENT;
@@ -374,6 +380,55 @@ describe('Universal QR Code Generation and Decoding Engine', () => {
       'pair_sess_plain456'
     );
     expect(urlHttp).toBe('http://192.168.1.100:8080/pairing.html?key=pair_sess_plain456');
+
+    // 4. A configured Public HTTPS URL (docs/TUNNELS.md) always wins, even
+    // over the self-signed https_enabled/https_port plane -- it's a real,
+    // browser-trusted cert, the whole reason to set it up.
+    const urlPublic = buildPairingUrl(
+      { https_enabled: true, https_port: 8443, http_port: 8080, lan_ip: '192.168.1.100', public_https_url: 'https://connect.yourchurch.org' },
+      { protocol: 'http:', hostname: '192.168.1.100', port: '8080' },
+      'pair_sess_public789'
+    );
+    expect(urlPublic).toBe('https://connect.yourchurch.org/pairing.html?key=pair_sess_public789');
+  });
+
+  test('buildRemoteUrl prioritizes HTTPS and https_port for the Mobile Remote QR when HTTPS is enabled', async () => {
+    // The Mobile Remote QR used to just mirror location.protocol, so a
+    // console viewed over the default plaintext http://…:8080/ URL (what
+    // the startup banner advertises) generated an http:// QR -- meaning the
+    // remote's device_token, a static bearer credential sent on every
+    // command, traveled in cleartext over the LAN by default. It must now
+    // prefer HTTPS/WSS whenever the server has the secure plane enabled,
+    // even though the console page itself is on http: -- same fix, same
+    // reasoning, as buildPairingUrl above.
+    const { buildRemoteUrl } = await import('../src/core/presentation_helpers.ts');
+
+    const urlHttps = buildRemoteUrl(
+      { https_enabled: true, https_port: 8443, http_port: 8080, lan_ip: '192.168.1.100' },
+      { protocol: 'http:', hostname: '192.168.1.100', port: '8080' }
+    );
+    expect(urlHttps).toBe('https://192.168.1.100:8443/remote');
+
+    // Localhost translation to lan_ip, same as buildPairingUrl.
+    const urlLocalhost = buildRemoteUrl(
+      { https_enabled: true, https_port: 8443, http_port: 8080, lan_ip: '10.0.0.45' },
+      { protocol: 'http:', hostname: 'localhost', port: '8080' }
+    );
+    expect(urlLocalhost).toBe('https://10.0.0.45:8443/remote');
+
+    // HTTPS disabled falls back to the plaintext AV plane.
+    const urlHttp = buildRemoteUrl(
+      { https_enabled: false, https_port: null, http_port: 8080, lan_ip: '192.168.1.100' },
+      { protocol: 'http:', hostname: '192.168.1.100', port: '8080' }
+    );
+    expect(urlHttp).toBe('http://192.168.1.100:8080/remote');
+
+    // A configured Public HTTPS URL wins over the self-signed plane here too.
+    const urlPublic = buildRemoteUrl(
+      { https_enabled: true, https_port: 8443, http_port: 8080, lan_ip: '192.168.1.100', public_https_url: 'https://connect.yourchurch.org' },
+      { protocol: 'http:', hostname: '192.168.1.100', port: '8080' }
+    );
+    expect(urlPublic).toBe('https://connect.yourchurch.org/remote');
   });
 });
 

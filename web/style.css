@@ -1080,15 +1080,15 @@ body, html {
 }
 
 .schedule-view-menu-dropdown {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
+  position: fixed;
+  top: 0;
+  left: 0;
   background: #1a1d24;
   border: 1px solid #3d4452;
   border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.75);
   padding: 10px 14px;
-  z-index: 1050;
+  z-index: 3500;
   width: 224px;
   display: none;
   user-select: none;

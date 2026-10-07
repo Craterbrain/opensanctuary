@@ -51,4 +51,14 @@ dependencies {
     // Video playback for motion backgrounds
     implementation("androidx.media3:media3-exoplayer:1.3.1")
     implementation("androidx.media3:media3-ui:1.3.1")
+
+    // QR encoding for the pairing-QR the TV displays in PairingManager's
+    // manual-pairing fallback (docs/CLIENT_PAIRING.md's two-way bridge) --
+    // core only, no camera/scanning needed on this side.
+    implementation("com.google.zxing:core:3.5.3")
+
+    // HTTP calls PairingManager makes itself (self-authorize, server-info,
+    // pairing-status poll) -- lightweight, no reflection/codegen needed for
+    // the handful of small JSON calls this makes.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

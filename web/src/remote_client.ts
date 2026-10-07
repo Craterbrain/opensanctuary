@@ -224,13 +224,13 @@ export function renderSnapshot(snapshot: any) {
   // Overrides
   if (btnBlack) btnBlack.classList.toggle('active-black', !!state.is_blackout);
   if (btnClear) btnClear.classList.toggle('active-clear', !state.is_blackout && !!state.is_clear_text);
-  if (btnLogo) btnLogo.classList.toggle('active-logo', !state.is_blackout && !!state.is_logo);
+  if (btnLogo) btnLogo.classList.toggle('active-logo', !state.is_blackout && !!state.is_logo_override);
 
   // Alert Banner
   if (alertBanner) {
-    if (state.alert_text && state.alert_text.trim()) {
+    if (state.alert_message && state.alert_message.trim()) {
       alertBanner.style.display = 'block';
-      alertBanner.textContent = `⚠️ ${state.alert_text}`;
+      alertBanner.textContent = `⚠️ ${state.alert_message}`;
     } else {
       alertBanner.style.display = 'none';
     }
@@ -309,7 +309,7 @@ export function renderSnapshot(snapshot: any) {
       miniPreviewTag.textContent = '⬛ BLACKOUT ACTIVE';
       miniPreviewTag.style.color = '#ff5252';
       miniPreviewText.textContent = 'FOH Screen is Blacked Out';
-    } else if (state.is_logo) {
+    } else if (state.is_logo_override) {
       miniPreviewCard.style.background = '#000000';
       miniPreviewCard.style.borderColor = 'var(--logo-amber)';
       miniPreviewTag.textContent = '⭐ LOGO ACTIVE';
@@ -422,7 +422,7 @@ export function renderSnapshot(snapshot: any) {
     } else if (state.is_blackout) {
       prompterLyrics.innerHTML = '<span style="color: var(--blackout-red); font-size: 0.8em;">⬛ BLACKOUT ACTIVE ON FOH</span>';
       prompterNextText.textContent = '—';
-    } else if (state.is_logo) {
+    } else if (state.is_logo_override) {
       prompterLyrics.innerHTML = '<span style="color: var(--logo-amber); font-size: 0.8em;">⭐ LOGO ACTIVE ON FOH</span>';
       prompterNextText.textContent = '—';
     } else {

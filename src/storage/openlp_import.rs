@@ -660,10 +660,7 @@ impl OpenLPImporter {
 
                 let src_path = theme_dir.map(|d| d.join(filename)).filter(|p| p.is_file())?;
                 let mdir = media_dir?;
-                std::fs::create_dir_all(mdir).ok()?;
-                let ext = src_path.extension().and_then(|s| s.to_str()).unwrap_or("jpg");
-                let new_filename = format!("openlp_{}.{}", uuid::Uuid::new_v4(), ext);
-                std::fs::copy(&src_path, mdir.join(&new_filename)).ok()?;
+                let new_filename = crate::storage::media_sniff::copy_sniffed_media(&src_path, mdir, "openlp")?;
                 // Only ever return a background once the file has actually been found
                 // and copied — a path we can't resolve is worse than no background.
                 Some(SlideBackground::Image {
@@ -691,7 +688,7 @@ impl OpenLPImporter {
         let tag_close = after_bg_start.find('>')?;
         let bg_open_tag = &after_bg_start[..tag_close];
 
-        let bg_end = after_bg_start.find("</background>")?;
+        let bg_end = after_bg_start[tag_close + 1..].find("</background>")? + tag_close + 1;
         let bg_body = &after_bg_start[tag_close + 1..bg_end];
 
         // Determine background type from attribute type="..." or child <type>...</type>
@@ -791,10 +788,7 @@ impl OpenLPImporter {
                 // (guaranteed not to exist anywhere) are both worse than no background.
                 let src_path = resolved_path?;
                 let mdir = media_dir?;
-                std::fs::create_dir_all(mdir).ok()?;
-                let ext = src_path.extension().and_then(|s| s.to_str()).unwrap_or("jpg");
-                let new_filename = format!("openlp_{}.{}", uuid::Uuid::new_v4(), ext);
-                std::fs::copy(&src_path, mdir.join(&new_filename)).ok()?;
+                let new_filename = crate::storage::media_sniff::copy_sniffed_media(&src_path, mdir, "openlp")?;
                 Some(SlideBackground::Image {
                     file_path: format!("/media/images/{}", new_filename),
                     opacity: 1.0,
@@ -815,7 +809,7 @@ impl OpenLPImporter {
         for i in 0..archive.len() {
             if let Ok(mut f) = archive.by_index(i) {
                 if f.name().to_lowercase().ends_with(".xml") {
-                    let _ = std::io::Read::read_to_string(&mut f, &mut xml_content);
+                    xml_content = crate::storage::media_sniff::read_capped_string(&mut f, crate::storage::media_sniff::MAX_ZIP_TEXT_BYTES).unwrap_or_default();
                     break;
                 }
             }
@@ -848,15 +842,8 @@ impl OpenLPImporter {
             if let Ok(mut f) = archive.by_index(i) {
                 let name = f.name().to_string();
                 if name.ends_with(trimmed_name) || name.rsplit('/').next() == Some(trimmed_name) {
-                    let mut img_bytes = Vec::new();
-                    if std::io::Read::read_to_end(&mut f, &mut img_bytes).is_ok() {
-                        std::fs::create_dir_all(mdir).ok()?;
-                        let ext = Path::new(trimmed_name)
-                            .extension()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("jpg");
-                        let new_filename = format!("openlp_{}.{}", uuid::Uuid::new_v4(), ext);
-                        std::fs::write(mdir.join(&new_filename), &img_bytes).ok()?;
+                    if let Ok(img_bytes) = crate::storage::media_sniff::read_capped_bytes(&mut f, crate::storage::media_sniff::MAX_ZIP_MEDIA_BYTES) {
+                        let new_filename = crate::storage::media_sniff::write_sniffed_media(mdir, "openlp", &img_bytes)?;
                         return Some(SlideBackground::Image {
                             file_path: format!("/media/images/{}", new_filename),
                             opacity: 1.0,

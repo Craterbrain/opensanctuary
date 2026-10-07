@@ -11,6 +11,7 @@
  */
 
 import { validateSnapshotProtocol } from './protocol.ts';
+import { resolveHostSessionToken, getHostSessionToken, getConsoleSessionId } from './host_session.ts';
 
 export type WsConnectionStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -33,6 +34,14 @@ export interface WsClientOptions {
   onStatusChange?: (status: WsConnectionStatus) => void;
   onSnapshot?: (snapshot: any) => void;
   onProtocolMismatch?: (errorMessage: string) => void;
+  /**
+   * Fired when the server rejects a command with a distinct reason rather
+   * than silently dropping it -- today just `"console_locked"` ("one
+   * console at a time, first one connected wins", see
+   * docs/CLIENT_PAIRING.md), delivered as a direct reply on this
+   * connection (`src/api/ws.rs`'s `direct_tx`), not a broadcast snapshot.
+   */
+  onCommandRejected?: (reason: string, message: string) => void;
 }
 
 export class EngineWebSocketClient {
@@ -108,7 +117,9 @@ export class EngineWebSocketClient {
         }
         try {
           if (this.ws) this.ws.close();
-        } catch (_) {}
+        } catch (e) {
+          console.warn('[WebSocket] Failed to close socket after error:', e);
+        }
       };
 
       this.ws.onclose = (event: CloseEvent) => {
@@ -143,7 +154,9 @@ export class EngineWebSocketClient {
     if (this.ws) {
       try {
         this.ws.close();
-      } catch (_) {}
+      } catch (e) {
+        console.warn('[WebSocket] Failed to close socket on disconnect:', e);
+      }
       this.ws = null;
     }
     this.setStatus('disconnected');
@@ -157,13 +170,25 @@ export class EngineWebSocketClient {
       const snapshot = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
       if (!snapshot) return;
 
+      // A direct, this-connection-only rejection reply (e.g. console_locked)
+      // rather than a broadcast state snapshot -- distinguished by having no
+      // `state`/`schedule` fields at all, which every real snapshot has.
+      if (snapshot.error && snapshot.state === undefined && snapshot.schedule === undefined) {
+        if (this.options.onCommandRejected) {
+          this.options.onCommandRejected(snapshot.error, snapshot.message || snapshot.error);
+        }
+        return;
+      }
+
       if (this.options.validateProtocol) {
         try {
           const validation = validateSnapshotProtocol(snapshot);
           if (!validation.valid && this.options.onProtocolMismatch) {
             this.options.onProtocolMismatch(validation.error || 'Protocol version mismatch');
           }
-        } catch (_) {}
+        } catch (e) {
+          console.warn('[WebSocket] Protocol validation threw:', e);
+        }
       }
 
       // Backend omits schedule (sends null) on live/staged updates — retain cached schedule
@@ -190,15 +215,32 @@ export class EngineWebSocketClient {
       ? cmd
       : JSON.stringify(cmd);
 
+    // A paired remote presents deviceToken; every other caller (the
+    // operator console) must instead present the host session token --
+    // /api/command and /ws both require one or the other now (see
+    // docs/CLIENT_PAIRING.md "Console (host) authentication"). Resolving is
+    // a no-op after the first call (host_session.ts caches it), so this
+    // doesn't add a real round-trip to the hot command-sending path.
+    let hostToken: string | null = null;
+    if (!deviceToken) {
+      await resolveHostSessionToken();
+      hostToken = getHostSessionToken();
+    }
+
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         // A raw WS text frame has no header to carry a credential in, so a
         // paired remote client wraps the command in an envelope the server
-        // unwraps after checking device_token against paired_devices.
-        // Unauthenticated callers (the operator console) send `text` as-is.
-        const wireText = deviceToken
-          ? JSON.stringify({ cmd, device_token: deviceToken })
-          : text;
+        // unwraps after checking device_token against paired_devices, and
+        // the operator console does the same with host_token instead --
+        // plus console_session_id, which enforces "one console at a time"
+        // (docs/CLIENT_PAIRING.md).
+        let wireText = text;
+        if (deviceToken) {
+          wireText = JSON.stringify({ cmd, device_token: deviceToken });
+        } else if (hostToken) {
+          wireText = JSON.stringify({ cmd, host_token: hostToken, console_session_id: getConsoleSessionId() });
+        }
         this.ws.send(wireText);
         return { success: true, via: 'websocket' };
       } catch (err) {
@@ -213,6 +255,7 @@ export class EngineWebSocketClient {
         headers: {
           'Content-Type': 'application/json',
           ...(deviceToken ? { 'x-device-token': deviceToken } : {}),
+          ...(hostToken ? { 'x-host-token': hostToken, 'x-console-session-id': getConsoleSessionId() } : {}),
         },
         body: text,
       });
@@ -236,7 +279,8 @@ export class EngineWebSocketClient {
         const text = typeof data === 'string' ? data : JSON.stringify(data);
         this.ws.send(text);
         return true;
-      } catch (_) {
+      } catch (e) {
+        console.warn('[WebSocket] sendRaw failed:', e);
         return false;
       }
     }

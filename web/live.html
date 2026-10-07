@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <title>Live Display - OpenSanctuary</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="icon" type="image/png" sizes="256x256" href="favicon.png">
+  <link rel="shortcut icon" href="favicon.ico">
+  <link rel="apple-touch-icon" href="favicon.png">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body, html {
@@ -193,6 +196,10 @@
 <body>
   <div id="screen" style="position: relative; overflow: hidden; background: #000;">
     <video id="screen-video-bg" preload="none" muted playsinline="true" webkit-playsinline="true" x5-playsinline="true" style="display: none; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; z-index: 1; pointer-events: none;"></video>
+    <!-- Frame-accurate WebCodecs renderer (web/src/core/webcodecs_player.ts): drawn into
+         instead of #screen-video-bg when the browser/file support it; same position/sizing/
+         z-index so it's a transparent swap from the operator's/viewer's perspective. -->
+    <canvas id="screen-video-canvas" style="display: none; position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none;"></canvas>
     <div id="screen-image-bg" style="display: none; position: absolute; inset: 0; width: 100%; height: 100%; background-size: cover; background-position: center; z-index: 1; pointer-events: none;"></div>
     <audio id="screen-audio-bg" preload="auto" autoplay style="display: none;"></audio>
     <iframe id="screen-web-stream" title="Live Web Stream" allow="autoplay; encrypted-media" style="display: none; position: absolute; border: 0; pointer-events: none; background: #000;"></iframe>

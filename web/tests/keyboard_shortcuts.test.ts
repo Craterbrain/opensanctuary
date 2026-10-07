@@ -185,6 +185,14 @@ describe("Keyboard Shortcuts Matrix & Resolution Engine", () => {
         const ctrlS = resolveKeyboardShortcut({ key: "s", ctrlKey: true });
         expect(ctrlS?.action).toBe("save_schedule");
 
+        // Ctrl+Shift+S must resolve to a distinct action from plain Ctrl+S --
+        // previously both fell into "save_schedule", which app_ui.ts's
+        // dispatch always routed to the Save As modal, so Ctrl+S alone never
+        // actually did the silent quick-save its own doc comment promised.
+        const ctrlShiftS = resolveKeyboardShortcut({ key: "s", ctrlKey: true, shiftKey: true });
+        expect(ctrlShiftS?.action).toBe("save_schedule_as");
+        expect(ctrlShiftS?.action).not.toBe(ctrlS?.action);
+
         const ctrlI = resolveKeyboardShortcut({ key: "i", ctrlKey: true });
         expect(ctrlI?.action).toBe("import_modal");
 

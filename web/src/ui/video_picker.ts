@@ -9,7 +9,7 @@
  */
 
 import { isVideoBackground } from '../core/presentation_helpers.ts';
-import { readClipboard } from '../core/ui_utils.ts';
+import { readClipboard, type ToastType } from '../core/ui_utils.ts';
 import { buildGridCard } from './grid_card.ts';
 import { renderEmptyState } from './filter_bar.ts';
 
@@ -17,7 +17,7 @@ export interface VideoPickerContext {
   showModal: (el: HTMLElement | null) => void;
   closeModal: (el: HTMLElement | null) => void;
   escapeHtml: (str: any) => string;
-  showToast?: (msg: string, type?: string) => void;
+  showToast?: (msg: string, type?: ToastType) => void;
 }
 
 export interface VideoMediaItem {
@@ -214,7 +214,7 @@ export function initVideoPicker(context: VideoPickerContext) {
             if (ytdlStatus) {
               ytdlStatus.innerHTML = `
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
-                  <span style="color: #00e5ff;">${currentContext!.escapeHtml(progress.status || 'Downloading...')}${speed}${eta}</span>
+                  <span style="color: #00e5ff;">${currentContext!.escapeHtml(progress.status || 'Downloading...')}${currentContext!.escapeHtml(speed)}${currentContext!.escapeHtml(eta)}</span>
                   <span style="font-weight: 700; color: #00e676;">${pct.toFixed(1)}%</span>
                 </div>`;
             }

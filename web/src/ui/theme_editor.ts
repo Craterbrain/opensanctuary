@@ -9,10 +9,12 @@
 import { FONT_FAMILY_GROUPS } from "../editor/types.ts";
 import { openThemePicker } from "./theme_picker.ts";
 import { applyResolvedBackground } from "../core/presentation_helpers.ts";
+import { resolveHostSessionToken, hostTokenHeader } from "../core/host_session.ts";
+import type { ToastType } from "../core/ui_utils.ts";
 
 export interface ThemeEditorContext {
   refreshThemes: () => Promise<void>;
-  showToast: (message: string, type?: string) => void;
+  showToast: (message: string, type?: ToastType) => void;
   escapeHtml: (str: any) => string;
 }
 
@@ -223,7 +225,8 @@ export async function deleteThemeItem(theme: any) {
   if (!ctx || !theme) return;
   if (!confirm(`Delete theme "${theme.name}"? This cannot be undone.`)) return;
   try {
-    await fetch(`/api/themes/${encodeURIComponent(theme.name)}`, { method: 'DELETE' });
+    await resolveHostSessionToken();
+    await fetch(`/api/themes/${encodeURIComponent(theme.name)}`, { method: 'DELETE', headers: hostTokenHeader() });
     await ctx.refreshThemes();
     ctx.showToast(`Deleted theme "${theme.name}"`, 'info');
   } catch (e) {

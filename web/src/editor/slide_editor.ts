@@ -289,9 +289,9 @@ export class SlideEditor {
 
     // 1. Ribbon toolbar: static markup in index.html (#slide-editor-ribbon,
     // a sibling of .studio-workspace-row so it spans the full width above
-    // the filmstrip/canvas/sidebar row, not just above this shell) — see
-    // docs/FRONTEND_ARCHITECTURE.md [ARCH:slide-editor-shell]. EditorToolbar
-    // binds to it rather than building it.
+    // the filmstrip/canvas/sidebar row, not just above this shell)
+    // [ARCH:slide-editor-shell]. EditorToolbar binds to it rather than
+    // building it.
     const ribbonEl = document.getElementById('slide-editor-ribbon');
     if (!ribbonEl) {
       throw new Error('SlideEditor: expected static #slide-editor-ribbon in index.html');
@@ -764,7 +764,7 @@ export class SlideEditor {
       cur.elements.splice(pos, 1, ...group.children);
     }
 
-    this.canvas.selection.selectMultiple(group.children.map(c => c.id));
+    this.canvas.selection.setSelection(group.children.map(c => c.id));
     this.canvas.render();
     this.syncUIState();
   }
@@ -798,7 +798,7 @@ export class SlideEditor {
       pastedIds.push(copy.id);
     }
 
-    this.canvas.selection.selectMultiple(pastedIds);
+    this.canvas.selection.setSelection(pastedIds);
     this.canvas.render();
     this.syncUIState();
   }
@@ -822,7 +822,7 @@ export class SlideEditor {
 
   private selectAll(): void {
     const cur = this.getActiveSlide();
-    this.canvas.selection.selectMultiple(cur.elements.map(e => e.id));
+    this.canvas.selection.setSelection(cur.elements.map(e => e.id));
     this.canvas.render();
     this.syncUIState();
   }

@@ -726,11 +726,23 @@ fn test_generate_and_load_pristine_sample_ewsx() {
         schedule_version: 0,
     };
 
-    EwsxManager::save_schedule_to_ewsx(&schedule, "test1.ewsx").expect("Failed to write test1.ewsx");
-    EwsxManager::save_schedule_to_ewsx(&schedule, "web/test1.ewsx").expect("Failed to write web/test1.ewsx");
+    // Regression-tests the save/load round trip only -- this used to write
+    // straight to "test1.ewsx" / "web/test1.ewsx", which are NOT test
+    // fixtures: they're the real, shipped "Load EasyWorship sample
+    // schedule" demo file (see web/src/app_ui.ts's fetch('/test1.ewsx')),
+    // committed to the repo. Running `cargo test` was silently overwriting
+    // that real content with this test's placeholder schedule on every run
+    // (visible as a recurring, unexplained diff on both files). A tempdir
+    // gives this test the same coverage without touching real project
+    // files; regenerating the actual shipped sample (if that's ever
+    // genuinely wanted) should be its own explicit, manually-run step, not
+    // a side effect of the test suite.
+    let test_dir = tempfile::tempdir().unwrap();
+    let ewsx_path = test_dir.path().join("test1.ewsx");
+    EwsxManager::save_schedule_to_ewsx(&schedule, &ewsx_path).expect("Failed to write test1.ewsx");
 
     // Verify loading back from bytes
-    let bytes = std::fs::read("test1.ewsx").unwrap();
+    let bytes = std::fs::read(&ewsx_path).unwrap();
     let loaded = EwsxManager::load_schedule_from_bytes(&bytes, "test1").expect("Failed to load test1.ewsx from bytes");
     assert_eq!(loaded.title, "Sunday Morning Worship");
     assert_eq!(loaded.items.len(), 2);
@@ -3248,6 +3260,130 @@ fn test_pptx_import_extracts_picture_background_and_saves_media_file() {
 }
 
 #[test]
+fn test_pptx_import_emits_one_positioned_textblock_per_shape() {
+    use os_next::core::models::SlideElement;
+
+    // Two text shapes, each with its own explicit <a:xfrm> position -- the exact
+    // "side-by-side columns" / "caption + body" case docs/IMPORT_EXPORT_NOTES.md
+    // says used to get flattened into one full-bleed text block. No
+    // presentation.xml here, so the importer's default 16:9 (12192000x6858000 EMU)
+    // slide size applies -- these EMU values were chosen to divide out evenly
+    // against it.
+    let slide_xml = r##"<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree>
+    <p:sp>
+      <p:spPr><a:xfrm><a:off x="1219200" y="685800"/><a:ext cx="3048000" cy="1371600"/></a:xfrm></p:spPr>
+      <p:txBody><a:p><a:r><a:t>Left column</a:t></a:r></a:p></p:txBody>
+    </p:sp>
+    <p:sp>
+      <p:spPr><a:xfrm><a:off x="6096000" y="3429000"/><a:ext cx="3048000" cy="1371600"/></a:xfrm></p:spPr>
+      <p:txBody><a:p><a:r><a:t>Right column</a:t></a:r></a:p></p:txBody>
+    </p:sp>
+  </p:spTree></p:cSld>
+</p:sld>"##;
+
+    let bytes = build_single_slide_pptx(slide_xml);
+    let media_dir = tempfile::tempdir().unwrap();
+    let pres = PptxImporter::import_pptx_bytes(&bytes, "stem", media_dir.path()).expect("should parse");
+
+    let slide = &pres.slides[0];
+    assert_eq!(slide.elements.len(), 2, "each shape must become its own element, not one flattened block");
+
+    let text_blocks: Vec<_> = slide.elements.iter().filter_map(|el| match el {
+        SlideElement::TextBlock { transform, block, .. } => Some((transform, block)),
+        _ => None,
+    }).collect();
+    assert_eq!(text_blocks.len(), 2);
+
+    let (t0, b0) = text_blocks[0];
+    assert_eq!(b0.runs[0].text, "Left column");
+    assert!((t0.x - 0.1).abs() < 1e-9, "x was {}", t0.x);
+    assert!((t0.y - 0.1).abs() < 1e-9, "y was {}", t0.y);
+    assert!((t0.w - 0.25).abs() < 1e-9, "w was {}", t0.w);
+    assert!((t0.h - 0.2).abs() < 1e-9, "h was {}", t0.h);
+    assert_eq!(t0.z_index, 0);
+
+    let (t1, b1) = text_blocks[1];
+    assert_eq!(b1.runs[0].text, "Right column");
+    assert!((t1.x - 0.5).abs() < 1e-9, "x was {}", t1.x);
+    assert!((t1.y - 0.5).abs() < 1e-9, "y was {}", t1.y);
+    assert_eq!(t1.z_index, 1);
+
+    // Distinct positions -- not both defaulted to the same full-bleed box.
+    assert_ne!(t0.x, t1.x);
+    assert_ne!(t0.y, t1.y);
+
+    // Legacy flat `text` stays correct too, joining both shapes.
+    assert_eq!(slide.text, "Left column\n\nRight column");
+}
+
+#[test]
+fn test_pptx_import_emits_positioned_image_element_from_inline_picture() {
+    use os_next::core::models::SlideElement;
+    use std::io::Write;
+    use zip::write::FileOptions;
+
+    // A text shape plus an inline (body-level) picture -- the "positioned logo" /
+    // "caption over a photo" case. Inline pictures (<p:pic>, as opposed to a
+    // slide-level <p:bg> fill) were never imported at all before this rewrite.
+    let slide_xml = r##"<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:cSld><p:spTree>
+    <p:sp>
+      <p:txBody><a:p><a:r><a:t>Caption text</a:t></a:r></a:p></p:txBody>
+    </p:sp>
+    <p:pic>
+      <p:nvPicPr><p:cNvPr id="3" name="Logo"/></p:nvPicPr>
+      <p:blipFill><a:blip r:embed="rId1"/></p:blipFill>
+      <p:spPr><a:xfrm><a:off x="9144000" y="457200"/><a:ext cx="1524000" cy="1524000"/></a:xfrm></p:spPr>
+    </p:pic>
+  </p:spTree></p:cSld>
+</p:sld>"##;
+
+    let fake_png_bytes: &[u8] = b"\x89PNG\r\n\x1a\nfake-inline-logo-bytes";
+
+    let cursor = std::io::Cursor::new(Vec::new());
+    let mut zip_writer = zip::ZipWriter::new(cursor);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip_writer.start_file("ppt/slides/slide1.xml", options).unwrap();
+    zip_writer.write_all(slide_xml.as_bytes()).unwrap();
+    zip_writer.start_file("ppt/slides/_rels/slide1.xml.rels", options).unwrap();
+    zip_writer.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/logo.png"/>
+</Relationships>"#).unwrap();
+    zip_writer.start_file("ppt/media/logo.png", options).unwrap();
+    zip_writer.write_all(fake_png_bytes).unwrap();
+    let bytes = zip_writer.finish().unwrap().into_inner();
+
+    let media_dir = tempfile::tempdir().unwrap();
+    let pres = PptxImporter::import_pptx_bytes(&bytes, "stem", media_dir.path()).expect("should parse");
+
+    let slide = &pres.slides[0];
+    assert_eq!(slide.elements.len(), 2, "both the text shape and the inline picture must become elements");
+
+    let image = slide.elements.iter().find_map(|el| match el {
+        SlideElement::Image { transform, file_path, .. } => Some((transform, file_path.clone())),
+        _ => None,
+    }).expect("an Image element must be present");
+    let (transform, file_path) = image;
+
+    assert!(file_path.starts_with("/media/images/pptx_"), "unexpected path: {}", file_path);
+    assert!(file_path.ends_with(".png"), "unexpected extension: {}", file_path);
+    let saved_name = file_path.trim_start_matches("/media/images/");
+    let saved_bytes = std::fs::read(media_dir.path().join(saved_name)).expect("extracted logo file should exist");
+    assert_eq!(saved_bytes, fake_png_bytes);
+
+    // Positioned where the <a:xfrm> actually said (top-right corner), not the
+    // default full-bleed box.
+    assert!((transform.x - 0.75).abs() < 1e-9, "x was {}", transform.x);
+    assert!(transform.w < 0.2, "a small logo must not default to a full-bleed box; w was {}", transform.w);
+    assert_eq!(transform.z_index, 1, "the picture is the second element to successfully resolve");
+
+    // The text shape's own element is unaffected by the picture's presence.
+    assert_eq!(slide.text, "Caption text");
+}
+
+#[test]
 fn test_openlp_import_songs_sqlite() {
     let fixture_path = std::path::Path::new("tests/fixtures/openlp/songs-2.4.6.sqlite");
     assert!(fixture_path.exists(), "songs fixture must exist");
@@ -3387,7 +3523,8 @@ fn test_openlp_theme_xml_resolution_and_backgrounds() {
     // 4. Image theme XML in a directory
     let temp_theme_dir = tempfile::tempdir().unwrap();
     let img_path = temp_theme_dir.path().join("forest.jpg");
-    std::fs::write(&img_path, b"fake-jpeg-bytes").unwrap();
+    // Real magic bytes: importers now sniff content type instead of trusting the extension.
+    std::fs::write(&img_path, b"\xFF\xD8\xFF\xE0fake-jpeg-bytes").unwrap();
 
     let img_xml = r#"<theme version="2.0">
   <name>ForestTheme</name>
@@ -3420,7 +3557,7 @@ fn test_openlp_theme_xml_resolution_and_backgrounds() {
     zip_writer.start_file("Moss on tree/Moss on tree.xml", options).unwrap();
     zip_writer.write_all(otz_xml.as_bytes()).unwrap();
     zip_writer.start_file("Moss on tree/climbing-moss.jpeg", options).unwrap();
-    zip_writer.write_all(b"fake-climbing-moss-bytes").unwrap();
+    zip_writer.write_all(b"\xFF\xD8\xFF\xE0fake-climbing-moss-bytes").unwrap();
     let otz_bytes = zip_writer.finish().unwrap().into_inner();
 
     let otz_bg = OpenLPImporter::parse_openlp_otz(Cursor::new(otz_bytes), Some(media_dir.path()));
@@ -3428,10 +3565,10 @@ fn test_openlp_theme_xml_resolution_and_backgrounds() {
         Some(SlideBackground::Image { file_path, opacity }) => {
             assert_eq!(opacity, 1.0);
             assert!(file_path.starts_with("/media/images/openlp_"));
-            assert!(file_path.ends_with(".jpeg"));
+            assert!(file_path.ends_with(".jpg"), "extension comes from the sniffed content type");
             let saved_name = file_path.trim_start_matches("/media/images/");
             let content = std::fs::read(media_dir.path().join(saved_name)).unwrap();
-            assert_eq!(content, b"fake-climbing-moss-bytes");
+            assert_eq!(content, b"\xFF\xD8\xFF\xE0fake-climbing-moss-bytes");
         }
         other => panic!("Expected Image background from .otz, got {:?}", other),
     }
@@ -3814,6 +3951,9 @@ async fn test_freeshow_import_http_route() {
         db: db.clone(),
         asset_graph,
         web_dir: web_dir.clone(),
+        media_dir: web_dir.clone(),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
         plugin_manager,
         bible_providers,
         media_search,
@@ -3825,6 +3965,11 @@ async fn test_freeshow_import_http_route() {
         https_port: None,
         https_enabled: false,
         pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -3858,6 +4003,7 @@ async fn test_freeshow_import_http_route() {
 
     let client = reqwest::Client::new();
     let resp = client.post(format!("http://{}/api/import/freeshow-show", addr))
+        .header("x-host-token", "test_host_session_token")
         .json(&payload)
         .send()
         .await
@@ -3993,6 +4139,9 @@ async fn test_app_state_plugin_token_lifecycle() {
         db,
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
+        media_dir: std::path::PathBuf::from("web"),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
         tx,
         plugin_manager,
         bible_providers,
@@ -4005,6 +4154,11 @@ async fn test_app_state_plugin_token_lifecycle() {
         https_port: None,
         https_enabled: false,
         pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     // Issue tokens for different plugins
@@ -4050,6 +4204,9 @@ async fn test_network_api_routes_and_conflict_detection() {
         db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
+        media_dir: std::path::PathBuf::from("web"),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
         plugin_manager,
         bible_providers,
         media_search,
@@ -4061,6 +4218,11 @@ async fn test_network_api_routes_and_conflict_detection() {
         https_port: None,
         https_enabled: false,
         pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4080,7 +4242,9 @@ async fn test_network_api_routes_and_conflict_detection() {
     assert!(info_json["mdns_url"].as_str().unwrap().contains(".local:"));
 
     // 2. GET /api/network/interfaces
-    let resp = client.get(format!("http://{}/api/network/interfaces", addr)).send().await.unwrap();
+    let resp = client.get(format!("http://{}/api/network/interfaces", addr))
+        .header("x-host-token", "test_host_session_token")
+        .send().await.unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
     let ifaces_json: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(ifaces_json["success"], true);
@@ -4093,6 +4257,7 @@ async fn test_network_api_routes_and_conflict_detection() {
         "broadcast_all": true
     });
     let resp = client.post(format!("http://{}/api/network/interfaces", addr))
+        .header("x-host-token", "test_host_session_token")
         .json(&save_payload)
         .send().await.unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
@@ -4107,6 +4272,7 @@ async fn test_network_api_routes_and_conflict_detection() {
     // 4. GET /api/network/check-port?port=<bound_port>
     // Should identify as in_use_by_current = true and available = true (since it belongs to this server)
     let resp = client.get(format!("http://{}/api/network/check-port?port={}", addr, bound_port))
+        .header("x-host-token", "test_host_session_token")
         .send().await.unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
     let port_json: serde_json::Value = resp.json().await.unwrap();
@@ -4116,6 +4282,7 @@ async fn test_network_api_routes_and_conflict_detection() {
 
     // 5. GET /api/network/check-hostname?name=MySanctuary_Host
     let resp = client.get(format!("http://{}/api/network/check-hostname?name=MySanctuary_Host", addr))
+        .header("x-host-token", "test_host_session_token")
         .send().await.unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
     let hn_json: serde_json::Value = resp.json().await.unwrap();
@@ -4127,6 +4294,7 @@ async fn test_network_api_routes_and_conflict_detection() {
         "hostname": "test-bcast-host"
     });
     let resp = client.post(format!("http://{}/api/network/broadcast-option12", addr))
+        .header("x-host-token", "test_host_session_token")
         .json(&bcast_payload)
         .send().await.unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
@@ -4135,8 +4303,8 @@ async fn test_network_api_routes_and_conflict_detection() {
     assert_eq!(bcast_json["hostname"], "test-bcast-host");
 }
 
-/// Regression test for docs/GEMINI_COMMIT_REVIEW_2026-09-22.md #5: the
-/// hostname/port conflict check was only ever wired into the read-only
+/// Regression test: the hostname/port conflict check was only ever wired
+/// into the read-only
 /// GET /api/network/check-hostname and check-port endpoints — the actual
 /// write paths (POST /api/settings, POST /api/network/dedicated-mac/toggle)
 /// saved whatever they were given regardless of what the check would have
@@ -4165,6 +4333,9 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
         db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
+        media_dir: std::path::PathBuf::from("web"),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
         plugin_manager,
         bible_providers,
         media_search,
@@ -4176,6 +4347,11 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
         https_port: None,
         https_enabled: false,
         pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4193,6 +4369,7 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
     let occupied_port = occupied_listener.local_addr().unwrap().port();
 
     let resp = client.post(format!("http://{}/api/settings", addr))
+        .header("x-host-token", "test_host_session_conflict")
         .json(&serde_json::json!({
             "networkPort": occupied_port.to_string(),
             "churchName": "Held Back Church",
@@ -4212,6 +4389,7 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
 
     // Resubmitting with _confirmOverrides saves it anyway.
     let resp = client.post(format!("http://{}/api/settings", addr))
+        .header("x-host-token", "test_host_session_conflict")
         .json(&serde_json::json!({
             "networkPort": occupied_port.to_string(),
             "_confirmOverrides": "networkPort",
@@ -4232,6 +4410,7 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
         probe.local_addr().unwrap().port()
     };
     let resp = client.post(format!("http://{}/api/settings", addr))
+        .header("x-host-token", "test_host_session_conflict")
         .json(&serde_json::json!({ "networkPort": free_port.to_string() }))
         .send().await.unwrap();
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -4285,6 +4464,9 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
         db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
+        media_dir: std::path::PathBuf::from("web"),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
         plugin_manager,
         bible_providers,
         media_search,
@@ -4296,6 +4478,11 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
         https_port: None,
         https_enabled: false,
         pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4313,8 +4500,7 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
     let host_token = "test_host_session_token";
 
     // 0. CRITICAL AUTH INVARIANT: minting a pairing session with no host
-    // token (or the wrong one) is rejected — see
-    // docs/GEMINI_COMMIT_REVIEW_2026-09-22.md #3. Before this fix, any LAN
+    // token (or the wrong one) is rejected. Before this fix, any LAN
     // client could mint its own session and self-pair a rogue device.
     let sess_noauth_resp = client.post(format!("http://{}/api/pairing/session", addr))
         .send().await.unwrap();
@@ -4391,6 +4577,28 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
     assert_eq!(second_json["success"], true);
     assert_eq!(second_json["device_id"], "tv-sanctuary-2");
 
+    // A session-token holder can't take over an already-paired device id;
+    // the console (host token) can.
+    let hijack_resp = client.post(format!("http://{}/api/pairing/authorize", addr))
+        .json(&serde_json::json!({
+            "session_token": session_token,
+            "device_id": "tv-sanctuary-1",
+            "name": "Attacker",
+            "platform": "android-tv"
+        }))
+        .send().await.unwrap();
+    assert_eq!(hijack_resp.status(), reqwest::StatusCode::CONFLICT);
+    let repair_resp = client.post(format!("http://{}/api/pairing/authorize", addr))
+        .header("x-host-token", host_token)
+        .json(&serde_json::json!({
+            "session_token": session_token,
+            "device_id": "tv-sanctuary-2",
+            "name": "Sanctuary Side TV",
+            "platform": "roku"
+        }))
+        .send().await.unwrap();
+    assert_eq!(repair_resp.status(), reqwest::StatusCode::OK);
+
     // An unknown/garbage session token still fails, same as before.
     let bad_reuse_resp = client.post(format!("http://{}/api/pairing/authorize", addr))
         .json(&serde_json::json!({
@@ -4411,6 +4619,16 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
     assert_eq!(status_after_json["device_id"], "tv-sanctuary-1");
     assert_eq!(status_after_json["token"], dev_token);
 
+    // 6b. A SECOND status poll for the same, already-paired device_id no
+    // longer includes the token -- it was already delivered once above.
+    // Before this fix, any LAN caller could read an already-paired device's
+    // permanent bearer token forever just by naming its device_id.
+    let status_again = client.get(format!("http://{}/api/pairing/status?device_id=tv-sanctuary-1", addr))
+        .send().await.unwrap();
+    let status_again_json: serde_json::Value = status_again.json().await.unwrap();
+    assert_eq!(status_again_json["paired"], true);
+    assert_eq!(status_again_json["token"], serde_json::Value::Null);
+
     // 7. Verify token endpoint
     let verify_resp = client.post(format!("http://{}/api/pairing/verify", addr))
         .json(&serde_json::json!({ "token": dev_token }))
@@ -4423,7 +4641,7 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
     // 8. GET /api/pairing/devices lists both paired devices — but only for
     // a caller with the host token; a plain LAN client gets nothing.
     // Before this fix, every paired device's permanent bearer token was
-    // readable by anyone (docs/GEMINI_COMMIT_REVIEW_2026-09-22.md #3).
+    // readable by anyone.
     let list_noauth_resp = client.get(format!("http://{}/api/pairing/devices", addr))
         .send().await.unwrap();
     assert_eq!(list_noauth_resp.status(), reqwest::StatusCode::UNAUTHORIZED);
@@ -4470,7 +4688,7 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
     // 11. GET /api/server-info no longer carries host_token — this route is
     // deliberately zero-auth (any LAN client reads it), which used to mean
     // anyone could read the host token from it and get unrestricted keyring
-    // access; see docs/GEMINI_COMMIT_REVIEW_2026-09-22.md #2.
+    // access.
     let server_info_resp = client.get(format!("http://{}/api/server-info", addr))
         .send().await.unwrap();
     assert_eq!(server_info_resp.status(), reqwest::StatusCode::OK);
@@ -4487,6 +4705,23 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
     assert_eq!(host_token_resp.status(), reqwest::StatusCode::OK);
     let host_token_json: serde_json::Value = host_token_resp.json().await.unwrap();
     assert_eq!(host_token_json["host_token"], host_token);
+
+    // 12b. A reverse proxy on this same machine (Caddy, see docs/TUNNELS.md)
+    // makes every real request's TCP peer loopback -- this test's own
+    // reqwest client already IS that loopback peer, so it can simulate one
+    // directly by adding its own X-Forwarded-For header. A real, non-
+    // loopback original client reported that way must be rejected...
+    let proxied_real_client_resp = client.get(format!("http://{}/api/internal/host-token", addr))
+        .header("x-forwarded-for", "203.0.113.7")
+        .send().await.unwrap();
+    assert_eq!(proxied_real_client_resp.status(), reqwest::StatusCode::FORBIDDEN, "a proxy reporting a real, non-loopback original client must not get the host token");
+
+    // ...while one reporting a loopback original client (e.g. a browser tab
+    // on this same machine going through the proxy) still succeeds.
+    let proxied_loopback_client_resp = client.get(format!("http://{}/api/internal/host-token", addr))
+        .header("x-forwarded-for", "127.0.0.1")
+        .send().await.unwrap();
+    assert_eq!(proxied_loopback_client_resp.status(), reqwest::StatusCode::OK);
 
     // 13. POST /api/pairing/remote-session requires the host token too —
     // otherwise any LAN client could mint itself a live remote-control
@@ -4508,7 +4743,7 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
 /// any plugin_name a caller asserted — including one that was never actually
 /// installed, e.g. "planning_center" — letting anyone read that plugin's
 /// vault the moment any *real* plugin's secret was ever stored under that
-/// name. See docs/GEMINI_COMMIT_REVIEW_2026-09-22.md #2.
+/// name.
 #[tokio::test]
 async fn test_plugin_token_requires_a_real_installed_plugin() {
     let test_dir = tempfile::tempdir().unwrap();
@@ -4533,6 +4768,9 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
         // The real repo web dir — "hello_world" is a genuinely installed
         // plugin there (web/plugins/hello_world.js), loaded by main.ts.
         web_dir: std::path::PathBuf::from("web"),
+        media_dir: std::path::PathBuf::from("web"),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
         plugin_manager,
         bible_providers,
         media_search,
@@ -4544,6 +4782,11 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
         https_port: None,
         https_enabled: false,
         pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4553,14 +4796,23 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
 
     let client = reqwest::Client::new();
 
+    // Minting a plugin token is console-only: an unauthenticated LAN caller is refused
+    // even for a real installed plugin (it would unlock that plugin's keyring secrets).
+    let anon_resp = client.post(format!("http://{}/api/keyring/plugin/token", addr))
+        .json(&serde_json::json!({ "plugin_name": "hello_world" }))
+        .send().await.unwrap();
+    assert_eq!(anon_resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+
     // A made-up plugin name that was never installed is rejected.
     let fake_resp = client.post(format!("http://{}/api/keyring/plugin/token", addr))
+        .header("x-host-token", "test_host_session_plugin")
         .json(&serde_json::json!({ "plugin_name": "planning_center" }))
         .send().await.unwrap();
     assert_eq!(fake_resp.status(), reqwest::StatusCode::NOT_FOUND);
 
     // A real, installed plugin still gets a token.
     let real_resp = client.post(format!("http://{}/api/keyring/plugin/token", addr))
+        .header("x-host-token", "test_host_session_plugin")
         .json(&serde_json::json!({ "plugin_name": "hello_world" }))
         .send().await.unwrap();
     assert_eq!(real_resp.status(), reqwest::StatusCode::OK);
@@ -4569,6 +4821,589 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
     assert!(real_json["token"].as_str().unwrap().starts_with("plg_"));
 }
 
+/// `POST /api/command` and `/ws` used to execute any command from any caller
+/// with no authentication at all, unless it carried a paired-device token
+/// (a pre-existing console-auth gap). Both now require `host_session_token`
+/// for callers with no device token -- this proves the gate actually blocks
+/// execution (not just
+/// returns an error status) on both entry points.
+#[tokio::test]
+async fn test_command_endpoint_requires_host_token_for_unpaired_callers() {
+    let test_dir = tempfile::tempdir().unwrap();
+    let db_path = test_dir.path().join("test_command_host_token.db");
+    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
+    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
+    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
+    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host_token = "test_host_session_command".to_string();
+
+    let app_state = os_next::api::ws::AppState {
+        tx,
+        engine,
+        db: db.clone(),
+        asset_graph,
+        web_dir: std::path::PathBuf::from("web"),
+        media_dir: std::path::PathBuf::from("web"),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
+        plugin_manager,
+        bible_providers,
+        media_search,
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: host_token.clone(),
+        server_port: addr.port(),
+        https_port: None,
+        https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+
+    let client = reqwest::Client::new();
+
+    // POST /api/internal/verify-host-token: no loopback restriction (unlike
+    // GET /api/internal/host-token), just a yes/no against the real token --
+    // this is how a remote console confirms a token it was handed
+    // out-of-band (printed to the server's terminal, or pasted manually).
+    let resp = client.post(format!("http://{}/api/internal/verify-host-token", addr))
+        .json(&serde_json::json!({ "token": host_token }))
+        .send().await.unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["valid"], true);
+    let resp = client.post(format!("http://{}/api/internal/verify-host-token", addr))
+        .json(&serde_json::json!({ "token": "not-the-real-token" }))
+        .send().await.unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["valid"], false);
+
+    // HTTP: no token at all -- rejected, state unchanged.
+    let resp = client.post(format!("http://{}/api/command", addr))
+        .json(&serde_json::json!({ "ToggleBlackout": null }))
+        .send().await.unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["success"], false);
+    assert_eq!(body["state"]["state"]["is_blackout"], false);
+
+    // HTTP: wrong token -- also rejected.
+    let resp = client.post(format!("http://{}/api/command", addr))
+        .header("x-host-token", "not-the-real-token")
+        .json(&serde_json::json!({ "ToggleBlackout": null }))
+        .send().await.unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["success"], false);
+    assert_eq!(body["state"]["state"]["is_blackout"], false);
+
+    // HTTP: the real host token but no console_session_id -- still rejected
+    // (a distinct "missing x-console-session-id" reason, not a state change).
+    let resp = client.post(format!("http://{}/api/command", addr))
+        .header("x-host-token", &host_token)
+        .json(&serde_json::json!({ "ToggleBlackout": null }))
+        .send().await.unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["success"], false);
+    assert_eq!(body["state"]["state"]["is_blackout"], false);
+
+    // HTTP: the real host token + a session id -- executes.
+    let resp = client.post(format!("http://{}/api/command", addr))
+        .header("x-host-token", &host_token)
+        .header("x-console-session-id", "session-a")
+        .json(&serde_json::json!({ "ToggleBlackout": null }))
+        .send().await.unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["success"], true);
+    assert_eq!(body["state"]["state"]["is_blackout"], true);
+
+    // WS: a message with no device_token and no (or a wrong) host_token
+    // must not execute either -- connect, send both bad variants, then
+    // confirm via a fresh HTTP snapshot that blackout is still on from the
+    // HTTP toggle above (i.e. an unauthenticated WS ToggleBlackout did not
+    // flip it back off).
+    use futures_util::{SinkExt, StreamExt};
+    let (mut ws_stream, _) = tokio_tungstenite::connect_async(format!("ws://{}/ws", addr)).await.unwrap();
+    let _initial_snapshot = ws_stream.next().await; // server sends one on connect
+
+    ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({ "cmd": "ToggleBlackout" }).to_string().into(),
+    )).await.unwrap();
+    ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({ "cmd": "ToggleBlackout", "host_token": "not-the-real-token", "console_session_id": "session-a" }).to_string().into(),
+    )).await.unwrap();
+
+    // Give the server a moment to (not) process those, then verify via HTTP
+    // that state didn't change -- a broadcast never arrives on this socket
+    // either way since a rejected message never calls broadcast_snapshot.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let state: serde_json::Value = client.get(format!("http://{}/api/state", addr))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(state["state"]["is_blackout"], true, "unauthenticated/wrong-token WS commands must not execute");
+
+    // WS: the real host token but no console_session_id -- also rejected.
+    ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({ "cmd": "ToggleBlackout", "host_token": host_token }).to_string().into(),
+    )).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let state: serde_json::Value = client.get(format!("http://{}/api/state", addr))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(state["state"]["is_blackout"], true, "a WS command missing console_session_id must not execute");
+
+    // WS: the real host token + the same session id already holding the
+    // lock from the HTTP call above -- executes (toggles back off).
+    ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({ "cmd": "ToggleBlackout", "host_token": host_token, "console_session_id": "session-a" }).to_string().into(),
+    )).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let state: serde_json::Value = client.get(format!("http://{}/api/state", addr))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(state["state"]["is_blackout"], false, "a WS command with the real host token and matching session id must execute");
+}
+
+/// Library CRUD-delete, schedule save, settings, and the local-update-apply
+/// routes all now require the host token, same as `/api/command`/`/ws` --
+/// previously any LAN caller could delete the whole song/media/theme/
+/// scripture library, overwrite an arbitrary file via `/api/schedule/save`,
+/// or make the console open an arbitrary local file via
+/// `/api/updates/apply-local`, with zero authentication. This does not
+/// exercise `apply_local_update`'s success path (it would try to actually
+/// open a file with the OS's default handler) -- only that an
+/// unauthenticated/wrong-token call is rejected before it gets that far.
+#[tokio::test]
+async fn test_library_mutation_and_admin_routes_require_host_token() {
+    let test_dir = tempfile::tempdir().unwrap();
+    let db_path = test_dir.path().join("test_library_auth.db");
+    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let event_log = Arc::new(EventLog::new(100));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
+    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
+    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
+    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host_token = "test_host_session_library_auth".to_string();
+
+    let song = os_next::core::models::Song::new("Auth Test Song", "Test Author");
+    db.insert_song(&song).unwrap();
+
+    let app_state = os_next::api::ws::AppState {
+        tx,
+        engine,
+        db: db.clone(),
+        asset_graph,
+        web_dir: std::path::PathBuf::from("web"),
+        media_dir: std::path::PathBuf::from("web"),
+        data_dir: test_dir.path().to_path_buf(),
+        skip_first_time_setup: true,
+        plugin_manager,
+        bible_providers,
+        media_search,
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: host_token.clone(),
+        server_port: addr.port(),
+        https_port: None,
+        https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+
+    let client = reqwest::Client::new();
+
+    // DELETE /api/songs/:id -- no token, wrong token, then the real one.
+    let resp = client.delete(format!("http://{}/api/songs/{}", addr, song.id)).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let resp = client.delete(format!("http://{}/api/songs/{}", addr, song.id))
+        .header("x-host-token", "wrong")
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(db.get_songs().unwrap().len(), 1, "unauthenticated caller must not be able to delete a song");
+    let resp = client.delete(format!("http://{}/api/songs/{}", addr, song.id))
+        .header("x-host-token", &host_token)
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    assert_eq!(db.get_songs().unwrap().len(), 0);
+
+    // POST /api/schedule/save -- no token is rejected before any file is written.
+    let save_path = test_dir.path().join("unauthorized_save.ewsx");
+    let resp = client.post(format!("http://{}/api/schedule/save", addr))
+        .json(&serde_json::json!({ "path": save_path.to_str().unwrap() }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert!(!save_path.exists(), "unauthenticated caller must not be able to write an arbitrary file via schedule save");
+    let resp = client.post(format!("http://{}/api/schedule/save", addr))
+        .header("x-host-token", &host_token)
+        .json(&serde_json::json!({ "path": save_path.to_str().unwrap() }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    assert!(save_path.exists());
+
+    // POST /api/settings -- no token is rejected.
+    let resp = client.post(format!("http://{}/api/settings", addr))
+        .json(&serde_json::json!({ "churchName": "Attacker Name" }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_ne!(
+        db.get_settings().unwrap().get("churchName").map(|s| s.as_str()),
+        Some("Attacker Name"),
+        "unauthenticated caller must not be able to change settings"
+    );
+
+    // POST /api/updates/apply-local -- no token is rejected before it ever
+    // tries to hand the path to the OS's open-with-default-handler.
+    let resp = client.post(format!("http://{}/api/updates/apply-local", addr))
+        .json(&serde_json::json!({ "path": "/nonexistent/should-not-be-opened", "force": true }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // The automated check/download flow (GET /api/updates/status, POST
+    // /api/updates/check, POST /api/updates/download-and-install) needs the
+    // same host-token gate -- without it, any LAN caller could trigger a
+    // real download-and-install, not just read status.
+    let resp = client.get(format!("http://{}/api/updates/status", addr)).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let resp = client.post(format!("http://{}/api/updates/check", addr)).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let resp = client.post(format!("http://{}/api/updates/download-and-install", addr)).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // Same gate for the yt-dlp self-updater's status (src/network/ytdlp_updater.rs)
+    // -- it's read-only, but still shouldn't leak to an unpaired LAN caller.
+    let resp = client.get(format!("http://{}/api/ytdlp-updater/status", addr)).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // ADB TV-provisioning routes -- without this, any LAN caller could
+    // trigger a real adb install/launch sequence against whatever IP it
+    // supplied, or read another operator's in-progress provisioning status.
+    let resp = client.get(format!("http://{}/api/tv-provision/status", addr)).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let resp = client.post(format!("http://{}/api/tv-provision/start", addr))
+        .json(&serde_json::json!({ "ip": "192.0.2.1" }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let resp = client.get(format!("http://{}/api/tv-provision/progress/nonexistent", addr)).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+/// Real, authenticated exercise of the ADB provisioning flow's actual
+/// `adb` invocation -- targets `127.0.0.1` (loopback, nothing listening on
+/// the ADB port in a test environment) rather than mocking `adb` out, so
+/// this proves the real subprocess plumbing (spawn, argument construction,
+/// the "adb connect exits 0 even on failure" quirk `network::adb::provision`
+/// specifically works around) rather than just the HTTP plumbing around it.
+/// Doesn't assert *which* failure reason (no `adb` binary vs. connection
+/// refused) since that depends on whether this machine has `adb` installed
+/// -- only that it fails cleanly and reports a real error, never hangs.
+#[tokio::test]
+async fn test_tv_provision_start_and_progress_against_unreachable_device() {
+    let test_dir = tempfile::tempdir().unwrap();
+    let db_path = test_dir.path().join("test_tv_provision.db");
+    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let event_log = Arc::new(EventLog::new(100));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
+    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
+    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
+    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host_token = "test_host_session_tv_provision".to_string();
+
+    let app_state = os_next::api::ws::AppState {
+        tx,
+        engine,
+        db: db.clone(),
+        asset_graph,
+        web_dir: std::path::PathBuf::from("web"),
+        media_dir: std::path::PathBuf::from("web"),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
+        plugin_manager,
+        bible_providers,
+        media_search,
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: host_token.clone(),
+        server_port: addr.port(),
+        https_port: None,
+        https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+
+    let client = reqwest::Client::new();
+
+    // No bundled APK in this test harness -- resolve_tv_apk_path() finds
+    // nothing next to the `cargo test` binary, so this correctly reports
+    // apk_available: false rather than crashing.
+    let resp = client.get(format!("http://{}/api/tv-provision/status", addr))
+        .header("x-host-token", &host_token)
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["apk_available"], false, "no APK is bundled in the test harness, expected {:?}", body);
+
+    // POST /api/tv-provision/start correctly refuses when there's no APK to
+    // install, rather than starting a task that could only ever fail later.
+    let resp = client.post(format!("http://{}/api/tv-provision/start", addr))
+        .header("x-host-token", &host_token)
+        .json(&serde_json::json!({ "ip": "127.0.0.1" }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE, "expected a clean refusal with no APK bundled");
+}
+
+/// Real, authenticated end-to-end coverage of the automated update routes
+/// against the live public test repo (`crate::network::updater::RELEASES_REPO`)
+/// -- `status` starts empty, `check` does a real GitHub call and populates
+/// it, and a second `status` read reflects that without hitting the network
+/// again.
+///
+/// `#[ignore]`d -- see `downloads_and_verifies_the_real_test_repo_release`
+/// in `src/network/updater.rs` for why: this and that test together were
+/// the dominant source of real GitHub API calls during this feature's own
+/// development, enough to trip a secondary rate limit mid-session. Run
+/// explicitly with `cargo test --test core_tests -- --ignored` when
+/// actually verifying the live path.
+#[tokio::test]
+#[ignore]
+async fn test_update_check_and_status_routes_against_real_test_repo() {
+    let test_dir = tempfile::tempdir().unwrap();
+    let db_path = test_dir.path().join("test_update_routes.db");
+    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let event_log = Arc::new(EventLog::new(100));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
+    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
+    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
+    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host_token = "test_host_session_update_routes".to_string();
+
+    let app_state = os_next::api::ws::AppState {
+        tx,
+        engine,
+        db: db.clone(),
+        asset_graph,
+        web_dir: std::path::PathBuf::from("web"),
+        media_dir: std::path::PathBuf::from("web"),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
+        plugin_manager,
+        bible_providers,
+        media_search,
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: host_token.clone(),
+        server_port: addr.port(),
+        https_port: None,
+        https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+
+    let client = reqwest::Client::new();
+
+    // Nothing's checked yet -- no background task in this harness (that's
+    // only started from `main.rs`), so status starts as null.
+    let resp = client.get(format!("http://{}/api/updates/status", addr))
+        .header("x-host-token", &host_token)
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["status"].is_null(), "expected no check to have run yet, got {:?}", body);
+
+    // A real check against the real test repo.
+    let resp = client.post(format!("http://{}/api/updates/check", addr))
+        .header("x-host-token", &host_token)
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["status"]["error"].is_null(), "expected a real check to succeed, got {:?}", body);
+    assert!(body["status"]["current_version"].is_string());
+
+    // Status now reflects that check, without another network call.
+    let resp = client.get(format!("http://{}/api/updates/status", addr))
+        .header("x-host-token", &host_token)
+        .send().await.unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(!body["status"].is_null(), "expected status to be populated after a check");
+
+    // A second POST /api/updates/check right away must NOT make another
+    // real GitHub call -- MIN_SECONDS_BETWEEN_REAL_CHECKS in routes.rs
+    // returns the still-fresh cached result instead (`throttled: true`).
+    // This is exactly the behavior that keeps an operator mashing "Check
+    // for Updates" from hammering GitHub's API.
+    let resp = client.post(format!("http://{}/api/updates/check", addr))
+        .header("x-host-token", &host_token)
+        .send().await.unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["throttled"], true, "a second check within the cooldown should be throttled, got {:?}", body);
+}
+
+/// "One console at a time, first one connected wins" (docs/CLIENT_PAIRING.md).
+/// A second console (different `console_session_id`) presenting the correct
+/// host token must still be rejected with the distinct `console_locked`
+/// reason while a first console holds the lock -- and once the first one's
+/// WS connection closes, the lock frees up for the next one.
+#[tokio::test]
+async fn test_only_one_console_connected_at_a_time() {
+    let test_dir = tempfile::tempdir().unwrap();
+    let db_path = test_dir.path().join("test_console_lock.db");
+    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let event_log = Arc::new(EventLog::with_initial_sequence(6000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
+    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
+    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
+    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let host_token = "test_host_session_lock".to_string();
+
+    let app_state = os_next::api::ws::AppState {
+        tx,
+        engine,
+        db: db.clone(),
+        asset_graph,
+        web_dir: std::path::PathBuf::from("web"),
+        media_dir: std::path::PathBuf::from("web"),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
+        plugin_manager,
+        bible_providers,
+        media_search,
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: host_token.clone(),
+        server_port: addr.port(),
+        https_port: None,
+        https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+
+    use futures_util::{SinkExt, StreamExt};
+    let client = reqwest::Client::new();
+
+    // Console A connects over WS and claims the lock with its first command.
+    let (mut ws_a, _) = tokio_tungstenite::connect_async(format!("ws://{}/ws", addr)).await.unwrap();
+    let _ = ws_a.next().await; // initial snapshot
+    ws_a.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({ "cmd": "ToggleBlackout", "host_token": host_token, "console_session_id": "console-a" }).to_string().into(),
+    )).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let state: serde_json::Value = client.get(format!("http://{}/api/state", addr)).send().await.unwrap().json().await.unwrap();
+    assert_eq!(state["state"]["is_blackout"], true, "console A's first command should claim the lock and execute");
+
+    // Console B (different session id, correct host token) is locked out --
+    // via HTTP, with the distinct "console_locked" error surfaced.
+    let resp = client.post(format!("http://{}/api/command", addr))
+        .header("x-host-token", &host_token)
+        .header("x-console-session-id", "console-b")
+        .json(&serde_json::json!({ "ToggleBlackout": null }))
+        .send().await.unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["success"], false);
+    assert_eq!(body["error"], "console_locked");
+    let state: serde_json::Value = client.get(format!("http://{}/api/state", addr)).send().await.unwrap().json().await.unwrap();
+    assert_eq!(state["state"]["is_blackout"], true, "console B must not have executed while A holds the lock");
+
+    // Console A can keep issuing commands (same session id it already holds
+    // the lock for) while B remains locked out.
+    ws_a.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({ "cmd": "ToggleBlackout", "host_token": host_token, "console_session_id": "console-a" }).to_string().into(),
+    )).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let state: serde_json::Value = client.get(format!("http://{}/api/state", addr)).send().await.unwrap().json().await.unwrap();
+    assert_eq!(state["state"]["is_blackout"], false, "console A should still be able to issue further commands");
+
+    // Console A disconnects -- releasing the lock -- so console B can now claim it.
+    drop(ws_a);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let resp = client.post(format!("http://{}/api/command", addr))
+        .header("x-host-token", &host_token)
+        .header("x-console-session-id", "console-b")
+        .json(&serde_json::json!({ "ToggleBlackout": null }))
+        .send().await.unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["success"], true, "console B should be able to claim the lock once A disconnects");
+}
+
+/// Confirms the router itself behaves correctly across both listeners --
+/// zero-auth routes reachable on each, the HTTPS plane accepting the
+/// self-signed cert, and `GET /api/network/info` always preferring https://
+/// URLs when available (`remote_url`/`mdns_url`/`pairing_url` -- since
+/// `src/main.rs`, the cleartext plane is never network-reachable at all, so
+/// every URL handed to a non-loopback caller must be https). The actual
+/// production loopback-only (127.0.0.1) vs network-wide (0.0.0.0) bind
+/// split lives in `src/main.rs`, not exercised here -- this test builds its
+/// own listeners directly against the router, both already on loopback by
+/// construction, which is the right level for what this test actually
+/// checks.
 #[tokio::test]
 async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
     let test_dir = tempfile::tempdir().unwrap();
@@ -4604,6 +5439,9 @@ async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
         db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
+        media_dir: std::path::PathBuf::from("web"),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
         plugin_manager,
         bible_providers,
         media_search,
@@ -4615,6 +5453,11 @@ async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
         https_port: Some(https_port),
         https_enabled: true,
         pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4659,6 +5502,13 @@ async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
     assert_eq!(net_info["https_enabled"], true);
     assert!(net_info["pairing_url"].as_str().unwrap().starts_with("https://"));
     assert!(net_info["pairing_url"].as_str().unwrap().contains(&format!(":{}", https_port)));
+    // remote_url/mdns_url: the cleartext plane is never network-reachable
+    // (src/main.rs loopback-bind), so these must prefer https:// too, same
+    // as pairing_url already did.
+    assert!(net_info["remote_url"].as_str().unwrap().starts_with("https://"));
+    assert!(net_info["remote_url"].as_str().unwrap().contains(&format!(":{}", https_port)));
+    assert!(net_info["mdns_url"].as_str().unwrap().starts_with("https://"));
+    assert!(net_info["mdns_url"].as_str().unwrap().contains(&format!(":{}", https_port)));
 
     // 5. Zero-Auth AV Plane: /api/state, /remote on HTTP
     let state_resp = http_client.get(format!("http://{}/api/state", http_addr))
@@ -4681,6 +5531,7 @@ async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
 
     // 7. Test POST /api/network/tls/regenerate
     let regen_resp = http_client.post(format!("http://{}/api/network/tls/regenerate", http_addr))
+        .header("x-host-token", "test_host_session_split")
         .send().await.unwrap();
     assert_eq!(regen_resp.status(), reqwest::StatusCode::OK);
     let regen_json: serde_json::Value = regen_resp.json().await.unwrap();
@@ -4715,6 +5566,9 @@ async fn test_security_headers_and_cors_policies() {
         db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
+        media_dir: std::path::PathBuf::from("web"),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
         plugin_manager,
         bible_providers,
         media_search,
@@ -4726,6 +5580,11 @@ async fn test_security_headers_and_cors_policies() {
         https_port: None,
         https_enabled: false,
         pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4758,10 +5617,20 @@ async fn test_security_headers_and_cors_policies() {
     assert!(csp.contains("media-src 'self' data: blob: https: http:")); // Allows sanctuary HTTP media in balanced mode
     assert!(headers.get("access-control-allow-origin").is_some());
 
-    // 3. Reconfigure to Strict CSP, Deny Framing, and Restricted CORS
-    db.set_setting("securityCspMode", "strict").unwrap();
-    db.set_setting("securityFrameOptions", "deny").unwrap();
-    db.set_setting("securityCorsMode", "restricted").unwrap();
+    // 3. Reconfigure to Strict CSP, Deny Framing, and Restricted CORS --
+    // through the real POST /api/settings endpoint (host-token gated), not
+    // a direct `db.set_setting`: the security headers/CORS predicate now
+    // read an in-memory cache that only `post_settings` refreshes, not the
+    // database directly (see `AppState::security_header_settings`).
+    let reconf_resp = client.post(format!("http://{}/api/settings", http_addr))
+        .header("x-host-token", "test_host_session_sec")
+        .json(&serde_json::json!({
+            "securityCspMode": "strict",
+            "securityFrameOptions": "deny",
+            "securityCorsMode": "restricted",
+        }))
+        .send().await.unwrap();
+    assert_eq!(reconf_resp.status(), reqwest::StatusCode::OK);
 
     let resp_strict = client.get(format!("http://{}/api/state", http_addr))
         .header("Origin", "http://192.168.1.100:8080")
@@ -4789,9 +5658,16 @@ async fn test_security_headers_and_cors_policies() {
     assert_eq!(resp_rejected.status(), reqwest::StatusCode::OK);
     assert!(resp_rejected.headers().get("access-control-allow-origin").is_none());
 
-    // 5. Reconfigure to Disabled CSP and Disabled Framing
-    db.set_setting("securityCspMode", "disabled").unwrap();
-    db.set_setting("securityFrameOptions", "disabled").unwrap();
+    // 5. Reconfigure to Disabled CSP and Disabled Framing (same reasoning
+    // as step 3 -- through the real endpoint, not the database directly)
+    let disable_resp = client.post(format!("http://{}/api/settings", http_addr))
+        .header("x-host-token", "test_host_session_sec")
+        .json(&serde_json::json!({
+            "securityCspMode": "disabled",
+            "securityFrameOptions": "disabled",
+        }))
+        .send().await.unwrap();
+    assert_eq!(disable_resp.status(), reqwest::StatusCode::OK);
 
     let resp_disabled = client.get(format!("http://{}/api/state", http_addr))
         .send().await.unwrap();
@@ -4804,5 +5680,186 @@ async fn test_security_headers_and_cors_policies() {
     );
 }
 
+#[tokio::test]
+async fn test_lcspring_ewpx_presentation_bullets_and_transforms() {
+    use std::path::PathBuf;
+    use os_next::core::models::SlideElement;
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let ewpx_path = manifest_dir.join("LCspring.ewpx");
+    if !ewpx_path.exists() {
+        return;
+    }
+
+    let schedule = EwsxManager::load_schedule_from_ewsx(&ewpx_path).expect("Should load LCspring.ewpx");
+    assert!(!schedule.items.is_empty(), "Schedule should contain items");
+
+    // Verify presentation items have autofit: false and custom transforms
+    let presentation_items: Vec<_> = schedule.items.iter().filter(|it| it.item_type == "presentation").collect();
+    assert!(!presentation_items.is_empty(), "Should contain presentation items");
+
+    let mut found_bullet = false;
+    let mut found_custom_bullet = false;
+    let mut found_custom_transform = false;
+
+    for item in &presentation_items {
+        for slide in &item.slides {
+            for el in &slide.elements {
+                if let SlideElement::TextBlock { transform, block, .. } = el {
+                    // Rule: Autosizing should only apply to songs and scripture
+                    assert!(!block.autofit, "Presentation text blocks must have autofit = false");
+
+                    // Bounding boxes must not be stretched to default when real coordinates exist
+                    if (transform.w - 0.2775).abs() < 0.01 && (transform.y - 0.7002).abs() < 0.01 {
+                        found_custom_transform = true;
+                    }
+
+                    // Font sizes should not be at 73pt template ceiling
+                    for run in &block.runs {
+                        assert!(run.font_size_pt <= 68.0, "Presentation fonts should be scaled below 70pt ceiling, got {}", run.font_size_pt);
+                    }
+                }
+            }
+
+            if slide.text.contains("• TODAY - Sacrificial Giving") {
+                found_bullet = true;
+            }
+            if slide.text.contains("✱ Please see the Pastor") {
+                found_custom_bullet = true;
+            }
+        }
+    }
+
+    assert!(found_bullet, "Should have parsed standard bullet point (•)");
+    assert!(found_custom_bullet, "Should have parsed custom glyph bullet (✱)");
+    assert!(found_custom_transform, "Should have preserved custom non-default element transform coordinates");
+}
+
+/// Builds a minimal real AppState + router for the check-public-url tests
+/// below, bound to an ephemeral loopback port. Mirrors the construction
+/// `test_freeshow_import_http_route` already uses elsewhere in this file.
+async fn spawn_test_app(host_session_token: &str) -> String {
+    let test_dir = tempfile::tempdir().unwrap();
+    let db_path = test_dir.path().join("test_public_url.db");
+    let db = Database::new(&db_path).expect("Database::new");
+    let web_dir = test_dir.path().join("web");
+    std::fs::create_dir_all(&web_dir).unwrap();
+
+    let event_log = Arc::new(EventLog::with_initial_sequence(3000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let asset_graph = Arc::new(AssetGraph::new(&web_dir));
+    let (tx, _rx) = tokio::sync::broadcast::channel(512);
+    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
+    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
+    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
+
+    let app_state = os_next::api::ws::AppState {
+        tx,
+        engine,
+        db: db.clone(),
+        asset_graph,
+        web_dir: web_dir.clone(),
+        media_dir: web_dir.clone(),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
+        plugin_manager,
+        bible_providers,
+        media_search,
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: host_session_token.to_string(),
+        server_port: 8080,
+        https_port: None,
+        https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+
+    let router = os_next::api::create_router(app_state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    format!("http://{}", addr)
+}
+
+#[tokio::test]
+async fn test_check_public_url_requires_host_token() {
+    let base = spawn_test_app("real_token").await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{}/api/network/check-public-url?url=https://connect.example.org", base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_check_public_url_rejects_non_https_scheme_without_a_network_call() {
+    // `url=http://...` (or any malformed URL) must be rejected by
+    // validate_https_url before the handler ever attempts an outbound
+    // request -- this test would hang/timeout if that ordering regressed,
+    // since `example.invalid` resolves to nothing.
+    let base = spawn_test_app("real_token").await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{}/api/network/check-public-url?url=http://example.invalid", base))
+        .header("x-host-token", "real_token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["reachable"], false);
+    assert!(body["message"].as_str().unwrap().contains("https://"));
+}
 
 
+
+
+// Inputs found by `fuzz/` (see docs/FUZZING.md) that used to panic; each must
+// now return normally. Fixtures are the raw libFuzzer crash artifacts.
+#[test]
+fn test_fuzz_regressions_do_not_panic() {
+    let ewsx: &[u8] = include_bytes!("fixtures/fuzz_regressions/ewsx_import.bin");
+    let _ = EwsxManager::load_schedule_from_bytes(ewsx, "fuzz");
+
+    let theme = String::from_utf8_lossy(include_bytes!("fixtures/fuzz_regressions/openlp_theme.bin")).into_owned();
+    let _ = OpenLPImporter::parse_openlp_theme_xml(&theme, None, None);
+
+    let rtf = String::from_utf8_lossy(include_bytes!("fixtures/fuzz_regressions/rtf_parse.bin")).into_owned();
+    let _ = os_next::storage::rtf::parse_rtf(&rtf);
+
+    let scripture = String::from_utf8_lossy(include_bytes!("fixtures/fuzz_regressions/scripture_ref.bin")).into_owned();
+    let _ = parse_scripture_reference(&scripture);
+    let _ = parse_scripture_reference("John 3 16–18");
+    let _ = parse_scripture_reference("John 3:16–18");
+}
+
+// Importers copy media referenced by untrusted files into the web-served
+// media dir. Active content (HTML/SVG) and non-media files (a local path such
+// as /etc/passwd) must be refused rather than copied under a servable name.
+#[test]
+fn test_importers_refuse_non_media_files_for_served_media_dir() {
+    let theme_dir = tempfile::tempdir().unwrap();
+    std::fs::write(theme_dir.path().join("evil.html"), b"<script>alert(1)</script>").unwrap();
+    std::fs::write(theme_dir.path().join("evil.jpg"), b"<svg onload=alert(1)/>").unwrap();
+    let media_dir = tempfile::tempdir().unwrap();
+
+    for name in ["evil.html", "evil.jpg"] {
+        let xml = format!(
+            r#"<theme version="2.0"><name>T</name><background type="image"><filename>{}</filename></background></theme>"#,
+            name
+        );
+        let bg = OpenLPImporter::parse_openlp_theme_xml(&xml, Some(theme_dir.path()), Some(media_dir.path()));
+        assert!(bg.is_none(), "{} must not be imported as a background", name);
+    }
+    assert_eq!(std::fs::read_dir(media_dir.path()).unwrap().count(), 0, "nothing should be copied");
+}

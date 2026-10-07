@@ -4,6 +4,7 @@
  */
 
 import { resolveSlideAt, escapeHtml } from './core/presentation_helpers.ts';
+import { autoFitLyrics } from './core/autofit.ts';
 import { clock } from './core/timesync.ts';
 import { createEngineWebSocket } from './core/ws_client.ts';
 import { resolveNextPresentationPreview, parseBilingualSlideText } from './core/presentation_sequence.ts';
@@ -55,7 +56,7 @@ export function renderStageSnapshot(snapshot: any) {
   if (state.live_item && state.live_item.slides && state.live_item.slides.length > 0) {
     if (infoEl) infoEl.textContent = state.live_item.title;
     const curr = resolveSlideAt(state.live_item, state.live_slide_index);
-    const isMedia = state.live_item.item_type === 'Media' || (curr && curr.background && (curr.background.endsWith('.mp4') || curr.background.endsWith('.webm') || curr.background.includes('/media/')));
+    const isMedia = state.live_item.item_type === 'media' || (curr && curr.background && (curr.background.endsWith('.mp4') || curr.background.endsWith('.webm') || curr.background.includes('/media/')));
     const bilingualCurr = parseBilingualSlideText(curr?.text);
 
     if (currLabelEl) currLabelEl.textContent = curr ? (curr.label || `Slide ${state.live_slide_index + 1}`) : '';
@@ -71,24 +72,27 @@ export function renderStageSnapshot(snapshot: any) {
         currEl.textContent = curr ? curr.text : '';
       }
 
-      // Auto-fit current slide text to fill card
+      // Auto-fit current slide text to fill card -- same binary-search
+      // algorithm as core/autofit.ts's autoFitLyrics (shared with the live
+      // presentation screen and slide editor canvas), just reused here
+      // instead of hand-rolled a second time. This card reserves a fixed
+      // pixel margin for its own chrome (badges/label) rather than a
+      // percentage of the container, so widthFactor/heightFactor are
+      // computed per-call as the ratio that reproduces that same maxW/maxH
+      // -- not a fixed constant like other callers use.
       if (currEl.parentElement) {
         const p = currEl.parentElement;
         const maxH = p.clientHeight - 80;
         const maxW = p.clientWidth - 40;
-        if (maxH > 0 && maxW > 0) {
-          let low = 16, high = Math.min(maxH * 0.35, maxW * 0.1, 75), best = low;
-          for (let s = 0; s < 8; s++) {
-            const m = (low + high) / 2;
-            currEl.style.fontSize = `${m}px`;
-            if (currEl.scrollHeight <= maxH && currEl.scrollWidth <= maxW) {
-              best = m;
-              low = m + 0.5;
-            } else {
-              high = m - 0.5;
-            }
-          }
-          currEl.style.fontSize = `${best}px`;
+        if (maxH > 0 && maxW > 0 && p.clientWidth > 0 && p.clientHeight > 0) {
+          autoFitLyrics(p, currEl, {
+            minFontSize: 16,
+            maxFontSize: Math.min(maxH * 0.35, maxW * 0.1, 75),
+            maxSteps: 8,
+            widthFactor: maxW / p.clientWidth,
+            heightFactor: maxH / p.clientHeight,
+            lineHeightScale: false,
+          });
         }
       }
     }

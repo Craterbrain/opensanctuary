@@ -94,12 +94,12 @@ impl YtDlpImporter {
     }
 
     pub fn get_progress(task_id: &str) -> Option<YtDlpProgress> {
-        let reg = get_progress_registry().lock().unwrap();
+        let reg = get_progress_registry().lock().unwrap_or_else(|e| e.into_inner());
         reg.get(task_id).cloned()
     }
 
     pub fn set_progress(task_id: &str, progress: YtDlpProgress) {
-        let mut reg = get_progress_registry().lock().unwrap();
+        let mut reg = get_progress_registry().lock().unwrap_or_else(|e| e.into_inner());
         if reg.len() > 100 {
             reg.retain(|_, v| v.status != "completed" && v.status != "failed");
         }
@@ -110,7 +110,7 @@ impl YtDlpImporter {
     where
         F: FnOnce(&mut YtDlpProgress),
     {
-        let mut reg = get_progress_registry().lock().unwrap();
+        let mut reg = get_progress_registry().lock().unwrap_or_else(|e| e.into_inner());
         if let Some(p) = reg.get_mut(task_id) {
             f(p);
         }
@@ -119,7 +119,8 @@ impl YtDlpImporter {
     /// Spawns asynchronous non-blocking background download task with real-time progress streaming
     pub fn start_background_download(
         options: YtDlpDownloadOptions,
-        web_dir: PathBuf,
+        media_dir: PathBuf,
+        tools_dir: PathBuf,
         db: Database,
     ) -> String {
         let task_id = options.task_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -138,7 +139,7 @@ impl YtDlpImporter {
 
         let t_id = task_id.clone();
         tokio::spawn(async move {
-            match Self::download_media_with_progress(&options, &web_dir, &t_id).await {
+            match Self::download_media_with_progress(&options, &media_dir, &tools_dir, &t_id).await {
                 Ok(media_item) => {
                     let _ = db.insert_media(&media_item);
                     Self::update_progress(&t_id, |p| {
@@ -164,11 +165,12 @@ impl YtDlpImporter {
     /// Internal execution tracking stdout and stderr lines for live download percentage
     async fn download_media_with_progress(
         options: &YtDlpDownloadOptions,
-        web_dir: &Path,
+        media_dir: &Path,
+        tools_dir: &Path,
         task_id: &str,
     ) -> Result<MediaItem, Box<dyn std::error::Error + Send + Sync>> {
-        let target_subfolder = if options.audio_only { "media/audio" } else { "media/videos" };
-        let full_output_dir = web_dir.join(target_subfolder);
+        let target_subfolder = if options.audio_only { "audio" } else { "videos" };
+        let full_output_dir = media_dir.join(target_subfolder);
         tokio::fs::create_dir_all(&full_output_dir).await?;
 
         let output_template = full_output_dir
@@ -186,7 +188,7 @@ impl YtDlpImporter {
         });
 
         // 1. First attempt with requested browser cookies
-        let res = Self::run_ytdlp_process(options, clean_url, &output_template, options.browser.as_deref(), task_id).await;
+        let res = Self::run_ytdlp_process(options, clean_url, &output_template, options.browser.as_deref(), tools_dir, task_id).await;
 
         // 2. If failed and browser cookies were specified, retry without cookies
         let (stdout_lines, last_json_opt) = match res {
@@ -196,7 +198,7 @@ impl YtDlpImporter {
                 Self::update_progress(task_id, |p| {
                     p.status = "Retrying direct download without cookies...".into();
                 });
-                Self::run_ytdlp_process(options, clean_url, &output_template, None, task_id).await?
+                Self::run_ytdlp_process(options, clean_url, &output_template, None, tools_dir, task_id).await?
             }
         };
 
@@ -234,15 +236,39 @@ impl YtDlpImporter {
 
         let filename_path = info._filename.or(info.filename).map(PathBuf::from);
 
-        let final_file_path = if let Some(p) = filename_path {
-            if let Ok(rel) = p.strip_prefix(web_dir) {
-                format!("/{}", rel.to_string_lossy().replace('\\', "/"))
-            } else {
-                p.to_string_lossy().replace('\\', "/")
+        let mut disk_path = filename_path.unwrap_or_else(|| {
+            let ext = info.ext.clone().unwrap_or_else(|| if options.audio_only { "mp3".into() } else { "mp4".into() });
+            full_output_dir.join(format!("{}.{}", video_id, ext))
+        });
+
+        // Last-resort H.264 downloads (the format selector above only falls
+        // here when neither AV1 nor VP9 was available) get converted to VP9
+        // so they still play back as a native hardware-decoded stream. Never
+        // fails the whole import if ffmpeg is missing or the convert errors
+        // out -- the original H.264 file is still perfectly playable.
+        if !options.audio_only && disk_path.is_file() {
+            if crate::storage::transcode::needs_transcode(&disk_path).await {
+                Self::update_progress(task_id, |p| {
+                    p.status = "Converting H.264 to VP9 for native playback...".into();
+                });
+                let t_id = task_id.to_string();
+                match crate::storage::transcode::transcode_h264_to_vp9(&disk_path, move |pct| {
+                    Self::update_progress(&t_id, |p| {
+                        p.status = format!("Converting H.264 to VP9: {:.0}%", pct);
+                    });
+                })
+                .await
+                {
+                    Ok(new_path) => disk_path = new_path,
+                    Err(e) => tracing::warn!("transcode skipped for {:?}: {}", disk_path, e),
+                }
             }
+        }
+
+        let final_file_path = if let Ok(rel) = disk_path.strip_prefix(media_dir) {
+            format!("/media/{}", rel.to_string_lossy().replace('\\', "/"))
         } else {
-            let ext = info.ext.unwrap_or_else(|| if options.audio_only { "mp3".into() } else { "mp4".into() });
-            format!("/{}/{}.{}", target_subfolder, video_id, ext)
+            disk_path.to_string_lossy().replace('\\', "/")
         };
 
         let media_type = if options.audio_only {
@@ -264,6 +290,7 @@ impl YtDlpImporter {
         url: &str,
         output_template: &str,
         browser_opt: Option<&str>,
+        tools_dir: &Path,
         task_id: &str,
     ) -> Result<(Vec<String>, Option<String>), Box<dyn std::error::Error + Send + Sync>> {
         let clean_url = url.trim();
@@ -271,7 +298,7 @@ impl YtDlpImporter {
             return Err("Invalid URL scheme: must begin with http:// or https://".into());
         }
 
-        let mut cmd = Command::new("yt-dlp");
+        let mut cmd = Command::new(crate::network::ytdlp_updater::resolve_ytdlp_command(tools_dir));
         cmd.kill_on_drop(true);
         cmd.arg("--no-playlist")
             .arg("--newline")
@@ -279,6 +306,17 @@ impl YtDlpImporter {
             .arg("--print-json")
             .arg("-o")
             .arg(output_template);
+
+        // yt-dlp shells out to its own ffmpeg for merging video+audio
+        // streams -- it doesn't know about our bundled Windows copy
+        // (src/storage/paths.rs) unless told explicitly. Only passed when
+        // we actually resolved a bundled copy; when relying on PATH (the
+        // Linux/macOS case, system-installed), omit the flag and let
+        // yt-dlp do its own default PATH search, unchanged.
+        let ffmpeg_cmd = crate::storage::paths::resolve_ffmpeg_command();
+        if let Some(ffmpeg_dir) = ffmpeg_cmd.parent().filter(|p| !p.as_os_str().is_empty()) {
+            cmd.arg("--ffmpeg-location").arg(ffmpeg_dir);
+        }
 
         // SponsorBlock
         if options.sponsorblock_remove_all {
@@ -308,10 +346,18 @@ impl YtDlpImporter {
                 .arg("--audio-quality")
                 .arg("0");
         } else {
-            cmd.arg("-f")
-                .arg("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best")
-                .arg("--merge-output-format")
-                .arg("mp4");
+            // Prefer AV1/VP9 (webm) over H.264/mp4: both are hardware-decoded
+            // natively on the target TV at a fraction of H.264's bitrate for
+            // the same quality. No --merge-output-format: omitting it lets
+            // yt-dlp pick the container that matches each branch's streams
+            // (webm+webm, or mp4+m4a) instead of forcing a remux. Any H.264
+            // files that still fall through to the last-resort branch get
+            // converted by `transcode::transcode_h264_to_vp9` below.
+            cmd.arg("-f").arg(
+                "bestvideo[vcodec^=av01][ext=webm]+bestaudio[ext=webm]/\
+                 bestvideo[vcodec^=vp9][ext=webm]+bestaudio[ext=webm]/\
+                 bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
+            );
         }
 
         cmd.arg("--").arg(clean_url);

@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// NOTE: ElementTransform / TextBlock / SlideElement below are hand-mirrored by
+// web/src/editor/types.ts (same names) — there's no shared schema or codegen
+// between them. If you add/rename/remove a field here, make the matching edit
+// there too, or the two sides will silently drift (wire JSON that (de)serializes
+// fine on one side but is missing/misread on the other).
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ElementTransform {
     pub x: f64,              // 0.0..1.0 relative to canvas width

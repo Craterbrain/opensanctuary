@@ -70,7 +70,7 @@ impl AssetGraph {
         let id = AssetId(uri.to_string());
 
         {
-            let mut cache = self.cache.write().unwrap();
+            let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
             if let Some(existing) = cache.get_mut(&id) {
                 existing.last_accessed_ms = chrono::Utc::now().timestamp_millis() as u64;
                 return Ok(id);
@@ -103,7 +103,7 @@ impl AssetGraph {
         };
 
         {
-            let mut cache = self.cache.write().unwrap();
+            let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
             cache.insert(id.clone(), prewarmed);
         }
 
@@ -111,13 +111,13 @@ impl AssetGraph {
     }
 
     pub fn get_asset(&self, id: &AssetId) -> Option<PrewarmedAsset> {
-        let cache = self.cache.read().unwrap();
+        let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
         cache.get(id).cloned()
     }
 
     pub fn evict_older_than(&self, age_ms: u64) {
         let now = chrono::Utc::now().timestamp_millis() as u64;
-        let mut cache = self.cache.write().unwrap();
+        let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
         cache.retain(|_, v| now.saturating_sub(v.last_accessed_ms) < age_ms);
     }
 }

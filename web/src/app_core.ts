@@ -1,5 +1,7 @@
 // OpenSanctuary Rust Client Show Controller & Bible Manager (app.js)
 import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
+import { resolveHostSessionToken, hostTokenHeader, submitManualHostToken, getConsoleSessionId } from './core/host_session.ts';
+import { api } from './core/api_client.ts';
 import { attachClosestEdge, extractClosestEdge, type Edge } from '@atlaskit/pragmatic-drag-and-drop-hitbox/closest-edge';
 import { getReorderDestinationIndex } from '@atlaskit/pragmatic-drag-and-drop-hitbox/util/get-reorder-destination-index';
 import {
@@ -9,7 +11,6 @@ import {
   resolveBackgroundAt,
   applyResolvedBackground,
   isPrimaryDropTarget,
-  parseParallelSlide,
   DEFAULT_THEMES,
   extractImageUrl,
   isImageBackground,
@@ -18,15 +19,13 @@ import {
   formatCssBackground,
   escapeHtml,
   resolveThemeAt,
-  applyThemeTypography,
   type ThemeDefinition
 } from './core/presentation_helpers.ts';
 import { showToast, formatMediaTime, copyToClipboard } from './core/ui_utils.ts';
 export { showToast, formatMediaTime, copyToClipboard };
-import { computeCanvasProjection } from './core/canvas_projection.ts';
-import { renderSlideElements } from './core/slide_render.ts';
+import { formatSlideLyricsHtml, applyAutoFitLyrics, renderSlideVisual } from './core/slide_render.ts';
 import { parseDisplayOutputs, serializeDisplayOutputs } from './core/display_config.ts';
-import { MediaSyncManager } from './core/media_sync.ts';
+import { MediaSyncManager, type MediaSyncPayload } from './core/media_sync.ts';
 import {
   parseScriptureReference,
   parseScriptureReferenceAsync,
@@ -42,8 +41,8 @@ import {
 import { initThemePicker, openThemePicker } from './ui/theme_picker.ts';
 import { initThemeEditor, openThemeEditor } from './ui/theme_editor.ts';
 import { buildSlideCardElement, renderDeckEmptyState } from './ui/slide_deck_view.ts';
-import { autoFitLyrics } from './core/autofit.ts';
 import { initArrangementModal, openArrangementModal } from './ui/arrangement_modal.ts';
+import { initCcliReportModal, openCcliReportModal } from './ui/ccli_report_modal.ts';
 import {
   initLibraryPanel,
   loadLibraryTab,
@@ -77,22 +76,52 @@ import { dialogManager } from './ui/dialog_manager.ts';
 import { contextMenuManager } from './ui/context_menu_manager.ts';
 import { createEngineWebSocket, EngineWebSocketClient } from './core/ws_client.ts';
 
+// Functions app_ui.ts hands back after it loads (see main.ts's sequential
+// `await import(...)` calls -- app_core.ts loads first, so it cannot
+// statically import app_ui.ts without forcing app_ui.ts to evaluate first,
+// reversing that order). app_ui.ts calls registerUiCallbacks() once, near
+// the end of its own module body, after all of these are declared.
+interface UiCallbacks {
+  stopYtdlpPolling: () => void;
+  editExistingItem: (item: any, scheduleContext?: { itemIndex: number; slideIndex?: number } | null) => void;
+  openImportModal: (initialMode?: string) => void;
+  openSlideEditor: (type?: string) => void;
+  promptNewSectionHeader: (insertIndex: any) => void;
+  renderOnlineBibleCatalog: (items: any) => void;
+  setImportMode: (mode: string) => void;
+  switchToPairingTab: () => void;
+  switchToAdbProvisionTab: () => void;
+  showFirstTimeSetup: () => void;
+}
+const uiCallbacks: Partial<UiCallbacks> = {};
+export function registerUiCallbacks(cb: UiCallbacks): void {
+  Object.assign(uiCallbacks, cb);
+}
+// Exposed on window for Playwright E2E tests that drive the running app
+// directly (tests/e2e_compare_windows_linux.test.ts, e2e_slide_templates.test.ts,
+// tests/theme_picker.test.ts), outside this module graph entirely -- not
+// needed by any in-repo module.
+try { (globalThis as any).sendCommand = sendCommand; } catch (_) {}
+try { (globalThis as any).openThemePicker = openThemePicker; } catch (_) {}
+
+
 let ws: any = null;
 let engineWsClient: EngineWebSocketClient | null = null;
-let currentSnapshot = null;
+export let currentSnapshot: any = null;
 let protocolMismatchWarned = false;
-let currentTab = 'songs';
-let selectedLibraryItem = null;
-let currentEditorType = 'song';
-let editingItemId = null;
-let onlineBibleCatalog = [];
-let activeImportMode = 'api';
-let activeLiveViewMode = 'matrix'; // 'matrix' or 'list'
-let expandedScheduleIndex = 0; // Only ONE schedule item expanded at a time, or null if all collapsed
+let consoleLockedWarned = false;
+export let currentTab = 'songs';
+export let selectedLibraryItem: any = null;
+export let currentEditorType = 'song';
+export let editingItemId: string | null = null;
+export let onlineBibleCatalog: any[] = [];
+export let activeImportMode = 'api';
+export let activeLiveViewMode = 'matrix'; // 'matrix' or 'list'
+export let expandedScheduleIndex: number | null = 0; // Only ONE schedule item expanded at a time, or null if all collapsed
 
 // Active Deck Context & Undo Placeholder State
 let lastActiveDeckContext: 'schedule' | 'preview' | 'live' = 'schedule';
-let activeUndoPlaceholder: {
+export let activeUndoPlaceholder: {
   index: number;
   title: string;
   createdAt: number;
@@ -100,26 +129,26 @@ let activeUndoPlaceholder: {
 } | null = null;
 
 // Context Menu State
-let currentContextMenuTarget = null;
+export let currentContextMenuTarget: any = null;
 
 // Available Presentation Themes & Background Photos — canonical list lives in
 // core/presentation_helpers.ts (already auto-populated from the slide
 // editor's own gradient/pattern presets); this is the live, server-refreshed
 // copy that extractImageUrl/isImageBackground/formatCssBackground below get
 // passed explicitly, since they can't see this module's own mutable state.
-let availableThemes = [...DEFAULT_THEMES];
+export let availableThemes = [...DEFAULT_THEMES];
 let lastThemesFetchTime = 0;
 
 // [ARCH:toast-notifications] Fully JS-built UI, no static HTML — delegated to src/core/ui_utils.ts
 
-async function refreshAvailableThemes(force = false) {
+export async function refreshAvailableThemes(force = false) {
   if (!force && Date.now() - lastThemesFetchTime < 15000) return;
   try {
     const res = await fetch('/api/themes');
     if (res.ok) {
       const dbThemes = await res.json();
       if (Array.isArray(dbThemes) && dbThemes.length > 0) {
-        const mapped = dbThemes.map(t => ({
+        const mapped: ThemeDefinition[] = dbThemes.map(t => ({
           id: t.id,
           name: t.name,
           bg: t.background || 'linear-gradient(135deg, #0f2027, #203a43, #2c5364)',
@@ -157,9 +186,9 @@ async function refreshAvailableThemes(force = false) {
 }
 
 // Bible Translations Management (Dynamic DB Lookups - Zero Hardcoded Defaults)
-let installedBibles = [];
+export let installedBibles: any[] = [];
 
-async function refreshInstalledBibles() {
+export async function refreshInstalledBibles() {
   try {
     const res = await fetch('/api/bibles');
     if (res.ok) {
@@ -184,7 +213,7 @@ async function refreshInstalledBibles() {
   }
 }
 
-let activeBibleVersion = 'all'; // 'all' or specific translation ID
+export let activeBibleVersion = 'all'; // 'all' or specific translation ID
 // True once the user has explicitly picked a translation (or "All") this session,
 // so the configured default only governs the initial/auto-opened state.
 let bibleVersionUserSelected = false;
@@ -196,10 +225,10 @@ function applyDefaultBibleVersionIfUnset() {
   }
 }
 
-let secondaryBibleVersion = '';
-let isDualBibleMode = false;
-let currentDualSecondaryVerses = [];
-let contextMenuTargetBible = null;
+export let secondaryBibleVersion = '';
+export let isDualBibleMode = false;
+export let currentDualSecondaryVerses: any[] = [];
+let contextMenuTargetBible: any = null;
 
 
 // Global Application Options (16:9 Default Standard)
@@ -209,7 +238,7 @@ let contextMenuTargetBible = null;
 // sends or renders it). outputMonitor is now the openLiveOutputWindow action button in
 // the Settings dialog, which doesn't need a persisted preference. See
 // web/src/core/settings_schema.ts.
-let appOptions = {
+export let appOptions = {
   aspectRatio: '16:9',
   alertPosition: 'bottom',
   alertFontSize: '36',
@@ -220,8 +249,12 @@ let appOptions = {
   displayOutputs: '[]'
 };
 
-async function loadAppOptions() {
+export async function loadAppOptions() {
   try {
+    // The server withholds credential settings (API keys) from callers with
+    // no host token, so make sure the token is resolved before reading them --
+    // otherwise saving the settings dialog would write those keys back blank.
+    await resolveHostSessionToken();
     const res = await fetch('/api/settings');
     if (res.ok) {
       const dbSettings = await res.json();
@@ -244,7 +277,7 @@ async function loadAppOptions() {
   }
 }
 
-async function saveAppOptions(newOptions) {
+export async function saveAppOptions(newOptions: any) {
   Object.assign(appOptions, newOptions);
   applyAppOptionsToUI();
   try {
@@ -269,16 +302,16 @@ function applyAppOptionsToUI() {
 }
 
 // Safe event listener helper
-function on(id, event, handler) {
+export function on(id: string | Element | null, event: string, handler: EventListenerOrEventListenerObject) {
   const el = typeof id === 'string' ? document.getElementById(id) : id;
   if (el) el.addEventListener(event, handler);
 }
 
 // DOM Elements
-const scheduleListEl = document.getElementById('schedule-items-list');
+export const scheduleListEl = document.getElementById('schedule-items-list');
 const scheduleTitleEl = document.getElementById('schedule-title-display');
 const previewTitleEl = document.getElementById('preview-title-display');
-const previewSlideMatrixEl = document.getElementById('preview-slide-matrix');
+export const previewSlideMatrixEl = document.getElementById('preview-slide-matrix');
 const previewCanvasEl = document.getElementById('preview-canvas');
 const previewCanvasLyricsEl = document.getElementById('preview-canvas-lyrics-text');
 const previewCanvasFooterLeftEl = document.getElementById('preview-canvas-footer-left');
@@ -288,7 +321,7 @@ const previewCanvasElementsEl = document.getElementById('preview-canvas-elements
 const previewSlideCounterTextEl = document.getElementById('preview-slide-counter-text');
 const btnPreviewGoLive = document.getElementById('btn-preview-golive');
 const liveTitleEl = document.getElementById('live-title-display');
-const liveSlideMatrixEl = document.getElementById('live-slide-matrix');
+export const liveSlideMatrixEl = document.getElementById('live-slide-matrix');
 const canvasLyricsEl = document.getElementById('canvas-lyrics-text');
 const liveCanvasElementsEl = document.getElementById('live-canvas-elements');
 const canvasFooterLeftEl = document.getElementById('canvas-footer-left');
@@ -302,47 +335,47 @@ const liveCanvasEl = document.getElementById('live-canvas');
 
 // Search & Preview Actions
 const btnPreviewToSchedule = document.getElementById('btn-preview-to-schedule');
-const btnToggleDualBible = document.getElementById('btn-toggle-dual-bible');
+export const btnToggleDualBible = document.getElementById('btn-toggle-dual-bible');
 
 // Ribbon Buttons
-const btnNew = document.getElementById('btn-new');
-const btnOpen = document.getElementById('btn-open');
-const btnSave = document.getElementById('btn-save');
-const btnImport = document.getElementById('btn-import');
-const btnStore = document.getElementById('btn-store');
-const btnWeb = document.getElementById('btn-web');
-const btnRemote = document.getElementById('btn-remote');
-const btnGoLive = document.getElementById('btn-golive');
-const btnAlert = document.getElementById('btn-alert');
-const btnLogo = document.getElementById('btn-logo');
-const btnBlack = document.getElementById('btn-black');
-const btnClear = document.getElementById('btn-clear');
-const btnLiveStatus = document.getElementById('btn-live-status');
+export const btnNew = document.getElementById('btn-new');
+export const btnOpen = document.getElementById('btn-open');
+export const btnSave = document.getElementById('btn-save');
+export const btnImport = document.getElementById('btn-import');
+export const btnStore = document.getElementById('btn-store');
+export const btnWeb = document.getElementById('btn-web');
+export const btnRemote = document.getElementById('btn-remote');
+export const btnGoLive = document.getElementById('btn-golive');
+export const btnAlert = document.getElementById('btn-alert');
+export const btnLogo = document.getElementById('btn-logo');
+export const btnBlack = document.getElementById('btn-black');
+export const btnClear = document.getElementById('btn-clear');
+export const btnLiveStatus = document.getElementById('btn-live-status');
 
 // Modals
-const alertModal = document.getElementById('alert-modal');
-const alertTextInput = document.getElementById('alert-text-input');
-const openModal = document.getElementById('open-modal');
-const saveModal = document.getElementById('save-modal');
-const storeModal = document.getElementById('store-modal');
-const webModal = document.getElementById('web-modal');
-const remoteModal = document.getElementById('remote-modal');
-const importModal = document.getElementById('import-modal');
-const createModal = document.getElementById('create-modal');
-const optionsModal = document.getElementById('options-modal');
-const shortcutsModal = document.getElementById('shortcuts-modal');
-const aboutModal = document.getElementById('about-modal');
-const scheduleArticlesModal = document.getElementById('schedule-articles-modal');
+export const alertModal = document.getElementById('alert-modal');
+export const alertTextInput = document.getElementById('alert-text-input') as HTMLInputElement | null;
+export const openModal = document.getElementById('open-modal');
+export const saveModal = document.getElementById('save-modal');
+export const storeModal = document.getElementById('store-modal');
+export const webModal = document.getElementById('web-modal');
+export const remoteModal = document.getElementById('remote-modal');
+export const importModal = document.getElementById('import-modal');
+export const createModal = document.getElementById('create-modal');
+export const optionsModal = document.getElementById('options-modal');
+export const shortcutsModal = document.getElementById('shortcuts-modal');
+export const aboutModal = document.getElementById('about-modal');
+export const scheduleArticlesModal = document.getElementById('schedule-articles-modal');
 const confirmModal = document.getElementById('confirm-modal');
 let onConfirmDialogAccept = null;
 
 // Editor Elements
 const createModalTitle = document.getElementById('create-modal-title');
-const createItemTitle = document.getElementById('create-item-title');
-const createItemAuthor = document.getElementById('create-item-author');
+export const createItemTitle = document.getElementById('create-item-title') as HTMLInputElement | null;
+export const createItemAuthor = document.getElementById('create-item-author') as HTMLInputElement | null;
 const createItemTheme = document.getElementById('create-item-theme');
-const createItemCopyright = document.getElementById('create-item-copyright');
-const createItemContent = document.getElementById('create-item-content');
+export const createItemCopyright = document.getElementById('create-item-copyright') as HTMLInputElement | null;
+export const createItemContent = document.getElementById('create-item-content') as HTMLInputElement | null;
 const editorPreviewCanvas = document.getElementById('editor-preview-canvas');
 const editorPreviewText = document.getElementById('editor-preview-text');
 const editorPreviewTitle = document.getElementById('editor-preview-title');
@@ -356,11 +389,11 @@ document.addEventListener('contextmenu', (e) => {
   e.preventDefault();
 });
 
-function showContextMenu(menuEl: any, x: number, y: number) {
+export function showContextMenu(menuEl: any, x: number, y: number) {
   return contextMenuManager.showElement(menuEl, x, y);
 }
 
-function hideAllContextMenus() {
+export function hideAllContextMenus() {
   contextMenuManager.hideAll();
 }
 
@@ -399,13 +432,13 @@ initPresentationPlayback({
   sendCommand: sendCommand,
 });
 
-function showModal(modalEl: any, options?: any) {
+export function showModal(modalEl: any, options?: any) {
   if (!modalEl) return null;
   hideAllContextMenus();
   return dialogManager.openModal(modalEl, options);
 }
 
-function closeModal(modalEl: any) {
+export function closeModal(modalEl: any) {
   if (!modalEl) return false;
   return dialogManager.closeModal(modalEl);
 }
@@ -414,7 +447,7 @@ function showConfirmDialog(title: string, message: string, detail: string, onAcc
   return dialogManager.showConfirmDialog(title, message, detail, onAccept, acceptBtnText);
 }
 
-function closeTopmostModal() {
+export function closeTopmostModal() {
   hideAllContextMenus();
   return dialogManager.closeTopmostModal();
 }
@@ -426,7 +459,7 @@ function resetCreateModal() {
   if (createItemContent) createItemContent.value = '';
   if (createItemCopyright) createItemCopyright.value = '';
   currentEditorType = 'song';
-  document.querySelectorAll('.type-pill').forEach(pill => {
+  document.querySelectorAll<HTMLElement>('.type-pill').forEach(pill => {
     pill.classList.toggle('active', pill.dataset.type === 'song');
   });
   // The canvas slide editor's own state (studioSlides, the mounted SlideEditor
@@ -434,32 +467,34 @@ function resetCreateModal() {
   // editExistingItem on the next open, so nothing further to reset here.
 }
 
-function resetImportModal() {
-  if (typeof ytdlpPollingInterval !== 'undefined' && ytdlpPollingInterval) {
-    clearInterval(ytdlpPollingInterval);
-    ytdlpPollingInterval = null;
-  }
-  const searchEl = document.getElementById('api-bible-search-input');
+export function resetImportModal() {
+  // `ytdlpPollingInterval` itself lives in app_ui.ts's module scope (a
+  // separate ES module -- see main.ts's two `await import(...)` calls) and
+  // was only ever globalThis-snapshotted once, at load time, as `null`; the
+  // exposed *function* always closes over app_ui.ts's real, live variable,
+  // so call that instead of touching the stale snapshot directly.
+  uiCallbacks.stopYtdlpPolling?.();
+  const searchEl = document.getElementById('api-bible-search-input') as HTMLInputElement | null;
   if (searchEl) searchEl.value = '';
-  const fileEl = document.getElementById('file-freeshow-fsb');
+  const fileEl = document.getElementById('file-freeshow-fsb') as HTMLInputElement | null;
   if (fileEl) fileEl.value = '';
-  setImportMode('api');
+  uiCallbacks.setImportMode?.('api');
   if (onlineBibleCatalog.length > 0) {
-    renderOnlineBibleCatalog(onlineBibleCatalog);
+    uiCallbacks.renderOnlineBibleCatalog?.(onlineBibleCatalog);
   }
 }
 
-function handleImportBack() {
+export function handleImportBack() {
   // 1. If currently on Local Files, GitHub, or yt-dlp tab, switch back to Online API tab
   if (activeImportMode === 'local' || activeImportMode === 'ytdlp' || activeImportMode === 'github') {
-    setImportMode('api');
+    uiCallbacks.setImportMode?.('api');
     return;
   }
   // 2. If there's an active search query in api-bible-search-input, clear it and show full catalog
-  const searchInput = document.getElementById('api-bible-search-input');
+  const searchInput = document.getElementById('api-bible-search-input') as HTMLInputElement | null;
   if (searchInput && searchInput.value.trim().length > 0) {
     searchInput.value = '';
-    renderOnlineBibleCatalog(onlineBibleCatalog);
+    uiCallbacks.renderOnlineBibleCatalog?.(onlineBibleCatalog);
     searchInput.focus();
     return;
   }
@@ -467,14 +502,14 @@ function handleImportBack() {
   closeModal(importModal);
 }
 
-function handleOptionsBack() {
+export function handleOptionsBack() {
   // The settings sidebar is a flat set of peer categories, not a drill-down wizard
   // like the old tab carousel — there's no "previous step" to return to, so Back and
   // Cancel both just close.
   closeModal(optionsModal);
 }
 
-function resetAlertModal() {
+export function resetAlertModal() {
   if (alertTextInput) {
     if (currentSnapshot && currentSnapshot.state && currentSnapshot.state.alert_message) {
       alertTextInput.value = currentSnapshot.state.alert_message;
@@ -494,23 +529,26 @@ initSettingsDialog({
   areTranslationsEquivalent: (a, b) => areTranslationsEquivalent(a, b),
   getDisplayOutputs: () => parseDisplayOutputs(appOptions.displayOutputs),
   saveDisplayOutputs: (outputs) => saveAppOptions({ displayOutputs: serializeDisplayOutputs(outputs) }),
+  switchToPairingTab: () => uiCallbacks.switchToPairingTab?.(),
+  switchToAdbProvisionTab: () => uiCallbacks.switchToAdbProvisionTab?.(),
+  showFirstTimeSetup: () => uiCallbacks.showFirstTimeSetup?.(),
 });
 
 
-function resetSaveModal() {
-  const titleEl = document.getElementById('save-schedule-title');
+export function resetSaveModal() {
+  const titleEl = document.getElementById('save-schedule-title') as HTMLInputElement | null;
   if (titleEl) {
     titleEl.value = scheduleTitleEl ? (scheduleTitleEl.textContent || 'Sunday Morning Worship') : 'Sunday Morning Worship';
   }
 }
 
-function resetOpenModal() {
-  const fInput = document.getElementById('file-schedule-input');
+export function resetOpenModal() {
+  const fInput = document.getElementById('file-schedule-input') as HTMLInputElement | null;
   if (fInput) fInput.value = '';
 }
 
-function resetWebModal() {
-  const urlEl = document.getElementById('web-stream-url');
+export function resetWebModal() {
+  const urlEl = document.getElementById('web-stream-url') as HTMLInputElement | null;
   if (urlEl) urlEl.value = '';
 }
 
@@ -573,6 +611,38 @@ initArrangementModal({
 });
 
 // ============================================================================
+// CCLI USAGE REPORT MODAL (delegated to src/ui/ccli_report_modal.ts)
+// ============================================================================
+initCcliReportModal({
+  showToast: showToast,
+  showModal: showModal,
+  closeModal: closeModal,
+});
+
+// CCLI reporting due-date reminder (docs/CCLI_REPORTING.md) -- checked once
+// per console load rather than only when Settings happens to be opened, so
+// an operator who never opens Settings still sees it. A persistent
+// (duration: 0) toast, the closest existing primitive to a "banner" here,
+// since this shouldn't silently disappear off-screen before anyone notices.
+(async () => {
+  try {
+    const settings = await api.settings.get();
+    const dueDate = (settings?.ccliReportingDueDate || '').trim();
+    if (!dueDate) return;
+    const due = new Date(`${dueDate}T00:00:00`);
+    if (isNaN(due.getTime())) return;
+    const daysLeft = Math.ceil((due.getTime() - Date.now()) / 86400000);
+    if (daysLeft > 30) return;
+    const message = daysLeft < 0
+      ? `CCLI usage report is overdue (was due ${dueDate}). Settings → Integrations → CCLI Usage Report to export it.`
+      : `CCLI usage report is due ${dueDate} (${daysLeft} day${daysLeft === 1 ? '' : 's'} left). Settings → Integrations → CCLI Usage Report to export it.`;
+    showToast(message, 'warning', 0);
+  } catch (_) {
+    // Not fatal -- the Settings panel itself still shows the due date.
+  }
+})();
+
+// ============================================================================
 // MEDIA IMAGE PICKER (delegated to src/ui/media_image_picker.ts)
 // ============================================================================
 initMediaImagePicker({
@@ -597,7 +667,7 @@ initVideoPicker({
 // ============================================================================
 // WEBSOCKET & ENGINE COMMUNICATIONS
 // ============================================================================
-function initWebSocket() {
+export function initWebSocket() {
   if (engineWsClient) {
     return;
   }
@@ -605,13 +675,12 @@ function initWebSocket() {
   engineWsClient = createEngineWebSocket({
     validateProtocol: true,
     onOpen: () => {
-      console.log('Connected to OpenSanctuary Rust Engine');
       ws = engineWsClient?.getRawSocket() || null;
-      try { (globalThis as any).ws = ws; } catch (_) {}
+      try { globalThis.ws = ws; } catch (_) {}
     },
     onClose: () => {
       ws = engineWsClient?.getRawSocket() || null;
-      try { (globalThis as any).ws = ws; } catch (_) {}
+      try { globalThis.ws = ws; } catch (_) {}
     },
     onProtocolMismatch: (errorMessage) => {
       console.error(`[Protocol] ${errorMessage}`);
@@ -627,28 +696,99 @@ function initWebSocket() {
       currentSnapshot = snapshot;
       renderAll(snapshot);
     },
+    onCommandRejected: (reason, message) => {
+      // "One console at a time, first one connected wins" (docs/CLIENT_PAIRING.md).
+      // Warn once, not on every subsequent command this console can't send
+      // while locked out -- that would spam the operator with the same fact
+      // repeatedly instead of just once.
+      if (reason === 'console_locked' && !consoleLockedWarned) {
+        consoleLockedWarned = true;
+        showToast(`🔒 ${message}`, 'warning', 10000);
+      }
+    },
   });
 
   ws = engineWsClient.getRawSocket();
-  try { (globalThis as any).ws = ws; } catch (_) {}
+  try { globalThis.ws = ws; } catch (_) {}
+
+  // Remote console access (docs/CLIENT_PAIRING.md): if this page can't
+  // resolve a host token at all (not the native webview, not loopback, no
+  // valid link/cached token), show a way to paste one in by hand rather
+  // than silently failing every command forever with no explanation.
+  resolveHostSessionToken().then((token) => {
+    if (!token) showHostAuthBanner();
+  });
 }
 
-function sendCommand(cmd: any) {
+/**
+ * A small, self-contained "this console isn't authenticated yet" banner,
+ * built the same lazy-DOM-creation way `showToast` builds its container --
+ * no index.html changes needed. Lets an operator paste in a host token they
+ * were handed out-of-band (the server's printed terminal link/QR, or the
+ * bare token read aloud/copied) -- see `submitManualHostToken` in
+ * host_session.ts. The console still renders and shows live state either
+ * way (reading is already zero-auth); this only unblocks issuing commands.
+ */
+function showHostAuthBanner() {
+  if (typeof document === 'undefined' || !document.body) return;
+  if (document.getElementById('os-host-auth-banner')) return; // already shown
+
+  const banner = document.createElement('div');
+  banner.id = 'os-host-auth-banner';
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#3a2a00;color:#fff;padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.4);';
+  banner.innerHTML = `
+    <span>🔒 This console isn't authenticated — paste the host token shown on the server to control the show.</span>
+    <input type="password" id="os-host-auth-input" placeholder="Host token" style="flex:1;min-width:160px;max-width:360px;padding:6px 8px;border-radius:4px;border:1px solid #665;background:#221a00;color:#fff;">
+    <button id="os-host-auth-connect" style="padding:6px 14px;border-radius:4px;border:none;background:#4a90d9;color:#fff;cursor:pointer;">Connect</button>
+    <span id="os-host-auth-error" style="color:#ff8080;"></span>
+    <button id="os-host-auth-dismiss" title="Dismiss" style="margin-left:auto;background:none;border:none;color:#ccc;cursor:pointer;font-size:16px;">×</button>
+  `;
+  document.body.appendChild(banner);
+
+  const input = document.getElementById('os-host-auth-input') as HTMLInputElement | null;
+  const errorEl = document.getElementById('os-host-auth-error');
+  const connect = async () => {
+    if (!input) return;
+    if (errorEl) errorEl.textContent = '';
+    const ok = await submitManualHostToken(input.value);
+    if (ok) {
+      banner.remove();
+      showToast('✓ Console authenticated', 'success');
+    } else if (errorEl) {
+      errorEl.textContent = 'Invalid token';
+    }
+  };
+  document.getElementById('os-host-auth-connect')?.addEventListener('click', connect);
+  input?.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter') connect(); });
+  document.getElementById('os-host-auth-dismiss')?.addEventListener('click', () => banner.remove());
+}
+
+export function sendCommand(cmd: any) {
   if (engineWsClient) {
     engineWsClient.sendCommand(cmd);
   } else {
-    fetch('/api/command', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(cmd)
-    }).catch(() => {});
+    // /api/command requires the host token for any caller with no paired-
+    // device token (see docs/CLIENT_PAIRING.md) -- same as the WS path
+    // engineWsClient.sendCommand takes below.
+    resolveHostSessionToken().then(() => {
+      const hostHeaders = hostTokenHeader();
+      fetch('/api/command', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...hostHeaders,
+          ...(hostHeaders['x-host-token'] ? { 'x-console-session-id': getConsoleSessionId() } : {}),
+        },
+        body: JSON.stringify(cmd)
+      }).catch(() => {});
+    });
   }
 }
 
 // ============================================================================
 // UI RENDERING
 // ============================================================================
-function renderAll(snapshot = currentSnapshot) {
+export function renderAll(snapshot = currentSnapshot) {
   if (snapshot) currentSnapshot = snapshot;
   if (!snapshot) snapshot = currentSnapshot;
   if (!snapshot) return;
@@ -662,7 +802,7 @@ function renderAll(snapshot = currentSnapshot) {
   }
 }
 
-function renderRibbon(state) {
+function renderRibbon(state: any) {
   if (btnBlack) btnBlack.classList.toggle('active', !!state.is_blackout);
   if (btnClear) btnClear.classList.toggle('active', !!state.is_clear_text);
   if (btnLogo) btnLogo.classList.toggle('active', !!state.is_logo_override);
@@ -672,9 +812,9 @@ function renderRibbon(state) {
 // ============================================================================
 // SCHEDULE PANEL: SINGLE ITEM EXPANSION & GROUP COLLAPSING (PRAGMATIC DND)
 // ============================================================================
-let lastRenderedScheduleKey = '';
+export let lastRenderedScheduleKey = '';
 let draggedPreviewSlideIndex: number | null = null;
-const collapsedGroupIds = new Set<string>();
+export const collapsedGroupIds = new Set<string>();
 
 // Cleanup subscriptions for dynamic DOM elements
 let scheduleDndCleanups: Array<() => void> = [];
@@ -999,7 +1139,7 @@ function clearActiveUndoPlaceholder() {
 /**
  * Triggered when clicking Undo on any placeholder or pressing Ctrl+Z during placeholder lifespan.
  */
-function triggerUndoFromPlaceholder() {
+export function triggerUndoFromPlaceholder() {
   if (activeUndoPlaceholder && activeUndoPlaceholder.timer) {
     clearTimeout(activeUndoPlaceholder.timer);
     activeUndoPlaceholder.timer = null;
@@ -1142,13 +1282,13 @@ export function getActiveSelectedSlide(): ActiveSelectedSlide | null {
 
 export function setActiveSelectedSlide(sel: ActiveSelectedSlide | null) {
   activeSelectedSlide = sel;
-  try { (globalThis as any).activeSelectedSlide = sel; } catch (_) {}
+  try { globalThis.activeSelectedSlide = sel; } catch (_) {}
   updateSlideSelectionVisuals();
 }
 
 export function clearActiveSelectedSlide() {
   activeSelectedSlide = null;
-  try { (globalThis as any).activeSelectedSlide = null; } catch (_) {}
+  try { globalThis.activeSelectedSlide = null; } catch (_) {}
   updateSlideSelectionVisuals();
 }
 
@@ -1266,7 +1406,7 @@ export function deleteSelectedSlideOrItem(): boolean {
 /**
  * Deletes currently selected item across Schedule, Preview, or Live decks with undo placeholder.
  */
-function deleteActiveSelectedItemWithUndo() {
+export function deleteActiveSelectedItemWithUndo() {
   const sched = (currentSnapshot && currentSnapshot.schedule) ? currentSnapshot.schedule : null;
   const state = (currentSnapshot && currentSnapshot.state) ? currentSnapshot.state : null;
   if (!sched || !sched.items || sched.items.length === 0) {
@@ -1288,19 +1428,16 @@ function deleteActiveSelectedItemWithUndo() {
 }
 
 try {
-  (globalThis as any).deleteActiveSelectedItemWithUndo = deleteActiveSelectedItemWithUndo;
-  (globalThis as any).deleteSelectedSlideOrItem = deleteSelectedSlideOrItem;
-  (globalThis as any).getActiveSelectedSlide = getActiveSelectedSlide;
-  (globalThis as any).setActiveSelectedSlide = setActiveSelectedSlide;
-  (globalThis as any).clearActiveSelectedSlide = clearActiveSelectedSlide;
-  (globalThis as any).getSlideBadge = getSlideBadge;
-  (globalThis as any).getSlideBadgeColor = getSlideBadgeColor;
-  (globalThis as any).triggerUndoFromPlaceholder = triggerUndoFromPlaceholder;
-  (globalThis as any).deleteScheduleItemByIndex = deleteScheduleItemByIndex;
-  (globalThis as any).clearActiveUndoPlaceholder = clearActiveUndoPlaceholder;
+  globalThis.getActiveSelectedSlide = getActiveSelectedSlide;
+  globalThis.setActiveSelectedSlide = setActiveSelectedSlide;
+  globalThis.clearActiveSelectedSlide = clearActiveSelectedSlide;
+  globalThis.getSlideBadge = getSlideBadge;
+  globalThis.getSlideBadgeColor = getSlideBadgeColor;
+  globalThis.deleteScheduleItemByIndex = deleteScheduleItemByIndex;
+  globalThis.clearActiveUndoPlaceholder = clearActiveUndoPlaceholder;
 } catch (_) {}
 
-function renderSchedule(schedule: any) {
+export function renderSchedule(schedule: any) {
   if (!scheduleListEl) return;
   if (scheduleTitleEl) scheduleTitleEl.textContent = schedule.title || 'UNTITLED';
 
@@ -1599,7 +1736,7 @@ function renderSchedule(schedule: any) {
 
     itemEl.innerHTML = `
       <span class="schedule-caret">${caret}</span>
-      <div class="thumb-box" style="background: ${gradient};">${icon}</div>
+      <div class="thumb-box" style="background: ${escapeHtml(gradient)};">${icon}</div>
       <div class="meta" style="flex: 1; overflow: hidden; margin-left: 4px;">
         <div class="title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600;">${escapeHtml(item.title)}</div>
         <div class="notes" style="font-size: 10px; color: var(--text-dim);">${escapeHtml(item.subtitle || 'notes')}</div>
@@ -2058,7 +2195,7 @@ let liveAudioMuted = false;
 // (Implementation delegated to src/core/media_sync.ts)
 const mediaSyncManager = new MediaSyncManager(() => liveVideoEl as HTMLVideoElement | null);
 
-function broadcastLocalMediaSync(action, currentTime, isPlaying, isLooping, executeAtEpoch) {
+function broadcastLocalMediaSync(action: MediaSyncPayload['action'], currentTime?: number, isPlaying?: boolean, isLooping?: boolean, executeAtEpoch?: number | null) {
   mediaSyncManager.setLooping(isLooping !== undefined ? isLooping : isLiveVideoLooping);
   mediaSyncManager.broadcastSync(action, currentTime, isPlaying, isLooping, executeAtEpoch);
 }
@@ -2073,20 +2210,20 @@ function stopMediaSyncHeartbeat() {
 }
 
 const liveMediaControls = document.getElementById('live-media-controls');
-const liveVideoSeek = document.getElementById('live-video-seek');
+const liveVideoSeek = document.getElementById('live-video-seek') as HTMLInputElement | null;
 const liveVideoTime = document.getElementById('live-video-time');
 const btnLiveVideoPlay = document.getElementById('btn-live-video-play');
 const btnLiveVideoStop = document.getElementById('btn-live-video-stop');
 const btnLiveVideoLoop = document.getElementById('btn-live-video-loop');
 const btnLiveVideoMute = document.getElementById('btn-live-video-mute');
-const liveVideoVolumeSlider = document.getElementById('live-video-volume');
-const liveVideoEl = document.getElementById('live-canvas-video');
+const liveVideoVolumeSlider = document.getElementById('live-video-volume') as HTMLInputElement | null;
+const liveVideoEl = document.getElementById('live-canvas-video') as HTMLVideoElement | null;
 const liveImageEl = document.getElementById('live-canvas-image');
-const liveAudioEl = document.getElementById('live-canvas-audio');
+const liveAudioEl = document.getElementById('live-canvas-audio') as HTMLAudioElement | null;
 
-let appScheduledTimer = null;
-let _appPlayStartedAt = null;
-function armClientScheduledPlay(el, executeAtEpoch) {
+let appScheduledTimer: ReturnType<typeof setTimeout> | null = null;
+let _appPlayStartedAt: number | null = null;
+function armClientScheduledPlay(el: HTMLVideoElement | null, executeAtEpoch: number) {
   if (!el) return;
   if (appScheduledTimer) {
     clearTimeout(appScheduledTimer);
@@ -2114,7 +2251,7 @@ function armClientScheduledPlay(el, executeAtEpoch) {
   appScheduledTimer = setTimeout(execute, delayMs);
 }
 
-function requestSeamlessResume(targetPts, runwayMs = 300) {
+function requestSeamlessResume(targetPts: number, runwayMs = 300) {
   if (!liveVideoEl) return;
   const pts = (typeof targetPts === 'number') ? targetPts : (liveVideoEl.currentTime || 0);
 
@@ -2246,9 +2383,18 @@ if (liveVideoSeek) {
       liveVideoEl.currentTime = seekTime;
       if (liveVideoTime) liveVideoTime.textContent = `${formatMediaTime(seekTime)} / ${formatMediaTime(liveVideoEl.duration)}`;
 
-      if (btnLiveVideoPlay) btnLiveVideoPlay.textContent = '⏸ Pause';
-      // Decisively trigger seamless resume after 300ms runway delay
-      requestSeamlessResume(seekTime, 300);
+      if (wasPlayingBeforeScrub) {
+        if (btnLiveVideoPlay) btnLiveVideoPlay.textContent = '⏸ Pause';
+        // Decisively trigger seamless resume after 300ms runway delay
+        requestSeamlessResume(seekTime, 300);
+      } else {
+        // It was paused before the scrub (e.g. cueing a start point) --
+        // stay paused at the new position instead of auto-playing, same as
+        // the live drag/`input` handler above already does while dragging.
+        if (btnLiveVideoPlay) btnLiveVideoPlay.textContent = '▶ Play';
+        broadcastLocalMediaSync('pause', seekTime, false, isLiveVideoLooping);
+        sendCommand({ MediaPreroll: { target_pts: seekTime } });
+      }
     }
     wasPlayingBeforeScrub = false;
   };
@@ -2264,7 +2410,7 @@ if (liveVideoEl) {
     if (isUserSeeking) return; // Do not overwrite slider while dragging seek head
     if (liveVideoEl.duration && !isNaN(liveVideoEl.duration)) {
       const pct = (liveVideoEl.currentTime / liveVideoEl.duration) * 100;
-      if (liveVideoSeek) liveVideoSeek.value = pct;
+      if (liveVideoSeek) liveVideoSeek.value = String(pct);
       if (liveVideoTime) liveVideoTime.textContent = `${formatMediaTime(liveVideoEl.currentTime)} / ${formatMediaTime(liveVideoEl.duration)}`;
     }
   });
@@ -2287,18 +2433,6 @@ if (liveVideoEl) {
       sendCommand('ToggleBlackout');
     }
   });
-}
-
-function formatSlideLyricsHtml(textContent) {
-  if (!textContent) return '';
-  const parsed = parseParallelSlide(textContent);
-  if (parsed.isParallel) {
-    return `<div class="dual-slide-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; text-align: left; align-items: start;">
-      <div class="dual-slide-col primary" style="background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 4px; border-left: 2px solid #ffa726; font-size: 0.9em; white-space: pre-line;">${escapeHtml(parsed.leftText)}</div>
-      <div class="dual-slide-col secondary" style="background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 4px; border-left: 2px solid #00e5ff; font-size: 0.9em; white-space: pre-line;">${escapeHtml(parsed.rightText)}</div>
-    </div>`;
-  }
-  return escapeHtml(textContent).replace(/\n/g, '<br>');
 }
 
 let lastRenderedPreviewKey = '';
@@ -2411,7 +2545,7 @@ function reorderPreviewSlides(fromIdx: number, toIdx: number) {
   });
 }
 
-function renderPreviewDeck(state) {
+function renderPreviewDeck(state: any) {
   if (!previewSlideMatrixEl) return;
 
   if (adhocPreviewItem) {
@@ -2650,64 +2784,7 @@ function renderPreviewDeck(state) {
   });
 }
 
-/**
- * Sets a canvas lyrics element's content and shrinks its font to fit —
- * shared by both the Preview and (in-app) Live viewports, which used to
- * each pick a fixed font size from a lookup table keyed only on character/
- * line count (12px/14px/16.5px/19px), with no idea how big the actual
- * viewport was. That's what caused text to visibly clip at the bottom on
- * anything smaller than whatever window size the buckets were tuned
- * against — a fixed table can never generalize across window sizes.
- * autoFitLyrics (core/autofit.ts) measures the real container and
- * binary-searches a font size that actually fits, the same technique
- * already used correctly by the Slide Editor canvas and (a separate,
- * unsynced copy of the same algorithm, until this change) live.html's own
- * broadcast output.
- */
-function applyAutoFitLyrics(lyricsEl: HTMLElement, html: string): void {
-  lyricsEl.innerHTML = html;
-  autoFitLyrics(lyricsEl.parentElement, lyricsEl, { minFontSize: 12 });
-}
-
-/**
- * Renders one slide's actual content into a viewport — shared by the Preview
- * and Live canvases so they can never independently drift apart on how a
- * slide looks. If the slide has real positioned elements (text runs,
- * images, shapes, lines, tables — the normal case for anything built in the
- * Slide Editor), it renders them exactly as authored via renderSlideElements
- * against a projection of the *actual* canvas box; otherwise it falls back
- * to the flattened single-textbox autofit path. Before this was pulled out,
- * Preview only ever had the flat-text fallback while Live had both branches
- * — meaning a slide with real elements independently autofit twice, in two
- * different boxes with two different sizing rules, and visibly disagreed on
- * text size between the two panels for the exact same slide.
- */
-function renderSlideVisual(canvasEl: HTMLElement, elementsEl: HTMLElement | null, lyricsEl: HTMLElement, slide: any, theme: ThemeDefinition | null = null): void {
-  applyThemeTypography(lyricsEl, theme);
-  // The compact operator preview/live-mirror canvases always show the reference
-  // inline (no separate pinned-overlay element here, unlike live_output.ts's real
-  // FOH output) — good enough for the operator's own working view.
-  const isScriptureTheme = !!(theme && theme.category === 'scripture');
-  const inlinePrefix = (isScriptureTheme && slide && slide.reference_label) ? `${slide.reference_label}  ` : '';
-
-  const hasPositionedElements = !!(slide && slide.elements && slide.elements.length > 0);
-  if (hasPositionedElements && elementsEl) {
-    lyricsEl.style.opacity = '0';
-    elementsEl.style.display = 'block';
-    const projection = computeCanvasProjection(canvasEl.clientWidth, canvasEl.clientHeight, { authoredAspect: 16 / 9 });
-    renderSlideElements(elementsEl, slide.elements, projection);
-  } else {
-    if (elementsEl) {
-      elementsEl.style.display = 'none';
-      elementsEl.innerHTML = '';
-    }
-    lyricsEl.style.opacity = '1';
-    const textContent = slide ? (slide.text || '') : '';
-    applyAutoFitLyrics(lyricsEl, formatSlideLyricsHtml(inlinePrefix ? `${inlinePrefix}${textContent}` : textContent));
-  }
-}
-
-function renderPreviewOutput(state) {
+function renderPreviewOutput(state: any) {
   if (!previewCanvasLyricsEl) return;
 
   if (adhocPreviewItem) {
@@ -2823,7 +2900,7 @@ function renderPreviewOutput(state) {
 
 let lastRenderedLiveKey = '';
 
-function renderLiveDeck(state) {
+function renderLiveDeck(state: any) {
   if (!liveSlideMatrixEl) return;
   if (liveTitleEl) liveTitleEl.textContent = state.live_item ? state.live_item.title : 'No Active Item';
 
@@ -2899,7 +2976,7 @@ function renderLiveDeck(state) {
   });
 }
 
-function renderLiveOutput(state) {
+function renderLiveOutput(state: any) {
   if (!canvasLyricsEl) return;
   const liveItem = state.live_item;
   const slideIdx = state.live_slide_index || 0;
@@ -2950,7 +3027,7 @@ function renderLiveOutput(state) {
   let currentBg = resolveBackgroundAt(liveItem, slideIdx, availableThemes, state.active_theme, state.global_theme);
 
   if (isVideoBackground(currentBg)) {
-    const isDedicatedMedia = liveItem && liveItem.item_type === 'Media';
+    const isDedicatedMedia = liveItem && liveItem.item_type === 'media';
     if (liveMediaControls) liveMediaControls.style.display = 'flex';
     if (liveVideoEl) {
       liveVideoEl.muted = liveAudioMuted;
@@ -3143,7 +3220,7 @@ on('ctx-sched-stage', 'click', () => {
 });
 on('ctx-sched-edit', 'click', () => {
   if (currentContextMenuTarget && currentContextMenuTarget.item) {
-    editExistingItem(currentContextMenuTarget.item, { itemIndex: currentContextMenuTarget.index });
+    uiCallbacks.editExistingItem?.(currentContextMenuTarget.item, { itemIndex: currentContextMenuTarget.index });
   }
   hideAllContextMenus();
 });
@@ -3160,7 +3237,7 @@ on('ctx-sched-theme', 'click', () => {
     openThemePicker(item, (theme) => {
       item.theme_name = theme.name;
       if (item.slides) {
-        item.slides.forEach(s => s.background = theme.bg);
+        item.slides.forEach((s: any) => s.background = theme.bg);
       }
       sendCommand({
         SetItemTheme: {
@@ -3187,7 +3264,7 @@ on('ctx-sched-image', 'click', () => {
       currentImage: item.slides && item.slides[0] ? item.slides[0].background : null,
       onSelectSlide: (filePath, cssBg, name) => {
         item.theme_name = name;
-        if (item.slides) item.slides.forEach(s => s.background = cssBg);
+        if (item.slides) item.slides.forEach((s: any) => s.background = cssBg);
         sendCommand({
           SetItemTheme: {
             item_index: itemIdx,
@@ -3211,23 +3288,23 @@ on('ctx-sched-add-group', 'click', () => {
   if (currentContextMenuTarget && typeof currentContextMenuTarget.index === 'number') {
     insertIdx = currentContextMenuTarget.index + 1;
   }
-  promptNewSectionHeader(insertIdx);
+  uiCallbacks.promptNewSectionHeader?.(insertIdx);
   hideAllContextMenus();
 });
 on('ctx-sched-empty-add-group', 'click', () => {
-  promptNewSectionHeader(null);
+  uiCallbacks.promptNewSectionHeader?.(null);
   hideAllContextMenus();
 });
 on('ctx-sched-empty-new-song', 'click', () => {
-  openSlideEditor('song');
+  uiCallbacks.openSlideEditor?.('song');
   hideAllContextMenus();
 });
 on('ctx-sched-empty-new-presentation', 'click', () => {
-  openSlideEditor('presentation');
+  uiCallbacks.openSlideEditor?.('presentation');
   hideAllContextMenus();
 });
 on('ctx-sched-empty-new-scripture', 'click', () => {
-  openSlideEditor('scripture');
+  uiCallbacks.openSlideEditor?.('scripture');
   hideAllContextMenus();
 });
 on('ctx-sched-empty-open', 'click', () => {
@@ -3307,7 +3384,7 @@ on('ctx-slide-stage', 'click', () => {
 on('ctx-slide-edit', 'click', () => {
   if (currentContextMenuTarget && currentContextMenuTarget.item) {
     const hasItemIndex = currentContextMenuTarget.itemIndex !== null && currentContextMenuTarget.itemIndex !== undefined;
-    editExistingItem(
+    uiCallbacks.editExistingItem?.(
       currentContextMenuTarget.item,
       hasItemIndex ? { itemIndex: currentContextMenuTarget.itemIndex, slideIndex: currentContextMenuTarget.slideIndex } : null
     );
@@ -3476,7 +3553,7 @@ on('ctx-lib-golive', 'click', () => {
 });
 on('ctx-lib-edit', 'click', () => {
   if (currentContextMenuTarget && currentContextMenuTarget.item) {
-    editExistingItem(currentContextMenuTarget.item);
+    uiCallbacks.editExistingItem?.(currentContextMenuTarget.item);
   }
   hideAllContextMenus();
 });
@@ -3487,7 +3564,7 @@ on('ctx-lib-theme', 'click', () => {
     openThemePicker(item, async (theme) => {
       item.theme_name = theme.name;
       if (item.slides) {
-        item.slides.forEach(s => s.background = theme.bg);
+        item.slides.forEach((s: any) => s.background = theme.bg);
       }
       try {
         if (tab === 'songs') {
@@ -3522,7 +3599,7 @@ on('ctx-lib-image', 'click', () => {
       onSelectSlide: async (filePath, cssBg, name) => {
         item.theme_name = name;
         if (item.slides) {
-          item.slides.forEach(s => s.background = cssBg);
+          item.slides.forEach((s: any) => s.background = cssBg);
         }
         try {
           if (tab === 'songs') {
@@ -3553,7 +3630,7 @@ on('ctx-lib-image', 'click', () => {
 on('ctx-lib-copy', 'click', () => {
   if (currentContextMenuTarget && currentContextMenuTarget.item) {
     const it = currentContextMenuTarget.item;
-    const text = it.slides ? it.slides.map(s => s.text).join('\n\n') : (it.name || it.title || it.reference || '');
+    const text = it.slides ? it.slides.map((s: any) => s.text).join('\n\n') : (it.name || it.title || it.reference || '');
     copyToClipboard(text, '✓ Copied library item content to clipboard!');
   }
   hideAllContextMenus();
@@ -3572,8 +3649,10 @@ on('ctx-lib-delete', 'click', () => {
       'This item will be removed from your database and cannot be undone.',
       async () => {
         try {
+          await resolveHostSessionToken();
           const res = await fetch(`/api/${tab}/${encodeURIComponent(it.id)}`, {
-            method: 'DELETE'
+            method: 'DELETE',
+            headers: hostTokenHeader(),
           });
           if (res.ok || res.status === 204) {
             await loadLibraryTab(tab);
@@ -3583,7 +3662,7 @@ on('ctx-lib-delete', 'click', () => {
             showToast(`Could not delete item: ${err}`, 'error');
           }
         } catch (e) {
-          showToast(`Delete error: ${e.message}`, 'error');
+          showToast(`Delete error: ${e instanceof Error ? e.message : String(e)}`, 'error');
         }
       },
       '🗑️ Delete Permanently'
@@ -3633,7 +3712,7 @@ on('ctx-compare-bible', 'click', () => {
   hideAllContextMenus();
 });
 on('ctx-install-more-bibles', 'click', () => {
-  openImportModal();
+  uiCallbacks.openImportModal?.();
   hideAllContextMenus();
 });
 
@@ -3660,222 +3739,29 @@ initLibraryPanel({
   escapeHtml: escapeHtml,
   formatCssBackground: formatCssBackground,
   showContextMenu: showContextMenu,
+  setContextMenuTarget: (target) => { currentContextMenuTarget = target; },
+  setContextMenuTargetBible: (v) => { contextMenuTargetBible = v; },
+  setBibleVersionUserSelected: (v) => { bibleVersionUserSelected = v; },
   applyDefaultBibleVersionIfUnset: applyDefaultBibleVersionIfUnset,
   formatMediaTime: formatMediaTime,
   setAdhocPreview: setAdhocPreview,
 });
 
-// Expose all core functions and variables to global scope for app_ui.ts
-try { (globalThis as any).extractImageUrl = extractImageUrl; } catch (_) {}
-try { (globalThis as any).isImageBackground = isImageBackground; } catch (_) {}
-try { (globalThis as any).isVideoBackground = isVideoBackground; } catch (_) {}
-try { (globalThis as any).isAudioMedia = isAudioMedia; } catch (_) {}
-try { (globalThis as any).formatCssBackground = formatCssBackground; } catch (_) {}
-try { (globalThis as any).showToast = showToast; } catch (_) {}
-try { (globalThis as any).refreshAvailableThemes = refreshAvailableThemes; } catch (_) {}
-try { (globalThis as any).refreshInstalledBibles = refreshInstalledBibles; } catch (_) {}
-try { (globalThis as any).loadAppOptions = loadAppOptions; } catch (_) {}
-try { (globalThis as any).saveAppOptions = saveAppOptions; } catch (_) {}
-try { (globalThis as any).onSettingsSearchInput = onSettingsSearchInput; } catch (_) {}
-try { (globalThis as any).saveNetworkSettings = saveNetworkSettings; } catch (_) {}
-try { (globalThis as any).applyAppOptionsToUI = applyAppOptionsToUI; } catch (_) {}
-try { (globalThis as any).on = on; } catch (_) {}
-try { (globalThis as any).showContextMenu = showContextMenu; } catch (_) {}
-try { (globalThis as any).hideAllContextMenus = hideAllContextMenus; } catch (_) {}
-try { (globalThis as any).showModal = showModal; } catch (_) {}
-try { (globalThis as any).closeModal = closeModal; } catch (_) {}
-try { (globalThis as any).showConfirmDialog = showConfirmDialog; } catch (_) {}
-try { (globalThis as any).closeTopmostModal = closeTopmostModal; } catch (_) {}
-try { (globalThis as any).resetCreateModal = resetCreateModal; } catch (_) {}
-try { (globalThis as any).resetImportModal = resetImportModal; } catch (_) {}
-try { (globalThis as any).handleImportBack = handleImportBack; } catch (_) {}
-try { (globalThis as any).handleOptionsBack = handleOptionsBack; } catch (_) {}
-try { (globalThis as any).resetAlertModal = resetAlertModal; } catch (_) {}
-try { (globalThis as any).resetOptionsModal = resetOptionsModal; } catch (_) {}
-try { (globalThis as any).openThemeEditor = openThemeEditor; } catch (_) {}
-try { (globalThis as any).resetSaveModal = resetSaveModal; } catch (_) {}
-try { (globalThis as any).resetOpenModal = resetOpenModal; } catch (_) {}
-try { (globalThis as any).resetWebModal = resetWebModal; } catch (_) {}
-try { (globalThis as any).openThemePicker = openThemePicker; } catch (_) {}
-try { (globalThis as any).getAllAvailableImages = getAllAvailableImages; } catch (_) {}
-try { (globalThis as any).openMediaImagePicker = openMediaImagePicker; } catch (_) {}
-try { (globalThis as any).renderMediaImagePickerGrid = renderMediaImagePickerGrid; } catch (_) {}
-try { (globalThis as any).setParsedRefCache = setParsedRefCache; } catch (_) {}
-try { (globalThis as any).parseScriptureReferenceAsync = parseScriptureReferenceAsync; } catch (_) {}
-try { (globalThis as any).parseScriptureReference = parseScriptureReference; } catch (_) {}
-try { (globalThis as any).initWebSocket = initWebSocket; } catch (_) {}
-try { (globalThis as any).sendCommand = sendCommand; } catch (_) {}
-try { (globalThis as any).renderAll = renderAll; } catch (_) {}
-try { (globalThis as any).renderRibbon = renderRibbon; } catch (_) {}
-try { (globalThis as any).renderSchedule = renderSchedule; } catch (_) {}
-try { (globalThis as any).formatMediaTime = formatMediaTime; } catch (_) {}
-try { (globalThis as any).broadcastLocalMediaSync = broadcastLocalMediaSync; } catch (_) {}
-try { (globalThis as any).startMediaSyncHeartbeat = startMediaSyncHeartbeat; } catch (_) {}
-try { (globalThis as any).stopMediaSyncHeartbeat = stopMediaSyncHeartbeat; } catch (_) {}
-try { (globalThis as any).armClientScheduledPlay = armClientScheduledPlay; } catch (_) {}
-try { (globalThis as any).requestSeamlessResume = requestSeamlessResume; } catch (_) {}
-try { (globalThis as any).formatSlideLyricsHtml = formatSlideLyricsHtml; } catch (_) {}
-try { (globalThis as any).renderPreviewDeck = renderPreviewDeck; } catch (_) {}
-try { (globalThis as any).renderPreviewOutput = renderPreviewOutput; } catch (_) {}
-try { (globalThis as any).renderLiveDeck = renderLiveDeck; } catch (_) {}
-try { (globalThis as any).renderLiveOutput = renderLiveOutput; } catch (_) {}
-try { (globalThis as any).updateSearchModeUI = updateSearchModeUI; } catch (_) {}
-try { (globalThis as any).renderSearchModeMenu = renderSearchModeMenu; } catch (_) {}
-try { (globalThis as any).loadLibraryTab = loadLibraryTab; } catch (_) {}
-try { (globalThis as any).renderCategoryTree = renderCategoryTree; } catch (_) {}
-try { (globalThis as any).areTranslationsEquivalent = areTranslationsEquivalent; } catch (_) {}
-try { (globalThis as any).getBibleAbbreviation = getBibleAbbreviation; } catch (_) {}
-try { (globalThis as any).normalizeBibleApiCode = normalizeBibleApiCode; } catch (_) {}
-try { (globalThis as any).scriptureMatchesVersion = scriptureMatchesVersion; } catch (_) {}
-try { (globalThis as any).searchGeniusChristianSongs = searchGeniusChristianSongs; } catch (_) {}
-try { (globalThis as any).renderGeniusHits = renderGeniusHits; } catch (_) {}
-try { (globalThis as any).renderGeniusPreview = renderGeniusPreview; } catch (_) {}
-try { (globalThis as any).importAndStageGeniusSong = importAndStageGeniusSong; } catch (_) {}
-try { (globalThis as any).filterAndRenderCatalog = filterAndRenderCatalog; } catch (_) {}
-try { (globalThis as any).tryHandleOnlineImagesEnter = tryHandleOnlineImagesEnter; } catch (_) {}
-try { (globalThis as any).updateCatalogCountDisplay = updateCatalogCountDisplay; } catch (_) {}
-try { (globalThis as any).loadMoreCatalogItems = loadMoreCatalogItems; } catch (_) {}
-try { (globalThis as any).renderCatalog = renderCatalog; } catch (_) {}
-try { (globalThis as any).createCatalogTableRow = createCatalogTableRow; } catch (_) {}
-try { (globalThis as any).appendCatalogTableRows = appendCatalogTableRows; } catch (_) {}
-try { (globalThis as any).renderCatalogTable = renderCatalogTable; } catch (_) {}
-try { (globalThis as any).highlightCatalogRow = highlightCatalogRow; } catch (_) {}
-try { (globalThis as any).createCatalogGridCard = createCatalogGridCard; } catch (_) {}
-try { (globalThis as any).appendCatalogGridCards = appendCatalogGridCards; } catch (_) {}
-try { (globalThis as any).renderCatalogGrid = renderCatalogGrid; } catch (_) {}
-try { (globalThis as any).selectAndPreviewItem = selectAndPreviewItem; } catch (_) {}
-try { (globalThis as any).renderAssetPreview = renderAssetPreview; } catch (_) {}
-try { (globalThis as any).fetchAndStageOnlineScripture = fetchAndStageOnlineScripture; } catch (_) {}
-try { (globalThis as any).addItemToSchedule = addItemToSchedule; } catch (_) {}
-try { (globalThis as any).addDualScriptureToSchedule = addDualScriptureToSchedule; } catch (_) {}
-try { (globalThis as any).escapeHtml = escapeHtml; } catch (_) {}
-try { (globalThis as any).ws = ws; } catch (_) {}
-try { (globalThis as any).currentSnapshot = currentSnapshot; } catch (_) {}
-try { (globalThis as any).currentTab = currentTab; } catch (_) {}
-try { (globalThis as any).getActiveLibraryItems = getActiveLibraryItems; } catch (_) {}
-try { (globalThis as any).getFilteredLibraryItems = getFilteredLibraryItems; } catch (_) {}
-try { (globalThis as any).selectedLibraryItem = selectedLibraryItem; } catch (_) {}
-try { (globalThis as any).currentEditorType = currentEditorType; } catch (_) {}
-try { (globalThis as any).editingItemId = editingItemId; } catch (_) {}
-try { (globalThis as any).onlineBibleCatalog = onlineBibleCatalog; } catch (_) {}
-try { (globalThis as any).activeImportMode = activeImportMode; } catch (_) {}
-try { (globalThis as any).getActiveResourceViewMode = getActiveResourceViewMode; } catch (_) {}
-try { (globalThis as any).setActiveResourceViewMode = setActiveResourceViewMode; } catch (_) {}
-try { (globalThis as any).activeLiveViewMode = activeLiveViewMode; } catch (_) {}
-try { (globalThis as any).getActiveCategory = getActiveCategory; } catch (_) {}
-try { (globalThis as any).setActiveCategory = setActiveCategory; } catch (_) {}
-try { (globalThis as any).expandedScheduleIndex = expandedScheduleIndex; } catch (_) {}
-try { (globalThis as any).currentContextMenuTarget = currentContextMenuTarget; } catch (_) {}
-try { (globalThis as any).DEFAULT_THEMES = DEFAULT_THEMES; } catch (_) {}
-try { (globalThis as any).availableThemes = availableThemes; } catch (_) {}
-try { (globalThis as any).lastThemesFetchTime = lastThemesFetchTime; } catch (_) {}
-try { (globalThis as any).installedBibles = installedBibles; } catch (_) {}
-try { (globalThis as any).activeBibleVersion = activeBibleVersion; } catch (_) {}
-try { (globalThis as any).secondaryBibleVersion = secondaryBibleVersion; } catch (_) {}
-try { (globalThis as any).isDualBibleMode = isDualBibleMode; } catch (_) {}
-try { (globalThis as any).currentDualSecondaryVerses = currentDualSecondaryVerses; } catch (_) {}
-try { (globalThis as any).contextMenuTargetBible = contextMenuTargetBible; } catch (_) {}
-try { (globalThis as any).appOptions = appOptions; } catch (_) {}
-try { (globalThis as any).scheduleListEl = scheduleListEl; } catch (_) {}
-try { (globalThis as any).scheduleTitleEl = scheduleTitleEl; } catch (_) {}
-try { (globalThis as any).previewTitleEl = previewTitleEl; } catch (_) {}
-try { (globalThis as any).previewSlideMatrixEl = previewSlideMatrixEl; } catch (_) {}
-try { (globalThis as any).previewCanvasEl = previewCanvasEl; } catch (_) {}
-try { (globalThis as any).previewCanvasLyricsEl = previewCanvasLyricsEl; } catch (_) {}
-try { (globalThis as any).previewCanvasFooterLeftEl = previewCanvasFooterLeftEl; } catch (_) {}
-try { (globalThis as any).previewCanvasFooterRightEl = previewCanvasFooterRightEl; } catch (_) {}
-try { (globalThis as any).previewCanvasImageEl = previewCanvasImageEl; } catch (_) {}
-try { (globalThis as any).previewSlideCounterTextEl = previewSlideCounterTextEl; } catch (_) {}
-try { (globalThis as any).btnPreviewGoLive = btnPreviewGoLive; } catch (_) {}
-try { (globalThis as any).liveTitleEl = liveTitleEl; } catch (_) {}
-try { (globalThis as any).liveSlideMatrixEl = liveSlideMatrixEl; } catch (_) {}
-try { (globalThis as any).canvasLyricsEl = canvasLyricsEl; } catch (_) {}
-try { (globalThis as any).canvasFooterLeftEl = canvasFooterLeftEl; } catch (_) {}
-try { (globalThis as any).canvasFooterRightEl = canvasFooterRightEl; } catch (_) {}
-try { (globalThis as any).canvasBlackoutEl = canvasBlackoutEl; } catch (_) {}
-try { (globalThis as any).canvasLogoEl = canvasLogoEl; } catch (_) {}
-try { (globalThis as any).canvasNurseryAlertEl = canvasNurseryAlertEl; } catch (_) {}
-try { (globalThis as any).canvasNurseryTextEl = canvasNurseryTextEl; } catch (_) {}
-try { (globalThis as any).slideCounterTextEl = slideCounterTextEl; } catch (_) {}
-try { (globalThis as any).liveCanvasEl = liveCanvasEl; } catch (_) {}
-try { (globalThis as any).btnPreviewToSchedule = btnPreviewToSchedule; } catch (_) {}
-try { (globalThis as any).btnToggleDualBible = btnToggleDualBible; } catch (_) {}
-try { (globalThis as any).btnNew = btnNew; } catch (_) {}
-try { (globalThis as any).btnOpen = btnOpen; } catch (_) {}
-try { (globalThis as any).btnSave = btnSave; } catch (_) {}
-try { (globalThis as any).btnImport = btnImport; } catch (_) {}
-try { (globalThis as any).btnStore = btnStore; } catch (_) {}
-try { (globalThis as any).btnWeb = btnWeb; } catch (_) {}
-try { (globalThis as any).btnRemote = btnRemote; } catch (_) {}
-try { (globalThis as any).btnGoLive = btnGoLive; } catch (_) {}
-try { (globalThis as any).btnAlert = btnAlert; } catch (_) {}
-try { (globalThis as any).btnLogo = btnLogo; } catch (_) {}
-try { (globalThis as any).btnBlack = btnBlack; } catch (_) {}
-try { (globalThis as any).btnClear = btnClear; } catch (_) {}
-try { (globalThis as any).btnLiveStatus = btnLiveStatus; } catch (_) {}
-try { (globalThis as any).alertModal = alertModal; } catch (_) {}
-try { (globalThis as any).alertTextInput = alertTextInput; } catch (_) {}
-try { (globalThis as any).openModal = openModal; } catch (_) {}
-try { (globalThis as any).saveModal = saveModal; } catch (_) {}
-try { (globalThis as any).storeModal = storeModal; } catch (_) {}
-try { (globalThis as any).webModal = webModal; } catch (_) {}
-try { (globalThis as any).remoteModal = remoteModal; } catch (_) {}
-try { (globalThis as any).importModal = importModal; } catch (_) {}
-try { (globalThis as any).createModal = createModal; } catch (_) {}
-try { (globalThis as any).optionsModal = optionsModal; } catch (_) {}
-try { (globalThis as any).shortcutsModal = shortcutsModal; } catch (_) {}
-try { (globalThis as any).aboutModal = aboutModal; } catch (_) {}
-try { (globalThis as any).scheduleArticlesModal = scheduleArticlesModal; } catch (_) {}
-try { (globalThis as any).confirmModal = confirmModal; } catch (_) {}
-try { (globalThis as any).onConfirmDialogAccept = onConfirmDialogAccept; } catch (_) {}
-try { (globalThis as any).createModalTitle = createModalTitle; } catch (_) {}
-try { (globalThis as any).createItemTitle = createItemTitle; } catch (_) {}
-try { (globalThis as any).createItemAuthor = createItemAuthor; } catch (_) {}
-try { (globalThis as any).createItemTheme = createItemTheme; } catch (_) {}
-try { (globalThis as any).createItemCopyright = createItemCopyright; } catch (_) {}
-try { (globalThis as any).createItemContent = createItemContent; } catch (_) {}
-try { (globalThis as any).editorPreviewCanvas = editorPreviewCanvas; } catch (_) {}
-try { (globalThis as any).editorPreviewText = editorPreviewText; } catch (_) {}
-try { (globalThis as any).editorPreviewTitle = editorPreviewTitle; } catch (_) {}
-try { (globalThis as any).editorPreviewAuthor = editorPreviewAuthor; } catch (_) {}
-try { (globalThis as any).parsedRefCache = parsedRefCache; } catch (_) {}
-try { (globalThis as any).lastRenderedScheduleKey = lastRenderedScheduleKey; } catch (_) {}
-try { (globalThis as any).draggedPreviewSlideIndex = draggedPreviewSlideIndex; } catch (_) {}
-try { (globalThis as any).collapsedGroupIds = collapsedGroupIds; } catch (_) {}
-try { (globalThis as any).isLiveVideoLooping = isLiveVideoLooping; } catch (_) {}
-try { (globalThis as any).liveAudioVolume = liveAudioVolume; } catch (_) {}
-try { (globalThis as any).liveAudioMuted = liveAudioMuted; } catch (_) {}
-try { (globalThis as any).mediaSyncChannel = mediaSyncChannel; } catch (_) {}
-try { (globalThis as any).mediaSyncHeartbeatTimer = mediaSyncHeartbeatTimer; } catch (_) {}
-try { (globalThis as any).liveOutputConnected = liveOutputConnected; } catch (_) {}
-try { (globalThis as any).liveMediaControls = liveMediaControls; } catch (_) {}
-try { (globalThis as any).liveVideoSeek = liveVideoSeek; } catch (_) {}
-try { (globalThis as any).liveVideoTime = liveVideoTime; } catch (_) {}
-try { (globalThis as any).btnLiveVideoPlay = btnLiveVideoPlay; } catch (_) {}
-try { (globalThis as any).btnLiveVideoStop = btnLiveVideoStop; } catch (_) {}
-try { (globalThis as any).btnLiveVideoLoop = btnLiveVideoLoop; } catch (_) {}
-try { (globalThis as any).btnLiveVideoMute = btnLiveVideoMute; } catch (_) {}
-try { (globalThis as any).liveVideoVolumeSlider = liveVideoVolumeSlider; } catch (_) {}
-try { (globalThis as any).liveVideoEl = liveVideoEl; } catch (_) {}
-try { (globalThis as any).liveImageEl = liveImageEl; } catch (_) {}
-try { (globalThis as any).liveAudioEl = liveAudioEl; } catch (_) {}
-try { (globalThis as any).appScheduledTimer = appScheduledTimer; } catch (_) {}
-try { (globalThis as any)._appPlayStartedAt = _appPlayStartedAt; } catch (_) {}
-try { (globalThis as any).isUserSeeking = isUserSeeking; } catch (_) {}
-try { (globalThis as any).wasPlayingBeforeScrub = wasPlayingBeforeScrub; } catch (_) {}
-try { (globalThis as any).lastRenderedPreviewKey = lastRenderedPreviewKey; } catch (_) {}
-try { (globalThis as any).lastRenderedLiveItemId = lastRenderedLiveItemId; } catch (_) {}
-try { (globalThis as any).lastRenderedLiveSlideCount = lastRenderedLiveSlideCount; } catch (_) {}
-try { (globalThis as any).geniusSearchTimer = geniusSearchTimer; } catch (_) {}
-try { (globalThis as any).lastGeniusSearchQuery = lastGeniusSearchQuery; } catch (_) {}
-try { (globalThis as any).currentCatalogItems = currentCatalogItems; } catch (_) {}
-try { (globalThis as any).catalogVisibleCount = catalogVisibleCount; } catch (_) {}
-try { (globalThis as any).CATALOG_BATCH_SIZE = CATALOG_BATCH_SIZE; } catch (_) {}
-try { (globalThis as any).catalogScrollBodyEl = catalogScrollBodyEl; } catch (_) {}
-try { (globalThis as any).reorderScheduleItemsAnimated = reorderScheduleItemsAnimated; } catch (_) {}
-try { (globalThis as any).reorderChildSlidesAnimated = reorderChildSlidesAnimated; } catch (_) {}
-try { (globalThis as any).reorderPreviewSlides = reorderPreviewSlides; } catch (_) {}
-try { (globalThis as any).computeSafeDestinationIndex = computeSafeDestinationIndex; } catch (_) {}
+
+// Setter functions for mutable state app_ui.ts needs to write, not just read — a
+// real `import { X }` of an exported `let` gives a live-reading binding, but JS
+// forbids assigning to an imported binding, so writes go through these instead.
+export function setActiveBibleVersion(v: typeof activeBibleVersion) { activeBibleVersion = v; }
+export function setActiveImportMode(v: typeof activeImportMode) { activeImportMode = v; }
+export function setActiveLiveViewMode(v: typeof activeLiveViewMode) { activeLiveViewMode = v; }
+export function setCurrentContextMenuTargetState(v: typeof currentContextMenuTarget) { currentContextMenuTarget = v; }
+export function setCurrentEditorType(v: typeof currentEditorType) { currentEditorType = v; }
+export function setCurrentSnapshot(v: typeof currentSnapshot) { currentSnapshot = v; }
+export function setEditingItemId(v: typeof editingItemId) { editingItemId = v; }
+export function setExpandedScheduleIndex(v: typeof expandedScheduleIndex) { expandedScheduleIndex = v; }
+export function setIsDualBibleMode(v: typeof isDualBibleMode) { isDualBibleMode = v; }
+export function resetLastRenderedScheduleKey() { lastRenderedScheduleKey = ''; }
+export function setOnlineBibleCatalog(v: typeof onlineBibleCatalog) { onlineBibleCatalog = v; }
 
 // Schedule Auto-Save (Every 2 minutes)
 setInterval(() => {

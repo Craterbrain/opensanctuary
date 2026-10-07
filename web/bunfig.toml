@@ -1,0 +1,8 @@
+[test]
+# Rebuilds dist/bundle.js (and the other 4 entry points) before every `bun
+# test` run -- see tests/_pretest_build.ts's doc comment for why this
+# exists. `bun test` doesn't honor npm-style "pretest" package.json scripts
+# (only `bun run <script>` does); this `[test] preload` is the mechanism
+# that actually runs, once per whole test invocation, regardless of which
+# files are targeted.
+preload = ["./tests/_pretest_build.ts"]

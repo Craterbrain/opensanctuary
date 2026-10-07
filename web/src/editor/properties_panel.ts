@@ -1,5 +1,5 @@
 import { EditorSlide, SlideElement, SOLID_PALETTE_PRESETS, GRADIENT_PRESETS, ANIMATED_PATTERN_PRESETS, FONT_FAMILY_GROUPS } from './types';
-import { applyResolvedBackground, escapeHtml } from '../core/presentation_helpers';
+import { applyResolvedBackground, backgroundPresetDataString, escapeHtml } from '../core/presentation_helpers';
 
 export class PropertiesPanel {
   private panelEl: HTMLElement;
@@ -13,9 +13,8 @@ export class PropertiesPanel {
   }
 
   constructor(containerEl: HTMLElement) {
-    // [ARCH:slide-editor-shell] See docs/FRONTEND_ARCHITECTURE.md's "known
-    // traps" section — trap #1 (className overwrite) applies to this
-    // constructor: this.panelEl IS containerEl, not a child of it.
+    // [ARCH:slide-editor-shell] className-overwrite trap: this.panelEl IS
+    // containerEl, not a child of it.
     // containerEl (slide_editor.ts's propsMount) already sits inside
     // .editor-sidebar-column, which owns the fixed 260px width and the left
     // border — this panel just needs to fill that column's remaining height
@@ -185,7 +184,7 @@ export class PropertiesPanel {
       aRow.className = 'w-full flex items-center gap-2 p-1 rounded hover:bg-slate-800 border border-slate-700 text-left cursor-pointer';
       const prev = document.createElement('div');
       prev.className = 'w-6 h-4 rounded border border-slate-600 flex-none overflow-hidden';
-      applyResolvedBackground(prev, (a.background as any).data);
+      applyResolvedBackground(prev, backgroundPresetDataString(a));
       const lbl = document.createElement('span');
       lbl.className = 'text-[10px] text-slate-300 truncate';
       lbl.textContent = a.name;
@@ -215,7 +214,7 @@ export class PropertiesPanel {
       </div>
       <div>
         <label class="text-[10px] text-slate-500 block mb-0.5">Opacity</label>
-        <input type="range" id="prop-bg-img-opacity" min="0" max="1" step="0.05" class="w-full cursor-pointer" value="${imgOpac}">
+        <input type="range" id="prop-bg-img-opacity" min="0" max="1" step="0.05" class="w-full cursor-pointer" value="${escapeHtml(imgOpac)}">
       </div>
     `;
     const imgPathInput = imgContainer.querySelector('#prop-bg-img-path') as HTMLInputElement;
@@ -371,7 +370,7 @@ export class PropertiesPanel {
       </div>
       <div class="mt-2 flex items-center justify-between">
         <label class="text-[10px] text-slate-500">Opacity</label>
-        <input type="range" id="prop-opacity" min="0" max="1" step="0.05" class="w-32 cursor-pointer" value="${t.opacity}">
+        <input type="range" id="prop-opacity" min="0" max="1" step="0.05" class="w-32 cursor-pointer" value="${escapeHtml(t.opacity)}">
       </div>
       <div class="mt-2 flex items-center gap-2">
         <input type="checkbox" id="prop-locked" ${t.locked ? 'checked' : ''}>
@@ -431,11 +430,11 @@ export class PropertiesPanel {
         <div class="grid grid-cols-2 gap-2">
           <div>
             <label class="text-[10px] text-slate-500 block mb-0.5">Font Size (pt)</label>
-            <input type="number" id="prop-font-size" min="8" max="150" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${run0.font_size_pt || 36}">
+            <input type="number" id="prop-font-size" min="8" max="150" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${escapeHtml(run0.font_size_pt || 36)}">
           </div>
           <div>
             <label class="text-[10px] text-slate-500 block mb-0.5">Text Color</label>
-            <input type="color" id="prop-text-color" class="w-full h-7 bg-transparent rounded cursor-pointer" value="${run0.color?.startsWith('#') ? run0.color : '#ffffff'}">
+            <input type="color" id="prop-text-color" class="w-full h-7 bg-transparent rounded cursor-pointer" value="${escapeHtml(run0.color?.startsWith('#') ? run0.color : '#ffffff')}">
           </div>
         </div>
 
@@ -456,7 +455,7 @@ export class PropertiesPanel {
         <div class="grid grid-cols-2 gap-2 items-center">
           <div>
             <label class="text-[10px] text-slate-500 block mb-0.5">Line Height</label>
-            <input type="number" id="prop-line-height" min="0.8" max="2.5" step="0.05" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${tb.paragraph_style?.line_height || 1.25}">
+            <input type="number" id="prop-line-height" min="0.8" max="2.5" step="0.05" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${escapeHtml(tb.paragraph_style?.line_height || 1.25)}">
           </div>
           <div class="flex items-center gap-1.5 pt-3">
             <input type="checkbox" id="prop-autofit" ${tb.autofit ? 'checked' : ''}>
@@ -470,11 +469,11 @@ export class PropertiesPanel {
           <div class="grid grid-cols-2 gap-2">
             <div>
               <label class="text-[10px] text-slate-500 block mb-0.5">Width (px)</label>
-              <input type="number" id="prop-outline-w" min="0" max="10" step="0.5" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${tb.effects?.outline?.width || 0}">
+              <input type="number" id="prop-outline-w" min="0" max="10" step="0.5" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${escapeHtml(tb.effects?.outline?.width || 0)}">
             </div>
             <div>
               <label class="text-[10px] text-slate-500 block mb-0.5">Outline Color</label>
-              <input type="color" id="prop-outline-color" class="w-full h-7 bg-transparent rounded cursor-pointer" value="${tb.effects?.outline?.color || '#000000'}">
+              <input type="color" id="prop-outline-color" class="w-full h-7 bg-transparent rounded cursor-pointer" value="${escapeHtml(tb.effects?.outline?.color || '#000000')}">
             </div>
           </div>
         </div>
@@ -485,11 +484,11 @@ export class PropertiesPanel {
           <div class="grid grid-cols-2 gap-2">
             <div>
               <label class="text-[10px] text-slate-500 block mb-0.5">Blur (px)</label>
-              <input type="number" id="prop-shadow-blur" min="0" max="30" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${tb.effects?.shadow?.blur || 0}">
+              <input type="number" id="prop-shadow-blur" min="0" max="30" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${escapeHtml(tb.effects?.shadow?.blur || 0)}">
             </div>
             <div>
               <label class="text-[10px] text-slate-500 block mb-0.5">Shadow Color</label>
-              <input type="color" id="prop-shadow-color" class="w-full h-7 bg-transparent rounded cursor-pointer" value="${tb.effects?.shadow?.color?.startsWith('#') ? tb.effects.shadow.color : '#000000'}">
+              <input type="color" id="prop-shadow-color" class="w-full h-7 bg-transparent rounded cursor-pointer" value="${escapeHtml(tb.effects?.shadow?.color?.startsWith('#') ? tb.effects.shadow.color : '#000000')}">
             </div>
           </div>
         </div>
@@ -641,7 +640,7 @@ export class PropertiesPanel {
         <div class="font-semibold text-slate-400 mb-1">Shape Attributes</div>
         <div>
           <label class="text-[10px] text-slate-500">Fill Color</label>
-          <input type="color" id="prop-shape-fill" class="w-full h-7 bg-transparent rounded cursor-pointer" value="${el.fill_color}">
+          <input type="color" id="prop-shape-fill" class="w-full h-7 bg-transparent rounded cursor-pointer" value="${escapeHtml(el.fill_color)}">
         </div>
       `;
       content.appendChild(shapeSection);

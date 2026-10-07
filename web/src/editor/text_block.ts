@@ -43,7 +43,8 @@ export function renderTextBlockDOM(
   containerEl: HTMLElement,
   block: TextBlock,
   isEditing: boolean = false,
-  onContentChange?: (updatedBlock: TextBlock) => void
+  onContentChange?: (updatedBlock: TextBlock) => void,
+  scale: number = 1
 ): void {
   // Note: intentionally does not set containerEl's own width/height — the
   // caller (canvas.ts / slide_render.ts) already positions and sizes this
@@ -60,7 +61,7 @@ export function renderTextBlockDOM(
   const pStyle = block.paragraph_style || {};
   containerEl.style.textAlign = pStyle.align || 'center';
   containerEl.style.lineHeight = `${pStyle.line_height || 1.25}`;
-  const indentPx = (pStyle.indent_level || 0) * 24;
+  const indentPx = (pStyle.indent_level || 0) * 24 * scale;
   containerEl.style.paddingLeft = indentPx > 0 ? `${indentPx}px` : '';
   if (pStyle.align === 'center') {
     containerEl.style.alignItems = 'center';
@@ -84,7 +85,7 @@ export function renderTextBlockDOM(
 
     // Combine runs into text with basic styling
     for (const run of block.runs) {
-      const span = createRunSpan(run, block.autofit);
+      const span = createRunSpan(run, block.autofit, scale);
       containerEl.appendChild(span);
     }
 
@@ -146,11 +147,11 @@ export function renderTextBlockDOM(
     textInner.style.whiteSpace = 'pre-wrap';
     textInner.style.wordBreak = 'break-word';
 
-    const basePt = block.runs[0]?.font_size_pt || 36;
+    const basePt = (block.runs[0]?.font_size_pt || 36) * scale;
     textInner.style.fontSize = block.autofit ? '48px' : `${basePt}pt`;
 
     for (const run of block.runs) {
-      const span = createRunSpan(run, block.autofit);
+      const span = createRunSpan(run, block.autofit, scale);
       textInner.appendChild(span);
     }
     containerEl.appendChild(textInner);
@@ -164,7 +165,7 @@ export function renderTextBlockDOM(
   }
 }
 
-function createRunSpan(run: TextRun, inheritFontSize: boolean = false): HTMLElement {
+function createRunSpan(run: TextRun, inheritFontSize: boolean = false, scale: number = 1): HTMLElement {
   const span = document.createElement('span');
   span.textContent = run.text;
   if (run.bold) span.style.fontWeight = 'bold';
@@ -173,8 +174,8 @@ function createRunSpan(run: TextRun, inheritFontSize: boolean = false): HTMLElem
   if (run.strike) span.style.textDecoration = `${span.style.textDecoration} line-through`.trim();
   if (run.color) span.style.color = run.color;
   if (run.font_family) span.style.fontFamily = run.font_family;
-  if (!inheritFontSize && run.font_size_pt) span.style.fontSize = `${run.font_size_pt}pt`;
-  if (run.letter_spacing_px) span.style.letterSpacing = `${run.letter_spacing_px}px`;
+  if (!inheritFontSize && run.font_size_pt) span.style.fontSize = `${run.font_size_pt * scale}pt`;
+  if (run.letter_spacing_px) span.style.letterSpacing = `${run.letter_spacing_px * scale}px`;
   if (run.baseline_shift === 'sub') {
     span.style.verticalAlign = 'sub';
     span.style.fontSize = '0.75em';

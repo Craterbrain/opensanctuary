@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=OpenSanctuary
+GenericName=Church Presentation Engine
+Comment=Next-generation church presentation engine
+Exec=opensanctuary
+Icon=opensanctuary
+Terminal=false
+Categories=AudioVideo;Office;
+StartupNotify=true
+StartupWMClass=opensanctuary
+Keywords=presentation;worship;church;lyrics;bible;display;slides;

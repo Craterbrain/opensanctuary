@@ -207,8 +207,6 @@ struct GhContentsEntry {
     entry_type: String,
     path: String,
     download_url: Option<String>,
-    #[allow(dead_code)]
-    size: Option<u64>,
 }
 
 #[async_trait]
@@ -298,6 +296,11 @@ impl BibleProvider for GitHubRepoBibleProvider {
         source_key: Option<&str>,
     ) -> Result<Vec<ScriptureItem>, ProviderError> {
         let url = source_key.ok_or("No download URL provided for GitHub bible")?;
+        // `source_key` round-trips through the client, so don't trust it to
+        // still be a GitHub raw URL (SSRF into loopback/LAN otherwise).
+        if !url.starts_with("https://raw.githubusercontent.com/") {
+            return Err("GitHub Bible download URL must be on raw.githubusercontent.com".into());
+        }
 
         let client = Self::build_client();
         let raw_json: serde_json::Value = client

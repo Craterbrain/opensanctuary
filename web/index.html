@@ -8,6 +8,9 @@
   <meta http-equiv="Expires" content="0">
   <title>OpenSanctuary - Worship Production</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="icon" type="image/png" sizes="256x256" href="favicon.png">
+  <link rel="shortcut icon" href="favicon.ico">
+  <link rel="apple-touch-icon" href="favicon.png">
   <link rel="stylesheet" href="style.css?v=7.1">
 </head>
 <body>
@@ -807,8 +810,8 @@
 
           <div class="import-tab-content" id="import-view-local" style="display: none; flex-direction: column; gap: 10px; overflow-y: auto;">
             <div class="store-card">
-              <h4>📁 EasyWorship / OpenLP Schedules</h4>
-              <p>Load a <code>.ewsx</code>/<code>.ews</code> EasyWorship service or an OpenLP <code>.osz</code>/<code>.osj</code> service, with drag-and-drop and a Replace/Append choice:</p>
+              <h4>📁 EasyWorship Services & Presentations</h4>
+              <p>Load an EasyWorship service (<code>.ewsx</code>, <code>.ews</code>) or presentation (<code>.ewpx</code>), or an OpenLP service (<code>.osz</code>, <code>.osj</code>), with drag-and-drop and a Replace/Append choice:</p>
               <button class="btn btn-primary" id="btn-open-schedule-hub" type="button" style="margin-top: 6px;">📂 Open Schedule Hub</button>
             </div>
 
@@ -880,6 +883,26 @@
           <div class="modal-footer-actions">
             <button class="btn" id="btn-cancel-options">Cancel</button>
             <button class="btn btn-primary" id="btn-save-options">💾 Save Settings</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3b. First-Time Setup Wizard (docs/first-time.md) — shown once, automatically,
+         the first time library.db is created; re-openable from Settings > About.
+         Step content is rendered entirely by web/src/ui/first_time_setup.ts. -->
+    <div class="modal-backdrop" id="first-time-setup-modal">
+      <div class="modal-dialog modal-dialog--lg">
+        <div class="modal-header">
+          <span>👋 Welcome to OpenSanctuary</span>
+          <button class="modal-close-btn" id="btn-close-first-time-setup">✖</button>
+        </div>
+        <div class="modal-body" id="first-time-setup-body" style="flex-direction: column; overflow-y: auto; padding: 28px 32px; gap: 16px;"></div>
+        <div class="modal-footer">
+          <button class="btn btn-back" id="btn-first-time-back">⬅ Back</button>
+          <div class="modal-footer-actions">
+            <button class="btn" id="btn-first-time-skip">Skip</button>
+            <button class="btn btn-primary" id="btn-first-time-next">Next ➜</button>
           </div>
         </div>
       </div>
@@ -977,8 +1000,8 @@
           <div class="schedule-dropzone" id="schedule-dropzone">
             <div style="font-size: 26px; margin-bottom: 6px;">📂</div>
             <div style="font-size: 13px; font-weight: 600; margin-bottom: 4px;">Click to browse, or drag & drop schedule file here</div>
-            <div style="font-size: 11px; color: var(--text-dim, #888);">Supports EasyWorship (.ewsx, .ews) & OpenLP / JSON (.osz, .osj, .json)</div>
-            <input type="file" id="file-schedule-input" accept=".ewsx,.ews,.osz,.osj,.json" style="display: none;">
+            <div style="font-size: 11px; color: var(--text-dim, #888);">Supports EasyWorship (.ewsx, .ews, .ewpx) & OpenLP / JSON (.osz, .osj, .json)</div>
+            <input type="file" id="file-schedule-input" accept=".ewsx,.ews,.ewpx,.osz,.osj,.json" style="display: none;">
           </div>
 
           <div class="sample-schedule-list" style="margin-top: 8px;">
@@ -1096,6 +1119,7 @@
         <div style="display: flex; gap: 6px; padding: 12px 20px 0; background: rgba(0,0,0,0.15); border-bottom: 1px solid var(--border-color);">
           <button class="btn btn-secondary" id="tab-remote-control" style="flex: 1; padding: 8px 12px; font-weight: 600; border-radius: 6px 6px 0 0; background: var(--os-accent, #ff5722); color: #ffffff; border-color: transparent;">📱 Mobile Remote</button>
           <button class="btn btn-secondary" id="tab-pair-tv" style="flex: 1; padding: 8px 12px; font-weight: 600; border-radius: 6px 6px 0 0; background: transparent; color: var(--text-muted); border-color: transparent;">📺 Pair TV App</button>
+          <button class="btn btn-secondary" id="tab-adb-provision" style="flex: 1; padding: 8px 12px; font-weight: 600; border-radius: 6px 6px 0 0; background: transparent; color: var(--text-muted); border-color: transparent;">📲 Install via ADB</button>
         </div>
 
         <!-- Panel 1: Mobile Remote Control -->
@@ -1149,6 +1173,27 @@
           <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
             <a href="/pairing.html" target="_blank" class="btn btn-primary" id="btn-open-pairing-tool">📷 Open Camera Tool ↗</a>
           </div>
+        </div>
+
+        <!-- Panel 3: Install via ADB (sideload, no Play Store needed) -->
+        <div class="modal-body" id="panel-adb-provision" style="display: none; text-align: left; padding: 20px;">
+          <div style="background: rgba(255, 87, 34, 0.08); border: 1px solid rgba(255, 87, 34, 0.25); border-radius: 8px; padding: 10px 14px; font-size: 12px; color: var(--text-main); line-height: 1.5; margin-bottom: 14px;">
+            <strong>On the TV:</strong><br>
+            1. Settings → Device Preferences → About → click "Build" 7 times to unlock Developer Options.<br>
+            2. Developer Options → enable <strong>Network debugging</strong>.<br>
+            3. Note the TV's IP address (Settings → Network & Internet).<br>
+            4. The first time you connect, the TV will show a one-time "Allow debugging from this computer?" prompt — accept it with your remote.
+          </div>
+          <div id="adb-provision-unavailable" style="display: none; background: rgba(255, 82, 82, 0.1); border: 1px solid rgba(255, 82, 82, 0.3); border-radius: 8px; padding: 10px 14px; font-size: 12px; color: #ff5252; margin-bottom: 14px;"></div>
+          <label class="form-label" style="font-size: 12px;">TV IP Address</label>
+          <input type="text" id="adb-provision-ip" class="search-input" placeholder="192.168.1.50" style="width: 100%; margin-bottom: 10px;">
+          <label class="form-label" style="font-size: 12px;">Display Name (optional)</label>
+          <input type="text" id="adb-provision-name" class="search-input" placeholder="Sanctuary Main TV" style="width: 100%; margin-bottom: 10px;">
+          <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); margin-bottom: 14px;">
+            <input type="checkbox" id="adb-provision-stage-mode"> Stage foldback view (instead of front-of-house)
+          </label>
+          <button class="btn btn-primary" id="btn-adb-provision-start" style="width: 100%; margin-bottom: 10px;">📲 Connect &amp; Install</button>
+          <div id="adb-provision-status" style="font-size: 13px; text-align: center; min-height: 18px;"></div>
         </div>
 
         <div class="modal-footer">
@@ -1242,6 +1287,80 @@
             <button class="btn btn-back" id="btn-cancel-arrangement">Cancel</button>
             <button class="btn btn-primary" id="btn-apply-arrangement" style="background: var(--os-brand-amber, #ffa726); color: #000; font-weight: 700;">✓ Apply Arrangement</button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CCLI Usage Report Modal (docs/CCLI_REPORTING.md) -->
+    <div class="modal-backdrop" id="ccli-report-modal" style="display: none;">
+      <div class="modal-dialog modal-dialog--xl">
+        <div class="modal-header">
+          <span>📊 CCLI Usage Report</span>
+          <button class="modal-close-btn" id="btn-close-ccli-report">✖</button>
+        </div>
+        <div class="modal-body" style="flex: 1; display: flex; gap: 16px; padding: 16px; overflow: hidden; background: var(--os-bg-base, #121316);">
+          <!-- Left: date range + reportable/excluded lists -->
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 12px; overflow: hidden;">
+            <div style="display: flex; gap: 10px; align-items: end; flex-wrap: wrap;">
+              <label style="display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-dim, #8a8f9e);">
+                Start date
+                <input type="date" id="ccli-report-start" class="search-input" style="width: 150px;">
+              </label>
+              <label style="display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-dim, #8a8f9e);">
+                End date
+                <input type="date" id="ccli-report-end" class="search-input" style="width: 150px;">
+              </label>
+              <button class="btn" id="btn-ccli-report-refresh">Refresh</button>
+            </div>
+
+            <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 14px;">
+              <div>
+                <div style="font-size: 11px; font-weight: 700; color: var(--text-dim, #8a8f9e); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; display: flex; justify-content: space-between;">
+                  <span>Reportable</span>
+                  <span id="ccli-report-reportable-count" style="color: var(--os-brand-amber, #ffa726);">0 songs</span>
+                </div>
+                <div id="ccli-report-reportable-list" style="display: flex; flex-direction: column; gap: 4px;"></div>
+              </div>
+              <div>
+                <div style="font-size: 11px; font-weight: 700; color: var(--text-dim, #8a8f9e); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; display: flex; justify-content: space-between;">
+                  <span>Excluded — Public Domain</span>
+                  <span id="ccli-report-excluded-count" style="color: var(--text-muted, #777);">0 songs</span>
+                </div>
+                <div id="ccli-report-excluded-list" style="display: flex; flex-direction: column; gap: 4px; opacity: 0.55;"></div>
+              </div>
+
+              <div style="border-top: 1px solid var(--os-border, #2d3139); padding-top: 12px;">
+                <div style="font-size: 11px; font-weight: 700; color: var(--text-dim, #8a8f9e); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">
+                  CCLI.com Login (optional)
+                </div>
+                <p style="font-size: 11px; color: var(--text-muted, #888); margin: 0 0 8px;">
+                  Saved to your OS's own credential store (Keychain/Credential Manager/Secret Service),
+                  never as plaintext — used only to autofill the Upload Assistant window below. It still
+                  requires you to click Log In and Upload yourself.
+                </p>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                  <input type="text" id="ccli-report-username" class="search-input" placeholder="CCLI username / email" style="flex: 1; min-width: 160px;" autocomplete="off">
+                  <input type="password" id="ccli-report-password" class="search-input" placeholder="Password" style="flex: 1; min-width: 120px;" autocomplete="off">
+                  <button class="btn" id="btn-ccli-report-save-creds">Save</button>
+                  <button class="btn btn-back" id="btn-ccli-report-clear-creds">Clear</button>
+                </div>
+                <div id="ccli-report-creds-status" style="font-size: 11px; color: var(--text-muted, #888); margin-top: 6px;"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: persistent explainer sidebar -->
+          <div style="width: 260px; flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--os-border, #2d3139); border-radius: 8px; font-size: 11px; color: var(--text-muted, #aaa); line-height: 1.5; overflow-y: auto;">
+            <div><b style="color: var(--text-main, #eee);">What counts as "used"?</b><br>Only songs that actually went live during a service — adding a song to a schedule and never presenting it doesn't count.</div>
+            <div><b style="color: var(--text-main, #eee);">Public Domain exclusion</b><br>A song is flagged PD when it has no CCLI number and its copyright field is empty or contains "public domain." This is a heuristic — double-check before relying on it.</div>
+            <div><b style="color: var(--text-main, #eee);">Due date</b><br><span id="ccli-report-due-date-info">Set in Settings → Integrations → CCLI Reporting Due Date.</span></div>
+            <div><b style="color: var(--text-main, #eee);">Current period</b><br><span id="ccli-report-period-info"></span></div>
+          </div>
+        </div>
+        <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px;">
+          <button class="btn btn-back" id="btn-close-ccli-report-2">Close</button>
+          <button class="btn" id="btn-ccli-report-open-assist">🌐 Open Upload Assistant</button>
+          <button class="btn btn-primary" id="btn-ccli-report-export" style="background: var(--os-brand-amber, #ffa726); color: #000; font-weight: 700;">⬇ Export CSV</button>
         </div>
       </div>
     </div>

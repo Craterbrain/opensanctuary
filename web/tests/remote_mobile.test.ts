@@ -323,7 +323,7 @@ describe('Mobile Remote Control Webpage (EasyWorship Android App Style)', () => 
     // the URL fragment (never sent to the server as part of the page
     // request), gets verified against POST /api/pairing/verify (the same
     // paired_devices table TV/Roku pairing uses), and only a valid,
-    // non-revoked token unlocks the app — see docs/GEMINI_COMMIT_REVIEW_2026-09-22.md.
+    // non-revoked token unlocks the app.
     function readTokenFromHash(hash: string): string | null {
       if (!hash || hash.length <= 1) return null;
       const params = new URLSearchParams(hash.slice(1));

@@ -556,46 +556,23 @@ fn resolve_external_media_path(path_or_url: &str, media_dir: &Path) -> Option<St
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         return Some(trimmed.to_string());
     }
-    let src = Path::new(trimmed);
-    if !src.is_file() {
-        return None;
-    }
-    std::fs::create_dir_all(media_dir).ok()?;
-    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
-    let new_filename = format!("freeshow_{}.{}", uuid::Uuid::new_v4(), ext);
-    std::fs::copy(src, media_dir.join(&new_filename)).ok()?;
+    let new_filename = crate::storage::media_sniff::copy_sniffed_media(Path::new(trimmed), media_dir, "freeshow")?;
     Some(format!("/media/images/{}", new_filename))
 }
 
 /// Decode base64 or data-uri string and write to `media_dir/freeshow_<uuid>.<ext>`
 fn save_embedded_base64(data_or_b64: &str, media_dir: &Path) -> Option<String> {
-    let (ext, b64_clean) = if let Some(idx) = data_or_b64.find(";base64,") {
-        let mime_part = &data_or_b64[..idx];
-        let ext = if mime_part.contains("png") {
-            "png"
-        } else if mime_part.contains("webp") {
-            "webp"
-        } else {
-            "jpg"
-        };
-        (ext, &data_or_b64[idx + 8..])
-    } else {
-        ("jpg", data_or_b64.trim())
+    let b64_clean = match data_or_b64.find(";base64,") {
+        Some(idx) => &data_or_b64[idx + 8..],
+        None => data_or_b64.trim(),
     };
 
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64_clean.trim().as_bytes())
         .ok()?;
 
-    if std::fs::create_dir_all(media_dir).is_ok() {
-        let filename = format!("freeshow_{}.{}", uuid::Uuid::new_v4(), ext);
-        let dst = media_dir.join(&filename);
-        if std::fs::write(&dst, &bytes).is_ok() {
-            return Some(format!("/media/images/{}", filename));
-        }
-    }
-
-    None
+    let filename = crate::storage::media_sniff::write_sniffed_media(media_dir, "freeshow", &bytes)?;
+    Some(format!("/media/images/{}", filename))
 }
 
 /// Simplified short label for slide groups: "Verse 1" -> "V1", "Chorus" -> "C1"

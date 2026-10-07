@@ -4,11 +4,13 @@
  */
 
 import { getReorderDestinationIndex } from "@atlaskit/pragmatic-drag-and-drop-hitbox/util/get-reorder-destination-index";
-import { GRADIENT_PRESETS, ANIMATED_PATTERN_PRESETS } from "../editor/types.ts";
+import { GRADIENT_PRESETS, ANIMATED_PATTERN_PRESETS, type SlideBackground, type BackgroundPreset } from "../editor/types.ts";
 
 export type Edge = 'top' | 'bottom' | 'left' | 'right';
 
 export interface ThemeDefinition {
+    /** Only present for backend-loaded (user-saved) themes; DEFAULT_THEMES entries have none. */
+    id?: string;
     name: string;
     bg: string;
     font?: string;
@@ -421,6 +423,19 @@ export function parseAnimatedPatternMarker(bg: string | null | undefined): Anima
  * element that previously had an animated pattern applied gets its
  * animation properly cleared when the background changes to something else.
  */
+/**
+ * Every entry in GRADIENT_PRESETS/ANIMATED_PATTERN_PRESETS happens to be a
+ * `{ kind: 'Solid', data: <css-or-pattern-marker string> }` background (see
+ * ANIMATED_PATTERN_PRESETS's own comment) -- but `BackgroundPreset.background`
+ * is typed as the full `SlideBackground` union, so TS can't narrow it to
+ * 'Solid' at a call site without a cast. This does the narrowing once,
+ * falling back to '' for a preset that's ever changed to a non-Solid kind
+ * instead of silently rendering `[object Object]`.
+ */
+export function backgroundPresetDataString(preset: BackgroundPreset): string {
+    return preset.background.kind === 'Solid' ? preset.background.data : '';
+}
+
 export function applyResolvedBackground(
     el: HTMLElement,
     bg: string | null | undefined,
@@ -439,6 +454,66 @@ export function applyResolvedBackground(
     el.style.animation = '';
     el.style.backgroundImage = '';
     el.style.background = formatCssBackground(bg, defaultGradient, availableThemes);
+}
+
+/**
+ * Resolves a slide's background onto `el`, preferring the structured
+ * `background_v2` (Solid/Gradient/Image/Video) over the legacy flattened
+ * `background` string. Unlike `applyResolvedBackground`, this is for contexts
+ * that only have the raw, unresolved slide record (the Slide Editor filmstrip,
+ * the Resources tab preview) rather than an engine-resolved `background` string
+ * — Preview/Live already get the latter and don't need this.
+ */
+export function resolveSlideBackgroundElement(
+    el: HTMLElement,
+    slide: { background?: string | null; background_v2?: SlideBackground | null }
+): void {
+    const bgV2 = slide.background_v2;
+    const legacyBg = slide.background;
+    if (bgV2) {
+        switch (bgV2.kind) {
+            case 'Solid':
+                // Also covers the "pattern:<name>" animated marker — gets the
+                // real (tiny) drifting animation too.
+                applyResolvedBackground(el, bgV2.data);
+                break;
+            case 'Gradient': {
+                el.style.animation = '';
+                el.style.backgroundImage = '';
+                const { kind, stops, angle_deg } = bgV2.data;
+                const stopStr = stops.map(s => `${s.color} ${s.offset * 100}%`).join(', ');
+                el.style.background = kind === 'radial'
+                    ? `radial-gradient(circle, ${stopStr})`
+                    : `linear-gradient(${angle_deg ?? 180}deg, ${stopStr})`;
+                break;
+            }
+            case 'Image':
+                el.style.animation = '';
+                el.style.backgroundImage = '';
+                el.style.background = `url("${bgV2.data.file_path}") center/cover no-repeat`;
+                break;
+            case 'Video':
+                el.style.animation = '';
+                el.style.backgroundImage = '';
+                el.style.background = '#0d1117';
+                break;
+            default:
+                el.style.animation = '';
+                el.style.backgroundImage = '';
+                el.style.background = '#0a0a0c';
+                break;
+        }
+    } else if (legacyBg) {
+        if (isVideoBackground(legacyBg)) {
+            el.style.animation = '';
+            el.style.backgroundImage = '';
+            el.style.background = '#0d1117';
+        } else {
+            applyResolvedBackground(el, legacyBg);
+        }
+    } else {
+        applyResolvedBackground(el, null);
+    }
 }
 
 /**
@@ -497,6 +572,31 @@ export function escapeHtml(str: any): string {
 }
 
 /**
+ * Returns the URL unchanged if it is an absolute http(s) URL, else null. Use before
+ * assigning data-derived values to navigable sinks (iframe.src, a.href) so that
+ * `javascript:` / `data:` / `vbscript:` URLs are never loaded.
+ */
+export function safeHttpUrl(url: any): string | null {
+    if (typeof url !== 'string') return null;
+    try {
+        const u = new URL(url.trim());
+        return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Make a URL safe to embed inside a CSS `url('...')` that is itself placed in an
+ * HTML `style="..."` attribute: percent-encodes quotes/parens/backslashes/whitespace/
+ * control chars (so it cannot terminate the url() token) and HTML-escapes the result.
+ */
+export function escapeCssUrl(url: any): string {
+    const encoded = String(url ?? '').replace(/['"()\\\s<>&\x00-\x1f]/g, (ch) => '%' + ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
+    return escapeHtml(encoded);
+}
+
+/**
  * Computes destination index using Pragmatic DnD's getReorderDestinationIndex
  * with edge normalization for multi-directional / grid matrix layouts.
  */
@@ -533,7 +633,7 @@ export interface ResolvedKeyboardAction {
     action: 'search_focus' | 'close_modals' | 'undo' | 'redo' | 'guide' | 'shortcuts' |
             'options' | 'blackout' | 'clear_text' | 'logo' | 'alert' | 'go_live' |
             'next_slide' | 'prev_slide' | 'next_item' | 'prev_item' | 'jump_slide' |
-            'jump_section' | 'new_schedule' | 'open_schedule' | 'save_schedule' |
+            'jump_section' | 'new_schedule' | 'open_schedule' | 'save_schedule' | 'save_schedule_as' |
             'import_modal' | 'create_song' | 'delete_selected_item';
     command?: any;
     preventDefault?: boolean;
@@ -645,9 +745,12 @@ export function resolveKeyboardShortcut(e: KeyboardEventLike): ResolvedKeyboardA
     if (e.ctrlKey && e.key && e.key.toLowerCase() === 'o') {
         return { action: 'open_schedule', preventDefault: true };
     }
-    // Ctrl+S: Save Schedule
+    // Ctrl+S: quick-save with the last title+format. Ctrl+Shift+S: always
+    // prompt via the Save As modal -- previously indistinguishable, both
+    // fell into the same 'save_schedule' action, which app_ui.ts's dispatch
+    // pointed at the modal, so plain Ctrl+S never actually quick-saved.
     if (e.ctrlKey && e.key && e.key.toLowerCase() === 's') {
-        return { action: 'save_schedule', preventDefault: true };
+        return { action: e.shiftKey ? 'save_schedule_as' : 'save_schedule', preventDefault: true };
     }
     // Ctrl+I: Import Modal
     if (e.ctrlKey && e.key && e.key.toLowerCase() === 'i') {
@@ -997,10 +1100,20 @@ export function areTranslationsEquivalent(t1: string | null | undefined, t2: str
  * mobile browsers (iOS Safari, Android Chrome) to access camera APIs.
  */
 export function buildPairingUrl(
-  info: { https_enabled?: boolean; https_port?: number | null; http_port?: number; port?: number; lan_ip?: string },
+  info: { https_enabled?: boolean; https_port?: number | null; http_port?: number; port?: number; lan_ip?: string; public_https_url?: string | null },
   currentLocation: { protocol?: string; hostname?: string; port?: string },
   sessionToken?: string | null
 ): string {
+  const tokenParam = sessionToken ? `?key=${encodeURIComponent(sessionToken)}` : '';
+
+  // A configured Public HTTPS URL (docs/TUNNELS.md) always wins: a real,
+  // browser-trusted cert removes any ambiguity around camera-API
+  // secure-context requirements on stricter mobile browsers, which is the
+  // whole reason this function prefers HTTPS at all.
+  if (info.public_https_url) {
+    return `${info.public_https_url}/pairing.html${tokenParam}`;
+  }
+
   const host = currentLocation.hostname || '127.0.0.1';
   const activeHost = (host === 'localhost' || host === '127.0.0.1')
     ? (info.lan_ip || host)
@@ -1016,8 +1129,45 @@ export function buildPairingUrl(
     activePort = currentLocation.port || (info.http_port ? String(info.http_port) : (info.port ? String(info.port) : '8080'));
   }
 
-  const tokenParam = sessionToken ? `?key=${encodeURIComponent(sessionToken)}` : '';
   return `${protocol}//${activeHost}:${activePort}/pairing.html${tokenParam}`;
+}
+
+/**
+ * Constructs the Mobile Remote QR's base URL (before `app_ui.ts` appends the
+ * `#token=...` fragment once a device token is minted). Same HTTPS/WSS
+ * preference as `buildPairingUrl` above, for the same reason: without it,
+ * this used to just mirror `currentLocation.protocol`, so a console viewed
+ * over the default plaintext `http://…:8080/` URL generated an `http://`
+ * remote QR -- meaning `device_token`, a static bearer credential sent on
+ * every command the remote issues, traveled in cleartext over the LAN by
+ * default, replayable by anyone who sniffed one packet.
+ */
+export function buildRemoteUrl(
+  info: { https_enabled?: boolean; https_port?: number | null; http_port?: number; port?: number; lan_ip?: string; public_https_url?: string | null },
+  currentLocation: { protocol?: string; hostname?: string; port?: string }
+): string {
+  // Same Public HTTPS URL preference as buildPairingUrl above, for the same
+  // reason: a real, browser-trusted cert instead of a self-signed warning.
+  if (info.public_https_url) {
+    return `${info.public_https_url}/remote`;
+  }
+
+  const host = currentLocation.hostname || '127.0.0.1';
+  const activeHost = (host === 'localhost' || host === '127.0.0.1')
+    ? (info.lan_ip || host)
+    : host;
+
+  let protocol = currentLocation.protocol || 'http:';
+  let activePort = currentLocation.port || '8080';
+
+  if (info.https_enabled && info.https_port) {
+    protocol = 'https:';
+    activePort = String(info.https_port);
+  } else {
+    activePort = currentLocation.port || (info.http_port ? String(info.http_port) : (info.port ? String(info.port) : '8080'));
+  }
+
+  return `${protocol}//${activeHost}:${activePort}/remote`;
 }
 
 

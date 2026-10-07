@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -58,12 +59,31 @@ pub struct DisplayStatus {
 }
 
 /// Message sent from an Axum handler thread into the native event loop thread —
-/// the only thread allowed to create/destroy `tao` windows.
-#[derive(Debug, Clone)]
+/// the only thread allowed to create/destroy `tao` windows (and, for `PickFolder`,
+/// the only thread allowed to show a native file-picker dialog: both GTK on Linux
+/// and the Win32/Cocoa dialogs `rfd` wraps need to run on the thread already
+/// pumping that platform's UI event loop, which is exactly this one).
+#[derive(Debug)]
 pub enum DisplayEvent {
     Open(DisplayOpenRequest),
     Close { id: String },
     RefreshMonitors,
+    /// `reply` carries back the chosen absolute path, or `None` if the user
+    /// canceled the dialog. See `docs/paths.md` (Settings > Storage directory
+    /// overrides) and `DisplayManagerHandle::pick_folder`.
+    PickFolder { reply: tokio::sync::oneshot::Sender<Option<String>> },
+    /// Same as `PickFolder` but a single-file dialog. See `docs/update.md`
+    /// (Settings > About > "Install Update from File") and
+    /// `DisplayManagerHandle::pick_file`.
+    PickFile { reply: tokio::sync::oneshot::Sender<Option<String>> },
+    /// Opens an arbitrary external URL in its own native webview window, with
+    /// `init_script` injected on every page load within it (`wry`'s
+    /// `with_initialization_script`, which re-runs across navigations to a
+    /// brand-new origin, not just the first page) -- see
+    /// `docs/CCLI_REPORTING.md`'s autofill-assist feature. This is the only
+    /// kind of window in this app that doesn't load one of OS-Next's own
+    /// served pages, so it gets its own variant rather than reusing `Open`.
+    OpenExternal { title: String, url: String, init_script: String },
 }
 
 /// Shared handle Axum handlers use to talk to the native event loop and read its
@@ -87,16 +107,16 @@ impl DisplayManagerHandle {
     }
 
     pub fn monitors(&self) -> Vec<MonitorInfo> {
-        self.monitors.lock().unwrap().clone()
+        self.monitors.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn statuses(&self) -> HashMap<String, DisplayStatus> {
-        self.statuses.lock().unwrap().clone()
+        self.statuses.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// `Some` only once the native event loop has actually started.
     pub fn is_ready(&self) -> bool {
-        self.proxy.lock().unwrap().is_some()
+        self.proxy.lock().unwrap_or_else(|e| e.into_inner()).is_some()
     }
 
     pub fn open(&self, req: DisplayOpenRequest) -> Result<(), String> {
@@ -111,8 +131,37 @@ impl DisplayManagerHandle {
         self.send(DisplayEvent::RefreshMonitors)
     }
 
+    /// Shows a native "choose a folder" dialog on the same thread as the
+    /// operator console's own window, and returns the chosen path (or `None`
+    /// if canceled). `Err` means there's no native window to show a dialog
+    /// from at all (headless/browser-only mode) or it's still starting up —
+    /// callers should fall back to a plain text path field in that case.
+    pub async fn pick_folder(&self) -> Result<Option<String>, String> {
+        let (reply, rx) = tokio::sync::oneshot::channel();
+        self.send(DisplayEvent::PickFolder { reply })?;
+        rx.await.map_err(|_| "Native window closed before responding".to_string())
+    }
+
+    /// Same as `pick_folder` but a single-file dialog (e.g. a downloaded
+    /// update package -- see `docs/update.md`).
+    pub async fn pick_file(&self) -> Result<Option<String>, String> {
+        let (reply, rx) = tokio::sync::oneshot::channel();
+        self.send(DisplayEvent::PickFile { reply })?;
+        rx.await.map_err(|_| "Native window closed before responding".to_string())
+    }
+
+    /// Opens an external URL in its own native webview window with a script
+    /// injected on every page load -- see `docs/CCLI_REPORTING.md`. `Err`
+    /// means there's no native window at all (headless/browser-only mode) or
+    /// it's still starting up; there is no plain-browser-tab fallback for
+    /// this one, since the whole point is script injection this app
+    /// controls, which an external browser tab can't offer.
+    pub fn open_external(&self, title: String, url: String, init_script: String) -> Result<(), String> {
+        self.send(DisplayEvent::OpenExternal { title, url, init_script })
+    }
+
     fn send(&self, event: DisplayEvent) -> Result<(), String> {
-        let guard = self.proxy.lock().unwrap();
+        let guard = self.proxy.lock().unwrap_or_else(|e| e.into_inner());
         match guard.as_ref() {
             Some(proxy) => proxy
                 .send_event(event)
@@ -209,6 +258,18 @@ fn enumerate_monitors(iter: impl Iterator<Item = tao::monitor::MonitorHandle>, p
 }
 
 #[cfg(feature = "desktop-webview")]
+const APP_ICON_PNG: &[u8] = include_bytes!("../../packaging/icons/256x256.png");
+
+/// Loads the embedded 256x256 application icon and decodes it to a 32bpp RGBA Tao window icon.
+#[cfg(feature = "desktop-webview")]
+pub fn load_app_icon() -> Option<tao::window::Icon> {
+    let img = image::load_from_memory(APP_ICON_PNG).ok()?.into_rgba8();
+    let (width, height) = img.dimensions();
+    let rgba = img.into_raw();
+    tao::window::Icon::from_rgba(rgba, width, height).ok()
+}
+
+#[cfg(feature = "desktop-webview")]
 fn build_display_window(
     target: &tao::event_loop::EventLoopWindowTarget<DisplayEvent>,
     monitor: &tao::monitor::MonitorHandle,
@@ -228,13 +289,17 @@ fn build_display_window(
         DisplayResolution::Fixed { width, height } => (*width, *height),
     };
 
-    let builder = tao::window::WindowBuilder::new()
+    let mut builder = tao::window::WindowBuilder::new()
         .with_title("OS-Next Display Output")
         .with_decorations(false)
         .with_always_on_top(req.always_on_top)
         .with_position(monitor.position())
         .with_inner_size(tao::dpi::PhysicalSize::new(reported_size.0, reported_size.1))
         .with_visible(true);
+
+    if let Some(icon) = load_app_icon() {
+        builder = builder.with_window_icon(Some(icon));
+    }
 
     match builder.build(target) {
         Ok(w) => Some((w, reported_size)),
@@ -286,7 +351,7 @@ fn try_open_display(
         };
         match wry::WebViewBuilder::new_gtk(vbox).with_url(&display_url).build() {
             Ok(webview) => {
-                display_manager.statuses.lock().unwrap().insert(
+                display_manager.statuses.lock().unwrap_or_else(|e| e.into_inner()).insert(
                     req.id.clone(),
                     DisplayStatus { open: true, monitor_index: Some(req.monitor_index), width: Some(w), height: Some(h) },
                 );
@@ -306,6 +371,7 @@ fn try_open_display(
     display_windows: &mut HashMap<String, (tao::window::Window, wry::WebView)>,
     display_manager: &DisplayManagerHandle,
     pending_opens: &mut Vec<DisplayOpenRequest>,
+    web_context: &mut wry::WebContext,
 ) {
     let monitor = match monitors.get(req.monitor_index) {
         Some(m) => m,
@@ -321,9 +387,9 @@ fn try_open_display(
 
     if let Some((win, (w, h))) = build_display_window(target, monitor, &req) {
         let display_url = format!("http://127.0.0.1:{}/{}", port, req.content_path);
-        match wry::WebViewBuilder::new(&win).with_url(&display_url).build() {
+        match wry::WebViewBuilder::new(&win).with_web_context(web_context).with_url(&display_url).build() {
             Ok(webview) => {
-                display_manager.statuses.lock().unwrap().insert(
+                display_manager.statuses.lock().unwrap_or_else(|e| e.into_inner()).insert(
                     req.id.clone(),
                     DisplayStatus { open: true, monitor_index: Some(req.monitor_index), width: Some(w), height: Some(h) },
                 );
@@ -334,17 +400,98 @@ fn try_open_display(
     }
 }
 
+/// Builds the ad-hoc utility window `DisplayEvent::OpenExternal` needs --
+/// pointed at an arbitrary external URL rather than one of this app's own
+/// served pages, so it gets its own small window-building function instead
+/// of extending `build_display_window`/`try_open_display` (those assume a
+/// specific monitor/fullscreen/content-path shape this doesn't have at all).
 #[cfg(all(feature = "desktop-webview", target_os = "linux"))]
-pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManagerHandle>, configured_outputs: Vec<DisplayOpenRequest>, host_session_token: String) {
+fn open_external_window(
+    target: &tao::event_loop::EventLoopWindowTarget<DisplayEvent>,
+    title: &str,
+    url: &str,
+    init_script: &str,
+    assist_windows: &mut Vec<(tao::window::Window, wry::WebView)>,
+) {
+    use tao::platform::unix::WindowExtUnix;
+    use wry::WebViewBuilderExtUnix;
+
+    let mut builder = tao::window::WindowBuilder::new()
+        .with_title(title)
+        .with_inner_size(tao::dpi::LogicalSize::new(1024.0, 768.0));
+    if let Some(icon) = load_app_icon() {
+        builder = builder.with_window_icon(Some(icon));
+    }
+    let win = match builder.build(target) {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::error!("Failed to create external assist window: {}", e);
+            return;
+        }
+    };
+    let vbox = match win.default_vbox() {
+        Some(v) => v,
+        None => {
+            tracing::error!("Failed to get GTK vbox for external assist window");
+            return;
+        }
+    };
+    match wry::WebViewBuilder::new_gtk(vbox).with_url(url).with_initialization_script(init_script).build() {
+        Ok(webview) => assist_windows.push((win, webview)),
+        Err(e) => tracing::error!("Failed to build external assist webview: {}", e),
+    }
+}
+
+#[cfg(all(feature = "desktop-webview", not(target_os = "linux")))]
+fn open_external_window(
+    target: &tao::event_loop::EventLoopWindowTarget<DisplayEvent>,
+    title: &str,
+    url: &str,
+    init_script: &str,
+    assist_windows: &mut Vec<(tao::window::Window, wry::WebView)>,
+    web_context: &mut wry::WebContext,
+) {
+    let mut builder = tao::window::WindowBuilder::new()
+        .with_title(title)
+        .with_inner_size(tao::dpi::LogicalSize::new(1024.0, 768.0));
+    if let Some(icon) = load_app_icon() {
+        builder = builder.with_window_icon(Some(icon));
+    }
+    let win = match builder.build(target) {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::error!("Failed to create external assist window: {}", e);
+            return;
+        }
+    };
+    match wry::WebViewBuilder::new(&win)
+        .with_web_context(web_context)
+        .with_url(url)
+        .with_initialization_script(init_script)
+        .build()
+    {
+        Ok(webview) => assist_windows.push((win, webview)),
+        Err(e) => tracing::error!("Failed to build external assist webview: {}", e),
+    }
+}
+
+#[cfg(all(feature = "desktop-webview", target_os = "linux"))]
+pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManagerHandle>, configured_outputs: Vec<DisplayOpenRequest>, host_session_token: String, _data_dir: PathBuf) {
     let url = format!("http://127.0.0.1:{}/", port);
     tracing::info!("Launching native desktop webview at {}", url);
 
     let event_loop = tao::event_loop::EventLoopBuilder::<DisplayEvent>::with_user_event().build();
-    *display_manager.proxy.lock().unwrap() = Some(event_loop.create_proxy());
+    *display_manager.proxy.lock().unwrap_or_else(|e| e.into_inner()) = Some(event_loop.create_proxy());
 
-    let window = tao::window::WindowBuilder::new()
+    let mut window_builder = tao::window::WindowBuilder::new()
         .with_title("OS-Next Operator Console")
-        .with_inner_size(tao::dpi::LogicalSize::new(1440.0, 900.0))
+        .with_inner_size(tao::dpi::LogicalSize::new(1440.0, 900.0));
+
+    if let Some(icon) = load_app_icon() {
+        window_builder = window_builder.with_window_icon(Some(icon));
+    }
+
+    let window = window_builder
         .build(&event_loop)
         .expect("Failed to create tao window");
 
@@ -357,8 +504,7 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
     // (even a paired one) can ever observe it. This is what makes it safe
     // for this specific window to carry full keyring/pairing-management
     // trust: that trust is "you are this actual native process," not a
-    // network-transmitted secret. See docs/GEMINI_COMMIT_REVIEW_2026-09-22.md #2/#3
-    // and `web/src/core/host_session.ts`.
+    // network-transmitted secret. See `web/src/core/host_session.ts`.
     let init_script = format!("window.__OS_HOST_TOKEN__ = {:?};", host_session_token);
 
     let _webview = wry::WebViewBuilder::new_gtk(vbox)
@@ -368,9 +514,10 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
         .build()
         .expect("Failed to build wry webview on Linux");
 
-    *display_manager.monitors.lock().unwrap() = enumerate_monitors(window.available_monitors(), window.primary_monitor());
+    *display_manager.monitors.lock().unwrap_or_else(|e| e.into_inner()) = enumerate_monitors(window.available_monitors(), window.primary_monitor());
 
     let mut display_windows: HashMap<String, (tao::window::Window, wry::WebView)> = HashMap::new();
+    let mut assist_windows: Vec<(tao::window::Window, wry::WebView)> = Vec::new();
     let mut pending_opens: Vec<DisplayOpenRequest> = Vec::new();
     let mut startup_outputs = Some(configured_outputs);
     let mut next_monitor_poll = std::time::Instant::now() + MONITOR_POLL_INTERVAL;
@@ -393,7 +540,7 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
             tao::event::Event::MainEventsCleared => {
                 if !pending_opens.is_empty() && std::time::Instant::now() >= next_monitor_poll {
                     let monitors: Vec<_> = target.available_monitors().collect();
-                    *display_manager.monitors.lock().unwrap() = enumerate_monitors(target.available_monitors(), target.primary_monitor());
+                    *display_manager.monitors.lock().unwrap_or_else(|e| e.into_inner()) = enumerate_monitors(target.available_monitors(), target.primary_monitor());
                     let retry = std::mem::take(&mut pending_opens);
                     for req in retry {
                         try_open_display(target, &monitors, req, port, &mut display_windows, &display_manager, &mut pending_opens);
@@ -406,7 +553,9 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
                     *control_flow = tao::event_loop::ControlFlow::Exit;
                 } else if let Some(id) = display_windows.iter().find(|(_, (w, _))| w.id() == window_id).map(|(k, _)| k.clone()) {
                     display_windows.remove(&id);
-                    display_manager.statuses.lock().unwrap().insert(id, DisplayStatus::default());
+                    display_manager.statuses.lock().unwrap_or_else(|e| e.into_inner()).insert(id, DisplayStatus::default());
+                } else {
+                    assist_windows.retain(|(w, _)| w.id() != window_id);
                 }
             }
             tao::event::Event::UserEvent(DisplayEvent::Open(req)) => {
@@ -416,10 +565,27 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
             tao::event::Event::UserEvent(DisplayEvent::Close { id }) => {
                 display_windows.remove(&id);
                 pending_opens.retain(|r| r.id != id);
-                display_manager.statuses.lock().unwrap().insert(id, DisplayStatus::default());
+                display_manager.statuses.lock().unwrap_or_else(|e| e.into_inner()).insert(id, DisplayStatus::default());
             }
             tao::event::Event::UserEvent(DisplayEvent::RefreshMonitors) => {
-                *display_manager.monitors.lock().unwrap() = enumerate_monitors(target.available_monitors(), target.primary_monitor());
+                *display_manager.monitors.lock().unwrap_or_else(|e| e.into_inner()) = enumerate_monitors(target.available_monitors(), target.primary_monitor());
+            }
+            tao::event::Event::UserEvent(DisplayEvent::PickFolder { reply }) => {
+                let picked = rfd::FileDialog::new()
+                    .set_title("Choose a Folder")
+                    .pick_folder()
+                    .map(|p| p.to_string_lossy().to_string());
+                let _ = reply.send(picked);
+            }
+            tao::event::Event::UserEvent(DisplayEvent::PickFile { reply }) => {
+                let picked = rfd::FileDialog::new()
+                    .set_title("Choose an Update Package")
+                    .pick_file()
+                    .map(|p| p.to_string_lossy().to_string());
+                let _ = reply.send(picked);
+            }
+            tao::event::Event::UserEvent(DisplayEvent::OpenExternal { title, url, init_script }) => {
+                open_external_window(target, &title, &url, &init_script, &mut assist_windows);
             }
             _ => {}
         }
@@ -427,32 +593,49 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
 }
 
 #[cfg(all(feature = "desktop-webview", not(target_os = "linux")))]
-pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManagerHandle>, configured_outputs: Vec<DisplayOpenRequest>, host_session_token: String) {
+pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManagerHandle>, configured_outputs: Vec<DisplayOpenRequest>, host_session_token: String, data_dir: PathBuf) {
     let url = format!("http://127.0.0.1:{}/", port);
     tracing::info!("Launching native desktop webview at {}", url);
 
     let event_loop = tao::event_loop::EventLoopBuilder::<DisplayEvent>::with_user_event().build();
-    *display_manager.proxy.lock().unwrap() = Some(event_loop.create_proxy());
+    *display_manager.proxy.lock().unwrap_or_else(|e| e.into_inner()) = Some(event_loop.create_proxy());
 
-    let window = tao::window::WindowBuilder::new()
+    let mut window_builder = tao::window::WindowBuilder::new()
         .with_title("OS-Next Operator Console")
-        .with_inner_size(tao::dpi::LogicalSize::new(1440.0, 900.0))
+        .with_inner_size(tao::dpi::LogicalSize::new(1440.0, 900.0));
+
+    if let Some(icon) = load_app_icon() {
+        window_builder = window_builder.with_window_icon(Some(icon));
+    }
+
+    let window = window_builder
         .build(&event_loop)
         .expect("Failed to create tao window");
 
     // See the matching comment in the Linux/GTK branch above.
     let init_script = format!("window.__OS_HOST_TOKEN__ = {:?};", host_session_token);
 
+    // Without an explicit data directory, WebView2 defaults to a
+    // "<exe name>.WebView2" folder next to the exe -- inside the install
+    // directory on Windows, which the uninstaller doesn't know to remove and
+    // which a non-writable per-machine install couldn't create at all.
+    // Redirecting it into our own per-user data dir keeps everything the
+    // uninstaller doesn't own out of the install directory, matching the
+    // guarantee docs/installer.md already makes for library.db et al.
+    let mut web_context = wry::WebContext::new(Some(data_dir.join("webview2")));
+
     let _webview = wry::WebViewBuilder::new(&window)
+        .with_web_context(&mut web_context)
         .with_url(&url)
         .with_initialization_script(&init_script)
         .with_devtools(true)
         .build()
         .expect("Failed to build wry webview on Windows/macOS");
 
-    *display_manager.monitors.lock().unwrap() = enumerate_monitors(window.available_monitors(), window.primary_monitor());
+    *display_manager.monitors.lock().unwrap_or_else(|e| e.into_inner()) = enumerate_monitors(window.available_monitors(), window.primary_monitor());
 
     let mut display_windows: HashMap<String, (tao::window::Window, wry::WebView)> = HashMap::new();
+    let mut assist_windows: Vec<(tao::window::Window, wry::WebView)> = Vec::new();
     let mut pending_opens: Vec<DisplayOpenRequest> = Vec::new();
     let mut startup_outputs = Some(configured_outputs);
     let mut next_monitor_poll = std::time::Instant::now() + MONITOR_POLL_INTERVAL;
@@ -468,17 +651,17 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
                 if let Some(outputs) = startup_outputs.take() {
                     let monitors: Vec<_> = target.available_monitors().collect();
                     for req in outputs {
-                        try_open_display(target, &monitors, req, port, &mut display_windows, &display_manager, &mut pending_opens);
+                        try_open_display(target, &monitors, req, port, &mut display_windows, &display_manager, &mut pending_opens, &mut web_context);
                     }
                 }
             }
             tao::event::Event::MainEventsCleared => {
                 if !pending_opens.is_empty() && std::time::Instant::now() >= next_monitor_poll {
                     let monitors: Vec<_> = target.available_monitors().collect();
-                    *display_manager.monitors.lock().unwrap() = enumerate_monitors(target.available_monitors(), target.primary_monitor());
+                    *display_manager.monitors.lock().unwrap_or_else(|e| e.into_inner()) = enumerate_monitors(target.available_monitors(), target.primary_monitor());
                     let retry = std::mem::take(&mut pending_opens);
                     for req in retry {
-                        try_open_display(target, &monitors, req, port, &mut display_windows, &display_manager, &mut pending_opens);
+                        try_open_display(target, &monitors, req, port, &mut display_windows, &display_manager, &mut pending_opens, &mut web_context);
                     }
                     next_monitor_poll = std::time::Instant::now() + MONITOR_POLL_INTERVAL;
                 }
@@ -488,20 +671,39 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
                     *control_flow = tao::event_loop::ControlFlow::Exit;
                 } else if let Some(id) = display_windows.iter().find(|(_, (w, _))| w.id() == window_id).map(|(k, _)| k.clone()) {
                     display_windows.remove(&id);
-                    display_manager.statuses.lock().unwrap().insert(id, DisplayStatus::default());
+                    display_manager.statuses.lock().unwrap_or_else(|e| e.into_inner()).insert(id, DisplayStatus::default());
+                } else {
+                    assist_windows.retain(|(w, _)| w.id() != window_id);
                 }
             }
             tao::event::Event::UserEvent(DisplayEvent::Open(req)) => {
                 let monitors: Vec<_> = target.available_monitors().collect();
-                try_open_display(target, &monitors, req, port, &mut display_windows, &display_manager, &mut pending_opens);
+                try_open_display(target, &monitors, req, port, &mut display_windows, &display_manager, &mut pending_opens, &mut web_context);
             }
             tao::event::Event::UserEvent(DisplayEvent::Close { id }) => {
                 display_windows.remove(&id);
                 pending_opens.retain(|r| r.id != id);
-                display_manager.statuses.lock().unwrap().insert(id, DisplayStatus::default());
+                display_manager.statuses.lock().unwrap_or_else(|e| e.into_inner()).insert(id, DisplayStatus::default());
             }
             tao::event::Event::UserEvent(DisplayEvent::RefreshMonitors) => {
-                *display_manager.monitors.lock().unwrap() = enumerate_monitors(target.available_monitors(), target.primary_monitor());
+                *display_manager.monitors.lock().unwrap_or_else(|e| e.into_inner()) = enumerate_monitors(target.available_monitors(), target.primary_monitor());
+            }
+            tao::event::Event::UserEvent(DisplayEvent::PickFolder { reply }) => {
+                let picked = rfd::FileDialog::new()
+                    .set_title("Choose a Folder")
+                    .pick_folder()
+                    .map(|p| p.to_string_lossy().to_string());
+                let _ = reply.send(picked);
+            }
+            tao::event::Event::UserEvent(DisplayEvent::PickFile { reply }) => {
+                let picked = rfd::FileDialog::new()
+                    .set_title("Choose an Update Package")
+                    .pick_file()
+                    .map(|p| p.to_string_lossy().to_string());
+                let _ = reply.send(picked);
+            }
+            tao::event::Event::UserEvent(DisplayEvent::OpenExternal { title, url, init_script }) => {
+                open_external_window(target, &title, &url, &init_script, &mut assist_windows, &mut web_context);
             }
             _ => {}
         }
@@ -509,6 +711,18 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
 }
 
 #[cfg(not(feature = "desktop-webview"))]
-pub fn launch_desktop_webview_sync(_port: u16, _display_manager: Arc<DisplayManagerHandle>, _configured_outputs: Vec<DisplayOpenRequest>, _host_session_token: String) {
+pub fn launch_desktop_webview_sync(_port: u16, _display_manager: Arc<DisplayManagerHandle>, _configured_outputs: Vec<DisplayOpenRequest>, _host_session_token: String, _data_dir: PathBuf) {
     tracing::info!("Desktop webview feature disabled. Running in headless mode.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "desktop-webview")]
+    fn test_load_app_icon_succeeds() {
+        let icon = load_app_icon();
+        assert!(icon.is_some(), "Embedded application icon must decode successfully");
+    }
 }

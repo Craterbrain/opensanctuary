@@ -1,66 +1,35 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { spawn, type Subprocess } from "bun";
-import { resolve, join } from "path";
-import { mkdtempSync, rmSync } from "fs";
-import { tmpdir } from "os";
+import { spawnTestServer, teardownTestServer, type SpawnedTestServer } from "./e2e_helpers";
 
 // Verifies per-run rich text editing works against a REAL browser Selection/
 // Range API — a hand-mocked DOM (as other editor tests use) can't exercise
 // genuine partial-text selection splitting, so this needs a live browser.
 describe("E2E Live Test: Per-Run Rich Text Selection Splitting", () => {
-  let serverProc: Subprocess;
+  let server: SpawnedTestServer;
   let browser: Browser;
   let page: Page;
-  let testDir: string;
-  let DB_PATH: string;
   const PORT = 8998;
 
   beforeAll(async () => {
     // Isolated OS temp dir: Database::new derives songs/bibles folders from
     // the db path's parent, so a project-root db path (the old behavior
     // here) meant every e2e run silently mutated the real song library.
-    testDir = mkdtempSync(join(tmpdir(), "os-next-e2e-"));
-    DB_PATH = join(testDir, "test.db");
-
-    const binaryPath = resolve(__dirname, "../../target/release/os-next");
-    serverProc = spawn([
-      binaryPath,
-      "--headless",
-      "--port", PORT.toString(),
-      "--db-path", DB_PATH,
-      "--web-dir", resolve(__dirname, "../")
-    ], {
-      cwd: resolve(__dirname, "../../"),
-      stdout: "pipe",
-      stderr: "pipe"
-    });
-
-    let ready = false;
-    for (let i = 0; i < 40; i++) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${PORT}/`);
-        if (res.ok) { ready = true; break; }
-      } catch (_) {}
-      await new Promise(r => setTimeout(r, 250));
-    }
-    if (!ready) throw new Error("Server failed to start in 10s");
+    server = await spawnTestServer({ port: PORT });
 
     browser = await chromium.launch({ headless: true });
     page = await browser.newPage();
     page.on("pageerror", err => console.log("PAGE ERR:", err.message));
     await page.goto(`http://127.0.0.1:${PORT}/`);
     await page.waitForFunction(() => (window as any).__APP_READY__ === true, { timeout: 15000 });
-    await page.waitForLoadState("networkidle");
+    // Not waitForLoadState("networkidle") -- the app's persistent time-sync
+    // WebSocket means "idle" may never fire; __APP_READY__ above is the
+    // real readiness signal (see main.ts).
   }, 45000);
 
   afterAll(async () => {
     if (browser) await browser.close();
-    if (serverProc) {
-      serverProc.kill();
-      await serverProc.exited;
-    }
-    try { rmSync(testDir, { recursive: true, force: true }); } catch (_) {}
+    await teardownTestServer(server);
   });
 
   test("Bolding a mid-word selection splits the run without losing the rest of the text", async () => {
