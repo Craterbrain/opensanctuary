@@ -156,11 +156,11 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install clang/lld (cargo-xwin's linker) and Wine (for Inno Setup)
+      - name: Install clang/llvm/lld (cargo-xwin's linker) and Wine (for Inno Setup)
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang lld wine wine32 wine64 unzip xvfb
+          sudo apt-get install -y --no-install-recommends clang llvm lld wine wine32 wine64 unzip xvfb
 
       - name: Install Inno Setup 6 under Wine
         run: |
