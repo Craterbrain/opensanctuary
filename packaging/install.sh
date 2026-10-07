@@ -27,11 +27,9 @@ set -eu
 
 # --- Configuration ---------------------------------------------------------
 
-# Mirrors `RELEASES_REPO` in src/network/updater.rs -- same disposable
-# public test repo for now (the real Craterbrain/opensanctuary is still
-# private; see docs/update.md's "Blocker to resolve first"). Swap both
-# this and PUBLIC_KEY below together once that repo goes public.
-REPO="Craterbrain/opensanctuary-release-testing"
+# Mirrors `RELEASES_REPO` in src/network/updater.rs. Keep both, and
+# PUBLIC_KEY below, in sync.
+REPO="Craterbrain/opensanctuary"
 
 # Mirrors `RELEASE_PUBLIC_KEY_B64` in src/network/updater.rs exactly -- the
 # production release key (minisign ID 80DBAA0356AE9867).

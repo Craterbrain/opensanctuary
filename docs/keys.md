@@ -128,9 +128,8 @@ into a binary isn't the sole source of truth for its own trust:
    `src/network/updater.rs` and `PUBLIC_KEY` in `packaging/install.sh` hold
    the same `RW...` string as step 5's variable. This is what every
    installed copy of OpenSanctuary actually checks updates against.
-2. **Swap the repo too**: same file, `RELEASES_REPO` currently points at
-   `Craterbrain/opensanctuary-release-testing` (the disposable test repo).
-   Change it to the real repo once it's public.
+2. **Swap the repo too** _(done)_: `RELEASES_REPO` and `REPO` point at
+   `Craterbrain/opensanctuary`, which must be public for the updater.
 3. **Publish it independently** _(done: `docs/release-signing-key.txt`, README "Releases")_: create `docs/release-signing-key.txt`
    containing the full contents of `opensanctuary_release.pub` (both
    lines) plus a one-line note of when/how it was generated. Add a short

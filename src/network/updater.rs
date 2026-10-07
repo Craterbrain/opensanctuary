@@ -25,16 +25,12 @@ use minisign_verify::{PublicKey, Signature};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-/// The GitHub repo the automated check flow polls. **This is currently a
-/// public test/release-mirror repo, not the real project repo**
-/// (`Craterbrain/opensanctuary`, still private as of this writing -- an
-/// unauthenticated `GET .../releases/latest`, the only safe way for a
-/// distributed binary to check for updates, 404s against a private repo;
-/// see "Blocker to resolve first" in `docs/update.md`). Swapping this one
-/// constant is the entire migration once the real repo goes public, or a
-/// dedicated public release-mirror repo exists -- nothing else in this
-/// module or its callers needs to change.
-pub const RELEASES_REPO: &str = "Craterbrain/opensanctuary-release-testing";
+/// The GitHub repo the automated check flow polls: the real project repo.
+/// It must stay public -- an unauthenticated `GET .../releases/latest`, the
+/// only safe way for a distributed binary to check for updates, 404s against
+/// a private repo. Download URLs are pinned to this repo's release assets
+/// (`is_release_download_url`). Keep `REPO` in `packaging/install.sh` in sync.
+pub const RELEASES_REPO: &str = "Craterbrain/opensanctuary";
 
 /// The release-signing public key (minisign key ID 80DBAA0356AE9867; the
 /// matching encrypted secret key is kept offline, never in this repo). Releases

@@ -50,9 +50,8 @@ a release publishes fine but installed apps reject it.
 ### 3. Point the app at the real release repo
 
 `RELEASES_REPO` in `src/network/updater.rs` and `REPO` in `packaging/install.sh`
-still point at `Craterbrain/opensanctuary-release-testing`. The updater only
-accepts downloads from `RELEASES_REPO`, so change both to the repo the
-workflow actually publishes to before shipping a build to real users.
+both point at `Craterbrain/opensanctuary`. The updater only accepts downloads
+from `RELEASES_REPO`, so if the workflow ever publishes elsewhere, change both.
 
 The updater polls `/releases/latest` without credentials, so that repo's
 releases must be **public**. Never mark a release as a GitHub "prerelease"
