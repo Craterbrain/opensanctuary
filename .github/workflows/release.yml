@@ -8,11 +8,10 @@
 # pushing a new one.
 #
 # Jobs:
-#   test          -- cargo build/test + web typecheck/build/test, gating the
-#                     two platform builds below (needs: test) -- a tag whose
-#                     commit doesn't pass the test suite can't produce a
-#                     release. See .github/workflows/ci.yml for the same
-#                     checks running on every push/PR instead of just here.
+#   check-version -- the tag must equal v<Cargo.toml version>; gates the two
+#                     platform builds below (needs: check-version). The test
+#                     suite is deliberately NOT run here -- ci.yml runs it on
+#                     every push/PR.
 #   build-linux   -- the .deb + generic tarball, from the same reproducible
 #                     container build packaging/build-deb.sh already uses
 #                     locally (CONTAINER_ENGINE=docker instead of podman --
@@ -86,19 +85,21 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Run the test suite before any release build
+  # No test suite here by design: ci.yml runs the tests on every push/PR.
+  # This job only guards the tag, because the in-app updater
+  # (src/network/updater.rs) refuses a release whose signed .deb filename
+  # doesn't carry the release tag's version, and that filename comes from
+  # Cargo.toml -- a mismatched tag would publish a release no installed copy
+  # can ever update to.
+  check-version:
+    name: Tag must match the Cargo.toml version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      # The in-app updater (src/network/updater.rs) refuses a release whose
-      # signed .deb filename doesn't carry the release tag's version, and the
-      # filename comes from Cargo.toml -- so a mismatched tag would publish a
-      # release no installed copy can ever update to.
-      - name: Tag must match the Cargo.toml version
+      - name: Compare tag to Cargo.toml
         env:
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
@@ -108,39 +109,9 @@ jobs:
             exit 1
           fi
 
-      - name: Install system dependencies (BUILDING.md)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: latest
-
-      # build.rs typechecks/bundles the web UI, which needs node_modules first.
-      - name: Install web dependencies
-        working-directory: web
-        run: bun install --frozen-lockfile
-
-      - name: cargo build + test
-        run: |
-          cargo build --verbose
-          cargo test --verbose
-
-      - name: web install + typecheck + build + test
-        working-directory: web
-        run: |
-          bun install --frozen-lockfile
-          bunx playwright install --with-deps chromium
-          bun run typecheck
-          bun run build
-          bun test
-
   build-linux:
     name: Linux (.deb + generic tarball)
-    needs: test
+    needs: check-version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -165,7 +136,7 @@ jobs:
 
   build-windows:
     name: Windows (installer + portable zip)
-    needs: test
+    needs: check-version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

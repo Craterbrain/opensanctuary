@@ -82,7 +82,8 @@ git push origin v0.3.0
 
 Watch it under the repo's **Actions** tab → **Release**. Jobs run in this order:
 
-1. `test`: tag/version check, `cargo test`, web typecheck/build/test.
+1. `check-version`: the tag must equal `v<Cargo.toml version>`. Tests are not run
+   here; `ci.yml` runs them on every push and PR.
 2. `build-linux` and `build-windows` in parallel (the Windows job installs the
    Android SDK, Wine, and Inno Setup, so expect it to be slow, especially the
    first time).
