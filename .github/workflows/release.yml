@@ -160,15 +160,18 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang lld wine wine32 wine64 unzip
+          sudo apt-get install -y --no-install-recommends clang lld wine wine32 wine64 unzip xvfb
 
       - name: Install Inno Setup 6 under Wine
         run: |
           curl -fsSL -o /tmp/innosetup.exe https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe
-          wine /tmp/innosetup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+          # No display on a hosted runner, and the Inno installer (and wine's
+          # first-run prefix setup) opens windows even when "silent" -- give
+          # wine a virtual one.
+          xvfb-run -a wine /tmp/innosetup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
 
       - name: Build installer + portable zip
-        run: SKIP_TV_APK=1 packaging/build-windows-installer.sh
+        run: SKIP_TV_APK=1 xvfb-run -a packaging/build-windows-installer.sh
 
       - name: Stage release assets
         run: |

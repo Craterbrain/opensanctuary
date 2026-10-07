@@ -14,7 +14,9 @@ how the app verifies updates is in `docs/update.md`.
 ## Current status (2026-10-06)
 
 - The workflow has **not yet completed a full run**. A dry run on tag
-  `v0.2.1-keytest` got past version check and the Rust/web build step; the
+  `v0.2.1-keytest` got past the version check, and the Windows job then failed
+  installing Inno Setup under Wine for lack of a display (fix: `xvfb-run`, on
+  `keytest`, not yet run); the Linux job's outcome was not recorded. The
   remaining fixes (below) live on branch `keytest` and have not been merged to
   `main`. Land them on `main` before cutting a real release, or the release
   will fail the same way.
@@ -198,6 +200,7 @@ second that each file matches it.
 | Checkout step fails fetching `refs/tags/<tag>` | The tag was never pushed (manual dispatch with a nonexistent tag) |
 | `build.rs` / `bun run typecheck` errors like "Cannot find module 'qrcode'" | Web dependencies not installed before `cargo build`; run `bun install --frozen-lockfile` in `web/` first |
 | `cargo deb` "Can't resolve asset ... tv-client" | Built without `--variant no-tv-apk` while `SKIP_TV_APK=1`, or the variant asset list drifted from the main one |
+| Windows job: "Install Inno Setup under Wine" fails, wine tries to open a window | Hosted runners have no display; wine and the Inno installer need one even when "silent". The workflow runs them under `xvfb-run -a` (install `xvfb`); keep that on both the Inno install step and the installer build step |
 | App says an update "does not carry release version" | `.deb` name doesn't match the tag; the tag/`Cargo.toml` check should prevent this, so check what produced the filename |
 | Installed apps never see the release | `RELEASES_REPO` isn't this repo, the repo/release isn't public, or the release is marked prerelease |
 
