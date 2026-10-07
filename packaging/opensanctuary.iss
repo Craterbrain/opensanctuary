@@ -58,7 +58,7 @@ Source: "{#SourceDir}\OpenSanctuary.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\web\*"; DestDir: "{app}\web"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Bundled Android TV client APK (docs/CLIENT_PAIRING.md's ADB-provisioning
 ; plan) -- resolved at runtime by src/storage/paths.rs::resolve_tv_apk_path().
-Source: "{#SourceDir}\tv-client\*"; DestDir: "{app}\tv-client"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourceDir}\tv-client\*"; DestDir: "{app}\tv-client"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 ; Bundled ffmpeg/ffprobe (LGPLv3, BtbN/FFmpeg-Builds -- see
 ; packaging/build-windows-installer.sh's "Bundled ffmpeg/ffprobe" comment
 ; and ffmpeg\SOURCE.txt for the corresponding-source pointer this license

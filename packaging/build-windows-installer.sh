@@ -40,8 +40,11 @@ echo "==> Building web UI assets..."
 # since an APK is cross-platform bytecode+resources, not a native binary.
 # Idempotent: whichever of the two release scripts runs first actually
 # builds it; the other just reuses the cached output.
+# SKIP_TV_APK=1 leaves the APK out entirely (no Android toolchain needed).
 TV_APK=target/tv-client/opensanctuary-tv.apk
-if [ ! -f "$TV_APK" ]; then
+if [ "${SKIP_TV_APK:-0}" = "1" ]; then
+  echo "==> SKIP_TV_APK=1: not building or bundling the Android TV client APK"
+elif [ ! -f "$TV_APK" ]; then
   echo "==> Building Android TV client APK..."
   mkdir -p target/tv-client
   cp "$(bash apps/android-tv/build_apk.sh | tail -1)" "$TV_APK"
@@ -119,7 +122,7 @@ for f in index.html live.html stage.html remote.html pairing.html style.css favi
 done
 cp web/dist/*.js "$STAGE/web/dist/"
 cp web/plugins/hello_world.js "$STAGE/web/plugins/"
-cp "$TV_APK" "$STAGE/tv-client/opensanctuary-tv.apk"
+[ "${SKIP_TV_APK:-0}" = "1" ] || cp "$TV_APK" "$STAGE/tv-client/opensanctuary-tv.apk"
 # NOT songs/public_domain.db: same reasoning as the .deb (Cargo.toml comment) --
 # songs_dir resolves to the per-user data dir, not this install-relative path,
 # so bundling it here would silently never be read.

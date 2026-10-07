@@ -68,6 +68,52 @@ assets = [
     # silently do nothing, so it's left out rather than shipped misleadingly.
 ]
 
+# Same package without the bundled Android TV client APK -- used by
+# `SKIP_TV_APK=1 packaging/build-deb.sh` (the GitHub release workflow), which
+# doesn't install the Android toolchain. Keep this asset list in sync with the
+# one above; the app reports "APK not available" when the file is absent
+# (src/storage/paths.rs::resolve_tv_apk_path).
+[package.metadata.deb.variants.no-tv-apk]
+assets = [
+    { source = "target/release/os-next", dest = "usr/bin/opensanctuary", mode = "755" },
+    { source = "packaging/opensanctuary.desktop", dest = "usr/share/applications/opensanctuary.desktop", mode = "644" },
+    { source = "web/favicon.svg", dest = "usr/share/icons/hicolor/scalable/apps/opensanctuary.svg", mode = "644" },
+    { source = "packaging/icons/16x16.png", dest = "usr/share/icons/hicolor/16x16/apps/opensanctuary.png", mode = "644" },
+    { source = "packaging/icons/32x32.png", dest = "usr/share/icons/hicolor/32x32/apps/opensanctuary.png", mode = "644" },
+    { source = "packaging/icons/48x48.png", dest = "usr/share/icons/hicolor/48x48/apps/opensanctuary.png", mode = "644" },
+    { source = "packaging/icons/64x64.png", dest = "usr/share/icons/hicolor/64x64/apps/opensanctuary.png", mode = "644" },
+    { source = "packaging/icons/128x128.png", dest = "usr/share/icons/hicolor/128x128/apps/opensanctuary.png", mode = "644" },
+    { source = "packaging/icons/256x256.png", dest = "usr/share/icons/hicolor/256x256/apps/opensanctuary.png", mode = "644" },
+    { source = "packaging/icons/512x512.png", dest = "usr/share/icons/hicolor/512x512/apps/opensanctuary.png", mode = "644" },
+    { source = "packaging/icons/256x256.png", dest = "usr/share/pixmaps/opensanctuary.png", mode = "644" },
+
+    { source = "web/index.html", dest = "usr/share/opensanctuary/web/index.html", mode = "644" },
+    { source = "web/live.html", dest = "usr/share/opensanctuary/web/live.html", mode = "644" },
+    { source = "web/stage.html", dest = "usr/share/opensanctuary/web/stage.html", mode = "644" },
+    { source = "web/remote.html", dest = "usr/share/opensanctuary/web/remote.html", mode = "644" },
+    { source = "web/pairing.html", dest = "usr/share/opensanctuary/web/pairing.html", mode = "644" },
+    { source = "web/style.css", dest = "usr/share/opensanctuary/web/style.css", mode = "644" },
+    { source = "web/favicon.svg", dest = "usr/share/opensanctuary/web/favicon.svg", mode = "644" },
+    { source = "web/favicon.ico", dest = "usr/share/opensanctuary/web/favicon.ico", mode = "644" },
+    { source = "web/favicon.png", dest = "usr/share/opensanctuary/web/favicon.png", mode = "644" },
+    { source = "web/logo-banner.svg", dest = "usr/share/opensanctuary/web/logo-banner.svg", mode = "644" },
+
+    { source = "web/dist/*.js", dest = "usr/share/opensanctuary/web/dist/", mode = "644" },
+    { source = "web/plugins/hello_world.js", dest = "usr/share/opensanctuary/web/plugins/hello_world.js", mode = "644" },
+
+    # ADB-sideloadable Android TV client (docs/CLIENT_PAIRING.md) -- built by
+    # apps/android-tv/build_apk.sh, staged to this path by
+    # packaging/build-deb-in-container.sh before this runs. Resolved at
+    # runtime by src/storage/paths.rs::resolve_tv_apk_path().
+    # NOT songs/public_domain.db: it would sit under the read-only install
+    # path, but songs_dir resolves to the per-user data directory (see
+    # docs/paths.md) -- SQLite just creates an empty db there instead of
+    # ever reading this one. A real install starts with zero song content,
+    # same as zero Bible content; first-time setup's "point at an existing
+    # folder" is today's way to add either. Bundling this file here would
+    # silently do nothing, so it's left out rather than shipped misleadingly.
+]
+
 [dependencies]
 # Async Runtime & Networking
 tokio = { version = "1.38", features = ["full"] }
