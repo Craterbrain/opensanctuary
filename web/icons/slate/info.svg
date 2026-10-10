@@ -1,8 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
   <style>
-    .stroke-icon { fill: none; stroke: #38bdf8; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-main { fill: none; stroke: #38bdf8; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-light { fill: none; stroke: #bae6fd; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   </style>
-  <circle class="stroke-icon" cx="12" cy="12" r="10"/>
-  <line class="stroke-icon" x1="12" y1="16" x2="12" y2="12"/>
-  <line class="stroke-icon" x1="12" y1="8" x2="12.01" y2="8"/>
+  <circle class="stroke-main" cx="12" cy="12" r="10"/>
+  <line class="stroke-light" x1="12" y1="16" x2="12" y2="12"/>
+  <line class="stroke-light" x1="12" y1="8" x2="12.01" y2="8"/>
 </svg>

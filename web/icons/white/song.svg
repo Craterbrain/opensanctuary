@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
   <style>
-    .fill-white { fill: #f8fafc; }
-    .stroke-gray { fill: none; stroke: #94a3b8; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-    .stroke-white { fill: none; stroke: #f8fafc; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-main { fill: none; stroke: #e2e8f0; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .fill-main { fill: #e2e8f0; }
+    .stroke-light { fill: none; stroke: #ffffff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   </style>
-  <path class="stroke-white" d="M9 18V5l10-2v13"/>
-  <circle class="fill-white" cx="6" cy="18" r="3"/>
-  <circle class="fill-white" cx="16" cy="16" r="3"/>
-  <path class="stroke-gray" d="M18 6h4"/>
-  <path class="stroke-gray" d="M20 4v4"/>
+  <path class="stroke-main" d="M9 18V5l10-2v13"/>
+  <circle class="fill-main" cx="6" cy="18" r="3"/>
+  <circle class="fill-main" cx="16" cy="16" r="3"/>
+  <path class="stroke-light" d="M18 6h4"/>
+  <path class="stroke-light" d="M20 4v4"/>
 </svg>

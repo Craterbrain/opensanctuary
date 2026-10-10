@@ -1,6 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
   <style>
-
+    .stroke-main { fill: none; stroke: #e2e8f0; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .fill-main { fill: #e2e8f0; }
   </style>
-  <polygon class="fill-white stroke-white" points="6 4 20 12 6 20 6 4"/>
+  <polygon class="fill-main stroke-main" points="6 4 20 12 6 20 6 4"/>
 </svg>

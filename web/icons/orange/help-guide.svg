@@ -1,10 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
   <style>
-    .fill-icon { fill: #FF5722; }
-    .stroke-icon { fill: none; stroke: #FF5722; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-main { fill: none; stroke: #FF5722; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-light { fill: none; stroke: #FFA726; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .fill-light { fill: #FFA726; }
   </style>
-  <path class="stroke-icon" d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
-  <path class="stroke-icon" d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
-  <path class="stroke-icon" d="M10 9a2 2 0 0 1 3.8 1c0 1.2-1.8 1.8-1.8 2.5"/>
-  <circle class="fill-icon" cx="12" cy="15.5" r="0.7"/>
+  <path class="stroke-main" d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+  <path class="stroke-main" d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+  <path class="stroke-light" d="M10 9a2 2 0 0 1 3.8 1c0 1.2-1.8 1.8-1.8 2.5"/>
+  <circle class="fill-light" cx="12" cy="15.5" r="0.7"/>
 </svg>

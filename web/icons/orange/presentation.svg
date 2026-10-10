@@ -1,11 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
   <style>
-    .stroke-icon { fill: none; stroke: #FF5722; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-main { fill: none; stroke: #FF5722; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-light { fill: none; stroke: #FFA726; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-dark { fill: none; stroke: #D84315; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   </style>
-  <rect class="stroke-icon" x="2" y="3" width="20" height="14" rx="2"/>
-  <path class="stroke-icon" d="M7 13v-2"/>
-  <path class="stroke-icon" d="M12 13V8"/>
-  <path class="stroke-icon" d="M17 13v-4"/>
-  <line class="stroke-icon" x1="8" y1="21" x2="16" y2="21"/>
-  <line class="stroke-icon" x1="12" y1="17" x2="12" y2="21"/>
+  <rect class="stroke-main" x="2" y="3" width="20" height="14" rx="2"/>
+  <path class="stroke-light" d="M7 13v-2"/>
+  <path class="stroke-main" d="M12 13V8"/>
+  <path class="stroke-light" d="M17 13v-4"/>
+  <line class="stroke-dark" x1="8" y1="21" x2="16" y2="21"/>
+  <line class="stroke-dark" x1="12" y1="17" x2="12" y2="21"/>
 </svg>

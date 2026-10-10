@@ -1,7 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
   <style>
-    .stroke-icon { fill: none; stroke: #38bdf8; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-main { fill: none; stroke: #38bdf8; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .fill-main { fill: #38bdf8; }
+    .stroke-light { fill: none; stroke: #bae6fd; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   </style>
-  <polygon class="stroke-icon fill-icon" points="19 20 9 12 19 4 19 20"/>
-  <line class="stroke-icon" x1="5" y1="4" x2="5" y2="20"/>
+  <polygon class="fill-main stroke-main" points="19 20 9 12 19 4 19 20"/>
+  <line class="stroke-light" x1="5" y1="4" x2="5" y2="20"/>
 </svg>

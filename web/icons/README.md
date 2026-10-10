@@ -7,9 +7,12 @@ inline `<style>`), so it works as a plain `<img src="icons/<color>/<name>.svg">`
 The ribbon in `index.html` uses `icons/orange/`. To switch the ribbon to another
 color, change the folder in those `<img>` paths.
 
-`orange` is the app's brand color (`--os-brand-primary` `#FF5722`, amber accent
-`#FFA726`); it is the slate set recolored. The other four were split from the
-sheets.
+All five sets are two-tone: a main color, a lighter highlight on secondary
+details and a darker accent on structural parts. The tone assignment comes from
+`crimson` (split from its sheet); the others reuse it with their own colors.
+`orange` uses the app brand colors (`--os-brand-primary` `#FF5722`,
+`--os-brand-amber` `#FFA726`, `--os-brand-flame` `#D84315`). The sheets in
+`docs/icons/` are the original flat designs for slate, gold and white.
 
 The source sheets (all icons in one preview image per color) are in
 `docs/icons/`. These per-icon files were split out of them; if you edit a sheet,
