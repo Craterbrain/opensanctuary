@@ -466,10 +466,10 @@
                 <select class="studio-select text-xs h-6" id="tb-font-family" title="Font Family" disabled></select>
                 <button class="studio-step-btn h-6 w-6" id="tb-font-size-minus" title="Decrease Font Size" disabled>{icon:minus}</button>
                 <input class="studio-step-val text-xs w-11 text-center h-6 bg-slate-800 border border-slate-700 rounded px-1" id="tb-font-size" type="number" min="8" max="150" value="36" title="Font Size (pt)" disabled>
-                <button class="studio-step-btn h-6 w-6" id="tb-font-size-plus" title="Increase Font Size" disabled>+</button>
+                <button class="studio-step-btn h-6 w-6" id="tb-font-size-plus" title="Increase Font Size" disabled>{icon:plus}</button>
                 <div class="studio-mini-divider"></div>
-                <button class="studio-btn-toggle w-6 h-6 text-sm font-bold" id="tb-list-bullet" title="Bullet List" disabled>•</button>
-                <button class="studio-btn-toggle w-6 h-6 text-[10px] font-bold" id="tb-list-number" title="Numbered List" disabled>1.</button>
+                <button class="studio-btn-toggle w-6 h-6 text-sm font-bold" id="tb-list-bullet" title="Bullet List" disabled>{icon:list}</button>
+                <button class="studio-btn-toggle w-6 h-6 text-[10px] font-bold" id="tb-list-number" title="Numbered List" disabled>{icon:list-numbered}</button>
                 <button class="studio-btn-toggle w-6 h-6 text-xs" id="tb-indent-dec" title="Decrease Indent (Outdent)" disabled>{icon:outdent}</button>
                 <button class="studio-btn-toggle w-6 h-6 text-xs" id="tb-indent-inc" title="Increase Indent" disabled>{icon:indent}</button>
               </div>
@@ -481,8 +481,8 @@
                 <button class="studio-btn-toggle w-6 h-6 text-[10px]" id="tb-subscript" title="Subscript" disabled>X<sub>2</sub></button>
                 <button class="studio-btn-toggle w-6 h-6 text-[10px]" id="tb-superscript" title="Superscript" disabled>X<sup>2</sup></button>
                 <label class="studio-btn-toggle w-6 h-6 cursor-pointer relative p-0" title="Text Color" id="tb-text-color-label">
-                  <span class="w-3.5 h-3.5 rounded border border-slate-500 shadow-inner flex-none pointer-events-none" id="tb-text-color-bar" style="background: #ffffff;"></span>
-                  <input class="absolute inset-0 opacity-0 cursor-pointer w-full h-full" id="tb-text-color" type="color" value="#ffffff" disabled>
+                  <span class="studio-color-chip" id="tb-text-color-bar" style="background: #ffffff;"></span>
+                  <input class="studio-color-input" id="tb-text-color" type="color" value="#ffffff" disabled>
                 </label>
                 <div class="studio-mini-divider"></div>
                 <button class="studio-btn-toggle w-6 h-6 text-xs" id="tb-align-left" title="Align Left" disabled>⇤</button>
@@ -548,7 +548,7 @@
                 <button class="studio-btn" id="tb-save-template" title="Save the current slide as a reusable template">{icon:save-as} <span class="studio-label">Save as Template</span></button>
                 <div class="ribbon-popover-anchor">
                   <button class="studio-btn flex items-center gap-1.5" id="tb-background" title="Change Slide Background">
-                    <span class="inline-block w-3.5 h-3.5 rounded border border-slate-500 shadow-inner flex-none" id="tb-background-preview" style="background: #000000;"></span>
+                    <span class="studio-color-chip" id="tb-background-preview" style="background: #000000;"></span>
                     <span class="studio-label">Background</span>
                   </button>
                   <!-- Populated on demand by toolbar.ts (tabs + presets from
@@ -581,7 +581,7 @@
               <div class="ribbon-row">
                 <button class="studio-step-btn" id="tb-zoom-out" title="Zoom Out">{icon:minus}</button>
                 <span class="studio-step-val" id="tb-zoom-label">100%</span>
-                <button class="studio-step-btn" id="tb-zoom-in" title="Zoom In">+</button>
+                <button class="studio-step-btn" id="tb-zoom-in" title="Zoom In">{icon:plus}</button>
               </div>
               <div class="ribbon-row">
                 <button class="studio-btn" id="tb-zoom-fit" title="Zoom to Fit">⛶ <span class="studio-label">Fit</span></button>
