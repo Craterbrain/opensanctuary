@@ -290,27 +290,15 @@ function renderArrangementModalPanes() {
     masterListEl.innerHTML = '';
     localMasterSlides.forEach((master, mIdx) => {
       const card = document.createElement('div');
-      card.className = 'arrangement-master-card';
       const isMasterSelected = mIdx === selectedMasterIndex;
-      card.style.cssText = `
-        padding: 8px 10px;
-        background: ${isMasterSelected ? 'rgba(255, 167, 38, 0.12)' : 'rgba(255, 255, 255, 0.05)'};
-        border: 1px solid ${isMasterSelected ? 'var(--os-brand-amber, #ffa726)' : 'var(--os-border, #2d3139)'};
-        border-radius: 6px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        cursor: pointer;
-        user-select: none;
-        transition: all 0.15s ease;
-      `;
+      card.className = `arrangement-master-card arrangement-card${isMasterSelected ? ' selected' : ''}`;
       const badgeColor = ctx!.getSlideBadgeColor(master.badge);
       const firstLine = (master.text || '').split('\n')[0] || '(empty text)';
 
       card.innerHTML = `
-        <span style="font-weight: 700; font-size: 11px; color: ${badgeColor}; width: 28px;">${ctx!.escapeHtml(master.badge)}</span>
-        <span style="flex: 1; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-main, #eee);">${ctx!.escapeHtml(firstLine)}</span>
-        <button class="btn btn-tag btn-add-section" title="Append to play order" style="padding: 2px 6px; font-size: 10px; border-radius: 4px; background: rgba(255,167,38,0.15); color: var(--os-brand-amber, #ffa726); border: 1px solid var(--os-brand-amber, #ffa726); cursor: pointer;">+ Add</button>
+        <span class="arrangement-card-badge" style="color: ${badgeColor};">${ctx!.escapeHtml(master.badge)}</span>
+        <span class="arrangement-card-text">${ctx!.escapeHtml(firstLine)}</span>
+        <button class="btn btn-tag btn-add-section" title="Append to play order">+ Add</button>
       `;
 
       card.addEventListener('mouseenter', () => updateArrangementPreview(master, null));
@@ -354,7 +342,7 @@ function renderArrangementModalPanes() {
     playListEl.innerHTML = '';
     if (localArrangement.length === 0) {
       playListEl.innerHTML = `
-        <div style="padding: 24px; text-align: center; color: var(--text-muted, #777); font-size: 11px;">
+        <div class="list-message">
           No sections in play order. Click <b>+ Add</b> on master sections to build the song progression.
         </div>
       `;
@@ -363,29 +351,18 @@ function renderArrangementModalPanes() {
         const master = localMasterSlides[entry.source_slide_index] || localMasterSlides[0];
         const isPlaySelected = pIdx === selectedPlayIndex;
         const card = document.createElement('div');
-        card.className = `arrangement-play-card ${isPlaySelected ? 'selected-play-card' : ''}`;
-        card.style.cssText = `
-          padding: 6px 10px;
-          background: ${isPlaySelected ? 'rgba(255, 167, 38, 0.12)' : 'rgba(255, 255, 255, 0.04)'};
-          border: 1px solid ${isPlaySelected ? 'var(--os-brand-amber, #ffa726)' : 'var(--os-border, #2d3139)'};
-          border-radius: 6px;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          user-select: none;
-          cursor: pointer;
-        `;
+        card.className = `arrangement-play-card arrangement-card ${isPlaySelected ? 'selected-play-card selected' : ''}`;
         const badgeColor = ctx!.getSlideBadgeColor(entry.section_id);
         const firstLine = (master?.text || '').split('\n')[0] || '';
         const hasBgOverride = !!entry.background_override;
 
         card.innerHTML = `
-          <span class="arr-play-drag-handle drag-handle" title="Drag to reorder" style="cursor: grab; color: var(--text-dim, #777); font-size: 12px;">⠿</span>
-          <span style="font-size: 10px; color: var(--text-muted, #888); width: 18px;">${pIdx + 1}.</span>
-          <span style="font-weight: 700; font-size: 11px; color: ${badgeColor}; width: 28px;">${ctx!.escapeHtml(entry.section_id)}</span>
-          <span style="flex: 1; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-main, #eee);">${ctx!.escapeHtml(firstLine)}</span>
-          ${hasBgOverride ? '<span title="Custom per-play background override" style="font-size: 10px;">🖼️</span>' : ''}
-          <button class="btn-remove-entry" title="Remove from play order" style="background: none; border: none; color: #ff8888; cursor: pointer; font-size: 12px; padding: 0 4px; line-height: 1;">✕</button>
+          <span class="arr-play-drag-handle drag-handle" title="Drag to reorder">⠿</span>
+          <span class="arrangement-card-index">${pIdx + 1}.</span>
+          <span class="arrangement-card-badge" style="color: ${badgeColor};">${ctx!.escapeHtml(entry.section_id)}</span>
+          <span class="arrangement-card-text">${ctx!.escapeHtml(firstLine)}</span>
+          ${hasBgOverride ? '<span class="arrangement-card-flag" title="Custom per-play background override">🖼️</span>' : ''}
+          <button class="btn-remove-entry" title="Remove from play order">✕</button>
         `;
 
         card.addEventListener('mouseenter', () => updateArrangementPreview(master, entry.background_override));
@@ -426,10 +403,10 @@ function renderArrangementModalPanes() {
           dropTargetForElements({
             element: card,
             getData: () => ({ type: 'play-entry-target', targetIndex: pIdx }),
-            onDragEnter: () => card.style.borderColor = 'var(--os-brand-amber, #ffa726)',
-            onDragLeave: () => card.style.borderColor = 'var(--os-border, #2d3139)',
+            onDragEnter: () => card.style.borderColor = 'var(--os-brand-amber)',
+            onDragLeave: () => card.style.borderColor = '',
             onDrop: ({ source }) => {
-              card.style.borderColor = 'var(--os-border, #2d3139)';
+              card.style.borderColor = '';
               const data = source.data;
               if (data.type === 'master-section') {
                 const mIdx = data.masterIndex as number;

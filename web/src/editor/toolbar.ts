@@ -525,17 +525,17 @@ export class EditorToolbar {
     // its placement is computed from #tb-background's real screen position
     // the same way.
     const popover = document.createElement('div');
-    popover.className = 'ribbon-popover w-72 text-xs text-white';
+    popover.className = 'ribbon-popover bg-popover';
     const anchorRect = this.bgBtn.getBoundingClientRect();
     popover.style.left = `${anchorRect.left}px`;
     popover.style.top = `${anchorRect.bottom + 4}px`;
 
     // Header
     const head = document.createElement('div');
-    head.className = 'flex items-center justify-between pb-2 mb-2 border-b border-zinc-700/70 font-semibold text-zinc-300';
+    head.className = 'bg-popover-head';
     head.innerHTML = '<span>🎨 Slide Background</span>';
     const closeBtn = document.createElement('button');
-    closeBtn.className = 'text-zinc-400 hover:text-white px-1 cursor-pointer';
+    closeBtn.className = 'modal-close-btn';
     closeBtn.textContent = '✕';
     closeBtn.addEventListener('click', () => this.closeBackgroundPopover());
     head.appendChild(closeBtn);
@@ -543,22 +543,22 @@ export class EditorToolbar {
 
     // Tab buttons: Solid | Gradient | Media
     const tabs = document.createElement('div');
-    tabs.className = 'flex gap-1 mb-2.5 p-0.5 bg-zinc-900/80 rounded border border-zinc-800';
+    tabs.className = 'os-segmented bg-popover-tabs';
 
     const btnSolid = document.createElement('button');
-    btnSolid.className = 'flex-1 py-1 text-center rounded text-[11px] font-medium bg-zinc-700 text-white cursor-pointer';
+    btnSolid.className = 'active';
     btnSolid.textContent = 'Solid';
 
     const btnGradient = document.createElement('button');
-    btnGradient.className = 'flex-1 py-1 text-center rounded text-[11px] font-medium text-zinc-400 hover:text-zinc-200 cursor-pointer';
+    btnGradient.className = '';
     btnGradient.textContent = 'Gradient';
 
     const btnMedia = document.createElement('button');
-    btnMedia.className = 'flex-1 py-1 text-center rounded text-[11px] font-medium text-zinc-400 hover:text-zinc-200 cursor-pointer';
+    btnMedia.className = '';
     btnMedia.textContent = 'Media';
 
     const btnAnimated = document.createElement('button');
-    btnAnimated.className = 'flex-1 py-1 text-center rounded text-[11px] font-medium text-zinc-400 hover:text-zinc-200 cursor-pointer';
+    btnAnimated.className = '';
     btnAnimated.textContent = 'Animated';
 
     tabs.appendChild(btnSolid);
@@ -569,17 +569,17 @@ export class EditorToolbar {
 
     // Tab Contents Container
     const body = document.createElement('div');
-    body.className = 'space-y-2';
+    body.className = 'bg-popover-pane';
 
     // 1. Solid Content
     const solidPane = document.createElement('div');
-    solidPane.className = 'space-y-2';
+    solidPane.className = 'bg-popover-pane';
 
     const swatchGrid = document.createElement('div');
-    swatchGrid.className = 'grid grid-cols-5 gap-1.5';
+    swatchGrid.className = 'prop-swatches';
     for (const p of SOLID_PALETTE_PRESETS) {
       const sw = document.createElement('button');
-      sw.className = 'w-full h-6 rounded border border-zinc-700 hover:scale-105 transition-transform cursor-pointer';
+      sw.className = 'prop-swatch';
       sw.style.background = p.color;
       sw.title = p.name;
       sw.addEventListener('click', () => {
@@ -593,11 +593,11 @@ export class EditorToolbar {
     solidPane.appendChild(swatchGrid);
 
     const customRow = document.createElement('div');
-    customRow.className = 'flex items-center gap-2 pt-1';
-    customRow.innerHTML = '<span class="text-zinc-400 text-[11px]">Custom:</span>';
+    customRow.className = 'prop-row';
+    customRow.innerHTML = '<span class="prop-label">Custom:</span>';
     const colorPicker = document.createElement('input');
     colorPicker.type = 'color';
-    colorPicker.className = 'w-7 h-7 bg-transparent border-0 rounded cursor-pointer';
+    colorPicker.className = 'prop-color-sm';
     colorPicker.value = '#000000';
     colorPicker.addEventListener('input', () => {
       if (this.callbacks.onUpdateBackground) {
@@ -610,15 +610,15 @@ export class EditorToolbar {
 
     // 2. Gradient Content
     const gradPane = document.createElement('div');
-    gradPane.className = 'space-y-1.5 hidden';
+    gradPane.className = 'bg-popover-pane prop-presets hidden';
     for (const g of GRADIENT_PRESETS) {
       const gRow = document.createElement('button');
-      gRow.className = 'w-full flex items-center gap-2 p-1 rounded hover:bg-zinc-800 border border-zinc-800 text-left cursor-pointer';
+      gRow.className = 'prop-preset';
       const preview = document.createElement('div');
-      preview.className = 'w-8 h-5 rounded border border-zinc-700 flex-none';
+      preview.className = 'prop-preset-thumb';
       preview.style.background = g.preview;
       const label = document.createElement('span');
-      label.className = 'text-[11px] text-zinc-300 truncate';
+      label.className = 'prop-preset-label';
       label.textContent = g.name;
       gRow.appendChild(preview);
       gRow.appendChild(label);
@@ -635,15 +635,15 @@ export class EditorToolbar {
     // via applyResolvedBackground, so picking one is "what you see is what
     // you get" for the motion, not just the base color.
     const animatedPane = document.createElement('div');
-    animatedPane.className = 'space-y-1.5 hidden';
+    animatedPane.className = 'bg-popover-pane prop-presets hidden';
     for (const a of ANIMATED_PATTERN_PRESETS) {
       const aRow = document.createElement('button');
-      aRow.className = 'w-full flex items-center gap-2 p-1 rounded hover:bg-zinc-800 border border-zinc-800 text-left cursor-pointer';
+      aRow.className = 'prop-preset';
       const preview = document.createElement('div');
-      preview.className = 'w-8 h-5 rounded border border-zinc-700 flex-none overflow-hidden';
+      preview.className = 'prop-preset-thumb';
       applyResolvedBackground(preview, backgroundPresetDataString(a));
       const label = document.createElement('span');
-      label.className = 'text-[11px] text-zinc-300 truncate';
+      label.className = 'prop-preset-label';
       label.textContent = a.name;
       aRow.appendChild(preview);
       aRow.appendChild(label);
@@ -658,15 +658,15 @@ export class EditorToolbar {
 
     // 4. Media Content
     const mediaPane = document.createElement('div');
-    mediaPane.className = 'space-y-2 hidden';
+    mediaPane.className = 'bg-popover-pane hidden';
     mediaPane.innerHTML = `
       <div>
-        <label class="block text-[10px] text-zinc-400 mb-1">Image or Video URL / File Path</label>
-        <input type="text" id="pop-media-url" class="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200" placeholder="https://... or /assets/...">
+        <label class="prop-label" for="pop-media-url">Image or Video URL / File Path</label>
+        <input type="text" id="pop-media-url" class="bg-popover-input" placeholder="https://... or /assets/...">
       </div>
-      <div class="flex gap-2 pt-1">
-        <button id="pop-apply-img" class="flex-1 py-1 bg-sky-600 hover:bg-sky-500 rounded font-medium text-[11px] cursor-pointer">Apply Image</button>
-        <button id="pop-apply-vid" class="flex-1 py-1 bg-indigo-600 hover:bg-indigo-500 rounded font-medium text-[11px] cursor-pointer">Apply Video</button>
+      <div class="prop-row">
+        <button id="pop-apply-img" class="btn btn-sm bg-popover-grow">Apply Image</button>
+        <button id="pop-apply-vid" class="btn btn-sm bg-popover-grow">Apply Video</button>
       </div>
     `;
 
@@ -706,10 +706,10 @@ export class EditorToolbar {
       animatedPane.classList.toggle('hidden', activeTab !== 'animated');
       mediaPane.classList.toggle('hidden', activeTab !== 'media');
 
-      btnSolid.className = `flex-1 py-1 text-center rounded text-[11px] font-medium cursor-pointer ${activeTab === 'solid' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`;
-      btnGradient.className = `flex-1 py-1 text-center rounded text-[11px] font-medium cursor-pointer ${activeTab === 'gradient' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`;
-      btnAnimated.className = `flex-1 py-1 text-center rounded text-[11px] font-medium cursor-pointer ${activeTab === 'animated' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`;
-      btnMedia.className = `flex-1 py-1 text-center rounded text-[11px] font-medium cursor-pointer ${activeTab === 'media' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`;
+      btnSolid.className = activeTab === 'solid' ? 'active' : '';
+      btnGradient.className = activeTab === 'gradient' ? 'active' : '';
+      btnAnimated.className = activeTab === 'animated' ? 'active' : '';
+      btnMedia.className = activeTab === 'media' ? 'active' : '';
     };
 
     btnSolid.addEventListener('click', () => setTab('solid'));
@@ -719,9 +719,9 @@ export class EditorToolbar {
 
     // Footer: Reset
     const foot = document.createElement('div');
-    foot.className = 'pt-2 mt-2 border-t border-zinc-700/60 flex justify-between';
+    foot.className = 'bg-popover-foot';
     const resetBtn = document.createElement('button');
-    resetBtn.className = 'text-[11px] text-rose-400 hover:text-rose-300 cursor-pointer';
+    resetBtn.className = 'prop-link-danger';
     resetBtn.textContent = 'Clear / Reset';
     resetBtn.addEventListener('click', () => {
       if (this.callbacks.onUpdateBackground) {

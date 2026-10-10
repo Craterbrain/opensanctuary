@@ -321,11 +321,11 @@ export function renderCategoryTree(tabName: string) {
     const allNode = document.createElement('div');
     allNode.className = `bible-tree-node ${lp.getActiveBibleVersion() === 'all' ? 'active' : ''}`;
     allNode.innerHTML = `
-      <div style="display: flex; align-items: center; gap: 6px;">
+      <div class="bible-tree-node-main">
         <span>📖</span>
-        <span style="font-weight: 600; color: #fff;">All Translations</span>
+        <span class="bible-tree-node-abbr">All Translations</span>
       </div>
-      <span class="bible-lang-badge" style="font-size: 8.5px;">ALL</span>
+      <span class="bible-lang-badge">ALL</span>
     `;
     allNode.addEventListener('click', () => {
       lp.setActiveBibleVersion('all');
@@ -339,20 +339,14 @@ export function renderCategoryTree(tabName: string) {
 
     // 2. Installed Versions Section Header
     const headerNode = document.createElement('div');
-    headerNode.style.padding = '8px 10px 4px';
-    headerNode.style.fontSize = '10px';
-    headerNode.style.fontWeight = '700';
-    headerNode.style.color = 'var(--text-dim)';
-    headerNode.style.textTransform = 'uppercase';
+    headerNode.className = 'os-eyebrow category-tree-heading';
     headerNode.textContent = 'Installed Versions';
     categoryTreeContainer.appendChild(headerNode);
 
     const availableBibles = lp.getInstalledBibles().filter(b => (b.verse_count === undefined || b.verse_count > 0));
     if (availableBibles.length === 0) {
       const emptyNote = document.createElement('div');
-      emptyNote.style.padding = '8px 12px';
-      emptyNote.style.fontSize = '11px';
-      emptyNote.style.color = 'var(--text-dim)';
+      emptyNote.className = 'category-tree-note';
       emptyNote.textContent = 'No Bible versions installed.';
       categoryTreeContainer.appendChild(emptyNote);
     } else {
@@ -368,12 +362,12 @@ export function renderCategoryTree(tabName: string) {
         nodeEl.dataset.bibleId = bible.id;
 
         nodeEl.innerHTML = `
-          <div style="display: flex; align-items: center; gap: 6px; overflow: hidden;">
-            <span style="font-weight: 600; color: #fff;">${lp.escapeHtml(bible.abbreviation || bible.id)}</span>
-            <span style="font-size: 10px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${lp.escapeHtml(bible.name || bible.id)}</span>
+          <div class="bible-tree-node-main">
+            <span class="bible-tree-node-abbr">${lp.escapeHtml(bible.abbreviation || bible.id)}</span>
+            <span class="bible-tree-node-name">${lp.escapeHtml(bible.name || bible.id)}</span>
           </div>
-          <div style="display: flex; align-items: center; gap: 4px;">
-            ${bible.language ? `<span class="bible-lang-badge" style="font-size: 8.5px;">${lp.escapeHtml(bible.language)}</span>` : ''}
+          <div class="bible-tree-node-meta">
+            ${bible.language ? `<span class="bible-lang-badge">${lp.escapeHtml(bible.language)}</span>` : ''}
             ${isDefault ? '<span class="bible-default-badge" title="Default Translation">⭐</span>' : ''}
           </div>
         `;
@@ -400,17 +394,10 @@ export function renderCategoryTree(tabName: string) {
 
     // 3. Install Button at Bottom
     const actionWrap = document.createElement('div');
-    actionWrap.style.padding = '8px 10px';
-    actionWrap.style.display = 'flex';
-    actionWrap.style.flexDirection = 'column';
-    actionWrap.style.gap = '4px';
-    actionWrap.style.borderTop = '1px solid var(--border-color)';
-    actionWrap.style.marginTop = '6px';
+    actionWrap.className = 'category-tree-actions';
 
     const btnInstallBibles = document.createElement('button');
-    btnInstallBibles.className = 'btn btn-tag';
-    btnInstallBibles.style.width = '100%';
-    btnInstallBibles.style.textAlign = 'left';
+    btnInstallBibles.className = 'btn btn-sm btn-block';
     btnInstallBibles.innerHTML = '➕ Install Bibles (ChurchApps)...';
     btnInstallBibles.addEventListener('click', () => openImportModal());
     actionWrap.appendChild(btnInstallBibles);
@@ -597,9 +584,7 @@ export async function searchGeniusChristianSongs(query: string) {
   const container = (activeResourceViewMode === 'table') ? catalogTableBody : catalogGrid;
   if (container) {
     container.innerHTML = `
-      <div style="padding: 30px; text-align: center; color: #ffd700; font-weight: 500;">
-        <span style="font-size: 18px;">✨</span> Searching Genius for Christian lyrics matching "${lp.escapeHtml(query)}"...
-      </div>`;
+      <div class="list-message">✨ Searching Genius for Christian lyrics matching "${lp.escapeHtml(query)}"...</div>`;
   }
 
   geniusSearchTimer = setTimeout(async () => {
@@ -610,9 +595,9 @@ export async function searchGeniusChristianSongs(query: string) {
         if (hits.length === 0) {
           if (container) {
             container.innerHTML = `
-              <div style="padding: 30px; text-align: center; color: var(--text-dim);">
-                <p>No Christian lyrics found on Genius for "${lp.escapeHtml(query)}".</p>
-                <p style="font-size: 11px; margin-top: 4px;">Try searching by another title or artist.</p>
+              <div class="ui-empty-state ui-empty-state--compact">
+                <div class="empty-state-title">No Christian lyrics found on Genius for "${lp.escapeHtml(query)}".</div>
+                <div class="empty-state-desc">Try searching by another title or artist.</div>
               </div>`;
           }
         } else {
@@ -620,12 +605,12 @@ export async function searchGeniusChristianSongs(query: string) {
         }
       } else {
         if (container) {
-          container.innerHTML = `<div style="padding: 20px; text-align: center; color: #ff5252;">Error searching Genius: ${lp.escapeHtml(res.statusText)}</div>`;
+          container.innerHTML = `<div class="list-message list-message--error">Error searching Genius: ${lp.escapeHtml(res.statusText)}</div>`;
         }
       }
     } catch (e) {
       if (container) {
-        container.innerHTML = `<div style="padding: 20px; text-align: center; color: #ff5252;">Network error: ${lp.escapeHtml(e instanceof Error ? e.message : String(e))}</div>`;
+        container.innerHTML = `<div class="list-message list-message--error">Network error: ${lp.escapeHtml(e instanceof Error ? e.message : String(e))}</div>`;
       }
     }
   }, 300);
@@ -654,14 +639,14 @@ export function renderGeniusHits(hits: any[]) {
       if (idx === 0) tr.classList.add('selected');
 
       const ccliBadge = hit.ccli_number
-        ? `<span style="background: rgba(0, 229, 255, 0.15); color: #00e5ff; border: 1px solid rgba(0, 229, 255, 0.4); font-size: 9.5px; padding: 2px 6px; border-radius: 3px; font-weight: 600; margin-left: 6px;">CCLI #${lp.escapeHtml(hit.ccli_number)}</span>`
+        ? `<span class="os-badge os-badge--neutral">CCLI #${lp.escapeHtml(hit.ccli_number)}</span>`
         : '';
 
       tr.innerHTML = `
-        <td style="font-weight: 600; color: #ffd700;">✨ ${escapeUserHtml(hit.title)}</td>
+        <td class="cell-title">✨ ${escapeUserHtml(hit.title)}</td>
         <td>${escapeUserHtml(hit.artist)}</td>
-        <td>
-          <span style="background: rgba(255,215,0,0.15); color: #ffd700; border: 1px solid rgba(255,215,0,0.4); font-size: 9.5px; padding: 2px 6px; border-radius: 3px; font-weight: 600;">GENIUS</span>
+        <td class="cell-badges">
+          <span class="os-badge os-badge--accent">GENIUS</span>
           ${ccliBadge}
         </td>
       `;
@@ -707,7 +692,7 @@ export function renderGeniusHits(hits: any[]) {
 
       card.innerHTML = `
         <div class="grid-card-thumb" style="${thumbStyle}">
-          <span style="position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,0.7); color: #ffd700; font-size: 8.5px; padding: 1px 4px; border-radius: 2px;">${lp.escapeHtml(ccliTag)}</span>
+          <span class="os-thumb-badge">${lp.escapeHtml(ccliTag)}</span>
           ${hit.thumbnail ? '' : '✨'}
         </div>
         <div class="grid-card-title">${escapeUserHtml(hit.title)}</div>
@@ -734,19 +719,19 @@ export function renderGeniusPreview(hit: any) {
   if (!resourcePreviewMonitor) return;
   if (!ctx) return;
   const ccliHtml = hit.ccli_number
-    ? `<div style="font-size: 11px; color: #00e5ff; font-weight: 600; margin-bottom: 8px;">🔢 CCLI Song #: ${ctx.escapeHtml(hit.ccli_number)}</div>`
+    ? `<div class="asset-preview-card-meta">🔢 CCLI Song #: ${ctx.escapeHtml(hit.ccli_number)}</div>`
     : '';
 
   resourcePreviewMonitor.innerHTML = `
-    <div class="asset-preview-content" style="background: linear-gradient(135deg, #181512, #2e261f, #141b24); font-family: Segoe UI, sans-serif; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 18px; color: #fff;">
-      <div class="preview-badge" style="background: rgba(255,215,0,0.2); color: #ffd700; border: 1px solid #ffd700; margin-bottom: 8px; font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 700;">✨ GENIUS CHRISTIAN LYRICS</div>
-      <div style="font-size: 18px; font-weight: 700; margin-bottom: 4px;">${escapeUserHtml(hit.title)}</div>
-      <div style="font-size: 13px; color: #ffd700; margin-bottom: 6px;">${escapeUserHtml(hit.artist)}</div>
+    <div class="asset-preview-content asset-preview-card">
+      <span class="os-badge os-badge--accent">✨ GENIUS CHRISTIAN LYRICS</span>
+      <div class="asset-preview-card-title">${escapeUserHtml(hit.title)}</div>
+      <div class="asset-preview-card-subtitle">${escapeUserHtml(hit.artist)}</div>
       ${ccliHtml}
-      <p style="font-size: 11.5px; color: #bbb; line-height: 1.5; max-width: 320px; margin-bottom: 14px;">
+      <p class="asset-preview-card-desc">
         Double-click or click below to automatically import all formatted lyrics slides into your Library & Schedule.
       </p>
-      <button class="btn btn-primary" id="btn-preview-import-genius" style="background: linear-gradient(135deg, #ffd700, #ffaa00); color: #000; font-weight: 700; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer;">
+      <button class="btn btn-primary" id="btn-preview-import-genius">
         📥 Import & Stage Lyrics
       </button>
     </div>
@@ -822,9 +807,7 @@ export async function searchOnlineImages(query: string) {
   if (catalogGrid) {
     catalogGrid.style.display = 'grid';
     catalogGrid.innerHTML = `
-      <div style="grid-column: 1 / -1; padding: 30px; text-align: center; color: #64b5f6; font-weight: 500;">
-        <span style="font-size: 18px;">🌐</span> Searching Pexels &amp; Pixabay for "${lp.escapeHtml(query)}"...
-      </div>`;
+      <div class="list-message grid-span-all">🌐 Searching Pexels &amp; Pixabay for "${lp.escapeHtml(query)}"...</div>`;
   }
 
   try {
@@ -835,19 +818,19 @@ export async function searchOnlineImages(query: string) {
       if (results.length === 0) {
         if (catalogGrid) {
           catalogGrid.innerHTML = `
-            <div style="grid-column: 1 / -1; padding: 30px; text-align: center; color: var(--text-dim);">
-              <p>No online images found for "${lp.escapeHtml(query)}".</p>
-              <p style="font-size: 11px; margin-top: 4px;">Check that a Pexels and/or Pixabay API key is configured in Options, and try another keyword.</p>
+            <div class="ui-empty-state ui-empty-state--compact grid-span-all">
+              <div class="empty-state-title">No online images found for "${lp.escapeHtml(query)}".</div>
+              <div class="empty-state-desc">Check that a Pexels and/or Pixabay API key is configured in Options, and try another keyword.</div>
             </div>`;
         }
       } else {
         renderOnlineImageHits(results);
       }
     } else {
-      if (catalogGrid) catalogGrid.innerHTML = `<div style="grid-column: 1 / -1; padding: 20px; text-align: center; color: #ff5252;">Error searching online images: ${lp.escapeHtml(res.statusText)}</div>`;
+      if (catalogGrid) catalogGrid.innerHTML = `<div class="list-message list-message--error grid-span-all">Error searching online images: ${lp.escapeHtml(res.statusText)}</div>`;
     }
   } catch (e) {
-    if (catalogGrid) catalogGrid.innerHTML = `<div style="grid-column: 1 / -1; padding: 20px; text-align: center; color: #ff5252;">Network error: ${lp.escapeHtml(e instanceof Error ? e.message : String(e))}</div>`;
+    if (catalogGrid) catalogGrid.innerHTML = `<div class="list-message list-message--error grid-span-all">Network error: ${lp.escapeHtml(e instanceof Error ? e.message : String(e))}</div>`;
   }
 }
 
@@ -868,7 +851,7 @@ export function renderOnlineImageHits(results: any[]) {
     const cardLabel = hit.tags || hit.photographer || providerLabel;
     card.innerHTML = `
       <div class="grid-card-thumb" style="background-image: url('${escapeCssUrl(hit.thumbnail_url)}'); background-size: cover; background-position: center;">
-        <span style="position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,0.7); color: #64b5f6; font-size: 8.5px; padding: 1px 4px; border-radius: 2px;">${lp.escapeHtml(providerLabel)}</span>
+        <span class="os-thumb-badge">${lp.escapeHtml(providerLabel)}</span>
       </div>
       <div class="grid-card-title" title="${lp.escapeHtml(cardLabel)}">${lp.escapeHtml(cardLabel)}</div>
     `;
@@ -896,15 +879,15 @@ export function renderOnlineImagePreview(hit: any) {
     ? `Photo by ${ctx.escapeHtml(hit.photographer)} on ${ctx.escapeHtml((hit.provider || '').charAt(0).toUpperCase() + (hit.provider || '').slice(1))}`
     : ctx.escapeHtml(hit.provider || '');
   const tagsHtml = hit.tags
-    ? `<div style="font-size: 9.5px; color: #64b5f6; margin-bottom: 4px;">🏷️ ${ctx.escapeHtml(hit.tags)}</div>`
+    ? `<div class="asset-preview-card-meta">🏷️ ${ctx.escapeHtml(hit.tags)}</div>`
     : '';
 
   resourcePreviewMonitor.innerHTML = `
-    <div class="asset-preview-content" style="background-image: url('${escapeCssUrl(hit.thumbnail_url)}'); background-size: cover; background-position: center; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; text-align: center; padding: 12px; color: #fff;">
-      <div style="background: rgba(0,0,0,0.65); border-radius: 4px; padding: 8px 12px; width: 100%;">
+    <div class="asset-preview-content asset-preview-photo" style="background-image: url('${escapeCssUrl(hit.thumbnail_url)}');">
+      <div class="asset-preview-photo-caption">
         ${tagsHtml}
-        <div style="font-size: 10.5px; color: #ddd; margin-bottom: 8px;">${attribution}</div>
-        <button class="btn btn-primary" id="btn-preview-import-online-image" style="background: linear-gradient(135deg, #64b5f6, #2979ff); color: #fff; font-weight: 700; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer;">
+        <div class="asset-preview-card-desc">${attribution}</div>
+        <button class="btn btn-primary" id="btn-preview-import-online-image">
           📥 Add to Media Library
         </button>
       </div>
@@ -957,12 +940,12 @@ export function filterAndRenderCatalog() {
     if (!query) {
       if (catalogItemCountEl) catalogItemCountEl.textContent = 'Online Image Search';
       if (catalogGrid) { catalogGrid.style.display = 'grid'; catalogGrid.innerHTML = `
-        <div style="grid-column: 1 / -1; padding: 40px 20px; text-align: center; color: var(--text-dim);">
-          <div style="font-size: 28px; margin-bottom: 8px;">🌐</div>
-          <p style="font-size: 14px; font-weight: 600; color: #64b5f6;">Online Images (Pexels &amp; Pixabay)</p>
-          <p style="font-size: 11px; margin-top: 4px; max-width: 360px; margin-left: auto; margin-right: auto;">
+        <div class="ui-empty-state grid-span-all">
+          <div class="empty-state-icon">🌐</div>
+          <div class="empty-state-title">Online Images (Pexels &amp; Pixabay)</div>
+          <div class="empty-state-desc">
             Type a keyword above (e.g. "sunrise", "worship", "cross") and press <strong>Enter</strong> to search free stock photos. Click a thumbnail to preview, double-click to add it to your Media library.
-          </p>
+          </div>
         </div>`; }
       if (catalogTable) catalogTable.style.display = 'none';
       if (resourcePreviewMonitor) {
@@ -984,12 +967,12 @@ export function filterAndRenderCatalog() {
       const container = (activeResourceViewMode === 'table') ? catalogTableBody : catalogGrid;
       if (container) {
         container.innerHTML = `
-          <div style="padding: 40px 20px; text-align: center; color: var(--text-dim);">
-            <div style="font-size: 28px; margin-bottom: 8px;">✨</div>
-            <p style="font-size: 14px; font-weight: 600; color: #ffd700;">Genius Christian & Worship Lyrics</p>
-            <p style="font-size: 11px; margin-top: 4px; max-width: 360px; margin-left: auto; margin-right: auto;">
+          <div class="ui-empty-state grid-span-all">
+            <div class="empty-state-icon">✨</div>
+            <div class="empty-state-title">Genius Christian & Worship Lyrics</div>
+            <div class="empty-state-desc">
               Type a song title or artist in the search bar above to search Genius for Christian lyrics (e.g. "Holy Forever", "Way Maker", "Goodness of God", "10,000 Reasons").
-            </p>
+            </div>
           </div>`;
       }
       if (resourcePreviewMonitor) {
@@ -1274,32 +1257,32 @@ export function createCatalogTableRow(item: any, idx: number, tabName: string) {
 
   if (tabName === 'songs') {
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">🎵 ${escapeUserHtml(item.title)}</td>
+      <td class="cell-title">🎵 ${escapeUserHtml(item.title)}</td>
       <td>${escapeUserHtml(item.author || '')}</td>
-      <td style="color: var(--text-dim); font-size: 10px;">${escapeUserHtml(item.ccli_number || item.copyright || '')}</td>
+      <td class="cell-meta">${escapeUserHtml(item.ccli_number || item.copyright || '')}</td>
     `;
   } else if (tabName === 'scriptures') {
     const snippet = item.verses && item.verses.length > 0 ? item.verses[0].text : '';
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">📖 ${escapeUserHtml(item.reference)}</td>
+      <td class="cell-title">📖 ${escapeUserHtml(item.reference)}</td>
       <td><span class="bible-lang-badge">${lp.escapeHtml(item.version)}</span></td>
-      <td style="color: var(--text-dim); font-size: 10.5px; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${lp.escapeHtml(snippet)}</td>
+      <td class="cell-snippet">${lp.escapeHtml(snippet)}</td>
     `;
   } else if (tabName === 'media') {
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">🎬 ${escapeUserHtml(item.name)}</td>
+      <td class="cell-title">🎬 ${escapeUserHtml(item.name)}</td>
       <td>${lp.escapeHtml(item.media_type || 'Image')}</td>
       <td>${item.duration_seconds ? item.duration_seconds + 's' : 'Still'}</td>
     `;
   } else if (tabName === 'presentations') {
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">📊 ${escapeUserHtml(item.title)}</td>
+      <td class="cell-title">📊 ${escapeUserHtml(item.title)}</td>
       <td>${escapeUserHtml(item.author || 'Media')}</td>
       <td>${item.slides ? item.slides.length : 1} slides</td>
     `;
   } else if (tabName === 'themes') {
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">🎨 ${escapeUserHtml(item.name)}</td>
+      <td class="cell-title">🎨 ${escapeUserHtml(item.name)}</td>
       <td>${lp.escapeHtml(item.font_family || 'Segoe UI')} (${item.font_size || 38}px)</td>
       <td>${lp.escapeHtml(item.background_type || 'Gradient')}</td>
     `;
@@ -1429,7 +1412,7 @@ export function renderCatalogTable(items: any[], tabName: string, matchedOnlineR
     promptTr.className = 'catalog-fetch-prompt-row';
     promptTr.tabIndex = 0;
     promptTr.innerHTML = `
-      <td colspan="3" style="padding: 10px; color: #ffd700; font-weight: 600; cursor: pointer; background: rgba(255,215,0,0.06);">
+      <td colspan="3">
         ✨ Search Genius for Christian Lyrics: "${ctx.escapeHtml(matchedOnlineRef.query)}" ➔
       </td>
     `;
@@ -1460,7 +1443,7 @@ export function renderCatalogTable(items: any[], tabName: string, matchedOnlineR
     promptTr.className = 'catalog-fetch-prompt-row';
     promptTr.tabIndex = 0;
     promptTr.innerHTML = `
-      <td colspan="3" style="padding: 10px; color: #00e5ff; font-weight: 600;">
+      <td colspan="3">
         🌐 Fetch & Stage "${ctx.escapeHtml(matchedOnlineRef.formatted)}" [${ctx.escapeHtml(activeObj.abbreviation)}] from Online Scripture API ➔
       </td>
     `;
@@ -1788,8 +1771,8 @@ export function renderAssetPreview(item: any, tabName: string) {
           </div>
         </div>
         <div class="canvas-footer" style="display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 8px; box-sizing: border-box;">
-          <span style="font-size: 10px;">Dual: <strong style="color:#ffa726">${lp.escapeHtml(pAbbr)}</strong> + <strong style="color:#00e5ff">${lp.escapeHtml(sAbbr)}</strong></span>
-          <button id="btn-add-dual-to-schedule" class="btn" style="background: linear-gradient(135deg, #00e5ff, #00b0ff); color: #000; font-weight: 800; padding: 2px 8px; font-size: 10.5px; border: none; border-radius: 3px; cursor: pointer;">
+          <span style="font-size: 10px;">Dual: <strong style="color: var(--os-accent-text)">${lp.escapeHtml(pAbbr)}</strong> + <strong style="color: var(--os-accent-text)">${lp.escapeHtml(sAbbr)}</strong></span>
+          <button id="btn-add-dual-to-schedule" class="btn btn-primary btn-sm">
             ➕ Add to Schedule
           </button>
         </div>
@@ -1868,11 +1851,11 @@ export function renderAssetPreview(item: any, tabName: string) {
         <div class="canvas-16-9" style="background: #000; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden;">
           <video id="preview-video-element" src="${lp.escapeHtml(item.file_path)}" muted playsinline preload="metadata" style="width: 100%; height: 100%; object-fit: contain;"></video>
           <div class="preview-video-control-bar" style="position: absolute; bottom: 22px; left: 0; right: 0; background: rgba(10, 15, 20, 0.88); display: flex; align-items: center; gap: 6px; padding: 4px 8px; z-index: 5; border-top: 1px solid rgba(255,255,255,0.1);">
-            <button class="btn" id="btn-preview-video-play" style="padding: 2px 8px; font-size: 10px; background: #00e5ff; color: #000; font-weight: 700; border: none; border-radius: 3px; cursor: pointer;">▶ Play</button>
-            <button class="btn" id="btn-preview-video-stop" style="padding: 2px 8px; font-size: 10px; background: #37474f; color: #fff; font-weight: 700; border: none; border-radius: 3px; cursor: pointer;">⏹ Stop</button>
-            <input type="range" id="preview-video-seek" min="0" max="100" value="0" style="flex: 1; height: 4px; cursor: pointer; accent-color: #00e5ff;">
-            <span id="preview-video-time" style="font-size: 10px; color: #cfd8dc; font-variant-numeric: tabular-nums;">0:00 / 0:00</span>
-            <button class="btn" id="btn-preview-video-mute" title="Mute/Unmute Preview Audio" style="background: transparent; border: none; font-size: 12px; cursor: pointer; color: #fff; padding: 0 4px;">🔊</button>
+            <button class="btn btn-primary btn-sm" id="btn-preview-video-play">▶ Play</button>
+            <button class="btn btn-sm" id="btn-preview-video-stop">⏹ Stop</button>
+            <input type="range" id="preview-video-seek" class="live-media-seek" min="0" max="100" value="0">
+            <span id="preview-video-time" class="live-media-time">0:00 / 0:00</span>
+            <button class="btn btn-ghost btn-sm btn-icon" id="btn-preview-video-mute" title="Mute/Unmute Preview Audio">🔊</button>
           </div>
           <div class="canvas-footer" style="background: rgba(0,0,0,0.85); position: absolute; bottom: 0; left: 0; right: 0; z-index: 4;">
             <span>🎬 ${escapeUserHtml(item.name)}</span>
@@ -1940,10 +1923,10 @@ export function renderAssetPreview(item: any, tabName: string) {
       return;
     } else if (mType.includes('audio')) {
       resourcePreviewMonitor.innerHTML = `
-        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 10px; padding: 16px; background: #141f26;">
-          <div style="font-size: 36px;">🎵</div>
-          <div style="font-weight: 700; color: #00e5ff; font-size: 13px; text-align: center; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeUserHtml(item.name)}</div>
-          <audio controls src="${lp.escapeHtml(item.file_path)}" style="width: 85%; height: 32px;"></audio>
+        <div class="asset-preview-audio">
+          <div class="asset-preview-audio-icon">🎵</div>
+          <div class="asset-preview-card-title">${escapeUserHtml(item.name)}</div>
+          <audio controls src="${lp.escapeHtml(item.file_path)}"></audio>
         </div>`;
       return;
     } else {

@@ -41,7 +41,7 @@ import {
 } from './ui/settings_dialog.ts';
 import { initThemePicker, openThemePicker } from './ui/theme_picker.ts';
 import { initThemeEditor, openThemeEditor } from './ui/theme_editor.ts';
-import { buildSlideCardElement, renderDeckEmptyState } from './ui/slide_deck_view.ts';
+import { buildSlideCardElement, buildSlideThumbElement, renderDeckEmptyState, slideDeckStyle } from './ui/slide_deck_view.ts';
 import { initArrangementModal, openArrangementModal } from './ui/arrangement_modal.ts';
 import { initCcliReportModal, openCcliReportModal } from './ui/ccli_report_modal.ts';
 import {
@@ -742,13 +742,13 @@ function showHostAuthBanner() {
 
   const banner = document.createElement('div');
   banner.id = 'os-host-auth-banner';
-  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#3a2a00;color:#fff;padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.4);';
+  banner.className = 'os-banner';
   banner.innerHTML = `
     <span>🔒 This console isn't authenticated — paste the host token shown on the server to control the show.</span>
-    <input type="password" id="os-host-auth-input" placeholder="Host token" style="flex:1;min-width:160px;max-width:360px;padding:6px 8px;border-radius:4px;border:1px solid #665;background:#221a00;color:#fff;">
-    <button id="os-host-auth-connect" style="padding:6px 14px;border-radius:4px;border:none;background:#4a90d9;color:#fff;cursor:pointer;">Connect</button>
-    <span id="os-host-auth-error" style="color:#ff8080;"></span>
-    <button id="os-host-auth-dismiss" title="Dismiss" style="margin-left:auto;background:none;border:none;color:#ccc;cursor:pointer;font-size:16px;">{icon:close}</button>
+    <input type="password" id="os-host-auth-input" placeholder="Host token">
+    <button id="os-host-auth-connect" class="btn btn-primary">Connect</button>
+    <span id="os-host-auth-error" class="os-banner-error"></span>
+    <button id="os-host-auth-dismiss" class="modal-close-btn os-banner-dismiss" title="Dismiss">{icon:close}</button>
   `;
   document.body.appendChild(banner);
 
@@ -1508,11 +1508,11 @@ export function renderSchedule(schedule: any) {
       scheduleListEl.appendChild(createUndoPlaceholderElement(activeUndoPlaceholder));
     }
     const emptyDiv = document.createElement('div');
-    emptyDiv.style.cssText = 'padding: 28px 12px; text-align: center; color: var(--text-dim); user-select: none;';
+    emptyDiv.className = 'ui-empty-state ui-empty-state--compact';
     emptyDiv.innerHTML = `
-      <div style="font-size: 28px; margin-bottom: 8px;">📋</div>
-      <p style="font-weight: 600;">Schedule is empty.</p>
-      <p style="font-size: 11px; margin-top: 4px;">Click <strong>➕</strong> or drag items from library to start building your service.</p>
+      <div class="empty-state-icon">📋</div>
+      <div class="empty-state-title">Schedule is empty.</div>
+      <div class="empty-state-desc">Click <strong>➕</strong> or drag items from library to start building your service.</div>
     `;
     scheduleListEl.appendChild(emptyDiv);
     return;
@@ -1550,20 +1550,18 @@ export function renderSchedule(schedule: any) {
       headerEl.className = `schedule-item schedule-section-header ${isSelected ? 'selected' : ''}`;
       headerEl.dataset.index = String(idx);
       headerEl.setAttribute('data-schedule-key', `item-${item.id}`);
-      headerEl.style.background = 'linear-gradient(135deg, #1f2128, #2b2d38)';
-      headerEl.style.borderLeft = '3.5px solid #ffa726';
-      headerEl.style.padding = '5px 8px';
+      // Look comes from .schedule-section-header in style.css; only the
+      // position-dependent spacing is set here.
       headerEl.style.marginTop = idx > 0 ? '6px' : '0';
       headerEl.style.marginBottom = '2px';
-      headerEl.style.borderRadius = '3px';
 
       headerEl.innerHTML = `
-        <span class="group-caret" style="font-size: 10px; width: 14px; text-align: center; color: #ffa726; cursor: pointer; display: inline-block;">${isGroupCollapsed ? '▶' : '▼'}</span>
-        <span style="font-size: 13px; margin-right: 4px;">🏷️</span>
-        <div class="meta" style="flex: 1; overflow: hidden;">
-          <div class="title" style="font-weight: 800; letter-spacing: 0.6px; color: #ffa726; font-size: 11px; text-transform: uppercase; display: inline-flex; align-items: center; gap: 6px;">
+        <span class="group-caret">${isGroupCollapsed ? '▶' : '▼'}</span>
+        <span class="schedule-section-icon">🏷️</span>
+        <div class="meta">
+          <div class="title">
             ${escapeUserHtml(item.title)}
-            ${isGroupCollapsed && groupItemCount > 0 ? `<span class="group-count-badge" style="font-size: 10px; color: #ffb74d; opacity: 0.8; font-weight: 600; text-transform: none;">(${groupItemCount} ${groupItemCount === 1 ? 'item' : 'items'})</span>` : ''}
+            ${isGroupCollapsed && groupItemCount > 0 ? `<span class="group-count-badge">(${groupItemCount} ${groupItemCount === 1 ? 'item' : 'items'})</span>` : ''}
           </div>
         </div>
         <span class="schedule-drag-handle drag-handle" data-item-idx="${idx}" role="button" tabindex="0" title="Drag handle to reorder" aria-label="Reorder section. Press Alt+Up or Alt+Down to move.">⠿</span>
@@ -1744,9 +1742,9 @@ export function renderSchedule(schedule: any) {
     itemEl.innerHTML = `
       <span class="schedule-caret">${caret}</span>
       <div class="thumb-box" style="background: ${escapeHtml(gradient)};">${icon}</div>
-      <div class="meta" style="flex: 1; overflow: hidden; margin-left: 4px;">
-        <div class="title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600;">${escapeUserHtml(item.title)}</div>
-        <div class="notes" style="font-size: 10px; color: var(--text-dim);">${escapeUserHtml(item.subtitle || 'notes')}</div>
+      <div class="meta schedule-item-meta">
+        <div class="title">${escapeUserHtml(item.title)}</div>
+        <div class="notes">${escapeUserHtml(item.subtitle || 'notes')}</div>
       </div>
       <span class="schedule-drag-handle drag-handle" data-item-idx="${idx}" role="button" tabindex="0" title="Drag handle to reorder" aria-label="Reorder item. Press Alt+Up or Alt+Down to move.">⠿</span>
     `;
@@ -2309,7 +2307,7 @@ if (btnLiveVideoLoop) {
     isLiveVideoLooping = !isLiveVideoLooping;
     if (liveVideoEl) liveVideoEl.loop = isLiveVideoLooping;
     btnLiveVideoLoop.textContent = isLiveVideoLooping ? '🔁 Loop: ON' : '🔁 Loop: OFF';
-    btnLiveVideoLoop.style.color = isLiveVideoLooping ? '#00e676' : '#b0bec5';
+    btnLiveVideoLoop.style.color = isLiveVideoLooping ? 'var(--os-success-text)' : '';
     broadcastLocalMediaSync('loop', liveVideoEl ? liveVideoEl.currentTime : 0, liveVideoEl ? !liveVideoEl.paused : false, isLiveVideoLooping);
     sendCommand({ MediaSetLoop: isLiveVideoLooping });
   });
@@ -2552,6 +2550,35 @@ function reorderPreviewSlides(fromIdx: number, toIdx: number) {
   });
 }
 
+/** Paints a slide's resolved background onto a deck thumbnail, the way the main canvases do. */
+function slideBackgroundPainter(item: any, slideIdx: number, state: any): (el: HTMLElement) => void {
+  const bg = resolveBackgroundAt(item, slideIdx, availableThemes, state.active_theme, state.global_theme);
+  return (el: HTMLElement) => {
+    const imgUrl = extractImageUrl(bg, availableThemes);
+    if (imgUrl) {
+      el.style.backgroundColor = '#000';
+      el.style.backgroundImage = `url("${imgUrl}")`;
+      el.style.backgroundSize = 'cover';
+      el.style.backgroundPosition = 'center';
+      el.style.backgroundRepeat = 'no-repeat';
+    } else if (isVideoBackground(bg)) {
+      el.style.background = '#000';
+    } else {
+      applyResolvedBackground(el, bg);
+    }
+  };
+}
+
+/** Re-draws both slide decks now (the deck view toggles call this: cards vs thumbnails depends on the view). */
+export function refreshSlideDecks() {
+  lastRenderedPreviewKey = '';
+  lastRenderedLiveKey = '';
+  const state = currentSnapshot && currentSnapshot.state;
+  if (!state) return;
+  renderPreviewDeck(state);
+  renderLiveDeck(state);
+}
+
 function renderPreviewDeck(state: any) {
   if (!previewSlideMatrixEl) return;
 
@@ -2612,7 +2639,8 @@ function renderPreviewDeck(state: any) {
     const s = resolveSlideAt(stagedItem, idx);
     return `${entry.section_id}:${entry.source_slide_index}:${(s?.text || '').slice(0, 20)}`;
   }).join(';') : '';
-  const currentContentKey = `${itemId}|${slideCount}|${slideFingerprint}`;
+  const previewStyle = slideDeckStyle(stagedItem ? stagedItem.item_type : '', previewSlideMatrixEl.classList.contains('list-mode'));
+  const currentContentKey = `${itemId}|${slideCount}|${slideFingerprint}|${previewStyle}`;
 
   if (lastRenderedPreviewKey === currentContentKey && slideCount > 0) {
     const cards = previewSlideMatrixEl.querySelectorAll('.slide-card');
@@ -2647,15 +2675,27 @@ function renderPreviewDeck(state: any) {
     const isActive = (state.staged_slide_index || 0) === sIdx;
     const badge = entry.section_id || (slide ? getSlideBadge(slide, entry.source_slide_index) : `S${sIdx + 1}`);
     const tagColor = getSlideBadgeColor(badge);
-    const cardEl = buildSlideCardElement({
-      badge: escapeHtml(badge),
-      badgeColor: tagColor,
-      lyricsHtml: formatSlideLyricsHtml(slide ? slide.text : ''),
-      isActive,
-      activeClass: 'active-staged',
-      showDragHandle: true,
-      extraClass: 'preview-slide-card'
-    });
+    const cardEl = previewStyle === 'thumbnails'
+      ? buildSlideThumbElement({
+          slide,
+          theme: resolveThemeAt(stagedItem, availableThemes, state.global_theme),
+          badge: escapeHtml(badge),
+          badgeColor: tagColor,
+          isActive,
+          activeClass: 'active-staged',
+          showDragHandle: true,
+          extraClass: 'preview-slide-card',
+          applyBackground: slideBackgroundPainter(stagedItem, sIdx, state)
+        })
+      : buildSlideCardElement({
+          badge: escapeHtml(badge),
+          badgeColor: tagColor,
+          lyricsHtml: formatSlideLyricsHtml(slide ? slide.text : ''),
+          isActive,
+          activeClass: 'active-staged',
+          showDragHandle: true,
+          extraClass: 'preview-slide-card'
+        });
 
     // Preview Card Handle Keyboard Navigation
     const cardHandle = cardEl.querySelector<HTMLElement>('.preview-card-drag-handle');
@@ -2920,7 +2960,8 @@ function renderLiveDeck(state: any) {
     const s = resolveSlideAt(liveItem, idx);
     return `${entry.section_id}:${entry.source_slide_index}:${(s?.text || '').slice(0, 20)}`;
   }).join(';') : '';
-  const currentLiveKey = `${itemId}|${slideCount}|${slideFingerprint}`;
+  const liveStyle = slideDeckStyle(liveItem ? liveItem.item_type : '', liveSlideMatrixEl.classList.contains('list-mode'));
+  const currentLiveKey = `${itemId}|${slideCount}|${slideFingerprint}|${liveStyle}`;
 
   if (lastRenderedLiveKey === currentLiveKey && slideCount > 0) {
     const cards = liveSlideMatrixEl.querySelectorAll('.slide-card');
@@ -2949,14 +2990,25 @@ function renderLiveDeck(state: any) {
     const isActive = state.live_slide_index === sIdx;
     const badge = entry.section_id || (slide ? getSlideBadge(slide, entry.source_slide_index) : `S${sIdx + 1}`);
     const tagColor = getSlideBadgeColor(badge);
-    const cardEl = buildSlideCardElement({
-      badge: escapeHtml(badge),
-      badgeColor: tagColor,
-      lyricsHtml: formatSlideLyricsHtml(slide ? slide.text : ''),
-      isActive,
-      activeClass: 'active',
-      showDragHandle: false
-    });
+    const cardEl = liveStyle === 'thumbnails'
+      ? buildSlideThumbElement({
+          slide,
+          theme: resolveThemeAt(liveItem, availableThemes, state.global_theme),
+          badge: escapeHtml(badge),
+          badgeColor: tagColor,
+          isActive,
+          activeClass: 'active',
+          showDragHandle: false,
+          applyBackground: slideBackgroundPainter(liveItem, sIdx, state)
+        })
+      : buildSlideCardElement({
+          badge: escapeHtml(badge),
+          badgeColor: tagColor,
+          lyricsHtml: formatSlideLyricsHtml(slide ? slide.text : ''),
+          isActive,
+          activeClass: 'active',
+          showDragHandle: false
+        });
 
     cardEl.addEventListener('click', () => {
       lastActiveDeckContext = 'live';
@@ -3054,7 +3106,7 @@ function renderLiveOutput(state: any) {
           if (liveVideoEl) liveVideoEl.loop = isLiveVideoLooping;
           if (btnLiveVideoLoop) {
             btnLiveVideoLoop.textContent = isLiveVideoLooping ? '🔁 Loop: ON' : '🔁 Loop: OFF';
-            btnLiveVideoLoop.style.color = isLiveVideoLooping ? '#00e676' : '#b0bec5';
+            btnLiveVideoLoop.style.color = isLiveVideoLooping ? 'var(--os-success-text)' : '';
           }
         }
         if (isUserSeeking) return;

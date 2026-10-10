@@ -16,7 +16,8 @@
  * to know which panel is calling it.
  */
 
-import { escapeUserHtml } from '../core/presentation_helpers.ts';
+import { escapeUserHtml, type ThemeDefinition } from '../core/presentation_helpers.ts';
+import { renderSlideVisual } from '../core/slide_render.ts';
 
 export interface SlideCardOptions {
   badge: string;
@@ -74,4 +75,66 @@ export function renderDeckEmptyState(matrixEl: HTMLElement, opts: DeckEmptyState
       <p class="deck-empty-title">${opts.emptyTitle}</p>
       <p class="deck-empty-subtitle">${opts.emptySubtitle}</p>
     </div>`;
+}
+
+/**
+ * How a Preview/Live deck draws its slides. Songs and scriptures read best as text cards
+ * (badge + lyrics); presentations are visual, so by default (grid view) they get rendered
+ * thumbnails. The deck's own list view always uses text cards -- that is the override.
+ */
+export type SlideDeckStyle = 'cards' | 'thumbnails';
+
+export function slideDeckStyle(itemType: string | null | undefined, listMode: boolean): SlideDeckStyle {
+  return !listMode && (itemType || '').toLowerCase() === 'presentation' ? 'thumbnails' : 'cards';
+}
+
+export interface SlideThumbOptions {
+  slide: any;
+  theme: ThemeDefinition | null;
+  badge: string;
+  badgeColor: string;
+  isActive: boolean;
+  /** CSS class applied when isActive -- 'active' for Live, 'active-staged' for Preview. */
+  activeClass: string;
+  showDragHandle: boolean;
+  extraClass?: string;
+  /** Paints the slide's resolved background (image, gradient, video poster) onto the thumbnail. */
+  applyBackground: (el: HTMLElement) => void;
+}
+
+/**
+ * A slide card that shows the slide itself: the same renderer as the Preview/Live canvas
+ * (renderSlideVisual), scaled into a 16:9 box with the badge and drag handle overlaid.
+ * Still a `.slide-card`, so active-state toggling and the deck's click/drag wiring work
+ * unchanged. The slide is drawn once the card has a width (and again if the grid resizes).
+ */
+export function buildSlideThumbElement(opts: SlideThumbOptions): HTMLElement {
+  const cardEl = document.createElement('div');
+  cardEl.className = `slide-card slide-thumb-card ${opts.extraClass || ''} ${opts.isActive ? opts.activeClass : ''}`.trim();
+  cardEl.innerHTML = `
+    <div class="slide-thumb-view">
+      <div class="slide-thumb-elements"></div>
+      <div class="slide-thumb-lyrics"></div>
+      <div class="slide-thumb-overlay">
+        ${opts.showDragHandle
+          ? '<span class="preview-card-drag-handle" title="Drag to reorder slide" role="button" tabindex="0" aria-label="Reorder slide. Press Alt+Left or Alt+Right to move.">⠿</span>'
+          : ''}
+        <span class="slide-badge-pill" style="color: ${opts.badgeColor};">${opts.badge}</span>
+      </div>
+    </div>
+  `;
+  const view = cardEl.querySelector<HTMLElement>('.slide-thumb-view')!;
+  const elementsEl = cardEl.querySelector<HTMLElement>('.slide-thumb-elements')!;
+  const lyricsEl = cardEl.querySelector<HTMLElement>('.slide-thumb-lyrics')!;
+  opts.applyBackground(view);
+
+  let drawnWidth = 0;
+  const draw = () => {
+    const w = view.clientWidth;
+    if (!w || w === drawnWidth) return;
+    drawnWidth = w;
+    renderSlideVisual(view, elementsEl, lyricsEl, opts.slide, opts.theme);
+  };
+  new ResizeObserver(draw).observe(view);
+  return cardEl;
 }

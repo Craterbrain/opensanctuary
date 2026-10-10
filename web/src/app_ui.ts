@@ -115,6 +115,7 @@ import {
   storeModal,
   triggerUndoFromPlaceholder,
   webModal,
+  refreshSlideDecks,
 } from './app_core.ts';
 
 // These DOM elements are also declared in app_core.ts / library_panel.ts — a second,
@@ -1129,6 +1130,7 @@ on('btn-preview-view-matrix', 'click', () => {
   if (bM) bM.classList.add('active');
   if (bL) bL.classList.remove('active');
   if (previewSlideMatrixEl) previewSlideMatrixEl.className = 'slide-matrix matrix-mode';
+  refreshSlideDecks();
 });
 on('btn-preview-view-list', 'click', () => {
   const bM = document.getElementById('btn-preview-view-matrix');
@@ -1136,6 +1138,7 @@ on('btn-preview-view-list', 'click', () => {
   if (bL) bL.classList.add('active');
   if (bM) bM.classList.remove('active');
   if (previewSlideMatrixEl) previewSlideMatrixEl.className = 'slide-matrix list-mode';
+  refreshSlideDecks();
 });
 
 // Live Deck View Mode Switching (Matrix vs List)
@@ -1146,6 +1149,7 @@ on('btn-live-view-matrix', 'click', () => {
   if (bM) bM.classList.add('active');
   if (bL) bL.classList.remove('active');
   if (liveSlideMatrixEl) liveSlideMatrixEl.className = 'slide-matrix matrix-mode';
+  refreshSlideDecks();
 });
 on('btn-live-view-list', 'click', () => {
   setActiveLiveViewMode('list');
@@ -1154,6 +1158,7 @@ on('btn-live-view-list', 'click', () => {
   if (bL) bL.classList.add('active');
   if (bM) bM.classList.remove('active');
   if (liveSlideMatrixEl) liveSlideMatrixEl.className = 'slide-matrix list-mode';
+  refreshSlideDecks();
 });
 
 // Resource View Mode Switching (Table vs Grid)
@@ -1582,9 +1587,10 @@ function activateRemoteModalTab(activeTabId: string) {
     const panel = document.getElementById(panelId);
     if (!tab || !panel) continue;
     const active = tabId === activeTabId;
-    tab.style.background = active ? 'var(--os-accent, #ff5722)' : 'transparent';
-    tab.style.color = active ? '#ffffff' : 'var(--text-muted)';
-    panel.style.display = active ? 'block' : 'none';
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    // '' (not 'block') so the panel keeps its stylesheet layout (.remote-panel is a flex column).
+    panel.style.display = active ? '' : 'none';
   }
 }
 
@@ -1723,7 +1729,7 @@ async function startAdbProvisioning() {
   }
 
   if (startBtn) startBtn.disabled = true;
-  if (statusEl) statusEl.innerHTML = '<span style="color: #00e5ff;">⏳ Starting…</span>';
+  if (statusEl) statusEl.innerHTML = '<span style="color: var(--os-accent-text);">⏳ Starting…</span>';
 
   try {
     const startResult = await api.tvProvision.start({
@@ -1746,7 +1752,7 @@ async function startAdbProvisioning() {
         const { progress } = progressResult;
 
         if (statusEl) {
-          const color = progress.status === 'failed' ? '#ff5252' : progress.status === 'completed' ? '#00e676' : '#00e5ff';
+          const color = progress.status === 'failed' ? 'var(--os-danger-text)' : progress.status === 'completed' ? 'var(--os-success-text)' : 'var(--os-accent-text)';
           statusEl.innerHTML = `<span style="color: ${color};">${escapeHtml(progress.message)}</span>`;
         }
 
@@ -1767,14 +1773,14 @@ async function startAdbProvisioning() {
         if (failCount >= 5) {
           stopAdbProvisionPolling();
           if (startBtn) startBtn.disabled = false;
-          if (statusEl) statusEl.innerHTML = '<span style="color: #ff5252;">❌ Lost connection while checking progress.</span>';
+          if (statusEl) statusEl.innerHTML = '<span style="color: var(--os-danger-text);">❌ Lost connection while checking progress.</span>';
         }
       }
     }, 1500);
   } catch (err: any) {
     if (startBtn) startBtn.disabled = false;
     const message = (err && err.message) || 'Could not start provisioning.';
-    if (statusEl) statusEl.innerHTML = `<span style="color: #ff5252;">❌ ${escapeHtml(message)}</span>`;
+    if (statusEl) statusEl.innerHTML = `<span style="color: var(--os-danger-text);">❌ ${escapeHtml(message)}</span>`;
   }
 }
 
@@ -1820,15 +1826,15 @@ on('btn-close-articles-footer', 'click', () => closeModal(scheduleArticlesModal)
 
 const ARTICLES_DATA: Record<string, string> = {
   'article-overview': `
-    <h2 style="color: #ffa726; margin-top: 0; display: flex; align-items: center; gap: 8px;">
+    <h2>
       <span>🌟</span> 1. Schedule & Worship "Set List" Overview
     </h2>
-    <p style="font-size: 14px; line-height: 1.6;">
+    <p>
       The <strong>Schedule Area</strong> in OpenSanctuary is the operational heart of your service. It acts as your dynamic playlist or "set list", organizing everything you plan to present on the main Front-of-House (FOH) projection display and Stage Confidence monitors during worship.
     </p>
-    <div style="background: rgba(255, 167, 38, 0.08); border-left: 4px solid var(--os-brand-amber); padding: 14px 18px; border-radius: 4px; margin: 16px 0;">
-      <strong style="font-size: 13.5px; color: #fff;">Supported Worship Schedule Items:</strong>
-      <ul style="margin: 10px 0 0 18px; padding: 0; line-height: 1.7;">
+    <div class="os-callout os-callout--info article-callout">
+      <strong>Supported Worship Schedule Items:</strong>
+      <ul>
         <li><strong>🎵 Songs with Backgrounds</strong> — Lyrics with verse tags (V1, C1, B1), motion video loops, photo backgrounds, and customizable themes.</li>
         <li><strong>📖 Scripture Passages</strong> — Specific single verses, multi-verse passages, and side-by-side Dual Translation comparison mode.</li>
         <li><strong>📊 PowerPoint & Sermon Slides</strong> — Multi-slide sermon outlines, bullet points, and imported presentation decks.</li>
@@ -1841,20 +1847,20 @@ const ARTICLES_DATA: Record<string, string> = {
   `,
 
   'article-building': `
-    <h2 style="color: #ffa726; margin-top: 0; display: flex; align-items: center; gap: 8px;">
+    <h2>
       <span>📋</span> 2. Building Your First Schedule
     </h2>
     <p>Creating a schedule in OpenSanctuary is fast and intuitive. You can build your service order using multiple quick workflows:</p>
     
-    <h3 style="color: #fff; margin-top: 18px;">Method 1: From the Catalog Library (Double-Click / ➕ / Drag-and-Drop)</h3>
-    <ol style="margin-left: 18px; line-height: 1.7;">
+    <h3>Method 1: From the Catalog Library (Double-Click / ➕ / Drag-and-Drop)</h3>
+    <ol>
       <li>Select any resource tab in the center panel (<strong>Songs, Scriptures, Media, Presentations</strong>).</li>
       <li>Search for your title, lyrics, or Bible reference (e.g. <code>Amazing Grace</code>, <code>John 3:16</code>, <code>Sunday Welcome</code>).</li>
       <li>Click the <strong>➕ Add to Schedule</strong> button, double-click the row, or drag the card directly into the Schedule list on the left.</li>
     </ol>
 
-    <h3 style="color: #fff; margin-top: 18px;">Method 2: From the Top "New ▾" Ribbon Dropdown</h3>
-    <ul style="margin-left: 18px; line-height: 1.7;">
+    <h3>Method 2: From the Top "New ▾" Ribbon Dropdown</h3>
+    <ul>
       <li>Click <strong>New ▾ -> 🎵 New Song...</strong> (<kbd>Ctrl+Shift+N</kbd>) to author a custom song.</li>
       <li>Click <strong>New ▾ -> 📊 New Presentation / Sermon Slides...</strong> to design sermon teaching points in the Creator Studio.</li>
       <li>Click <strong>New ▾ -> 📖 New Scripture Passage...</strong> to lookup and stage specific verses.</li>
@@ -1863,73 +1869,73 @@ const ARTICLES_DATA: Record<string, string> = {
       <li>Click <strong>New ▾ -> 🏷️ New Section / Group Header...</strong> to organize your service sections.</li>
     </ul>
 
-    <h3 style="color: #fff; margin-top: 18px;">Method 3: Staging & Previewing Before Going Live</h3>
+    <h3>Method 3: Staging & Previewing Before Going Live</h3>
     <p>
       Clicking any item in the Schedule stages it in the <strong>Preview Deck</strong> (center-right). You can inspect all slide tiles, verify lyrics and background contrast, and then hit <kbd>Enter</kbd> or click <strong>▶ GO LIVE</strong> when your pastor or worship leader is ready!
     </p>
   `,
 
   'article-content-types': `
-    <h2 style="color: #ffa726; margin-top: 0; display: flex; align-items: center; gap: 8px;">
+    <h2>
       <span>🎬</span> 3. Songs, Scriptures, Feeds & Media
     </h2>
     
-    <h3 style="color: #fff; margin-top: 14px;">1. Songs with Dynamic Backgrounds</h3>
+    <h3>1. Songs with Dynamic Backgrounds</h3>
     <p>
       Every song can use default global themes or custom per-song / per-slide backgrounds. Right-click any schedule item and choose <strong>🎨 Change Theme / Background...</strong> or <strong>🖼 Select Background Photo...</strong> to apply scenic mountains, motion video loops, or subtle dark gradients.
     </p>
 
-    <h3 style="color: #fff; margin-top: 14px;">2. Scriptures & Dual-Translation Comparison</h3>
+    <h3>2. Scriptures & Dual-Translation Comparison</h3>
     <p>
       Type single verses (<code>Philippians 4:6</code>) or ranges (<code>Romans 8:28-30</code>) to add precisely those verses to your schedule. Toggle <strong>👥 Compare</strong> to project two translations side-by-side (e.g. KJV and ASV or WEB).
     </p>
 
-    <h3 style="color: #fff; margin-top: 14px;">3. PowerPoint & Sermon Presentations</h3>
+    <h3>3. PowerPoint & Sermon Presentations</h3>
     <p>
       Build rich sermon slides using the built-in Presentation Studio. Choose between Title & Body, 2 Columns, Scripture Quote, or Bullet List layouts. Import slide decks and presentations from PowerPoint (<code>.pptx</code>), FreeShow (<code>.show</code>), or OpenLP via the <strong>📥 Import</strong> menu — FreeShow brings in rich text formatting, arrangement sections, and backgrounds.
     </p>
 
-    <h3 style="color: #fff; margin-top: 14px;">4. Live Camera Feeds (PTZ & Webcams)</h3>
+    <h3>4. Live Camera Feeds (PTZ & Webcams)</h3>
     <p>
       Select <strong>Media -> 📡 Live Camera Feeds</strong> or <strong>New ▾ -> 📡 New Live Camera Feed...</strong> to stream local capture devices and USB webcams straight to the sanctuary screen, with worship lyrics rendered cleanly over the live video!
     </p>
 
-    <h3 style="color: #fff; margin-top: 14px;">5. Mini-Movies & Sermon Illustrations</h3>
+    <h3>5. Mini-Movies & Sermon Illustrations</h3>
     <p>
       Add videos directly to the schedule for countdowns, offering mini-movies, or sermon illustrations. Supports full playback transport controls (Play, Pause, Scrub bar, Loop toggle, Volume). Download web clips directly via the built-in <strong>📥 yt-dlp Video Importer</strong>.
     </p>
 
-    <h3 style="color: #fff; margin-top: 14px;">6. Websites & Live Web Streams</h3>
+    <h3>6. Websites & Live Web Streams</h3>
     <p>
       Use the <strong>🌐 Web</strong> button to embed live stream links, church announcements, or YouTube broadcasts into your worship presentation.
     </p>
   `,
 
   'article-reordering': `
-    <h2 style="color: #ffa726; margin-top: 0; display: flex; align-items: center; gap: 8px;">
+    <h2>
       <span>⠿</span> 4. Editing, Re-ordering & Organizing Items
     </h2>
 
-    <h3 style="color: #fff; margin-top: 14px;">1. Drag-and-Drop Schedule Re-ordering</h3>
+    <h3>1. Drag-and-Drop Schedule Re-ordering</h3>
     <p>
       Grab the <strong>⠿ drag handle</strong> on any schedule item or section header and drag it up or down to change the service sequence. The schedule reorders smoothly in real time.
     </p>
 
-    <h3 style="color: #fff; margin-top: 14px;">2. Section Headers & Collapsible Groups</h3>
+    <h3>2. Section Headers & Collapsible Groups</h3>
     <p>
       Insert Section Headers (e.g. <code>🏷️ PRAISE & WORSHIP</code>, <code>🏷️ SERMON</code>, <code>🏷️ OFFERING</code>). Clicking any header expands or collapses all child items underneath it, displaying an item count badge (e.g. <em>(4 items)</em>) to keep large worship services tidy and organized.
     </p>
 
-    <h3 style="color: #fff; margin-top: 14px;">3. Verse & Slide-Level Reordering</h3>
+    <h3>3. Verse & Slide-Level Reordering</h3>
     <p>
       Click the <strong>▶ caret</strong> next to any multi-slide song to reveal its individual verses (<em>Verse 1, Chorus, Verse 2, Bridge</em>). Drag any slide up or down using the child drag handle to rearrange verses on the fly without editing the original song in your library!
     </p>
 
-    <h3 style="color: #fff; margin-top: 14px;">4. Right-Click Context Menu Actions</h3>
+    <h3>4. Right-Click Context Menu Actions</h3>
     <p>
       Right-click any schedule item for instant management options:
     </p>
-    <ul style="margin-left: 18px; line-height: 1.7;">
+    <ul>
       <li><strong>✏️ Edit Item & Slides...</strong> — Open the slide studio to modify text or formatting.</li>
       <li><strong>📋 Duplicate Item</strong> — Duplicate an item for responsive call-and-response liturgy.</li>
       <li><strong>🗑️ Remove from Schedule</strong> — Remove the item from the current service queue.</li>
@@ -1938,71 +1944,71 @@ const ARTICLES_DATA: Record<string, string> = {
   `,
 
   'article-saving': `
-    <h2 style="color: #ffa726; margin-top: 0; display: flex; align-items: center; gap: 8px;">
+    <h2>
       <span>💾</span> 5. Saving, Exporting & Sharing Schedules
     </h2>
     <p>
       OpenSanctuary schedules are fully self-contained portable files designed for seamless sharing across church production teams and computers.
     </p>
 
-    <h3 style="color: #fff; margin-top: 14px;">1. Native EasyWorship 7 (.ewsx) Standard Package Format</h3>
+    <h3>1. Native EasyWorship 7 (.ewsx) Standard Package Format</h3>
     <p>
       When you save a schedule (<kbd>Ctrl+S</kbd> or <strong>File -> Save Schedule</strong>), OpenSanctuary writes a standard <code>.ewsx</code> zip bundle containing:
     </p>
-    <ul style="margin-left: 18px; line-height: 1.7;">
+    <ul>
       <li>All schedule items, slide texts, and verse tags.</li>
       <li>Embedded song records and scripture references.</li>
       <li>Embedded background images, photos, and theme styling.</li>
       <li>Section header structure and grouping states.</li>
     </ul>
 
-    <h3 style="color: #fff; margin-top: 14px;">2. Sharing with Other Operators & Computers</h3>
+    <h3>2. Sharing with Other Operators & Computers</h3>
     <p>
       To share a schedule with your pastor, sound booth team, or a backup laptop:
     </p>
-    <ol style="margin-left: 18px; line-height: 1.7;">
+    <ol>
       <li>Click <strong>Save As...</strong> and save your schedule (e.g. <code>Sunday_Morning_Worship.ewsx</code>).</li>
       <li>Copy the <code>.ewsx</code> file to a USB thumb drive, church cloud folder, or email.</li>
       <li>On the sanctuary presentation computer, click <strong>📂 Open</strong> (or drag and drop the <code>.ewsx</code> file directly into OpenSanctuary). All songs, slides, and backgrounds load instantly!</li>
     </ol>
 
-    <h3 style="color: #fff; margin-top: 14px;">3. Exporting to OpenLP (.osj) Format</h3>
+    <h3>3. Exporting to OpenLP (.osj) Format</h3>
     <p>
       Need to share with another church using OpenLP? Use <strong>File -> Export Schedule -> OpenLP Service (.osj)</strong> for cross-platform compatibility.
     </p>
   `,
 
   'article-live-ops': `
-    <h2 style="color: #ffa726; margin-top: 0; display: flex; align-items: center; gap: 8px;">
+    <h2>
       <span>⚡</span> 6. Live Service Operations, Hotkeys & Stage Monitors
     </h2>
     
-    <h3 style="color: #fff; margin-top: 14px;">1. Emergency Live Override Hotkeys</h3>
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 12px 0;">
-      <div style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 4px; border: 1px solid var(--border-color);">
-        <strong style="color: #ef5350;">⬛ Blackout (<kbd>F5</kbd>)</strong><br>
-        <span style="font-size: 11px; color: var(--text-dim);">Instantly blacks out the screen.</span>
+    <h3>1. Emergency Live Override Hotkeys</h3>
+    <div class="article-card-grid">
+      <div class="os-card article-card">
+        <strong>⬛ Blackout (<kbd>F5</kbd>)</strong><br>
+        <span class="form-help">Instantly blacks out the screen.</span>
       </div>
-      <div style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 4px; border: 1px solid var(--border-color);">
-        <strong style="color: #42a5f5;">🧹 Clear Text (<kbd>F6</kbd>)</strong><br>
-        <span style="font-size: 11px; color: var(--text-dim);">Hides lyrics, keeps background.</span>
+      <div class="os-card article-card">
+        <strong>🧹 Clear Text (<kbd>F6</kbd>)</strong><br>
+        <span class="form-help">Hides lyrics, keeps background.</span>
       </div>
-      <div style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 4px; border: 1px solid var(--border-color);">
-        <strong style="color: #ab47bc;">🏛 Logo Screen (<kbd>F7</kbd>)</strong><br>
-        <span style="font-size: 11px; color: var(--text-dim);">Displays church logo screen.</span>
+      <div class="os-card article-card">
+        <strong>🏛 Logo Screen (<kbd>F7</kbd>)</strong><br>
+        <span class="form-help">Displays church logo screen.</span>
       </div>
-      <div style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 4px; border: 1px solid var(--border-color);">
-        <strong style="color: #ffa726;">{icon:alert} Alert Banner (<kbd>F8</kbd>)</strong><br>
-        <span style="font-size: 11px; color: var(--text-dim);">Nursery & parking emergency alerts.</span>
+      <div class="os-card article-card">
+        <strong>{icon:alert} Alert Banner (<kbd>F8</kbd>)</strong><br>
+        <span class="form-help">Nursery & parking emergency alerts.</span>
       </div>
     </div>
 
-    <h3 style="color: #fff; margin-top: 14px;">2. Stage Foldback & Confidence Monitor</h3>
+    <h3>2. Stage Foldback & Confidence Monitor</h3>
     <p>
       Musicians and speakers on stage can view the <strong>Stage Foldback Monitor</strong> by opening <code>/stage.html</code> in any browser or on a dedicated stage display. It shows large high-contrast current lyrics, NEXT slide preview, and real-time clock.
     </p>
 
-    <h3 style="color: #fff; margin-top: 14px;">3. Mobile Remote Control</h3>
+    <h3>3. Mobile Remote Control</h3>
     <p>
       Worship leaders and pastors can change slides from their smartphone or tablet on the church Wi-Fi using the mobile-optimized web console at <code>http://[your-ip]:8080/</code>.
     </p>
@@ -2017,17 +2023,7 @@ function renderArticle(articleId: string) {
     pane.scrollTop = 0;
   }
   document.querySelectorAll<HTMLElement>('.article-nav-item').forEach(item => {
-    if (item.dataset.article === articleId) {
-      item.classList.add('active');
-      item.style.color = '#fff';
-      item.style.borderLeft = '3px solid var(--os-brand-amber)';
-      item.style.background = 'rgba(255, 167, 38, 0.08)';
-    } else {
-      item.classList.remove('active');
-      item.style.color = 'var(--text-muted)';
-      item.style.borderLeft = '3px solid transparent';
-      item.style.background = 'transparent';
-    }
+    item.classList.toggle('active', item.dataset.article === articleId);
   });
 }
 
@@ -2124,7 +2120,7 @@ if (btnYtdlpPaste) {
       ytdlpUrlInput.focus();
       ytdlpUrlInput.select();
       if (ytdlpDownloadStatus) {
-        ytdlpDownloadStatus.innerHTML = `<span style="color: #00e5ff;">📋 Please press <strong>Ctrl+V</strong> to paste your URL.</span>`;
+        ytdlpDownloadStatus.innerHTML = `<span style="color: var(--os-accent-text);">📋 Please press <strong>Ctrl+V</strong> to paste your URL.</span>`;
         setTimeout(() => {
           if (ytdlpDownloadStatus && ytdlpDownloadStatus.textContent.includes('Ctrl+V')) {
             ytdlpDownloadStatus.innerHTML = '';
@@ -2177,7 +2173,7 @@ async function handleYtDlpDownload(goLiveAfter = false) {
   const url = ytdlpUrlInput ? ytdlpUrlInput.value.trim() : '';
   if (!url) {
     if (ytdlpDownloadStatus) {
-      ytdlpDownloadStatus.innerHTML = `<span style="color: #ff5252;">⚠️ Please enter or paste a video URL (e.g. YouTube, Vimeo, direct link).</span>`;
+      ytdlpDownloadStatus.innerHTML = `<span style="color: var(--os-danger-text);">⚠️ Please enter or paste a video URL (e.g. YouTube, Vimeo, direct link).</span>`;
     }
     if (ytdlpUrlInput) ytdlpUrlInput.focus();
     return;
@@ -2192,9 +2188,9 @@ async function handleYtDlpDownload(goLiveAfter = false) {
 
   if (ytdlpDownloadStatus) {
     ytdlpDownloadStatus.innerHTML = `
-      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #00e5ff;">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--os-accent-text);">
         <span>⏳ Initializing <strong>yt-dlp</strong> background download...</span>
-        <span style="font-weight: 700; color: #00e676;">0%</span>
+        <span style="font-weight: 700; color: var(--os-success-text);">0%</span>
       </div>`;
   }
 
@@ -2236,7 +2232,7 @@ async function handleYtDlpDownload(goLiveAfter = false) {
             if (btnYtdlpDownloadAndLive) btnYtdlpDownloadAndLive.disabled = false;
             if (btnYtdlpPaste) btnYtdlpPaste.disabled = false;
             if (ytdlpDownloadStatus) {
-              ytdlpDownloadStatus.innerHTML = `<div style="color: #ff5252;">❌ Download status polling connection lost.</div>`;
+              ytdlpDownloadStatus.innerHTML = `<div style="color: var(--os-danger-text);">❌ Download status polling connection lost.</div>`;
             }
           }
           return;
@@ -2256,8 +2252,8 @@ async function handleYtDlpDownload(goLiveAfter = false) {
         if (ytdlpDownloadStatus) {
           ytdlpDownloadStatus.innerHTML = `
             <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
-              <span style="color: #00e5ff;">${escapeHtml(progress.status || 'Downloading...')}${escapeHtml(speedStr)}${escapeHtml(etaStr)}</span>
-              <span style="font-weight: 700; color: #00e676; font-variant-numeric: tabular-nums;">${pct.toFixed(1)}%</span>
+              <span style="color: var(--os-accent-text);">${escapeHtml(progress.status || 'Downloading...')}${escapeHtml(speedStr)}${escapeHtml(etaStr)}</span>
+              <span style="font-weight: 700; color: var(--os-success-text); font-variant-numeric: tabular-nums;">${pct.toFixed(1)}%</span>
             </div>`;
         }
 
@@ -2271,7 +2267,7 @@ async function handleYtDlpDownload(goLiveAfter = false) {
           if (progress.error) {
             if (ytdlpDownloadStatus) {
               ytdlpDownloadStatus.innerHTML = `
-                <div style="color: #ff5252;">
+                <div style="color: var(--os-danger-text);">
                   ❌ Download failed: ${escapeHtml(progress.error)}
                 </div>`;
             }
@@ -2317,7 +2313,7 @@ async function handleYtDlpDownload(goLiveAfter = false) {
 
     if (ytdlpDownloadStatus) {
       ytdlpDownloadStatus.innerHTML = `
-        <div style="color: #ff5252;">
+        <div style="color: var(--os-danger-text);">
           ❌ Initialization error: ${escapeHtml(err instanceof Error ? err.message : String(err))}
         </div>`;
     }
@@ -2554,7 +2550,7 @@ function renderOnlineBibleCatalog(items: any[]) {
           <span class="bible-name-text" style="font-weight: 600;">${escapeHtml(b.name)}${escapeHtml(abbr)}</span>
         </div>
         <div style="font-size: 10px; color: var(--text-dim); margin-left: 2px;">
-          Source: <span style="color: #00e5ff;">${escapeHtml(sourcesStr)}</span>
+          Source: <span style="color: var(--os-accent-text);">${escapeHtml(sourcesStr)}</span>
         </div>
       </div>
       <button class="btn-install-bible" data-abbr="${escapeHtml(b.abbreviation || b.id)}">Install / Download</button>
@@ -2660,13 +2656,13 @@ async function browseGitHubBibleRepo() {
       renderGitHubBibleCatalog(data.catalog);
     } else {
       if (ghBibleCatalogList) {
-        ghBibleCatalogList.innerHTML = `<div style="padding: 24px; text-align: center; color: #ff5252;">Failed to load repo catalog: ${escapeHtml(data.error || 'Unknown error')}</div>`;
+        ghBibleCatalogList.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--os-danger-text);">Failed to load repo catalog: ${escapeHtml(data.error || 'Unknown error')}</div>`;
       }
       if (ghBibleCountLabel) ghBibleCountLabel.textContent = 'Failed to load';
     }
   } catch (err: any) {
     if (ghBibleCatalogList) {
-      ghBibleCatalogList.innerHTML = `<div style="padding: 24px; text-align: center; color: #ff5252;">Network error: ${escapeHtml(err.message)}</div>`;
+      ghBibleCatalogList.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--os-danger-text);">Network error: ${escapeHtml(err.message)}</div>`;
     }
     if (ghBibleCountLabel) ghBibleCountLabel.textContent = 'Network error';
   } finally {
@@ -2703,7 +2699,7 @@ function renderGitHubBibleCatalog(items: any[]) {
           <span class="bible-name-text" style="font-weight: 600;">${escapeHtml(b.name)}${escapeHtml(abbr)}</span>
         </div>
         <div style="font-size: 10px; color: var(--text-dim); margin-left: 2px;">
-          Source: <span style="color: #00e5ff;">${escapeHtml(b.source || 'GitHub')}</span>
+          Source: <span style="color: var(--os-accent-text);">${escapeHtml(b.source || 'GitHub')}</span>
         </div>
       </div>
       <button class="btn-install-bible" data-id="${escapeHtml(b.id)}">Install / Download</button>
@@ -2825,7 +2821,7 @@ on('file-openlp-import', 'change', async (e: Event) => {
       const msg = `✓ OpenLP Import Successful: ${data.message || `${count} items imported`}`;
       if (statusEl) {
         statusEl.style.display = 'block';
-        statusEl.style.color = '#00e676';
+        statusEl.style.color = 'var(--os-success-text)';
         statusEl.textContent = msg;
       }
       showToast(msg, 'success');
@@ -2835,7 +2831,7 @@ on('file-openlp-import', 'change', async (e: Event) => {
       const err = await res.text();
       if (statusEl) {
         statusEl.style.display = 'block';
-        statusEl.style.color = '#ff5252';
+        statusEl.style.color = 'var(--os-danger-text)';
         statusEl.textContent = `Import error: ${err}`;
       }
       showToast(`OpenLP import error: ${err}`, 'error');
@@ -2843,7 +2839,7 @@ on('file-openlp-import', 'change', async (e: Event) => {
   } catch (err: any) {
     if (statusEl) {
       statusEl.style.display = 'block';
-      statusEl.style.color = '#ff5252';
+      statusEl.style.color = 'var(--os-danger-text)';
       statusEl.textContent = `Error: ${err.message}`;
     }
     showToast(`OpenLP import failed: ${err.message}`, 'error');
@@ -2878,7 +2874,7 @@ on('file-freeshow-show-import', 'change', async (e: Event) => {
       const msg = `✓ ${data.message || `Imported '${data.title}' (${data.slide_count} slides)`}`;
       if (statusEl) {
         statusEl.style.display = 'block';
-        statusEl.style.color = '#00e676';
+        statusEl.style.color = 'var(--os-success-text)';
         statusEl.textContent = msg;
       }
       showToast(msg, 'success');
@@ -2891,7 +2887,7 @@ on('file-freeshow-show-import', 'change', async (e: Event) => {
       const err = await res.text();
       if (statusEl) {
         statusEl.style.display = 'block';
-        statusEl.style.color = '#ff5252';
+        statusEl.style.color = 'var(--os-danger-text)';
         statusEl.textContent = `Import error: ${err}`;
       }
       showToast(`FreeShow import error: ${err}`, 'error');
@@ -2899,7 +2895,7 @@ on('file-freeshow-show-import', 'change', async (e: Event) => {
   } catch (err: any) {
     if (statusEl) {
       statusEl.style.display = 'block';
-      statusEl.style.color = '#ff5252';
+      statusEl.style.color = 'var(--os-danger-text)';
       statusEl.textContent = `Error: ${err.message}`;
     }
     showToast(`FreeShow import failed: ${err.message}`, 'error');
@@ -2934,7 +2930,7 @@ on('file-pptx-import', 'change', async (e: Event) => {
       const msg = `✓ ${data.message || `Imported '${data.title}' (${data.slide_count} slides)`}`;
       if (statusEl) {
         statusEl.style.display = 'block';
-        statusEl.style.color = '#00e676';
+        statusEl.style.color = 'var(--os-success-text)';
         statusEl.textContent = msg;
       }
       showToast(msg, 'success');
@@ -2943,7 +2939,7 @@ on('file-pptx-import', 'change', async (e: Event) => {
       const err = await res.text();
       if (statusEl) {
         statusEl.style.display = 'block';
-        statusEl.style.color = '#ff5252';
+        statusEl.style.color = 'var(--os-danger-text)';
         statusEl.textContent = `Import error: ${err}`;
       }
       showToast(`PowerPoint import error: ${err}`, 'error');
@@ -2951,7 +2947,7 @@ on('file-pptx-import', 'change', async (e: Event) => {
   } catch (err: any) {
     if (statusEl) {
       statusEl.style.display = 'block';
-      statusEl.style.color = '#ff5252';
+      statusEl.style.color = 'var(--os-danger-text)';
       statusEl.textContent = `Error: ${err.message}`;
     }
     showToast(`PowerPoint import failed: ${err.message}`, 'error');
@@ -2983,7 +2979,7 @@ on('btn-openlp-autodetect', 'click', async () => {
       const msg = `✓ ${data.message || `Imported ${count} items from local OpenLP installation`}`;
       if (statusEl) {
         statusEl.style.display = 'block';
-        statusEl.style.color = '#00e676';
+        statusEl.style.color = 'var(--os-success-text)';
         statusEl.textContent = msg;
       }
       showToast(msg, 'success');
@@ -2993,7 +2989,7 @@ on('btn-openlp-autodetect', 'click', async () => {
       const err = await res.text();
       if (statusEl) {
         statusEl.style.display = 'block';
-        statusEl.style.color = '#ff5252';
+        statusEl.style.color = 'var(--os-danger-text)';
         statusEl.textContent = `Auto-detect error: ${err}`;
       }
       showToast(`OpenLP auto-detect error: ${err}`, 'error');
@@ -3001,7 +2997,7 @@ on('btn-openlp-autodetect', 'click', async () => {
   } catch (err: any) {
     if (statusEl) {
       statusEl.style.display = 'block';
-      statusEl.style.color = '#ff5252';
+      statusEl.style.color = 'var(--os-danger-text)';
       statusEl.textContent = `Error: ${err.message}`;
     }
     showToast(`OpenLP auto-detect failed: ${err.message}`, 'error');

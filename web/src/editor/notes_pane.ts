@@ -50,23 +50,13 @@ export class NotesPane {
     // between the toolbar and the footer, shrinking the canvas/properties
     // area instead of ever overflowing.
     this.containerEl.className = 'editor-notes-pane';
-    this.containerEl.style.background = '#18181b';
-    this.containerEl.style.borderTop = '1px solid #27272a';
-    this.containerEl.style.display = 'flex';
-    this.containerEl.style.flexDirection = 'column';
 
     // Header bar
     const header = document.createElement('div');
     header.className = 'studio-notes-header';
-    header.style.display = 'flex';
-    header.style.justifyContent = 'space-between';
-    header.style.alignItems = 'center';
-    header.style.padding = '6px 12px';
-    header.style.background = '#202024';
-    header.style.userSelect = 'none';
 
     const titleSpan = document.createElement('span');
-    titleSpan.className = 'text-xs font-semibold text-slate-300 flex items-center gap-2';
+    titleSpan.className = 'studio-notes-title';
     titleSpan.innerHTML = '📝 <span>Speaker Notes &amp; CCLI Metadata (Stage Monitor &amp; Broadcast)</span>';
 
     header.appendChild(titleSpan);
@@ -75,26 +65,14 @@ export class NotesPane {
     // Body container: 2 columns (Speaker notes left, CCLI metadata right)
     this.bodyEl = document.createElement('div');
     this.bodyEl.className = 'studio-notes-body';
-    this.bodyEl.style.display = 'grid';
-    this.bodyEl.style.gridTemplateColumns = '1fr 340px';
-    this.bodyEl.style.gap = '12px';
-    this.bodyEl.style.padding = '8px 12px';
-    this.bodyEl.style.height = '110px';
-    this.bodyEl.style.boxSizing = 'border-box';
 
     // Left column: Notes
     const leftCol = document.createElement('div');
-    leftCol.style.display = 'flex';
-    leftCol.style.flexDirection = 'column';
-    leftCol.style.height = '100%';
+    leftCol.className = 'studio-notes-col';
 
     this.notesInput = document.createElement('textarea');
     this.notesInput.className = 'search-input studio-notes-input';
     this.notesInput.placeholder = 'Add speaker cues, scripture references, or stage prompts for this slide...';
-    this.notesInput.style.flex = '1';
-    this.notesInput.style.resize = 'none';
-    this.notesInput.style.fontFamily = 'inherit';
-    this.notesInput.style.fontSize = '12px';
     this.notesInput.addEventListener('input', () => {
       if (this.currentSlide) {
         this.currentSlide.speaker_notes = this.notesInput.value;
@@ -108,9 +86,7 @@ export class NotesPane {
 
     // Right column: CCLI metadata fields
     const rightCol = document.createElement('div');
-    rightCol.style.display = 'grid';
-    rightCol.style.gridTemplateColumns = '1fr 1fr';
-    rightCol.style.gap = '6px';
+    rightCol.className = 'studio-notes-meta';
 
     this.ccliTitleInput = this.createMetaInput('Song/Piece Title', (val) => {
       this.ensureCcli().title = val;
@@ -140,10 +116,8 @@ export class NotesPane {
 
   private wrapInput(label: string, input: HTMLInputElement): HTMLElement {
     const wrap = document.createElement('div');
-    wrap.style.display = 'flex';
-    wrap.style.flexDirection = 'column';
+    wrap.className = 'studio-notes-field';
     const lbl = document.createElement('label');
-    lbl.className = 'text-2xs text-slate-400 mb-0.5';
     lbl.textContent = label;
     wrap.appendChild(lbl);
     wrap.appendChild(input);
@@ -153,10 +127,8 @@ export class NotesPane {
   private createMetaInput(placeholder: string, onUpdate: (val: string) => void): HTMLInputElement {
     const inp = document.createElement('input');
     inp.type = 'text';
-    inp.className = 'search-input text-xs';
+    inp.className = 'search-input';
     inp.placeholder = placeholder;
-    inp.style.padding = '3px 6px';
-    inp.style.height = '24px';
     inp.addEventListener('input', () => onUpdate(inp.value));
     return inp;
   }

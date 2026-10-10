@@ -37,12 +37,6 @@ export class EditorContextMenu {
     this.menuEl.style.zIndex = '100000';
     this.menuEl.style.display = 'none';
     this.menuEl.style.minWidth = '180px';
-    this.menuEl.style.background = '#1e1e24';
-    this.menuEl.style.border = '1px solid #333338';
-    this.menuEl.style.borderRadius = '6px';
-    this.menuEl.style.boxShadow = '0 8px 24px rgba(0,0,0,0.6)';
-    this.menuEl.style.padding = '4px 0';
-    this.menuEl.style.fontSize = '12px';
     this.menuEl.style.userSelect = 'none';
 
     document.body.appendChild(this.menuEl);
@@ -110,22 +104,10 @@ export class EditorContextMenu {
 
   private addItem(label: string, shortcut: string, enabled: boolean, onClick: () => void): void {
     const item = document.createElement('div');
-    item.className = 'editor-context-item';
-    item.style.display = 'flex';
-    item.style.justifyContent = 'space-between';
-    item.style.alignItems = 'center';
-    item.style.padding = '6px 12px';
-    item.style.cursor = enabled ? 'pointer' : 'default';
-    item.style.opacity = enabled ? '1.0' : '0.4';
-    item.style.color = enabled ? '#e4e4e7' : '#71717a';
+    // Look (hover, disabled) comes from the shared .context-menu-item recipe.
+    item.className = `editor-context-item context-menu-item${enabled ? '' : ' disabled'}`;
 
     if (enabled) {
-      item.addEventListener('mouseenter', () => {
-        item.style.background = '#27272a';
-      });
-      item.addEventListener('mouseleave', () => {
-        item.style.background = 'transparent';
-      });
       item.addEventListener('click', (e) => {
         e.stopPropagation();
         this.hide();
@@ -137,9 +119,7 @@ export class EditorContextMenu {
     labelSpan.textContent = label;
 
     const shortcutSpan = document.createElement('span');
-    shortcutSpan.style.fontSize = '10px';
-    shortcutSpan.style.color = '#a1a1aa';
-    shortcutSpan.style.marginLeft = '16px';
+    shortcutSpan.className = 'context-menu-shortcut';
     shortcutSpan.textContent = shortcut;
 
     item.appendChild(labelSpan);
@@ -149,9 +129,7 @@ export class EditorContextMenu {
 
   private addSeparator(): void {
     const sep = document.createElement('div');
-    sep.style.height = '1px';
-    sep.style.background = '#27272a';
-    sep.style.margin = '4px 0';
+    sep.className = 'context-menu-separator';
     this.menuEl.appendChild(sep);
   }
 }
