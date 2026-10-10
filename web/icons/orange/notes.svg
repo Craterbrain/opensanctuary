@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <style>
+    .stroke-main { fill: none; stroke: #FF5722; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-light { fill: none; stroke: #FFA726; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-dark { fill: none; stroke: #D84315; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <rect class="stroke-main" x="4" y="4" width="16" height="18" rx="2"/>
+  <line class="stroke-dark" x1="8" y1="2" x2="8" y2="6"/>
+  <line class="stroke-dark" x1="12" y1="2" x2="12" y2="6"/>
+  <line class="stroke-dark" x1="16" y1="2" x2="16" y2="6"/>
+  <line class="stroke-light" x1="8" y1="11" x2="16" y2="11"/>
+  <line class="stroke-light" x1="8" y1="15" x2="16" y2="15"/>
+  <line class="stroke-light" x1="8" y1="19" x2="12" y2="19"/>
+</svg>

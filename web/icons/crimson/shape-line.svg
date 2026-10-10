@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <style>
+    .stroke-red { fill: none; stroke: #f43f5e; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-light-red { fill: none; stroke: #fda4af; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <line class="stroke-red" x1="7" y1="17" x2="17" y2="7"/>
+  <circle class="stroke-light-red" cx="5" cy="19" r="2"/>
+  <circle class="stroke-light-red" cx="19" cy="5" r="2"/>
+</svg>
