@@ -18,6 +18,7 @@ import {
   isAudioMedia,
   formatCssBackground,
   escapeHtml,
+  escapeUserHtml,
   resolveThemeAt,
   type ThemeDefinition
 } from './core/presentation_helpers.ts';
@@ -1074,7 +1075,7 @@ function createUndoPlaceholderElement(ph: { index: number; title: string; create
   el.innerHTML = `
     <div class="undo-content">
       <span style="font-size: 12px;">🗑️</span>
-      <span>Removed "<strong>${escapeHtml(ph.title)}</strong>"</span>
+      <span>Removed "<strong>${escapeUserHtml(ph.title)}</strong>"</span>
     </div>
     <button class="btn btn-undo" type="button" title="Undo delete (Ctrl+Z)">↩ Undo</button>
     <div class="undo-progress"></div>
@@ -1561,7 +1562,7 @@ export function renderSchedule(schedule: any) {
         <span style="font-size: 13px; margin-right: 4px;">🏷️</span>
         <div class="meta" style="flex: 1; overflow: hidden;">
           <div class="title" style="font-weight: 800; letter-spacing: 0.6px; color: #ffa726; font-size: 11px; text-transform: uppercase; display: inline-flex; align-items: center; gap: 6px;">
-            ${escapeHtml(item.title)}
+            ${escapeUserHtml(item.title)}
             ${isGroupCollapsed && groupItemCount > 0 ? `<span class="group-count-badge" style="font-size: 10px; color: #ffb74d; opacity: 0.8; font-weight: 600; text-transform: none;">(${groupItemCount} ${groupItemCount === 1 ? 'item' : 'items'})</span>` : ''}
           </div>
         </div>
@@ -1744,8 +1745,8 @@ export function renderSchedule(schedule: any) {
       <span class="schedule-caret">${caret}</span>
       <div class="thumb-box" style="background: ${escapeHtml(gradient)};">${icon}</div>
       <div class="meta" style="flex: 1; overflow: hidden; margin-left: 4px;">
-        <div class="title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600;">${escapeHtml(item.title)}</div>
-        <div class="notes" style="font-size: 10px; color: var(--text-dim);">${escapeHtml(item.subtitle || 'notes')}</div>
+        <div class="title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600;">${escapeUserHtml(item.title)}</div>
+        <div class="notes" style="font-size: 10px; color: var(--text-dim);">${escapeUserHtml(item.subtitle || 'notes')}</div>
       </div>
       <span class="schedule-drag-handle drag-handle" data-item-idx="${idx}" role="button" tabindex="0" title="Drag handle to reorder" aria-label="Reorder item. Press Alt+Up or Alt+Down to move.">⠿</span>
     `;
@@ -1961,7 +1962,7 @@ export function renderSchedule(schedule: any) {
         childEl.innerHTML = `
           <span class="child-slide-drag-handle drag-handle" data-slide-idx="${sIdx}" role="button" tabindex="0" title="Drag handle to reorder verse" aria-label="Reorder verse. Press Alt+Up or Alt+Down to move.">⠿</span>
           <span style="font-weight: 700; color: ${badgeColor}; width: 28px; font-size: 11px;">${escapeHtml(badge)}</span>
-          <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;">${escapeHtml(firstLine)}</span>
+          <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;">${escapeUserHtml(firstLine)}</span>
           ${slideMediaBadge}
         `;
 

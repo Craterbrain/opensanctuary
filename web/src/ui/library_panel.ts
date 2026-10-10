@@ -15,7 +15,7 @@
  */
 import { draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { parseScriptureReference } from '../core/bible_parser';
-import { escapeCssUrl, escapeHtml, formatParallelSlide, resolveSlideBackgroundElement } from '../core/presentation_helpers.ts';
+import { escapeCssUrl, escapeHtml, escapeUserHtml, formatParallelSlide, resolveSlideBackgroundElement } from '../core/presentation_helpers.ts';
 import { renderSlideVisual } from '../core/slide_render.ts';
 import { openThemeEditor, setThemeAsDefault, duplicateTheme, deleteThemeItem } from './theme_editor.ts';
 
@@ -658,8 +658,8 @@ export function renderGeniusHits(hits: any[]) {
         : '';
 
       tr.innerHTML = `
-        <td style="font-weight: 600; color: #ffd700;">✨ ${lp.escapeHtml(hit.title)}</td>
-        <td>${lp.escapeHtml(hit.artist)}</td>
+        <td style="font-weight: 600; color: #ffd700;">✨ ${escapeUserHtml(hit.title)}</td>
+        <td>${escapeUserHtml(hit.artist)}</td>
         <td>
           <span style="background: rgba(255,215,0,0.15); color: #ffd700; border: 1px solid rgba(255,215,0,0.4); font-size: 9.5px; padding: 2px 6px; border-radius: 3px; font-weight: 600;">GENIUS</span>
           ${ccliBadge}
@@ -710,7 +710,7 @@ export function renderGeniusHits(hits: any[]) {
           <span style="position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,0.7); color: #ffd700; font-size: 8.5px; padding: 1px 4px; border-radius: 2px;">${lp.escapeHtml(ccliTag)}</span>
           ${hit.thumbnail ? '' : '✨'}
         </div>
-        <div class="grid-card-title">${lp.escapeHtml(hit.title)}</div>
+        <div class="grid-card-title">${escapeUserHtml(hit.title)}</div>
       `;
 
       card.addEventListener('click', () => {
@@ -740,8 +740,8 @@ export function renderGeniusPreview(hit: any) {
   resourcePreviewMonitor.innerHTML = `
     <div class="asset-preview-content" style="background: linear-gradient(135deg, #181512, #2e261f, #141b24); font-family: Segoe UI, sans-serif; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 18px; color: #fff;">
       <div class="preview-badge" style="background: rgba(255,215,0,0.2); color: #ffd700; border: 1px solid #ffd700; margin-bottom: 8px; font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 700;">✨ GENIUS CHRISTIAN LYRICS</div>
-      <div style="font-size: 18px; font-weight: 700; margin-bottom: 4px;">${ctx.escapeHtml(hit.title)}</div>
-      <div style="font-size: 13px; color: #ffd700; margin-bottom: 6px;">${ctx.escapeHtml(hit.artist)}</div>
+      <div style="font-size: 18px; font-weight: 700; margin-bottom: 4px;">${escapeUserHtml(hit.title)}</div>
+      <div style="font-size: 13px; color: #ffd700; margin-bottom: 6px;">${escapeUserHtml(hit.artist)}</div>
       ${ccliHtml}
       <p style="font-size: 11.5px; color: #bbb; line-height: 1.5; max-width: 320px; margin-bottom: 14px;">
         Double-click or click below to automatically import all formatted lyrics slides into your Library & Schedule.
@@ -1274,32 +1274,32 @@ export function createCatalogTableRow(item: any, idx: number, tabName: string) {
 
   if (tabName === 'songs') {
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">🎵 ${lp.escapeHtml(item.title)}</td>
-      <td>${lp.escapeHtml(item.author || '')}</td>
-      <td style="color: var(--text-dim); font-size: 10px;">${lp.escapeHtml(item.ccli_number || item.copyright || '')}</td>
+      <td style="font-weight: 600; color: #fff;">🎵 ${escapeUserHtml(item.title)}</td>
+      <td>${escapeUserHtml(item.author || '')}</td>
+      <td style="color: var(--text-dim); font-size: 10px;">${escapeUserHtml(item.ccli_number || item.copyright || '')}</td>
     `;
   } else if (tabName === 'scriptures') {
     const snippet = item.verses && item.verses.length > 0 ? item.verses[0].text : '';
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">📖 ${lp.escapeHtml(item.reference)}</td>
+      <td style="font-weight: 600; color: #fff;">📖 ${escapeUserHtml(item.reference)}</td>
       <td><span class="bible-lang-badge">${lp.escapeHtml(item.version)}</span></td>
       <td style="color: var(--text-dim); font-size: 10.5px; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${lp.escapeHtml(snippet)}</td>
     `;
   } else if (tabName === 'media') {
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">🎬 ${lp.escapeHtml(item.name)}</td>
+      <td style="font-weight: 600; color: #fff;">🎬 ${escapeUserHtml(item.name)}</td>
       <td>${lp.escapeHtml(item.media_type || 'Image')}</td>
       <td>${item.duration_seconds ? item.duration_seconds + 's' : 'Still'}</td>
     `;
   } else if (tabName === 'presentations') {
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">📊 ${lp.escapeHtml(item.title)}</td>
-      <td>${lp.escapeHtml(item.author || 'Media')}</td>
+      <td style="font-weight: 600; color: #fff;">📊 ${escapeUserHtml(item.title)}</td>
+      <td>${escapeUserHtml(item.author || 'Media')}</td>
       <td>${item.slides ? item.slides.length : 1} slides</td>
     `;
   } else if (tabName === 'themes') {
     tr.innerHTML = `
-      <td style="font-weight: 600; color: #fff;">🎨 ${lp.escapeHtml(item.name)}</td>
+      <td style="font-weight: 600; color: #fff;">🎨 ${escapeUserHtml(item.name)}</td>
       <td>${lp.escapeHtml(item.font_family || 'Segoe UI')} (${item.font_size || 38}px)</td>
       <td>${lp.escapeHtml(item.background_type || 'Gradient')}</td>
     `;
@@ -1521,7 +1521,7 @@ export function createCatalogGridCard(item: any, idx: number, tabName: string) {
   const defaultBadge = (tabName === 'themes' && item.is_default) ? '<span class="grid-card-default-badge" title="Default theme for this category">⭐</span>' : '';
   card.innerHTML = `
     <div class="grid-card-thumb" style="background: ${escapeHtml(bgStyle)};">${icon}${defaultBadge}</div>
-    <div class="grid-card-title">${lp.escapeHtml(title)}</div>
+    <div class="grid-card-title">${escapeUserHtml(title)}</div>
   `;
 
   if (tabName === 'themes') {
@@ -1875,7 +1875,7 @@ export function renderAssetPreview(item: any, tabName: string) {
             <button class="btn" id="btn-preview-video-mute" title="Mute/Unmute Preview Audio" style="background: transparent; border: none; font-size: 12px; cursor: pointer; color: #fff; padding: 0 4px;">🔊</button>
           </div>
           <div class="canvas-footer" style="background: rgba(0,0,0,0.85); position: absolute; bottom: 0; left: 0; right: 0; z-index: 4;">
-            <span>🎬 ${lp.escapeHtml(item.name)}</span>
+            <span>🎬 ${escapeUserHtml(item.name)}</span>
             <span>${lp.escapeHtml(item.media_type || 'Media')} ${item.duration_seconds ? '(' + item.duration_seconds + 's)' : ''}</span>
           </div>
         </div>
@@ -1942,7 +1942,7 @@ export function renderAssetPreview(item: any, tabName: string) {
       resourcePreviewMonitor.innerHTML = `
         <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 10px; padding: 16px; background: #141f26;">
           <div style="font-size: 36px;">🎵</div>
-          <div style="font-weight: 700; color: #00e5ff; font-size: 13px; text-align: center; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${lp.escapeHtml(item.name)}</div>
+          <div style="font-weight: 700; color: #00e5ff; font-size: 13px; text-align: center; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeUserHtml(item.name)}</div>
           <audio controls src="${lp.escapeHtml(item.file_path)}" style="width: 85%; height: 32px;"></audio>
         </div>`;
       return;
@@ -1951,7 +1951,7 @@ export function renderAssetPreview(item: any, tabName: string) {
         <div class="canvas-16-9" style="background: #000; position: relative; display: flex; align-items: center; justify-content: center;">
           <img src="${lp.escapeHtml(item.file_path)}" style="width: 100%; height: 100%; object-fit: contain;">
           <div class="canvas-footer" style="background: rgba(0,0,0,0.75); position: absolute; bottom: 0; left: 0; right: 0;">
-            <span>🖼️ ${lp.escapeHtml(item.name)}</span>
+            <span>🖼️ ${escapeUserHtml(item.name)}</span>
             <span>Image</span>
           </div>
         </div>
@@ -1972,8 +1972,8 @@ export function renderAssetPreview(item: any, tabName: string) {
         <div class="canvas-lyrics" id="resource-preview-canvas-lyrics"></div>
       </div>
       <div class="canvas-footer">
-        <span>${lp.escapeHtml(title)}</span>
-        <span>${lp.escapeHtml(author)}</span>
+        <span>${escapeUserHtml(title)}</span>
+        <span>${escapeUserHtml(author)}</span>
       </div>
     </div>
   `;

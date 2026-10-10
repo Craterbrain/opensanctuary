@@ -7,7 +7,7 @@
  * "used," the PD exclusion rule, and the current reporting period.
  */
 import { api } from '../core/api_client.ts';
-import { escapeHtml } from '../core/presentation_helpers.ts';
+import { escapeHtml, escapeUserHtml } from '../core/presentation_helpers.ts';
 import type { ToastType } from '../core/ui_utils.ts';
 import { keyring, KEYRING_SERVICES } from '../core/keyring.ts';
 
@@ -194,8 +194,8 @@ function renderRow(row: CcliUsageRow): string {
   const ccli = row.ccli_number ? `CCLI #${escapeHtml(row.ccli_number)}` : 'No CCLI number';
   return `
     <div style="padding: 6px 10px; background: rgba(255,255,255,0.04); border: 1px solid var(--os-border, #2d3139); border-radius: 6px; font-size: 11px; display: flex; gap: 10px; align-items: center;">
-      <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-main, #eee); font-weight: 600;">${escapeHtml(row.title)}</span>
-      <span style="color: var(--text-muted, #999); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(row.author || '—')}</span>
+      <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-main, #eee); font-weight: 600;">${escapeUserHtml(row.title)}</span>
+      <span style="color: var(--text-muted, #999); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeUserHtml(row.author || '—')}</span>
       <span style="color: var(--text-dim, #8a8f9e); white-space: nowrap;">${ccli}</span>
       <span style="color: var(--os-brand-amber, #ffa726); white-space: nowrap; font-weight: 700;">${row.use_count}×</span>
       <span style="color: var(--text-muted, #777); white-space: nowrap;">${formatDate(row.first_used_ms)}–${formatDate(row.last_used_ms)}</span>

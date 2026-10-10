@@ -572,6 +572,14 @@ export function escapeHtml(str: any): string {
 }
 
 /**
+ * escapeHtml for text the user typed (titles, authors, lyrics). Wrapped so the emoji-to-icon
+ * converter (core/emoji_icons.ts) leaves it exactly as written: user content is never rewritten.
+ */
+export function escapeUserHtml(str: any): string {
+    return `<span data-no-iconify>${escapeHtml(str)}</span>`;
+}
+
+/**
  * Returns the URL unchanged if it is an absolute http(s) URL, else null. Use before
  * assigning data-derived values to navigable sinks (iframe.src, a.href) so that
  * `javascript:` / `data:` / `vbscript:` URLs are never loaded.

@@ -178,7 +178,7 @@
           <div class="panel-header" style="display: flex !important; flex-direction: row !important; align-items: center !important; justify-content: space-between !important; flex-wrap: nowrap !important; overflow: hidden !important; white-space: nowrap !important; height: 30px !important; min-height: 30px !important; max-height: 30px !important; gap: 4px !important; padding: 0 4px 0 8px !important;">
             <span class="title" id="schedule-title-wrap" title="Click to rename or save schedule" style="display: flex !important; flex-direction: row !important; align-items: center !important; min-width: 0 !important; flex: 1 1 0% !important; overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; cursor: pointer !important; gap: 3px !important;">
               <span class="schedule-icon" style="flex-shrink: 0 !important; line-height: 1 !important; display: inline-flex !important;">📋</span>
-              <span id="schedule-title-display" class="schedule-title-clickable" style="min-width: 0 !important; flex: 1 1 auto !important; overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; display: inline-block !important;">UNTITLED</span>
+              <span id="schedule-title-display" data-no-iconify class="schedule-title-clickable" style="min-width: 0 !important; flex: 1 1 auto !important; overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; display: inline-block !important;">UNTITLED</span>
             </span>
             <span class="actions" style="display: flex !important; flex-direction: row !important; align-items: center !important; gap: 2px !important; flex-shrink: 0 !important; flex-grow: 0 !important; white-space: nowrap !important; flex-wrap: nowrap !important;">
               <div class="schedule-view-dropdown-wrap" id="sched-view-dropdown-wrap" style="flex-shrink: 0 !important; display: inline-flex !important; align-items: center !important;">
@@ -218,7 +218,7 @@
         <!-- Column 2: Preview Panel (ZONE_PREV) [ARCH:zone-prev] -->
         <div class="panel" id="preview-panel">
           <div class="panel-header">
-            <span class="title">👁️ Preview - <span id="preview-title-display">No Staged Item</span></span>
+            <span class="title">👁️ Preview - <span id="preview-title-display" data-no-iconify>No Staged Item</span></span>
           </div>
           <div class="preview-viewport-wrapper" id="preview-viewport-wrap">
             <div class="canvas-16-9" id="preview-canvas" style="position: relative; overflow: hidden;">
@@ -255,7 +255,7 @@
         <!-- Column 3: Live Output Panel (ZONE_LIVE) [ARCH:zone-live] -->
         <div class="panel" id="live-output-panel">
           <div class="panel-header">
-            <span class="title">{icon:display-foh} Live - <span id="live-title-display">No Active Item</span></span>
+            <span class="title">{icon:display-foh} Live - <span id="live-title-display" data-no-iconify>No Active Item</span></span>
             <div class="live-deck-header-actions">
               <span class="jump-pill-hint" title="Quick Section Jumps: V=Verse, C=Chorus, B=Bridge, E=Ending, P=Pre-Chorus, I=Intro, O=Outro, 1-9=Slide #">Jump: [V] [C] [B] [E] [1-9]</span>
               <button class="header-link-btn" id="btn-open-foh-screen" title="Pop out hardware display window">Open Screen ↗</button>
@@ -567,9 +567,9 @@
                 <button class="studio-btn" id="tb-ungroup" title="Ungroup (Ctrl+Shift+G)" disabled>⚏ <span class="studio-label">Ungroup</span></button>
               </div>
               <div class="ribbon-row">
-                <button class="studio-btn-toggle" id="tb-align-el-left" title="Align Left">⇤</button>
-                <button class="studio-btn-toggle" id="tb-align-el-center" title="Align Center">≡</button>
-                <button class="studio-btn-toggle" id="tb-align-el-right" title="Align Right">⇥</button>
+                <button class="studio-btn-toggle" id="tb-align-el-left" title="Align Left">{icon:align-el-left}</button>
+                <button class="studio-btn-toggle" id="tb-align-el-center" title="Align Center">{icon:align-el-center}</button>
+                <button class="studio-btn-toggle" id="tb-align-el-right" title="Align Right">{icon:align-el-right}</button>
                 <button class="studio-btn-toggle" id="tb-align-el-top" title="Align Top">⤊</button>
                 <button class="studio-btn-toggle" id="tb-align-el-middle" title="Align Middle">⬍</button>
                 <button class="studio-btn-toggle" id="tb-align-el-bottom" title="Align Bottom">⤋</button>
