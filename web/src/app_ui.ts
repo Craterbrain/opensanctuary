@@ -115,6 +115,7 @@ import {
   storeModal,
   triggerUndoFromPlaceholder,
   webModal,
+  refreshSlideDecks,
 } from './app_core.ts';
 
 // These DOM elements are also declared in app_core.ts / library_panel.ts — a second,
@@ -1129,6 +1130,7 @@ on('btn-preview-view-matrix', 'click', () => {
   if (bM) bM.classList.add('active');
   if (bL) bL.classList.remove('active');
   if (previewSlideMatrixEl) previewSlideMatrixEl.className = 'slide-matrix matrix-mode';
+  refreshSlideDecks();
 });
 on('btn-preview-view-list', 'click', () => {
   const bM = document.getElementById('btn-preview-view-matrix');
@@ -1136,6 +1138,7 @@ on('btn-preview-view-list', 'click', () => {
   if (bL) bL.classList.add('active');
   if (bM) bM.classList.remove('active');
   if (previewSlideMatrixEl) previewSlideMatrixEl.className = 'slide-matrix list-mode';
+  refreshSlideDecks();
 });
 
 // Live Deck View Mode Switching (Matrix vs List)
@@ -1146,6 +1149,7 @@ on('btn-live-view-matrix', 'click', () => {
   if (bM) bM.classList.add('active');
   if (bL) bL.classList.remove('active');
   if (liveSlideMatrixEl) liveSlideMatrixEl.className = 'slide-matrix matrix-mode';
+  refreshSlideDecks();
 });
 on('btn-live-view-list', 'click', () => {
   setActiveLiveViewMode('list');
@@ -1154,6 +1158,7 @@ on('btn-live-view-list', 'click', () => {
   if (bL) bL.classList.add('active');
   if (bM) bM.classList.remove('active');
   if (liveSlideMatrixEl) liveSlideMatrixEl.className = 'slide-matrix list-mode';
+  refreshSlideDecks();
 });
 
 // Resource View Mode Switching (Table vs Grid)

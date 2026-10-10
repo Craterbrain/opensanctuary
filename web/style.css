@@ -5946,3 +5946,59 @@ video {
 .dropdown-item > span {
   white-space: nowrap;
 }
+
+/* Presentation slides in the Preview/Live decks: a rendered thumbnail instead of the text card
+   (see slideDeckStyle in src/ui/slide_deck_view.ts). Grid view only; list view keeps text cards. */
+.slide-card.slide-thumb-card {
+  flex-direction: column;
+  padding: 3px;
+  min-height: 0;
+  gap: 0;
+}
+.slide-thumb-view {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  box-sizing: border-box;
+  border-radius: calc(var(--os-radius-md) - 2px);
+  background-color: var(--os-bg-void);
+}
+.slide-thumb-elements {
+  position: absolute;
+  inset: 0;
+  display: none;
+  pointer-events: none;
+}
+.slide-thumb-lyrics {
+  font-size: 8px;
+  font-weight: 700;
+  color: #fff;
+  text-align: center;
+  word-break: break-word;
+  white-space: pre-line;
+  max-width: 96%;
+  max-height: 100%;
+  overflow: hidden;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+.slide-thumb-overlay {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 5px 1px 2px;
+  background: rgba(0, 0, 0, 0.62);
+  border-radius: var(--os-radius-sm);
+  line-height: 1.2;
+}
+.slide-thumb-overlay .slide-badge-pill {
+  padding-left: 3px;
+}

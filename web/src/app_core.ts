@@ -41,7 +41,7 @@ import {
 } from './ui/settings_dialog.ts';
 import { initThemePicker, openThemePicker } from './ui/theme_picker.ts';
 import { initThemeEditor, openThemeEditor } from './ui/theme_editor.ts';
-import { buildSlideCardElement, renderDeckEmptyState } from './ui/slide_deck_view.ts';
+import { buildSlideCardElement, buildSlideThumbElement, renderDeckEmptyState, slideDeckStyle } from './ui/slide_deck_view.ts';
 import { initArrangementModal, openArrangementModal } from './ui/arrangement_modal.ts';
 import { initCcliReportModal, openCcliReportModal } from './ui/ccli_report_modal.ts';
 import {
@@ -2550,6 +2550,35 @@ function reorderPreviewSlides(fromIdx: number, toIdx: number) {
   });
 }
 
+/** Paints a slide's resolved background onto a deck thumbnail, the way the main canvases do. */
+function slideBackgroundPainter(item: any, slideIdx: number, state: any): (el: HTMLElement) => void {
+  const bg = resolveBackgroundAt(item, slideIdx, availableThemes, state.active_theme, state.global_theme);
+  return (el: HTMLElement) => {
+    const imgUrl = extractImageUrl(bg, availableThemes);
+    if (imgUrl) {
+      el.style.backgroundColor = '#000';
+      el.style.backgroundImage = `url("${imgUrl}")`;
+      el.style.backgroundSize = 'cover';
+      el.style.backgroundPosition = 'center';
+      el.style.backgroundRepeat = 'no-repeat';
+    } else if (isVideoBackground(bg)) {
+      el.style.background = '#000';
+    } else {
+      applyResolvedBackground(el, bg);
+    }
+  };
+}
+
+/** Re-draws both slide decks now (the deck view toggles call this: cards vs thumbnails depends on the view). */
+export function refreshSlideDecks() {
+  lastRenderedPreviewKey = '';
+  lastRenderedLiveKey = '';
+  const state = currentSnapshot && currentSnapshot.state;
+  if (!state) return;
+  renderPreviewDeck(state);
+  renderLiveDeck(state);
+}
+
 function renderPreviewDeck(state: any) {
   if (!previewSlideMatrixEl) return;
 
@@ -2610,7 +2639,8 @@ function renderPreviewDeck(state: any) {
     const s = resolveSlideAt(stagedItem, idx);
     return `${entry.section_id}:${entry.source_slide_index}:${(s?.text || '').slice(0, 20)}`;
   }).join(';') : '';
-  const currentContentKey = `${itemId}|${slideCount}|${slideFingerprint}`;
+  const previewStyle = slideDeckStyle(stagedItem ? stagedItem.item_type : '', previewSlideMatrixEl.classList.contains('list-mode'));
+  const currentContentKey = `${itemId}|${slideCount}|${slideFingerprint}|${previewStyle}`;
 
   if (lastRenderedPreviewKey === currentContentKey && slideCount > 0) {
     const cards = previewSlideMatrixEl.querySelectorAll('.slide-card');
@@ -2645,15 +2675,27 @@ function renderPreviewDeck(state: any) {
     const isActive = (state.staged_slide_index || 0) === sIdx;
     const badge = entry.section_id || (slide ? getSlideBadge(slide, entry.source_slide_index) : `S${sIdx + 1}`);
     const tagColor = getSlideBadgeColor(badge);
-    const cardEl = buildSlideCardElement({
-      badge: escapeHtml(badge),
-      badgeColor: tagColor,
-      lyricsHtml: formatSlideLyricsHtml(slide ? slide.text : ''),
-      isActive,
-      activeClass: 'active-staged',
-      showDragHandle: true,
-      extraClass: 'preview-slide-card'
-    });
+    const cardEl = previewStyle === 'thumbnails'
+      ? buildSlideThumbElement({
+          slide,
+          theme: resolveThemeAt(stagedItem, availableThemes, state.global_theme),
+          badge: escapeHtml(badge),
+          badgeColor: tagColor,
+          isActive,
+          activeClass: 'active-staged',
+          showDragHandle: true,
+          extraClass: 'preview-slide-card',
+          applyBackground: slideBackgroundPainter(stagedItem, sIdx, state)
+        })
+      : buildSlideCardElement({
+          badge: escapeHtml(badge),
+          badgeColor: tagColor,
+          lyricsHtml: formatSlideLyricsHtml(slide ? slide.text : ''),
+          isActive,
+          activeClass: 'active-staged',
+          showDragHandle: true,
+          extraClass: 'preview-slide-card'
+        });
 
     // Preview Card Handle Keyboard Navigation
     const cardHandle = cardEl.querySelector<HTMLElement>('.preview-card-drag-handle');
@@ -2918,7 +2960,8 @@ function renderLiveDeck(state: any) {
     const s = resolveSlideAt(liveItem, idx);
     return `${entry.section_id}:${entry.source_slide_index}:${(s?.text || '').slice(0, 20)}`;
   }).join(';') : '';
-  const currentLiveKey = `${itemId}|${slideCount}|${slideFingerprint}`;
+  const liveStyle = slideDeckStyle(liveItem ? liveItem.item_type : '', liveSlideMatrixEl.classList.contains('list-mode'));
+  const currentLiveKey = `${itemId}|${slideCount}|${slideFingerprint}|${liveStyle}`;
 
   if (lastRenderedLiveKey === currentLiveKey && slideCount > 0) {
     const cards = liveSlideMatrixEl.querySelectorAll('.slide-card');
@@ -2947,14 +2990,25 @@ function renderLiveDeck(state: any) {
     const isActive = state.live_slide_index === sIdx;
     const badge = entry.section_id || (slide ? getSlideBadge(slide, entry.source_slide_index) : `S${sIdx + 1}`);
     const tagColor = getSlideBadgeColor(badge);
-    const cardEl = buildSlideCardElement({
-      badge: escapeHtml(badge),
-      badgeColor: tagColor,
-      lyricsHtml: formatSlideLyricsHtml(slide ? slide.text : ''),
-      isActive,
-      activeClass: 'active',
-      showDragHandle: false
-    });
+    const cardEl = liveStyle === 'thumbnails'
+      ? buildSlideThumbElement({
+          slide,
+          theme: resolveThemeAt(liveItem, availableThemes, state.global_theme),
+          badge: escapeHtml(badge),
+          badgeColor: tagColor,
+          isActive,
+          activeClass: 'active',
+          showDragHandle: false,
+          applyBackground: slideBackgroundPainter(liveItem, sIdx, state)
+        })
+      : buildSlideCardElement({
+          badge: escapeHtml(badge),
+          badgeColor: tagColor,
+          lyricsHtml: formatSlideLyricsHtml(slide ? slide.text : ''),
+          isActive,
+          activeClass: 'active',
+          showDragHandle: false
+        });
 
     cardEl.addEventListener('click', () => {
       lastActiveDeckContext = 'live';
