@@ -1,0 +1,587 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 960" width="100%" height="100%">
+    <defs>
+        <!-- Background styling and Sanctuary Gold / Velvet Obsidian Theme -->
+        <style>
+            .grid-bg { fill: #121118; }
+            .tile { fill: #1c1a24; stroke: #2d2938; stroke-width: 1.5; rx: 12px; }
+            .icon-label { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11px; fill: #d4cfbe; font-weight: 500; text-anchor: middle; }
+            .icon-id { font-family: "SFMono-Regular", Consolas, Menlo, monospace; font-size: 9px; fill: #8a8275; text-anchor: middle; }
+            .icon-group { cursor: pointer; transition: transform 0.2s ease; }
+            .icon-group:hover .tile { stroke: #eab308; fill: #262233; }
+            .icon-group:hover .icon-label { fill: #fef08a; }
+            .icon-group:hover .icon-id { fill: #facc15; }
+
+            /* Worship Sanctuary Color Palette (Gold / Amber / Warm Coral / Sage) */
+            .stroke-icon { fill: none; stroke: #eab308; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+            .fill-icon { fill: #eab308; }
+            .accent-stroke { fill: none; stroke: #38bdf8; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+            .accent-fill { fill: #38bdf8; }
+            .danger-stroke { fill: none; stroke: #f43f5e; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+            .danger-fill { fill: #f43f5e; }
+            .success-stroke { fill: none; stroke: #34d399; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+            .success-fill { fill: #34d399; }
+        </style>
+
+        <!-- REUSABLE ICON SYMBOLS (24x24 standard viewBox) -->
+
+        <!-- 1. New Schedule (Document with Fold) -->
+        <g id="icon-new-doc">
+            <path class="stroke-icon" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline class="stroke-icon" points="14 2 14 8 20 8"/>
+            <line class="stroke-icon" x1="12" y1="18" x2="12" y2="12"/>
+            <line class="stroke-icon" x1="9" y1="15" x2="15" y2="15"/>
+        </g>
+
+        <!-- 2. Open Schedule (Folder Opening) -->
+        <g id="icon-open">
+            <path class="stroke-icon" d="M3 7v13a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6.5l-2-2H5a2 2 0 0 0-2 2z"/>
+            <path class="stroke-icon" d="M3 13l2.2-3.3A2 2 0 0 1 6.8 9h14.4a1 1 0 0 1 .9 1.4L19 18"/>
+        </g>
+
+        <!-- 3. Save Schedule (Floppy Disk) -->
+        <g id="icon-save">
+            <path class="stroke-icon" d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+            <polyline class="stroke-icon" points="17 21 17 13 7 13 7 21"/>
+            <polyline class="stroke-icon" points="7 3 7 8 15 8"/>
+        </g>
+
+        <!-- 4. Save As (Floppy Disk + Stylus) -->
+        <g id="icon-save-as">
+            <path class="stroke-icon" d="M15 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v5"/>
+            <polyline class="stroke-icon" points="7 3 7 8 14 8"/>
+            <path class="accent-stroke" d="M18 13l3 3-5 5h-3v-3l5-5z"/>
+        </g>
+
+        <!-- 5. New Song (Musical Notes + Plus) -->
+        <g id="icon-song">
+            <path class="stroke-icon" d="M9 18V5l10-2v13"/>
+            <circle class="fill-icon" cx="6" cy="18" r="3"/>
+            <circle class="fill-icon" cx="16" cy="16" r="3"/>
+            <path class="accent-stroke" d="M18 6h4"/>
+            <path class="accent-stroke" d="M20 4v4"/>
+        </g>
+
+        <!-- 6. Group / Header (Tag / Label) -->
+        <g id="icon-header-tag">
+            <path class="stroke-icon" d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+            <line class="stroke-icon" x1="7" y1="7" x2="7.01" y2="7"/>
+        </g>
+
+        <!-- 7. Import (Tray / Box with Inbound Vector) -->
+        <g id="icon-import">
+            <polyline class="stroke-icon" points="14 11 12 13 10 11"/>
+            <line class="stroke-icon" x1="12" y1="3" x2="12" y2="13"/>
+            <path class="stroke-icon" d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>
+            <path class="stroke-icon" d="M2 13h5l2 3h6l2-3h5"/>
+        </g>
+
+        <!-- 8. Exit / Quit (Power Door / Exit) -->
+        <g id="icon-exit">
+            <path class="stroke-icon" d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+            <polyline class="danger-stroke" points="16 17 21 12 16 7"/>
+            <line class="danger-stroke" x1="21" y1="12" x2="9" y2="12"/>
+        </g>
+
+        <!-- 9. Undo (Counter-clockwise curved arrow) -->
+        <g id="icon-undo">
+            <path class="stroke-icon" d="M3 7v6h6"/>
+            <path class="stroke-icon" d="M3 13a9 9 0 1 1 3 6.7"/>
+        </g>
+
+        <!-- 10. Redo (Clockwise curved arrow) -->
+        <g id="icon-redo">
+            <path class="stroke-icon" d="M21 7v6h-6"/>
+            <path class="stroke-icon" d="M21 13a9 9 0 1 0-3 6.7"/>
+        </g>
+
+        <!-- 11. Create Slide / Song (Slide Canvas + Add) -->
+        <g id="icon-new-slide">
+            <rect class="stroke-icon" x="3" y="3" width="18" height="14" rx="2"/>
+            <path class="stroke-icon" d="M8 21h8"/>
+            <path class="stroke-icon" d="M12 17v4"/>
+            <line class="accent-stroke" x1="12" y1="7" x2="12" y2="13"/>
+            <line class="accent-stroke" x1="9" y1="10" x2="15" y2="10"/>
+        </g>
+
+        <!-- 12. Clear Active Schedule (Trash Can) -->
+        <g id="icon-trash">
+            <polyline class="danger-stroke" points="3 6 5 6 21 6"/>
+            <path class="danger-stroke" d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            <line class="danger-stroke" x1="10" y1="11" x2="10" y2="17"/>
+            <line class="danger-stroke" x1="14" y1="11" x2="14" y2="17"/>
+        </g>
+
+        <!-- 13. Settings / Options (Cog Gear) -->
+        <g id="icon-settings">
+            <circle class="stroke-icon" cx="12" cy="12" r="3"/>
+            <path class="stroke-icon" d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </g>
+
+        <!-- 14. Go Live (Play Triangle on Air) -->
+        <g id="icon-golive">
+            <polygon class="success-fill" points="6 4 20 12 6 20 6 4"/>
+        </g>
+
+        <!-- 15. Next Slide (Skip Forward) -->
+        <g id="icon-next">
+            <polygon class="stroke-icon fill-icon" points="5 4 15 12 5 20 5 4"/>
+            <line class="stroke-icon" x1="19" y1="4" x2="19" y2="20"/>
+        </g>
+
+        <!-- 16. Previous Slide (Skip Back) -->
+        <g id="icon-prev">
+            <polygon class="stroke-icon fill-icon" points="19 20 9 12 19 4 19 20"/>
+            <line class="stroke-icon" x1="5" y1="4" x2="5" y2="20"/>
+        </g>
+
+        <!-- 17. Blackout Screen (Shaded Monitor) -->
+        <g id="icon-blackout">
+            <rect class="stroke-icon" x="2" y="3" width="20" height="14" rx="2"/>
+            <rect fill="#0a090d" stroke="#524e5e" stroke-width="1" x="5" y="6" width="14" height="8" rx="1"/>
+            <path class="stroke-icon" d="M8 21h8"/>
+            <path class="stroke-icon" d="M12 17v4"/>
+        </g>
+
+        <!-- 18. Clear Lyrics / Text (Letter T crossed out) -->
+        <g id="icon-clear-lyrics">
+            <rect class="stroke-icon" x="3" y="3" width="18" height="14" rx="2"/>
+            <path class="stroke-icon" d="M8 7h8"/>
+            <path class="stroke-icon" d="M12 7v8"/>
+            <line class="danger-stroke" x1="4" y1="4" x2="20" y2="20"/>
+        </g>
+
+        <!-- 19. Logo Overlay (Emblem Crest Star) -->
+        <g id="icon-logo">
+            <circle class="stroke-icon" cx="12" cy="12" r="9"/>
+            <polygon class="fill-icon" points="12 4 14.5 9 20 9.8 16 13.7 17 19.2 12 16.5 7 19.2 8 13.7 4 9.8 9.5 9 12 4"/>
+        </g>
+
+        <!-- 20. Alert / Bell (Notification) -->
+        <g id="icon-alert">
+            <path class="accent-stroke" d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+            <path class="accent-stroke" d="M13.73 21a2 2 0 0 1-3.46 0"/>
+        </g>
+
+        <!-- 21. Fullscreen Toggle -->
+        <g id="icon-fullscreen">
+            <path class="stroke-icon" d="M8 3H5a2 2 0 0 0-2 2v3"/>
+            <path class="stroke-icon" d="M16 3h3a2 2 0 0 1 2 2v3"/>
+            <path class="stroke-icon" d="M8 21H5a2 2 0 0 1-2-2v-3"/>
+            <path class="stroke-icon" d="M16 21h3a2 2 0 0 0 2-2v-3"/>
+        </g>
+
+        <!-- 22. Bible / Scripture (Liturgical Cross on Pages) -->
+        <g id="icon-bible">
+            <path class="stroke-icon" d="M2 4v16a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V4"/>
+            <path class="stroke-icon" d="M12 4v18"/>
+            <path class="stroke-icon" d="M2 4a4 4 0 0 1 4-2h12a4 4 0 0 1 4 2"/>
+            <line class="stroke-icon" x1="7" y1="8" x2="7" y2="14"/>
+            <line class="stroke-icon" x1="5" y1="10" x2="9" y2="10"/>
+        </g>
+
+        <!-- 23. Output Display (FOH Screen) -->
+        <g id="icon-display-foh">
+            <rect class="stroke-icon" x="2" y="3" width="20" height="14" rx="2"/>
+            <line class="stroke-icon" x1="8" y1="21" x2="16" y2="21"/>
+            <line class="stroke-icon" x1="12" y1="17" x2="12" y2="21"/>
+            <polyline class="success-stroke" points="13 7 17 7 17 11"/>
+            <line class="success-stroke" x1="10" y1="14" x2="17" y2="7"/>
+        </g>
+
+        <!-- 24. Stage Foldback Monitor (Wedge Monitor) -->
+        <g id="icon-stage-foldback">
+            <polygon class="stroke-icon" points="3 17 8 6 21 9 19 20 3 17"/>
+            <circle class="stroke-icon" cx="12" cy="13" r="3"/>
+        </g>
+
+        <!-- 25. Help / User Guide (Book with ?) -->
+        <g id="icon-help-guide">
+            <path class="stroke-icon" d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+            <path class="stroke-icon" d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            <path class="stroke-icon" d="M10 9a2 2 0 0 1 3.8 1c0 1.2-1.8 1.8-1.8 2.5"/>
+            <circle class="fill-icon" cx="12" cy="15.5" r="0.7"/>
+        </g>
+
+        <!-- 26. Keyboard Shortcuts Reference -->
+        <g id="icon-keyboard">
+            <rect class="stroke-icon" x="2" y="4" width="20" height="16" rx="3"/>
+            <line class="stroke-icon" x1="6" y1="8" x2="6.01" y2="8"/>
+            <line class="stroke-icon" x1="10" y1="8" x2="10.01" y2="8"/>
+            <line class="stroke-icon" x1="14" y1="8" x2="14.01" y2="8"/>
+            <line class="stroke-icon" x1="18" y1="8" x2="18.01" y2="8"/>
+            <line class="stroke-icon" x1="6" y1="12" x2="6.01" y2="12"/>
+            <line class="stroke-icon" x1="18" y1="12" x2="18.01" y2="12"/>
+            <line class="stroke-icon" x1="9" y1="16" x2="15" y2="16"/>
+        </g>
+
+        <!-- 27. About / Info -->
+        <g id="icon-info">
+            <circle class="stroke-icon" cx="12" cy="12" r="10"/>
+            <line class="stroke-icon" x1="12" y1="16" x2="12" y2="12"/>
+            <line class="stroke-icon" x1="12" y1="8" x2="12.01" y2="8"/>
+        </g>
+
+        <!-- 28. Presentation / Sermon Slides (Chart Slides) -->
+        <g id="icon-presentation">
+            <rect class="stroke-icon" x="2" y="3" width="20" height="14" rx="2"/>
+            <path class="stroke-icon" d="M7 13v-2"/>
+            <path class="stroke-icon" d="M12 13V8"/>
+            <path class="stroke-icon" d="M17 13v-4"/>
+            <line class="stroke-icon" x1="8" y1="21" x2="16" y2="21"/>
+            <line class="stroke-icon" x1="12" y1="17" x2="12" y2="21"/>
+        </g>
+
+        <!-- 29. Video / Mini-Movie (Film Projector) -->
+        <g id="icon-video">
+            <polygon class="stroke-icon" points="23 7 16 12 23 17 23 7"/>
+            <rect class="stroke-icon" x="1" y="5" width="15" height="14" rx="2"/>
+        </g>
+
+        <!-- 30. Live Camera Feed (Antenna / Broadcast Stream) -->
+        <g id="icon-camera-feed">
+            <path class="stroke-icon" d="M4.93 4.93a10 10 0 0 1 14.14 0"/>
+            <path class="stroke-icon" d="M7.76 7.76a6 6 0 0 1 8.48 0"/>
+            <circle class="danger-fill" cx="12" cy="12" r="2.5"/>
+            <path class="stroke-icon" d="M12 14.5V20"/>
+            <path class="stroke-icon" d="M9 20h6"/>
+        </g>
+
+        <!-- 31. Web Stream / Browser (Globe with Meridians) -->
+        <g id="icon-web">
+            <circle class="stroke-icon" cx="12" cy="12" r="10"/>
+            <line class="stroke-icon" x1="2" y1="12" x2="22" y2="12"/>
+            <path class="stroke-icon" d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+        </g>
+
+        <!-- 32. Media Store (Shopping Cart) -->
+        <g id="icon-store">
+            <circle class="stroke-icon" cx="9" cy="21" r="1"/>
+            <circle class="stroke-icon" cx="20" cy="21" r="1"/>
+            <path class="stroke-icon" d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+        </g>
+
+        <!-- 33. Remote Mobile Control (Smartphone) -->
+        <g id="icon-remote">
+            <rect class="stroke-icon" x="6" y="2" width="12" height="20" rx="2"/>
+            <line class="stroke-icon" x1="11" y1="5" x2="13" y2="5"/>
+            <circle class="fill-icon" cx="12" cy="18" r="1"/>
+        </g>
+
+        <!-- 34. Dual Bible Comparison (Parallel Columns) -->
+        <g id="icon-dual-bible">
+            <rect class="stroke-icon" x="2" y="4" width="9" height="16" rx="1"/>
+            <rect class="stroke-icon" x="13" y="4" width="9" height="16" rx="1"/>
+            <line class="stroke-icon" x1="4.5" y1="8" x2="8.5" y2="8"/>
+            <line class="stroke-icon" x1="4.5" y1="12" x2="8.5" y2="12"/>
+            <line class="stroke-icon" x1="15.5" y1="8" x2="19.5" y2="8"/>
+            <line class="stroke-icon" x1="15.5" y1="12" x2="19.5" y2="12"/>
+        </g>
+
+        <!-- 35. Live Broadcast Status (Warm Crimson Beacon) -->
+        <g id="icon-live-status">
+            <circle class="danger-fill" cx="12" cy="12" r="5"/>
+            <circle class="danger-stroke" cx="12" cy="12" r="9"/>
+        </g>
+    </defs>
+
+    <!-- Background -->
+    <rect class="grid-bg" width="100%" height="100%"/>
+
+    <!-- Header Title -->
+    <g transform="translate(60, 45)">
+        <text font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="700" fill="#fef08a">OpenSanctuary Icon System Grid</text>
+        <text font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" fill="#a19b8f" y="20">Warm Velvet Obsidian &amp; Liturgical Gold Theme | High Contrast Presentation Dark Mode</text>
+    </g>
+
+    <!-- GRID RENDERING: 7 Columns x 5 Rows (145px pitch horizontal, 140px vertical) -->
+
+    <!-- ROW 1 -->
+    <!-- 1. New Schedule -->
+    <g class="icon-group" transform="translate(60, 90)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-new-doc"/></g>
+        <text class="icon-label" x="62.5" y="86">New Schedule</text>
+        <text class="icon-id" x="62.5" y="102">#menu-file-new</text>
+    </g>
+
+    <!-- 2. Open Schedule -->
+    <g class="icon-group" transform="translate(210, 90)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-open"/></g>
+        <text class="icon-label" x="62.5" y="86">Open Schedule</text>
+        <text class="icon-id" x="62.5" y="102">#menu-file-open</text>
+    </g>
+
+    <!-- 3. Save Schedule -->
+    <g class="icon-group" transform="translate(360, 90)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-save"/></g>
+        <text class="icon-label" x="62.5" y="86">Save Schedule</text>
+        <text class="icon-id" x="62.5" y="102">#menu-file-save</text>
+    </g>
+
+    <!-- 4. Save Schedule As -->
+    <g class="icon-group" transform="translate(510, 90)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-save-as"/></g>
+        <text class="icon-label" x="62.5" y="86">Save As...</text>
+        <text class="icon-id" x="62.5" y="102">#menu-file-save-as</text>
+    </g>
+
+    <!-- 5. New Song -->
+    <g class="icon-group" transform="translate(660, 90)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-song"/></g>
+        <text class="icon-label" x="62.5" y="86">New Song</text>
+        <text class="icon-id" x="62.5" y="102">#menu-file-new-song</text>
+    </g>
+
+    <!-- 6. Section Header -->
+    <g class="icon-group" transform="translate(810, 90)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-header-tag"/></g>
+        <text class="icon-label" x="62.5" y="86">Section Header</text>
+        <text class="icon-id" x="62.5" y="102">#menu-file-new-header</text>
+    </g>
+
+    <!-- 7. Import -->
+    <g class="icon-group" transform="translate(960, 90)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-import"/></g>
+        <text class="icon-label" x="62.5" y="86">Import OpenLP</text>
+        <text class="icon-id" x="62.5" y="102">#menu-file-import</text>
+    </g>
+
+    <!-- ROW 2 -->
+    <!-- 8. Exit -->
+    <g class="icon-group" transform="translate(60, 240)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-exit"/></g>
+        <text class="icon-label" x="62.5" y="86">Exit</text>
+        <text class="icon-id" x="62.5" y="102">#menu-file-exit</text>
+    </g>
+
+    <!-- 9. Undo -->
+    <g class="icon-group" transform="translate(210, 240)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-undo"/></g>
+        <text class="icon-label" x="62.5" y="86">Undo</text>
+        <text class="icon-id" x="62.5" y="102">#menu-edit-undo</text>
+    </g>
+
+    <!-- 10. Redo -->
+    <g class="icon-group" transform="translate(360, 240)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-redo"/></g>
+        <text class="icon-label" x="62.5" y="86">Redo</text>
+        <text class="icon-id" x="62.5" y="102">#menu-edit-redo</text>
+    </g>
+
+    <!-- 11. Create Slide / Song -->
+    <g class="icon-group" transform="translate(510, 240)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-new-slide"/></g>
+        <text class="icon-label" x="62.5" y="86">Create Slide</text>
+        <text class="icon-id" x="62.5" y="102">#menu-edit-new-slide</text>
+    </g>
+
+    <!-- 12. Clear Active Schedule -->
+    <g class="icon-group" transform="translate(660, 240)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-trash"/></g>
+        <text class="icon-label" x="62.5" y="86">Clear Schedule</text>
+        <text class="icon-id" x="62.5" y="102">#edit-clear-schedule</text>
+    </g>
+
+    <!-- 13. Options & Settings -->
+    <g class="icon-group" transform="translate(810, 240)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-settings"/></g>
+        <text class="icon-label" x="62.5" y="86">Options/Settings</text>
+        <text class="icon-id" x="62.5" y="102">#menu-edit-options</text>
+    </g>
+
+    <!-- 14. Go Live -->
+    <g class="icon-group" transform="translate(960, 240)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-golive"/></g>
+        <text class="icon-label" x="62.5" y="86">Go Live</text>
+        <text class="icon-id" x="62.5" y="102">#menu-live-golive</text>
+    </g>
+
+    <!-- ROW 3 -->
+    <!-- 15. Next Slide -->
+    <g class="icon-group" transform="translate(60, 390)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-next"/></g>
+        <text class="icon-label" x="62.5" y="86">Next Slide</text>
+        <text class="icon-id" x="62.5" y="102">#menu-live-next</text>
+    </g>
+
+    <!-- 16. Previous Slide -->
+    <g class="icon-group" transform="translate(210, 390)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-prev"/></g>
+        <text class="icon-label" x="62.5" y="86">Prev Slide</text>
+        <text class="icon-id" x="62.5" y="102">#menu-live-prev</text>
+    </g>
+
+    <!-- 17. Blackout Screen -->
+    <g class="icon-group" transform="translate(360, 390)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-blackout"/></g>
+        <text class="icon-label" x="62.5" y="86">Blackout Screen</text>
+        <text class="icon-id" x="62.5" y="102">#menu-live-black</text>
+    </g>
+
+    <!-- 18. Clear Lyrics / Text -->
+    <g class="icon-group" transform="translate(510, 390)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-clear-lyrics"/></g>
+        <text class="icon-label" x="62.5" y="86">Clear Lyrics</text>
+        <text class="icon-id" x="62.5" y="102">#menu-live-clear</text>
+    </g>
+
+    <!-- 19. Logo Overlay -->
+    <g class="icon-group" transform="translate(660, 390)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-logo"/></g>
+        <text class="icon-label" x="62.5" y="86">Logo Overlay</text>
+        <text class="icon-id" x="62.5" y="102">#menu-live-logo</text>
+    </g>
+
+    <!-- 20. Message Alert -->
+    <g class="icon-group" transform="translate(810, 390)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-alert"/></g>
+        <text class="icon-label" x="62.5" y="86">Message Alert</text>
+        <text class="icon-id" x="62.5" y="102">#menu-live-alert</text>
+    </g>
+
+    <!-- 21. Fullscreen -->
+    <g class="icon-group" transform="translate(960, 390)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-fullscreen"/></g>
+        <text class="icon-label" x="62.5" y="86">Toggle Fullscreen</text>
+        <text class="icon-id" x="62.5" y="102">#view-fullscreen</text>
+    </g>
+
+    <!-- ROW 4 -->
+    <!-- 22. Scripture / Bible -->
+    <g class="icon-group" transform="translate(60, 540)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-bible"/></g>
+        <text class="icon-label" x="62.5" y="86">Scripture Slide</text>
+        <text class="icon-id" x="62.5" y="102">#rb-new-scripture</text>
+    </g>
+
+    <!-- 23. Live FOH Output -->
+    <g class="icon-group" transform="translate(210, 540)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-display-foh"/></g>
+        <text class="icon-label" x="62.5" y="86">Live FOH Output</text>
+        <text class="icon-id" x="62.5" y="102">#menu-view-open-foh</text>
+    </g>
+
+    <!-- 24. Stage Foldback -->
+    <g class="icon-group" transform="translate(360, 540)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-stage-foldback"/></g>
+        <text class="icon-label" x="62.5" y="86">Stage Foldback</text>
+        <text class="icon-id" x="62.5" y="102">#view-open-stage</text>
+    </g>
+
+    <!-- 25. User Guide -->
+    <g class="icon-group" transform="translate(510, 540)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-help-guide"/></g>
+        <text class="icon-label" x="62.5" y="86">User Guide</text>
+        <text class="icon-id" x="62.5" y="102">#menu-help-guide</text>
+    </g>
+
+    <!-- 26. Shortcuts Reference -->
+    <g class="icon-group" transform="translate(660, 540)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-keyboard"/></g>
+        <text class="icon-label" x="62.5" y="86">Shortcuts Ref</text>
+        <text class="icon-id" x="62.5" y="102">#help-shortcuts</text>
+    </g>
+
+    <!-- 27. About Sanctuary -->
+    <g class="icon-group" transform="translate(810, 540)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-info"/></g>
+        <text class="icon-label" x="62.5" y="86">About App</text>
+        <text class="icon-id" x="62.5" y="102">#menu-help-about</text>
+    </g>
+
+    <!-- 28. Presentation / Sermon -->
+    <g class="icon-group" transform="translate(960, 540)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-presentation"/></g>
+        <text class="icon-label" x="62.5" y="86">Presentation</text>
+        <text class="icon-id" x="62.5" y="102">#rb-new-presentation</text>
+    </g>
+
+    <!-- ROW 5 -->
+    <!-- 29. Video / Mini-Movie -->
+    <g class="icon-group" transform="translate(60, 690)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-video"/></g>
+        <text class="icon-label" x="62.5" y="86">Video Movie</text>
+        <text class="icon-id" x="62.5" y="102">#rb-new-video</text>
+    </g>
+
+    <!-- 30. Live Camera Feed -->
+    <g class="icon-group" transform="translate(210, 690)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-camera-feed"/></g>
+        <text class="icon-label" x="62.5" y="86">Live Camera</text>
+        <text class="icon-id" x="62.5" y="102">#rb-new-camera</text>
+    </g>
+
+    <!-- 31. Web Stream -->
+    <g class="icon-group" transform="translate(360, 690)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-web"/></g>
+        <text class="icon-label" x="62.5" y="86">Website Stream</text>
+        <text class="icon-id" x="62.5" y="102">#rb-new-web / #btn-web</text>
+    </g>
+
+    <!-- 32. Store -->
+    <g class="icon-group" transform="translate(510, 690)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-store"/></g>
+        <text class="icon-label" x="62.5" y="86">Media Store</text>
+        <text class="icon-id" x="62.5" y="102">#btn-store</text>
+    </g>
+
+    <!-- 33. Remote Mobile -->
+    <g class="icon-group" transform="translate(660, 690)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-remote"/></g>
+        <text class="icon-label" x="62.5" y="86">Remote App</text>
+        <text class="icon-id" x="62.5" y="102">#btn-remote</text>
+    </g>
+
+    <!-- 34. Dual Bible Comparison -->
+    <g class="icon-group" transform="translate(810, 690)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-dual-bible"/></g>
+        <text class="icon-label" x="62.5" y="86">Dual Bible</text>
+        <text class="icon-id" x="62.5" y="102">#view-dual-bible</text>
+    </g>
+
+    <!-- 35. Live Broadcast Status -->
+    <g class="icon-group" transform="translate(960, 690)">
+        <rect class="tile" width="125" height="120"/>
+        <g transform="translate(42, 22) scale(1.7)"><use href="#icon-live-status"/></g>
+        <text class="icon-label" x="62.5" y="86">Live Broadcast</text>
+        <text class="icon-id" x="62.5" y="102">#btn-live-status</text>
+    </g>
+
+    <!-- Footer Info -->
+    <text font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11" fill="#716b7c" x="60" y="850">
+        Total Icons: 35 | Liturgical Gold (#EAB308) &amp; Deep Obsidian (#121118) Palette | Ready for SVG Sprite integration
+    </text>
+</svg>
