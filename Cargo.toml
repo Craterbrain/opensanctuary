@@ -50,6 +50,10 @@ assets = [
     { source = "web/favicon.ico", dest = "usr/share/opensanctuary/web/favicon.ico", mode = "644" },
     { source = "web/favicon.png", dest = "usr/share/opensanctuary/web/favicon.png", mode = "644" },
     { source = "web/logo-banner.svg", dest = "usr/share/opensanctuary/web/logo-banner.svg", mode = "644" },
+    { source = "web/icons/slate/*.svg", dest = "usr/share/opensanctuary/web/icons/slate/", mode = "644" },
+    { source = "web/icons/gold/*.svg", dest = "usr/share/opensanctuary/web/icons/gold/", mode = "644" },
+    { source = "web/icons/white/*.svg", dest = "usr/share/opensanctuary/web/icons/white/", mode = "644" },
+    { source = "web/icons/crimson/*.svg", dest = "usr/share/opensanctuary/web/icons/crimson/", mode = "644" },
 
     { source = "web/dist/*.js", dest = "usr/share/opensanctuary/web/dist/", mode = "644" },
     { source = "web/plugins/hello_world.js", dest = "usr/share/opensanctuary/web/plugins/hello_world.js", mode = "644" },
@@ -97,6 +101,10 @@ assets = [
     { source = "web/favicon.ico", dest = "usr/share/opensanctuary/web/favicon.ico", mode = "644" },
     { source = "web/favicon.png", dest = "usr/share/opensanctuary/web/favicon.png", mode = "644" },
     { source = "web/logo-banner.svg", dest = "usr/share/opensanctuary/web/logo-banner.svg", mode = "644" },
+    { source = "web/icons/slate/*.svg", dest = "usr/share/opensanctuary/web/icons/slate/", mode = "644" },
+    { source = "web/icons/gold/*.svg", dest = "usr/share/opensanctuary/web/icons/gold/", mode = "644" },
+    { source = "web/icons/white/*.svg", dest = "usr/share/opensanctuary/web/icons/white/", mode = "644" },
+    { source = "web/icons/crimson/*.svg", dest = "usr/share/opensanctuary/web/icons/crimson/", mode = "644" },
 
     { source = "web/dist/*.js", dest = "usr/share/opensanctuary/web/dist/", mode = "644" },
     { source = "web/plugins/hello_world.js", dest = "usr/share/opensanctuary/web/plugins/hello_world.js", mode = "644" },

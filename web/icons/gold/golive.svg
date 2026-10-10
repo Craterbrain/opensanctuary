@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <style>
+    .success-fill { fill: #34d399; }
+  </style>
+  <polygon class="success-fill" points="6 4 20 12 6 20 6 4"/>
+</svg>

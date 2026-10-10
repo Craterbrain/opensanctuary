@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <style>
+    .stroke-icon { fill: none; stroke: #38bdf8; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .success-stroke { fill: none; stroke: #10b981; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <rect class="stroke-icon" x="2" y="3" width="20" height="14" rx="2"/>
+  <line class="stroke-icon" x1="8" y1="21" x2="16" y2="21"/>
+  <line class="stroke-icon" x1="12" y1="17" x2="12" y2="21"/>
+  <polyline class="success-stroke" points="13 7 17 7 17 11"/>
+  <line class="success-stroke" x1="10" y1="14" x2="17" y2="7"/>
+</svg>

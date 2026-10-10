@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <style>
+    .danger-fill { fill: #f43f5e; }
+    .stroke-icon { fill: none; stroke: #eab308; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <path class="stroke-icon" d="M4.93 4.93a10 10 0 0 1 14.14 0"/>
+  <path class="stroke-icon" d="M7.76 7.76a6 6 0 0 1 8.48 0"/>
+  <circle class="danger-fill" cx="12" cy="12" r="2.5"/>
+  <path class="stroke-icon" d="M12 14.5V20"/>
+  <path class="stroke-icon" d="M9 20h6"/>
+</svg>

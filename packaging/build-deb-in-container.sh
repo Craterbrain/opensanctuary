@@ -65,6 +65,7 @@ for f in index.html live.html stage.html remote.html pairing.html style.css favi
   cp "web/$f" "$STAGE/web/$f"
 done
 cp web/dist/*.js "$STAGE/web/dist/"
+cp -r web/icons "$STAGE/web/icons"
 cp web/plugins/hello_world.js "$STAGE/web/plugins/"
 [ "${SKIP_TV_APK:-0}" = "1" ] || cp "$TV_APK" "$STAGE/tv-client/opensanctuary-tv.apk"
 

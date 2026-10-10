@@ -233,6 +233,15 @@ body, html {
 .ribbon-btn .icon {
   font-size: clamp(14px, 1.4vw, 20px);
   margin-bottom: 2px;
+  display: inline-flex;
+}
+
+/* SVG icon set (web/icons/<color>/*.svg, 24x24 grid); sized with the old emoji. */
+.ribbon-btn .icon img {
+  width: 1.3em;
+  height: 1.3em;
+  display: block;
+  pointer-events: none;
 }
 
 .ribbon-btn .label {
