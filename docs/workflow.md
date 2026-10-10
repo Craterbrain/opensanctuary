@@ -11,16 +11,21 @@ how the app verifies updates is in `docs/update.md`.
 `ci.yml` is separate: it runs the tests on every push and PR. Only
 `release.yml` signs and publishes, and it deliberately does **not** run tests.
 
-## Current status (2026-10-06)
+## Current status (2026-10-10)
 
-- The workflow has **not yet completed a full run**. A dry run on tag
-  `v0.2.1-keytest` got past the version check, and the Windows job then failed
-  installing Inno Setup under Wine for lack of a display (fixed with `xvfb-run`), then failed building for lack of
-  `llvm-lib` (fix: apt `llvm`, on `keytest`, not yet run; `keytest` is now version
-  `0.2.2-keytest`, so test it with tag `v0.2.2-keytest`). The Linux job passes. The
-  remaining fixes (below) live on branch `keytest` and have not been merged to
-  `main`. Land them on `main` before cutting a real release, or the release
-  will fail the same way.
+- The workflow has **not yet published a release**. The last dry run (tag
+  `v0.2.2-keytest`, run 8) passed the version check and both builds: Linux, and
+  Windows after the Wine/Inno-under-xvfb and `llvm` fixes. `sign-and-publish`
+  then failed at "Sign checksums.txt" with `Error while loading the secret key
+  file`: the `MINISIGN_SECRET_KEY` secret must hold the key file **verbatim, both
+  lines** (`untrusted comment: ...` and the base64 line). Reset it with
+  `gh secret set MINISIGN_SECRET_KEY < opensanctuary_release.key`, then rerun the
+  failed job (`gh run rerun <id> --failed`). The verify and publish steps have not
+  run yet. The `MINISIGN_PUBLIC_KEY_B64` variable, by contrast, is the bare
+  `RW...` string.
+- The workflow fixes are on `main`. The throwaway dry-run tags/versions
+  (`v0.2.1-keytest`, `v0.2.2-keytest`) can be deleted; a dry run needs a new tag
+  and a matching throwaway `Cargo.toml` version on a branch (see "First run").
 - The signing secrets/variable are set. The production public key is embedded
   in `updater.rs` and `install.sh`. `RELEASES_REPO`/`REPO` point at
   `Craterbrain/opensanctuary`.
