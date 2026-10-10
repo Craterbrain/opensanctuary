@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <style>
+    .stroke-main { fill: none; stroke: #38bdf8; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-light { fill: none; stroke: #bae6fd; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <polygon class="stroke-main" points="3 17 8 6 21 9 19 20 3 17"/>
+  <circle class="stroke-light" cx="12" cy="13" r="3"/>
+</svg>

@@ -4,7 +4,12 @@
   --os-brand-amber: #FFA726;
   --os-brand-primary: #FF5722;
   --os-brand-flame: #D84315;
+  --os-brand-bright: #FF7043;
   --os-brand-glow: rgba(255, 87, 34, 0.14);
+  /* r, g, b triplets of primary/amber, for translucent uses: rgba(var(--os-brand-primary-rgb), .3).
+     Set together with the colors above by applyColorTheme() (src/core/icon_sets.ts). */
+  --os-brand-primary-rgb: 255, 87, 34;
+  --os-brand-amber-rgb: 255, 167, 38;
 
   /* Surfaces & Workspace Foundations (Dark Charcoal & Gunmetal) */
   --os-bg-void: #121316;
@@ -36,7 +41,7 @@
   --bg-darker: var(--os-bg-studio);
   --bg-panel: var(--os-bg-panel);
   --bg-card: var(--os-bg-elevated);
-  --bg-hover: rgba(255, 167, 38, 0.08);
+  --bg-hover: rgba(var(--os-brand-amber-rgb), 0.08);
   --bg-selected: var(--os-brand-primary);
   --bg-header: var(--os-bg-panel);
   --bg-ribbon: linear-gradient(180deg, #24252D 0%, #1A1B20 100%);
@@ -148,7 +153,7 @@ body, html {
 }
 
 .dropdown-item:hover {
-  background: #007acc;
+  background: var(--os-brand-primary);
   color: #ffffff;
 }
 
@@ -226,13 +231,22 @@ body, html {
 }
 
 .ribbon-btn:active, .ribbon-btn.active {
-  background: rgba(0, 122, 204, 0.35);
+  background: rgba(var(--os-brand-primary-rgb), 0.35);
   border-color: var(--accent-blue);
 }
 
 .ribbon-btn .icon {
   font-size: clamp(14px, 1.4vw, 20px);
   margin-bottom: 2px;
+  display: inline-flex;
+}
+
+/* SVG icon set (web/icons/<color>/*.svg, 24x24 grid); sized with the old emoji. */
+.ribbon-btn .icon img {
+  width: 1.3em;
+  height: 1.3em;
+  display: block;
+  pointer-events: none;
 }
 
 .ribbon-btn .label {
@@ -282,9 +296,9 @@ body, html {
 }
 
 .override-logo.active {
-  background: rgba(0, 122, 204, 0.3);
+  background: rgba(var(--os-brand-primary-rgb), 0.3);
   border-color: var(--accent-blue);
-  color: #88ccff;
+  color: var(--os-brand-amber);
 }
 
 .override-alert.active {
@@ -591,8 +605,8 @@ body, html {
 }
 
 .header-link-btn {
-  background: rgba(0, 122, 204, 0.2);
-  border: 1px solid rgba(0, 122, 204, 0.4);
+  background: rgba(var(--os-brand-primary-rgb), 0.2);
+  border: 1px solid rgba(var(--os-brand-primary-rgb), 0.4);
   color: #00e5ff;
   font-size: 10px;
   padding: 2px 6px;
@@ -600,7 +614,7 @@ body, html {
   cursor: pointer;
 }
 .header-link-btn:hover {
-  background: rgba(0, 122, 204, 0.4);
+  background: rgba(var(--os-brand-primary-rgb), 0.4);
   color: #fff;
 }
 
@@ -805,7 +819,7 @@ body, html {
 
 .schedule-undo-placeholder .btn-undo:hover,
 .deck-undo-placeholder .btn-undo:hover {
-  background: #ffa726;
+  background: var(--os-brand-amber);
   transform: scale(1.05);
 }
 
@@ -927,7 +941,7 @@ body, html {
 .schedule-bottom-drop-zone:hover {
   border-color: var(--os-brand-amber, #ff9100);
   background: rgba(255, 145, 0, 0.09);
-  color: #ffa726;
+  color: var(--os-brand-amber);
   box-shadow: inset 0 0 12px rgba(255, 145, 0, 0.15);
   transform: translateY(1px);
 }
@@ -1066,7 +1080,7 @@ body, html {
   font-size: 10px;
   width: 14px;
   text-align: center;
-  color: #ffa726;
+  color: var(--os-brand-amber);
   cursor: pointer;
   display: inline-block;
   user-select: none;
@@ -1130,7 +1144,7 @@ body, html {
   transition: color 0.15s ease;
 }
 .sched-tick-label.active {
-  color: #ffa726;
+  color: var(--os-brand-amber);
   font-weight: 700;
 }
 
@@ -1363,7 +1377,7 @@ body, html {
 .slide-card.active {
   border-color: var(--os-status-live);
   box-shadow: 0 0 12px rgba(255, 61, 0, 0.45);
-  background: rgba(255, 87, 34, 0.18);
+  background: rgba(var(--os-brand-primary-rgb), 0.18);
 }
 
 .slide-card.active-staged {
@@ -1454,7 +1468,7 @@ body, html {
   border-radius: 4px;
   border: none;
   cursor: pointer;
-  box-shadow: 0 2px 6px rgba(255, 87, 34, 0.4);
+  box-shadow: 0 2px 6px rgba(var(--os-brand-primary-rgb), 0.4);
   transition: background 0.12s ease, transform 0.08s ease;
 }
 
@@ -1850,7 +1864,7 @@ body, html {
   cursor: pointer;
 }
 .catalog-fetch-prompt-row:hover {
-  background: rgba(255, 87, 34, 0.25);
+  background: rgba(var(--os-brand-primary-rgb), 0.25);
 }
 
 .category-tree {
@@ -2345,8 +2359,8 @@ body, html {
 }
 
 .display-unavailable-banner {
-  background: rgba(255, 167, 38, 0.08);
-  border: 1px solid rgba(255, 167, 38, 0.35);
+  background: rgba(var(--os-brand-amber-rgb), 0.08);
+  border: 1px solid rgba(var(--os-brand-amber-rgb), 0.35);
   border-radius: 6px;
   padding: 14px 16px;
   color: var(--os-text-primary);
@@ -2555,8 +2569,8 @@ body, html {
 
 .network-badge--warning {
   background: rgba(239, 108, 0, 0.15);
-  border: 1px solid rgba(255, 167, 38, 0.35);
-  color: #ffb74d;
+  border: 1px solid rgba(var(--os-brand-amber-rgb), 0.35);
+  color: var(--os-brand-amber);
 }
 
 .network-badge--error {
@@ -2751,9 +2765,9 @@ select option {
   box-shadow: 0 2px 8px var(--os-brand-glow);
 }
 .btn-primary:hover {
-  background: linear-gradient(135deg, #ff7043 0%, var(--os-brand-primary) 100%) !important;
+  background: linear-gradient(135deg, var(--os-brand-bright) 0%, var(--os-brand-primary) 100%) !important;
   border-color: var(--os-brand-amber) !important;
-  box-shadow: 0 0 12px rgba(255, 87, 34, 0.35);
+  box-shadow: 0 0 12px rgba(var(--os-brand-primary-rgb), 0.35);
 }
 
 .btn-tag {
@@ -2852,7 +2866,7 @@ select option {
   font-weight: 800;
   background: var(--os-brand-glow);
   color: var(--os-brand-amber);
-  border: 1px solid rgba(255, 167, 38, 0.3);
+  border: 1px solid rgba(var(--os-brand-amber-rgb), 0.3);
   padding: 2px 6px;
   border-radius: 3px;
   text-transform: uppercase;
@@ -2956,7 +2970,7 @@ select option {
   width: 20px;
   height: 20px;
   flex-shrink: 0;
-  filter: drop-shadow(0 0 3px rgba(255, 87, 34, 0.5));
+  filter: drop-shadow(0 0 3px rgba(var(--os-brand-primary-rgb), 0.5));
 }
 
 .studio-title-input {
@@ -3585,7 +3599,7 @@ select option {
 .ui-grid-card.selected,
 .media-image-card.selected {
   border-color: var(--os-brand-primary);
-  box-shadow: 0 0 0 2px var(--os-brand-glow), 0 0 14px rgba(255, 87, 34, 0.4);
+  box-shadow: 0 0 0 2px var(--os-brand-glow), 0 0 14px rgba(var(--os-brand-primary-rgb), 0.4);
 }
 .ui-grid-card.selected .grid-card-thumb::after {
   content: '✓';
@@ -3717,7 +3731,7 @@ select option {
 }
 .media-video-card.selected {
   border-color: var(--os-brand-primary);
-  box-shadow: 0 0 0 2px var(--os-brand-glow), 0 0 14px rgba(255, 87, 34, 0.4);
+  box-shadow: 0 0 0 2px var(--os-brand-glow), 0 0 14px rgba(var(--os-brand-primary-rgb), 0.4);
 }
 .media-video-thumb {
   width: 100%;
@@ -4010,7 +4024,7 @@ select option {
 }
 
 .bible-tree-node.active {
-  background: rgba(255, 87, 34, 0.2);
+  background: rgba(var(--os-brand-primary-rgb), 0.2);
   border-left-color: var(--os-brand-amber);
   color: #fff;
   font-weight: 600;
@@ -4043,7 +4057,7 @@ select option {
   padding: 6px 8px;
   box-sizing: border-box;
   overflow: hidden;
-  border-top: 2px solid #ffa726;
+  border-top: 2px solid var(--os-brand-amber);
 }
 
 .canvas-dual-col.secondary-col {
@@ -4085,9 +4099,9 @@ select option {
 }
 
 .canvas-dual-badge.primary {
-  background: rgba(255, 167, 38, 0.2);
-  color: #ffa726;
-  border: 1px solid rgba(255, 167, 38, 0.4);
+  background: rgba(var(--os-brand-amber-rgb), 0.2);
+  color: var(--os-brand-amber);
+  border: 1px solid rgba(var(--os-brand-amber-rgb), 0.4);
 }
 
 .canvas-dual-badge.secondary {
@@ -4164,7 +4178,7 @@ select option {
 
 .theme-picker-card.selected {
   border-color: var(--os-brand-primary);
-  box-shadow: 0 0 0 2px var(--os-brand-glow), 0 0 14px rgba(255, 87, 34, 0.4);
+  box-shadow: 0 0 0 2px var(--os-brand-glow), 0 0 14px rgba(var(--os-brand-primary-rgb), 0.4);
 }
 
 .theme-picker-preview {
@@ -4304,7 +4318,7 @@ select option {
 }
 
 .os-toast-warning {
-  border-left-color: #ffa726;
+  border-left-color: var(--os-brand-amber);
 }
 
 .os-toast-error {
@@ -4503,4 +4517,135 @@ video {
   cursor: pointer;
   background: transparent;
   padding: 1px;
+}
+
+/* Settings > Theme: icon-set picker */
+.icon-set-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.icon-set-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--os-bg-panel);
+  border: 1px solid var(--os-border);
+  border-radius: 6px;
+  color: var(--text-main);
+  cursor: pointer;
+  text-align: left;
+}
+.icon-set-card:hover {
+  border-color: var(--os-text-secondary);
+}
+.icon-set-card.selected {
+  border-color: var(--os-brand-primary);
+  box-shadow: 0 0 0 1px var(--os-brand-primary);
+}
+.icon-set-preview {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  background: var(--os-bg-studio);
+  border-radius: 4px;
+}
+.icon-set-preview img {
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+}
+.icon-set-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+}
+.icon-set-swatch {
+  display: flex;
+  gap: 4px;
+}
+.icon-set-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+/* Settings > Theme: color-theme mock (a primary button and accent bars in the theme's colors) */
+.theme-color-mock {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  background: var(--os-bg-studio);
+  border-radius: 4px;
+}
+.theme-color-mock-btn {
+  padding: 3px 12px;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+.theme-color-mock-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+}
+
+/* SVG icons that replace emoji in text (src/core/emoji_icons.ts): sized and aligned like a glyph. */
+.ui-icon {
+  width: 1.2em;
+  height: 1.2em;
+  vertical-align: -0.22em;
+  pointer-events: none;
+}
+
+/* Icons sitting on a solid brand-colored background would vanish (orange on orange):
+   draw them white there. Generated from the stylesheet's own "primary background" rules. */
+.bg-picker-tab-btn.active .ui-icon,
+.bg-picker-tab-btn.active img[data-icon],
+.btn-golive-large .ui-icon,
+.btn-golive-large img[data-icon],
+.btn-primary .ui-icon,
+.btn-primary img[data-icon],
+.btn-studio-mode.active .ui-icon,
+.btn-studio-mode.active img[data-icon],
+.btn-tag:hover .ui-icon,
+.btn-tag:hover img[data-icon],
+.catalog-table tr.selected .ui-icon,
+.catalog-table tr.selected img[data-icon],
+.category-node.active .ui-icon,
+.category-node.active img[data-icon],
+.context-menu-item:hover .ui-icon,
+.context-menu-item:hover img[data-icon],
+.dropdown-item:hover .ui-icon,
+.dropdown-item:hover img[data-icon],
+.import-tab-btn.active .ui-icon,
+.import-tab-btn.active img[data-icon],
+.schedule-item.selected .ui-icon,
+.schedule-item.selected img[data-icon],
+.search-mode-item:hover .ui-icon,
+.search-mode-item:hover img[data-icon],
+.settings-category-btn.active .ui-icon,
+.settings-category-btn.active img[data-icon],
+.studio-btn-toggle.active .ui-icon,
+.studio-btn-toggle.active img[data-icon],
+.type-pill.active .ui-icon,
+.type-pill.active img[data-icon],
+.view-toggle-btn.active .ui-icon,
+.view-toggle-btn.active img[data-icon] {
+  filter: brightness(0) invert(1);
+}
+/* ...except on the amber buttons that use black text. */
+.btn-primary[style*="--os-brand-amber"] .ui-icon {
+  filter: brightness(0);
+}
+/* Menu entries stay on one line now that an icon sits in front of the label. */
+.dropdown-item > span {
+  white-space: nowrap;
 }

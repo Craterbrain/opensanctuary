@@ -1793,7 +1793,7 @@ on('btn-cancel-options', 'click', () => closeModal(optionsModal));
 on('btn-save-options', 'click', () => {
   const newOpts: Record<string, string> = {};
   SETTINGS_SCHEMA.forEach(def => {
-    if (def.control === 'readonly' || def.control === 'action') return;
+    if (def.control === 'readonly' || def.control === 'action' || def.control === 'panel') return;
     const el = document.getElementById(`setting-${def.key}`) as HTMLInputElement | HTMLSelectElement | null;
     if (!el) return;
     const value = 'value' in el ? el.value : '';
@@ -1933,7 +1933,7 @@ const ARTICLES_DATA: Record<string, string> = {
       <li><strong>✏️ Edit Item & Slides...</strong> — Open the slide studio to modify text or formatting.</li>
       <li><strong>📋 Duplicate Item</strong> — Duplicate an item for responsive call-and-response liturgy.</li>
       <li><strong>🗑️ Remove from Schedule</strong> — Remove the item from the current service queue.</li>
-      <li><strong>⬆ Move Up / ⬇ Move Down</strong> — Single-step keyboard/mouse shifting.</li>
+      <li><strong><span data-no-iconify>⬆ Move Up / ⬇ Move Down</span></strong> — Single-step keyboard/mouse shifting.</li>
     </ul>
   `,
 
@@ -1992,7 +1992,7 @@ const ARTICLES_DATA: Record<string, string> = {
         <span style="font-size: 11px; color: var(--text-dim);">Displays church logo screen.</span>
       </div>
       <div style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 4px; border: 1px solid var(--border-color);">
-        <strong style="color: #ffa726;">📢 Alert Banner (<kbd>F8</kbd>)</strong><br>
+        <strong style="color: #ffa726;">{icon:alert} Alert Banner (<kbd>F8</kbd>)</strong><br>
         <span style="font-size: 11px; color: var(--text-dim);">Nursery & parking emergency alerts.</span>
       </div>
     </div>

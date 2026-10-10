@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <style>
+    .stroke-red { fill: none; stroke: #f43f5e; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-light-red { fill: none; stroke: #fda4af; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-dark-red { fill: none; stroke: #e11d48; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <path class="stroke-red" d="M7.51 13.62L8.4 7.3A1.49 1.49 0 0 1 11.35 7.71L10.76 11.98"/>
+  <path class="stroke-red" d="M10.76 11.98L11.59 6.07A1.49 1.49 0 0 1 14.54 6.49L13.71 12.4"/>
+  <path class="stroke-red" d="M13.71 12.4L14.42 7.31A1.49 1.49 0 0 1 17.38 7.72L16.66 12.81"/>
+  <path class="stroke-red" d="M16.66 12.81L17.03 10.19A1.49 1.49 0 0 1 19.99 10.6L19.27 15.69"/>
+  <path class="stroke-red" d="M7.51 13.62L5.37 12.06A1.49 1.49 0 0 0 3.61 14.47L5.76 16.03Q8.58 17.95 9.58 19.76"/>
+  <path class="stroke-red" d="M19.27 15.69Q18.69 19.79 15.73 20.63"/>
+  <path class="stroke-dark-red" d="M8.98 21.02L15.96 22"/>
+  <path class="stroke-light-red" d="M5 3Q3.2 4.2 2.8 6.6"/>
+  <path class="stroke-light-red" d="M19.5 2.5Q21.3 3.6 21.7 6"/>
+</svg>

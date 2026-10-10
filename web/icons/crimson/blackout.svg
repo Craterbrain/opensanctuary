@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <style>
+    .stroke-red { fill: none; stroke: #f43f5e; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-dark-red { fill: none; stroke: #e11d48; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <rect class="stroke-red" x="2" y="3" width="20" height="14" rx="2"/>
+  <rect fill="#0a0305" stroke="#4c1d24" stroke-width="1" x="5" y="6" width="14" height="8" rx="1"/>
+  <path class="stroke-dark-red" d="M8 21h8"/>
+  <path class="stroke-dark-red" d="M12 17v4"/>
+</svg>

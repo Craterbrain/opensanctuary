@@ -26,7 +26,7 @@ export function showToast(message: string, type: ToastType = 'info', duration: n
 
   const iconMap: Record<ToastType, string> = {
     success: '✓',
-    error: '✕',
+    error: '{icon:error}',
     warning: '⚠️',
     info: 'ℹ️',
   };
@@ -35,7 +35,7 @@ export function showToast(message: string, type: ToastType = 'info', duration: n
   toast.innerHTML = `
     <span class="os-toast-icon">${icon}</span>
     <span class="os-toast-msg">${escapeHtml(message)}</span>
-    <button class="os-toast-close" title="Dismiss">×</button>
+    <button class="os-toast-close" title="Dismiss">{icon:close}</button>
   `;
 
   const closeBtn = toast.querySelector('.os-toast-close');

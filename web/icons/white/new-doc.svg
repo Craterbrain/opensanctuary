@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <style>
+    .stroke-main { fill: none; stroke: #e2e8f0; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-light { fill: none; stroke: #ffffff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <path class="stroke-main" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+  <polyline class="stroke-light" points="14 2 14 8 20 8"/>
+  <line class="stroke-main" x1="12" y1="18" x2="12" y2="12"/>
+  <line class="stroke-main" x1="9" y1="15" x2="15" y2="15"/>
+</svg>

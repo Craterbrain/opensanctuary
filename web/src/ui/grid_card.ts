@@ -7,7 +7,7 @@
  */
 
 import { formatMediaTime } from '../core/ui_utils.ts';
-import { escapeHtml } from '../core/presentation_helpers.ts';
+import { escapeHtml, escapeUserHtml } from '../core/presentation_helpers.ts';
 
 export type ThumbnailType = 'image' | 'video' | 'css' | 'icon';
 
@@ -119,14 +119,14 @@ export function buildGridCard(options: GridCardOptions): HTMLElement {
   // Title label
   const titleEl = document.createElement('div');
   titleEl.className = `grid-card-title ${options.titleClassName || ''}`.trim();
-  titleEl.innerHTML = escapeHtml(options.title);
+  titleEl.innerHTML = escapeUserHtml(options.title);
   card.appendChild(titleEl);
 
   // Optional subtitle
   if (options.subtitle) {
     const subEl = document.createElement('div');
     subEl.className = 'grid-card-subtitle';
-    subEl.innerHTML = escapeHtml(options.subtitle);
+    subEl.innerHTML = escapeUserHtml(options.subtitle);
     card.appendChild(subEl);
   }
 

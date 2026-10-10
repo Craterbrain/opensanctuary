@@ -17,7 +17,12 @@
  * setting shared across songs/scriptures/presentations.
  */
 
-export type SettingControl = 'text' | 'password' | 'select' | 'readonly' | 'action';
+/**
+ * 'panel' rows belong to a category rendered by its own bespoke panel (display, theme).
+ * They are never shown in that category's own view -- only as search results, where
+ * they open the panel -- so the Settings search can find what those panels hold.
+ */
+export type SettingControl = 'text' | 'password' | 'select' | 'readonly' | 'action' | 'panel';
 
 export interface SettingOption {
   value: string;
@@ -46,6 +51,7 @@ export const SETTINGS_CATEGORIES: SettingCategoryDef[] = [
   { id: 'general', label: 'General', icon: '⚙' },
   { id: 'live-output', label: 'Live Output', icon: '🖥' },
   { id: 'display', label: 'Display', icon: '🖵' },
+  { id: 'theme', label: 'Theme', icon: '🎨' },
   { id: 'network', label: 'Network', icon: '🌐' },
   { id: 'paired-devices', label: 'Paired Devices', icon: '📺' },
   { id: 'alerts', label: 'Alerts & Nursery', icon: '🔔' },
@@ -54,12 +60,53 @@ export const SETTINGS_CATEGORIES: SettingCategoryDef[] = [
   { id: 'about', label: 'About', icon: 'ℹ' },
 ];
 
-// The "display" category has no SETTINGS_SCHEMA entries — it's rendered by the bespoke
-// renderDisplaySettings() in settings_dialog.ts (live monitor detection, per-output
-// Open/Close, etc.) rather than the generic single-value row renderer below, so it's
-// intentionally excluded from search matching too.
+// The "display" and "theme" categories are rendered by the bespoke renderDisplaySettings()
+// / renderThemeSettings() in settings_dialog.ts (live monitor detection, per-output
+// Open/Close; icon-set and color-theme pickers) rather than the generic single-value row
+// renderer below. Their SETTINGS_SCHEMA entries are 'panel' rows: search-only pointers
+// that open the panel (see SettingControl).
 
 export const SETTINGS_SCHEMA: SettingDef[] = [
+  {
+    key: 'themeLinked',
+    label: 'Match Icons and Colors',
+    description: 'Use one cohesive theme for both the icon set and the interface colors, or turn this off to choose them independently.',
+    category: 'theme',
+    control: 'panel',
+    actionLabel: 'Open Theme',
+  },
+  {
+    key: 'iconSet',
+    label: 'Icon Set',
+    description: 'Theme icons: the color of the toolbar and menu icons (orange, slate, gold, white or crimson).',
+    category: 'theme',
+    control: 'panel',
+    actionLabel: 'Open Theme',
+  },
+  {
+    key: 'colorTheme',
+    label: 'Color Theme',
+    description: 'Accent colors used across the interface (selection, buttons, highlights). Follows the icon set unless set independently.',
+    category: 'theme',
+    control: 'panel',
+    actionLabel: 'Open Theme',
+  },
+  {
+    key: 'displayMonitors',
+    label: 'Detected Monitors',
+    description: 'The screens connected to this computer, with their resolution and which one is primary. Refresh to detect newly connected displays.',
+    category: 'display',
+    control: 'panel',
+    actionLabel: 'Open Display',
+  },
+  {
+    key: 'displayOutputsPanel',
+    label: 'Display Outputs',
+    description: 'Open or close the live output and stage display windows on each monitor, and add or remove outputs.',
+    category: 'display',
+    control: 'panel',
+    actionLabel: 'Open Display',
+  },
   {
     key: 'churchName',
     label: 'Church / Sanctuary Name',

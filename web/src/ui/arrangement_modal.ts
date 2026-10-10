@@ -6,7 +6,7 @@
  * built with drag-and-drop between and within both lists.
  */
 import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
-import { type ArrangementEntry, isPrimaryDropTarget } from '../core/presentation_helpers';
+import { type ArrangementEntry, escapeUserHtml, isPrimaryDropTarget } from '../core/presentation_helpers';
 import type { ToastType } from '../core/ui_utils';
 
 export interface ArrangementModalContext {
@@ -232,7 +232,7 @@ export function openArrangementModal(itemIndex: number, item: any) {
 
   const titleEl = document.getElementById('arrangement-modal-title');
   if (titleEl) {
-    titleEl.textContent = `🎼 Song Arrangement — ${item.title || 'Song'}`;
+    titleEl.innerHTML = `🎼 Song Arrangement — ${escapeUserHtml(item.title || 'Song')}`;
   }
 
   document.body.classList.add('editor-open');

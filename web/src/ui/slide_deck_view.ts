@@ -16,6 +16,8 @@
  * to know which panel is calling it.
  */
 
+import { escapeUserHtml } from '../core/presentation_helpers.ts';
+
 export interface SlideCardOptions {
   badge: string;
   badgeColor: string;
@@ -59,7 +61,7 @@ export function renderDeckEmptyState(matrixEl: HTMLElement, opts: DeckEmptyState
       <div class="deck-undo-placeholder">
         <div class="undo-content">
           <span style="font-size: 12px;">🗑️</span>
-          <span>Removed "<strong>${opts.escapeHtml(opts.undoPlaceholder.title)}</strong>"</span>
+          <span>Removed "<strong>${escapeUserHtml(opts.undoPlaceholder.title)}</strong>"</span>
         </div>
         <button class="btn btn-undo" type="button" title="Undo delete (Ctrl+Z)">↩ Undo</button>
       </div>`;

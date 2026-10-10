@@ -25,10 +25,12 @@ ENGINE="${CONTAINER_ENGINE:-podman}"
 IMAGE=os-next-linux-builder
 
 echo "==> Building builder image ($ENGINE)..."
-"$ENGINE" build -t "$IMAGE" -f packaging/Dockerfile.linux-build .
+ANDROID_ARG=1
+[ "${SKIP_TV_APK:-0}" = "1" ] && ANDROID_ARG=0
+"$ENGINE" build --build-arg INCLUDE_ANDROID_SDK="$ANDROID_ARG" -t "$IMAGE" -f packaging/Dockerfile.linux-build .
 
 echo "==> Building inside the container..."
-"$ENGINE" run --rm -v "$PWD":/src:Z -w /src "$IMAGE" packaging/build-deb-in-container.sh
+"$ENGINE" run --rm -e SKIP_TV_APK="${SKIP_TV_APK:-0}" -v "$PWD":/src:Z -w /src "$IMAGE" packaging/build-deb-in-container.sh
 
 DEB=$(ls -t target/debian/*.deb | head -1)
 TARBALL=$(ls -t target/release-artifacts/*.tar.gz | head -1)

@@ -55,16 +55,20 @@ RUN curl -fsSL https://bun.sh/install | bash
 # The project's own `gradlew` brings its own pinned Gradle -- only the SDK
 # itself (platform + build-tools for compileSdk 36, matching
 # apps/android-tv/app/build.gradle.kts) needs installing here.
-RUN apt-get update && apt-get install -y --no-install-recommends openjdk-17-jdk-headless && rm -rf /var/lib/apt/lists/*
+ARG INCLUDE_ANDROID_SDK=1
 ENV ANDROID_HOME=/opt/android-sdk \
     ANDROID_SDK_ROOT=/opt/android-sdk
-RUN mkdir -p "$ANDROID_HOME/cmdline-tools" \
-    && curl -fsSL -o /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
-    && unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools" \
-    && mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest" \
-    && rm /tmp/cmdline-tools.zip
 ENV PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
-RUN yes | sdkmanager --licenses > /dev/null \
-    && sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+# Skipped with --build-arg INCLUDE_ANDROID_SDK=0 (SKIP_TV_APK=1 builds).
+RUN if [ "$INCLUDE_ANDROID_SDK" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends openjdk-17-jdk-headless && rm -rf /var/lib/apt/lists/* \
+      && mkdir -p "$ANDROID_HOME/cmdline-tools" \
+      && curl -fsSL -o /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+      && unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools" \
+      && mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest" \
+      && rm /tmp/cmdline-tools.zip \
+      && (yes | sdkmanager --licenses > /dev/null) \
+      && sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"; \
+    fi
 
 WORKDIR /src
