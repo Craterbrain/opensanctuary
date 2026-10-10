@@ -54,7 +54,7 @@
   {"glyph": "⛶", "icon": "fullscreen", "note": "Toggle fullscreen, Zoom to Fit.", "contexts": [{"where": "tb-group (Group Selected Elements)", "icon": "group"}]},
   {"glyph": "☰", "icon": "list", "note": "List / table view toggle."},
   {"glyph": "⏹", "icon": "stop", "note": "Stop video / stop stream."},
-  {"glyph": "📑", "icon": "copy", "note": "Duplicate slide; remote \"Slides\" tab."},
+  {"glyph": "📑", "icon": "copy", "note": "Remote \"Slides\" tab (stacked slides); 2 Columns layout option.", "contexts": [{"where": "ctx-slide-duplicate (Duplicate Slide)", "icon": "duplicate"}]},
   {"glyph": "▼", "icon": null, "note": "Expand/collapse caret (app_core.ts); typography.", "contexts": [{"where": "tb-send-backward", "icon": "send-backward"}]},
   {"glyph": "➜", "icon": "arrow-right", "note": "Wizard \"Next ➜\" / \"Let's Go ➜\" buttons."},
   {"glyph": "↓", "icon": null, "note": "Only inside <kbd> key labels and code comments; a key name, keep as text."},
@@ -122,5 +122,14 @@
   {"glyph": "🖧", "icon": "network", "note": "Ethernet network interface."},
   {"glyph": "🔀", "icon": "network-virtual", "note": "Virtual network interface (bridge / VPN / loopback): network nodes inside a dashed-corner frame."},
   {"glyph": "🛡", "icon": "shield", "note": "Network & security policies."},
-  {"glyph": "🟣", "icon": "tv", "note": "Roku device in the paired-devices list (the purple dot is a platform stand-in; other platforms use 📺)."}
+  {"glyph": "🟣", "icon": "tv", "note": "Roku device in the paired-devices list (the purple dot is a platform stand-in; other platforms use 📺)."},
+  {"glyph": "⠿", "icon": "grip", "note": "Drag handle on schedule items, slide cards and arrangement rows; help-guide \"Re-ordering\" heading."},
+  {"glyph": "⊞", "icon": "grid", "note": "Matrix / thumbnail grid view toggle buttons (preview, live, resource panels)."},
+  {"glyph": "⧉", "icon": "duplicate", "note": "Duplicate slide (editor toolbar, slide thumbnail) and Duplicate theme."},
+  {"glyph": "≡", "icon": "align-center", "note": "Align center (text and element)."},
+  {"glyph": "≣", "icon": "align-justify", "note": "Justify text."},
+  {"glyph": "⤊", "icon": "align-top", "note": "Align elements to top."},
+  {"glyph": "⤋", "icon": "align-bottom", "note": "Align elements to bottom."},
+  {"glyph": "ℹ", "icon": "info", "note": "About OpenSanctuary, About settings category, info toast icon. Also appears as ℹ+U+FE0F (ui_utils.ts toast map); like every entry in this map the glyph is stored without U+FE0F, so strip it before lookup."},
+  {"glyph": "＋", "icon": "plus", "note": "Fullwidth plus on the schedule bottom drop zone (\"Drop here to add to end of schedule\")."}
 ]

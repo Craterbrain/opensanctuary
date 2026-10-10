@@ -4604,3 +4604,48 @@ video {
   vertical-align: -0.22em;
   pointer-events: none;
 }
+
+/* Icons sitting on a solid brand-colored background would vanish (orange on orange):
+   draw them white there. Generated from the stylesheet's own "primary background" rules. */
+.bg-picker-tab-btn.active .ui-icon,
+.bg-picker-tab-btn.active img[data-icon],
+.btn-golive-large .ui-icon,
+.btn-golive-large img[data-icon],
+.btn-primary .ui-icon,
+.btn-primary img[data-icon],
+.btn-studio-mode.active .ui-icon,
+.btn-studio-mode.active img[data-icon],
+.btn-tag:hover .ui-icon,
+.btn-tag:hover img[data-icon],
+.catalog-table tr.selected .ui-icon,
+.catalog-table tr.selected img[data-icon],
+.category-node.active .ui-icon,
+.category-node.active img[data-icon],
+.context-menu-item:hover .ui-icon,
+.context-menu-item:hover img[data-icon],
+.dropdown-item:hover .ui-icon,
+.dropdown-item:hover img[data-icon],
+.import-tab-btn.active .ui-icon,
+.import-tab-btn.active img[data-icon],
+.schedule-item.selected .ui-icon,
+.schedule-item.selected img[data-icon],
+.search-mode-item:hover .ui-icon,
+.search-mode-item:hover img[data-icon],
+.settings-category-btn.active .ui-icon,
+.settings-category-btn.active img[data-icon],
+.studio-btn-toggle.active .ui-icon,
+.studio-btn-toggle.active img[data-icon],
+.type-pill.active .ui-icon,
+.type-pill.active img[data-icon],
+.view-toggle-btn.active .ui-icon,
+.view-toggle-btn.active img[data-icon] {
+  filter: brightness(0) invert(1);
+}
+/* ...except on the amber buttons that use black text. */
+.btn-primary[style*="--os-brand-amber"] .ui-icon {
+  filter: brightness(0);
+}
+/* Menu entries stay on one line now that an icon sits in front of the label. */
+.dropdown-item > span {
+  white-space: nowrap;
+}

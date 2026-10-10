@@ -42,3 +42,21 @@ that `style.css` builds its accents from. In Settings > Theme the two are one
 cohesive theme by default (`themeLinked`); turn that off to pick the icon set
 (`iconSet`) and the color theme (`colorTheme`) independently. Keep white text
 readable on each theme's `primary` (a unit test checks this).
+
+## Emoji in the UI
+
+The console no longer shows emoji where an icon exists: `src/core/emoji_icons.ts`
+converts the glyphs listed in `emoji-map.json` into `<img data-icon>` elements as text is
+rendered (so every icon follows the Settings > Theme choice). To add or change one:
+make the icon (see "Adding icons"), then add the glyph to `emoji-map.json`.
+
+- Where one emoji means different things at different call sites, write
+  `{icon:name}` in the string/markup instead of the glyph; list it under the glyph's
+  `contexts` in the map so the decision is recorded.
+- Glyphs that are also plain text (`×` in "1920×1080", `−`) are not in the map; use the
+  `{icon:name}` token on the button.
+- Left alone on purpose: inputs, `<option>`s, `[contenteditable]`, anything marked
+  `data-no-iconify`, the slide canvases (`.canvas-16-9`) and tree carets. Tooltips
+  (`title=`) can't show images, so emoji set there stay text.
+- Icons on a solid brand-colored background are drawn white by a block at the end of
+  `style.css`; add new "primary background" selectors there.
