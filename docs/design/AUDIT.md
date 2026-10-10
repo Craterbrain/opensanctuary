@@ -126,4 +126,36 @@ reach. The result looks fine in the default orange theme and visibly breaks in t
 
 ## What changed
 
-See the "What changed" section appended at the end of the design pass.
+The system is documented in [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md). Against the findings above:
+
+- **Color (C1-C8)**: cyan, gold, sky, teal and Tailwind blues are gone from the console chrome;
+  colored text uses `--os-accent-text`, fills use `--os-brand-primary`, status uses fixed
+  success/warning/danger tokens. Live = tally red, staged = tally green in every theme.
+  Schedule section headers follow the theme. The undefined tokens (C4) are now defined as
+  aliases. Selected-row secondary text is 80% white (C7).
+- **Surfaces (S1-S4)**: one overlay recipe for every menu/popover/toast, one card recipe,
+  one tile recipe; 3 shadows, 5 radii. Splitters and drop indicators use the theme.
+- **Selection/hover/focus (H1-H4)**: strong selection = solid primary everywhere (schedule,
+  library rows, category/version trees, Settings nav, guide nav); soft selection = tint +
+  bar. Hover is a translucent overlay. A visible `:focus-visible` ring on every control.
+- **Buttons (B1-B5)**: primary / secondary / ghost / danger / danger-ghost / chip, three
+  sizes, icon-only; no inline button styling remains in `index.html`.
+- **Forms (F1-F6)**: sunken fields distinct from buttons; `.form-field` / `.form-row` /
+  `.form-check`; checkboxes, radios, ranges, file and color inputs themed; the studio
+  properties panel and background popover (written for an unloaded Tailwind, so they
+  rendered as raw browser buttons with all five background panes visible at once) now use
+  real classes.
+- **Tabs (T1-T3)**: underline tabs for page switching (library, Import, Remote); segmented
+  controls for views/filters/modes.
+- **Dialogs (M1-M6)**: shared shell with body-layout modifiers; footers put the primary
+  action last on the right; danger header is a red rule, not a different surface.
+- **Feedback (E1-E4)**: one empty-state recipe (schedule, decks, library incl. an empty
+  library message, Genius/online search, paired devices); toasts and the host-auth banner
+  use the overlay surface + status edge; callouts replace hand-tinted boxes.
+- Inline `style=""` in `index.html`: 328 -> 53 (the rest are `display:none` toggles that JS
+  owns, and the canvas internals, which were out of scope).
+
+**Deliberately unchanged**: slide canvases, `live.html`, `stage.html`, `remote.html`,
+`pairing.html`; per-section tag colors (verse/chorus/bridge badges, filmstrip tag chips);
+the editor's on-canvas guides/marquee; the remote-modal `.active` bug noted above;
+modal focus trapping (Tab can leave an open dialog - behavior, not styling).
