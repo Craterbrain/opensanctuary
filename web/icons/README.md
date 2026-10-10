@@ -7,6 +7,18 @@ inline `<style>`), so it works as a plain `<img src="icons/<color>/<name>.svg">`
 The ribbon in `index.html` uses `icons/orange/`. To switch the ribbon to another
 color, change the folder in those `<img>` paths.
 
+**Adding icons: author `crimson/` only.** The other four sets are generated:
+write `crimson/<name>.svg`, then run `bun icons/derive_sets.ts` from `web/` (the unit
+test fails if the derived sets are stale). Never hand-edit `orange/`, `slate/`,
+`gold/` or `white/`.
+
+Icon format (copy an existing crimson icon): `viewBox="0 0 24 24"`, 2px round
+strokes, a `<style>` listing only the classes the icon uses -- `stroke-red` /
+`fill-red` (main), `stroke-light-red` / `fill-light-red` (highlight, secondary
+details) and `stroke-dark-red` / `fill-dark-red` (accent, structural parts) -- with
+the `stroke-*` rules before the `fill-*` rules (an element with both needs the
+fill to win). Colors: main `#f43f5e`, light `#fda4af`, dark `#e11d48`.
+
 All five sets are two-tone: a main color, a lighter highlight on secondary
 details and a darker accent on structural parts. The tone assignment comes from
 `crimson` (split from its sheet); the others reuse it with their own colors.

@@ -30,6 +30,14 @@ describe('icon sets', () => {
   });
 });
 
+describe('icon set generation', () => {
+  test('orange, slate, gold and white are exactly what derive_sets.ts generates from crimson', () => {
+    const r = Bun.spawnSync(['bun', join(import.meta.dir, '..', 'icons', 'derive_sets.ts'), '--check']);
+    expect(r.stderr.toString()).toBe('');
+    expect(r.exitCode).toBe(0);
+  });
+});
+
 describe('color themes', () => {
   test('linked is the default: the color theme follows the icon set', () => {
     expect(resolveTheme({})).toEqual({ iconSet: 'orange', colorTheme: 'orange', linked: true });
