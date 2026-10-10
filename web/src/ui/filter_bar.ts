@@ -90,7 +90,7 @@ export function createSearchInput(options: SearchInputOptions): SearchInputHandl
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
   clearBtn.className = 'ui-search-clear-btn';
-  clearBtn.innerHTML = '&times;';
+  clearBtn.innerHTML = '{icon:close}';
   clearBtn.title = 'Clear search';
   clearBtn.setAttribute('aria-label', 'Clear search');
 

@@ -67,7 +67,8 @@ function iconElement(name: string): HTMLImageElement {
 }
 
 const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'INPUT', 'SELECT', 'OPTION', 'TITLE']);
-const SKIP_SELECTOR = '[contenteditable], [data-no-iconify], .canvas-16-9';
+// Tree expand/collapse carets (▶ ▼) stay glyphs; so does anything inside the slide canvases.
+const SKIP_SELECTOR = '[contenteditable], [data-no-iconify], .canvas-16-9, .group-caret, .schedule-caret';
 
 function skip(el: Element | null): boolean {
   return !el || SKIP_TAGS.has(el.tagName) || el.closest(SKIP_SELECTOR) !== null;

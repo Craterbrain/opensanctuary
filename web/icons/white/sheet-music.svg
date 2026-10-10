@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <style>
+    .stroke-main { fill: none; stroke: #e2e8f0; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .fill-main { fill: #e2e8f0; }
+    .stroke-dark { fill: none; stroke: #94a3b8; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <path class="stroke-dark" d="M2 8h20"/>
+  <path class="stroke-dark" d="M2 13h20"/>
+  <path class="stroke-dark" d="M2 18h20"/>
+  <path class="stroke-main" d="M10 18V4l9-1.5V15"/>
+  <circle class="fill-main" cx="7.5" cy="18" r="2.5"/>
+  <circle class="fill-main" cx="16.5" cy="15" r="2.5"/>
+</svg>

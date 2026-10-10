@@ -30,13 +30,13 @@
           <div class="dropdown-item" id="menu-file-new"><span>📄 New Schedule</span><kbd>Ctrl+N</kbd></div>
           <div class="dropdown-item" id="menu-file-open"><span>📂 Open Schedule...</span><kbd>Ctrl+O</kbd></div>
           <div class="dropdown-item" id="menu-file-save"><span>💾 Save Schedule</span><kbd>Ctrl+S</kbd></div>
-          <div class="dropdown-item" id="menu-file-save-as"><span>💾 Save Schedule As...</span><kbd>Ctrl+Shift+S</kbd></div>
+          <div class="dropdown-item" id="menu-file-save-as"><span>{icon:save-as} Save Schedule As...</span><kbd>Ctrl+Shift+S</kbd></div>
           <div class="dropdown-divider"></div>
           <div class="dropdown-item" id="menu-file-new-song"><span>🎵 New Song...</span><kbd>Ctrl+Shift+N</kbd></div>
           <div class="dropdown-item" id="menu-file-new-header"><span>🏷️ New Section / Group Header...</span></div>
           <div class="dropdown-item" id="menu-file-import"><span>📥 Import Bibles / OpenLP...</span><kbd>Ctrl+I</kbd></div>
           <div class="dropdown-divider"></div>
-          <div class="dropdown-item" id="menu-file-exit"><span>✖ Exit OpenSanctuary</span><kbd>Alt+F4</kbd></div>
+          <div class="dropdown-item" id="menu-file-exit"><span>{icon:exit} Exit OpenSanctuary</span><kbd>Alt+F4</kbd></div>
         </div>
       </div>
 
@@ -62,7 +62,7 @@
           <div class="dropdown-divider"></div>
           <div class="dropdown-item" id="menu-live-black"><span>⬛ Blackout Screen</span><kbd>F5</kbd></div>
           <div class="dropdown-item" id="menu-live-clear"><span>🔲 Clear Lyrics / Text</span><kbd>F6</kbd></div>
-          <div class="dropdown-item" id="menu-live-logo"><span>⭐ Logo Overlay</span><kbd>F7</kbd></div>
+          <div class="dropdown-item" id="menu-live-logo"><span>{icon:logo} Logo Overlay</span><kbd>F7</kbd></div>
           <div class="dropdown-item" id="menu-live-alert"><span>🔔 Nursery / Message Alert</span><kbd>F8</kbd></div>
         </div>
       </div>
@@ -71,7 +71,7 @@
         <button class="menu-trigger-btn" id="menu-view">View</button>
         <div class="menu-dropdown-content">
           <div class="dropdown-item" id="menu-view-fullscreen"><span>⛶ Toggle Fullscreen</span><kbd>F11</kbd></div>
-          <div class="dropdown-item" id="menu-view-dual-bible"><span>📖 Toggle Dual Bible Comparison</span></div>
+          <div class="dropdown-item" id="menu-view-dual-bible"><span>{icon:dual-bible} Toggle Dual Bible Comparison</span></div>
           <div class="dropdown-divider"></div>
           <div class="dropdown-item" id="menu-view-open-foh"><span>↗ Open Live FOH Output Screen</span></div>
           <div class="dropdown-item" id="menu-view-open-stage"><span>↗ Open Stage Foldback Display</span></div>
@@ -81,7 +81,7 @@
       <div class="menu-item-dropdown">
         <button class="menu-trigger-btn" id="menu-help">Help</button>
         <div class="menu-dropdown-content">
-          <div class="dropdown-item" id="menu-help-guide"><span>📖 Schedule & Service Articles (User Guide)</span><kbd>F1</kbd></div>
+          <div class="dropdown-item" id="menu-help-guide"><span>{icon:help-guide} Schedule & Service Articles (User Guide)</span><kbd>F1</kbd></div>
           <div class="dropdown-item" id="menu-help-shortcuts"><span>⌨ Keyboard Shortcuts Reference</span><kbd>?</kbd></div>
           <div class="dropdown-item" id="menu-help-bibles"><span>📖 Installed Bible Versions</span></div>
           <div class="dropdown-divider"></div>
@@ -255,7 +255,7 @@
         <!-- Column 3: Live Output Panel (ZONE_LIVE) [ARCH:zone-live] -->
         <div class="panel" id="live-output-panel">
           <div class="panel-header">
-            <span class="title">📺 Live - <span id="live-title-display">No Active Item</span></span>
+            <span class="title">{icon:display-foh} Live - <span id="live-title-display">No Active Item</span></span>
             <div class="live-deck-header-actions">
               <span class="jump-pill-hint" title="Quick Section Jumps: V=Verse, C=Chorus, B=Bridge, E=Ending, P=Pre-Chorus, I=Intro, O=Outro, 1-9=Slide #">Jump: [V] [C] [B] [E] [1-9]</span>
               <button class="header-link-btn" id="btn-open-foh-screen" title="Pop out hardware display window">Open Screen ↗</button>
@@ -470,8 +470,8 @@
                 <div class="studio-mini-divider"></div>
                 <button class="studio-btn-toggle w-6 h-6 text-sm font-bold" id="tb-list-bullet" title="Bullet List" disabled>•</button>
                 <button class="studio-btn-toggle w-6 h-6 text-[10px] font-bold" id="tb-list-number" title="Numbered List" disabled>1.</button>
-                <button class="studio-btn-toggle w-6 h-6 text-xs" id="tb-indent-dec" title="Decrease Indent (Outdent)" disabled>⇤</button>
-                <button class="studio-btn-toggle w-6 h-6 text-xs" id="tb-indent-inc" title="Increase Indent" disabled>⇥</button>
+                <button class="studio-btn-toggle w-6 h-6 text-xs" id="tb-indent-dec" title="Decrease Indent (Outdent)" disabled>{icon:outdent}</button>
+                <button class="studio-btn-toggle w-6 h-6 text-xs" id="tb-indent-inc" title="Increase Indent" disabled>{icon:indent}</button>
               </div>
               <div class="ribbon-row">
                 <button class="studio-btn-toggle font-bold w-6 h-6 text-xs" id="tb-bold" title="Bold" disabled>B</button>
@@ -507,7 +507,7 @@
             <div class="ribbon-shapes-grid" id="tb-shapes-grid">
               <button class="ribbon-shape-btn-sm" data-shape="rectangle" title="Rectangle">▭</button>
               <button class="ribbon-shape-btn-sm" data-shape="ellipse" title="Ellipse / Circle">⬬</button>
-              <button class="ribbon-shape-btn-sm" data-shape="triangle" title="Triangle">▲</button>
+              <button class="ribbon-shape-btn-sm" data-shape="triangle" title="Triangle">{icon:shape-triangle}</button>
               <button class="ribbon-shape-btn-sm" data-shape="diamond" title="Diamond">◆</button>
               <button class="ribbon-shape-btn-sm" data-shape="pentagon" title="Pentagon">⬠</button>
               <button class="ribbon-shape-btn-sm" data-shape="rounded_rectangle" title="Rounded Rectangle">▢</button>
@@ -523,7 +523,7 @@
                 <button class="studio-btn" id="tb-insert-line" title="Insert Line / Arrow">📏 <span class="studio-label">Line</span></button>
               </div>
               <div class="ribbon-row">
-                <button class="studio-btn" id="tb-insert-table" title="Insert Table (3x3)">📊 <span class="studio-label">Table</span></button>
+                <button class="studio-btn" id="tb-insert-table" title="Insert Table (3x3)">{icon:table} <span class="studio-label">Table</span></button>
               </div>
             </div>
             <div class="studio-divider"></div>
@@ -545,7 +545,7 @@
                 </select>
               </div>
               <div class="ribbon-row">
-                <button class="studio-btn" id="tb-save-template" title="Save the current slide as a reusable template">💾 <span class="studio-label">Save as Template</span></button>
+                <button class="studio-btn" id="tb-save-template" title="Save the current slide as a reusable template">{icon:save-as} <span class="studio-label">Save as Template</span></button>
                 <div class="ribbon-popover-anchor">
                   <button class="studio-btn flex items-center gap-1.5" id="tb-background" title="Change Slide Background">
                     <span class="inline-block w-3.5 h-3.5 rounded border border-slate-500 shadow-inner flex-none" id="tb-background-preview" style="background: #000000;"></span>
@@ -561,9 +561,9 @@
 
             <div class="ribbon-group">
               <div class="ribbon-row">
-                <button class="studio-btn" id="tb-bring-forward" title="Bring Forward">▲</button>
-                <button class="studio-btn" id="tb-send-backward" title="Send Backward">▼</button>
-                <button class="studio-btn" id="tb-group" title="Group Selected Elements (Ctrl+G)" disabled>⛶ <span class="studio-label">Group</span></button>
+                <button class="studio-btn" id="tb-bring-forward" title="Bring Forward">{icon:bring-forward}</button>
+                <button class="studio-btn" id="tb-send-backward" title="Send Backward">{icon:send-backward}</button>
+                <button class="studio-btn" id="tb-group" title="Group Selected Elements (Ctrl+G)" disabled>{icon:group} <span class="studio-label">Group</span></button>
                 <button class="studio-btn" id="tb-ungroup" title="Ungroup (Ctrl+Shift+G)" disabled>⚏ <span class="studio-label">Ungroup</span></button>
               </div>
               <div class="ribbon-row">
@@ -1134,7 +1134,7 @@
             <div style="background: #141414; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color); font-family: monospace; font-size: 13px; color: #00e5ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px;" id="remote-url-display">
               http://127.0.0.1:8080/remote
             </div>
-            <button class="btn btn-secondary" id="btn-copy-remote-url" title="Copy URL" style="padding: 7px 12px;">📋 Copy</button>
+            <button class="btn btn-secondary" id="btn-copy-remote-url" title="Copy URL" style="padding: 7px 12px;">{icon:copy} Copy</button>
           </div>
           <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 16px; line-height: 1.4;">
             Ensure your phone or tablet is on the same Wi-Fi network. Point any regular phone camera or QR scanner at the code above to launch the remote.
@@ -1161,7 +1161,7 @@
             <div style="background: #141414; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color); font-family: monospace; font-size: 12px; color: #00e5ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px;" id="pairing-url-display">
               http://127.0.0.1:8080/pairing.html
             </div>
-            <button class="btn btn-secondary" id="btn-copy-pairing-url" title="Copy URL" style="padding: 7px 12px;">📋 Copy</button>
+            <button class="btn btn-secondary" id="btn-copy-pairing-url" title="Copy URL" style="padding: 7px 12px;">{icon:copy} Copy</button>
             <button class="btn btn-secondary" id="btn-refresh-pairing-session" title="Generate New Session" style="padding: 7px 12px;">🔄</button>
           </div>
           <div style="background: rgba(255, 87, 34, 0.08); border: 1px solid rgba(255, 87, 34, 0.25); border-radius: 8px; padding: 10px 14px; text-align: left; font-size: 12px; color: var(--text-main); line-height: 1.5; margin-bottom: 16px;">
@@ -1295,7 +1295,7 @@
     <div class="modal-backdrop" id="ccli-report-modal" style="display: none;">
       <div class="modal-dialog modal-dialog--xl">
         <div class="modal-header">
-          <span>📊 CCLI Usage Report</span>
+          <span>{icon:chart} CCLI Usage Report</span>
           <button class="modal-close-btn" id="btn-close-ccli-report">✖</button>
         </div>
         <div class="modal-body" style="flex: 1; display: flex; gap: 16px; padding: 16px; overflow: hidden; background: var(--os-bg-base, #121316);">
@@ -1453,7 +1453,7 @@
       <div class="context-menu-item" id="ctx-sched-empty-new-scripture">📖 New Scripture Passage...</div>
       <div class="dropdown-divider"></div>
       <div class="context-menu-item" id="ctx-sched-empty-open">📂 Open Schedule...</div>
-      <div class="context-menu-item" id="ctx-sched-empty-clear" style="color: #ff8888;">🧹 Clear Schedule (New)</div>
+      <div class="context-menu-item" id="ctx-sched-empty-clear" style="color: #ff8888;">{icon:trash} Clear Schedule (New)</div>
     </div>
 
     <!-- 15. Slide / Verse Context Menu (Schedule Child Slides & Live Deck Matrix) -->
@@ -1467,7 +1467,7 @@
       <div class="context-menu-item" id="ctx-slide-bg">🎨 Change Theme & Background...</div>
       <div class="context-menu-item" id="ctx-slide-image">🖼 Select Background Photo...</div>
       <div class="dropdown-divider"></div>
-      <div class="context-menu-item" id="ctx-slide-copy">📋 Copy Slide Text</div>
+      <div class="context-menu-item" id="ctx-slide-copy">{icon:copy} Copy Slide Text</div>
       <div class="context-menu-item" id="ctx-slide-delete" style="color: #ff8888;">🗑️ Delete Slide</div>
     </div>
 
@@ -1481,7 +1481,7 @@
       <div class="context-menu-item" id="ctx-lib-theme">🎨 Set Theme / Background...</div>
       <div class="context-menu-item" id="ctx-lib-image">🖼 Select Background Photo...</div>
       <div class="dropdown-divider"></div>
-      <div class="context-menu-item" id="ctx-lib-copy">📋 Copy Content / Lyrics</div>
+      <div class="context-menu-item" id="ctx-lib-copy">{icon:copy} Copy Content / Lyrics</div>
       <div class="dropdown-divider"></div>
       <div class="context-menu-item context-menu-item-danger" id="ctx-lib-delete" style="color: #ff6b6b;">🗑️ Delete from Library...</div>
     </div>
@@ -1489,8 +1489,8 @@
     <!-- 17. Live Monitor Context Menu -->
     <div id="live-monitor-context-menu" class="context-menu" style="display: none;">
       <div class="context-menu-item" id="ctx-mon-black">⬛ Toggle Blackout (F5)</div>
-      <div class="context-menu-item" id="ctx-mon-clear">📄 Toggle Clear Text (F6)</div>
-      <div class="context-menu-item" id="ctx-mon-logo">🏷️ Toggle Logo (F7)</div>
+      <div class="context-menu-item" id="ctx-mon-clear">{icon:clear-lyrics} Toggle Clear Text (F6)</div>
+      <div class="context-menu-item" id="ctx-mon-logo">{icon:logo} Toggle Logo (F7)</div>
       <div class="dropdown-divider"></div>
       <div class="context-menu-item" id="ctx-mon-alert">🔔 Send Nursery / Message Alert (F8)...</div>
       <div class="context-menu-item" id="ctx-mon-foh">🖥️ Open Fullscreen / FOH Window</div>

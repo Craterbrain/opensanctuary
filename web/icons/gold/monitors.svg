@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <style>
+    .stroke-main { fill: none; stroke: #eab308; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-dark { fill: none; stroke: #ca8a04; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <path class="stroke-dark" d="M7 5V4a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-1"/>
+  <rect class="stroke-main" x="2" y="7" width="15" height="11" rx="2"/>
+  <path class="stroke-dark" d="M9.5 18v3"/>
+  <path class="stroke-dark" d="M6 21h7"/>
+</svg>

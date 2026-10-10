@@ -1650,7 +1650,7 @@ function renderNetworkSettings(content: HTMLElement) {
     const icon = iface.interface_type === 'Ethernet' ? '🖧'
       : iface.interface_type === 'Wireless' ? '📶'
       : iface.interface_type === 'Virtual' ? '🔀'
-      : '🔄';
+      : '{icon:network}';
 
     const title = document.createElement('div');
     title.className = 'network-iface-title';

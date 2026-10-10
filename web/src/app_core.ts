@@ -747,7 +747,7 @@ function showHostAuthBanner() {
     <input type="password" id="os-host-auth-input" placeholder="Host token" style="flex:1;min-width:160px;max-width:360px;padding:6px 8px;border-radius:4px;border:1px solid #665;background:#221a00;color:#fff;">
     <button id="os-host-auth-connect" style="padding:6px 14px;border-radius:4px;border:none;background:#4a90d9;color:#fff;cursor:pointer;">Connect</button>
     <span id="os-host-auth-error" style="color:#ff8080;"></span>
-    <button id="os-host-auth-dismiss" title="Dismiss" style="margin-left:auto;background:none;border:none;color:#ccc;cursor:pointer;font-size:16px;">×</button>
+    <button id="os-host-auth-dismiss" title="Dismiss" style="margin-left:auto;background:none;border:none;color:#ccc;cursor:pointer;font-size:16px;">{icon:close}</button>
   `;
   document.body.appendChild(banner);
 
