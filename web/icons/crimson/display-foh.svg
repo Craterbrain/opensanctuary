@@ -2,7 +2,7 @@
   <style>
     .stroke-red { fill: none; stroke: #f43f5e; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     .stroke-light-red { fill: none; stroke: #fda4af; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-    .stroke-dark-red { fill: none; stroke: #9f1239; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-dark-red { fill: none; stroke: #e11d48; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   </style>
   <rect class="stroke-red" x="2" y="3" width="20" height="14" rx="2"/>
   <line class="stroke-dark-red" x1="8" y1="21" x2="16" y2="21"/>
