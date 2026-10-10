@@ -94,9 +94,17 @@ export function hexToRgbTriplet(hex: string): string {
   return `${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}`;
 }
 
+let currentIconSet = DEFAULT_ICON_SET;
+
+/** The set most recently applied -- icons created later (see emoji_icons.ts) start out in it. */
+export function getCurrentIconSet(): string {
+  return currentIconSet;
+}
+
 /** Points every `img[data-icon]` under `root` at `setId`. */
 export function applyIconSet(setId: unknown, root: ParentNode = document): void {
   const id = normalizeIconSet(setId);
+  currentIconSet = id;
   root.querySelectorAll<HTMLImageElement>('img[data-icon]').forEach(img => {
     const url = iconUrl(id, img.dataset.icon || '');
     if (img.getAttribute('src') !== url) img.setAttribute('src', url);

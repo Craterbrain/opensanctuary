@@ -5,6 +5,10 @@ import { PluginManager } from "./core/plugins.ts";
 import { clock } from "./core/timesync.ts";
 import { VideoSyncController } from "./core/video_sync.ts";
 import { keyring } from "./core/keyring.ts";
+import { startEmojiIcons } from "./core/emoji_icons.ts";
+
+// 0. Swap emoji for the themed SVG icons (static markup now, rendered content as it appears)
+startEmojiIcons();
 
 // 1. Initialize Plugin System
 export const pluginManager = new PluginManager();

@@ -4596,3 +4596,11 @@ video {
   height: 8px;
   border-radius: 4px;
 }
+
+/* SVG icons that replace emoji in text (src/core/emoji_icons.ts): sized and aligned like a glyph. */
+.ui-icon {
+  width: 1.2em;
+  height: 1.2em;
+  vertical-align: -0.22em;
+  pointer-events: none;
+}
