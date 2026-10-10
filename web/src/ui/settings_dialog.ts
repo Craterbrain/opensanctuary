@@ -18,7 +18,7 @@ import { api, UpdateCheckResult } from "../core/api_client.ts";
 import { escapeHtml } from "../core/presentation_helpers.ts";
 import { closeModal, showConfirmDialog } from "./dialog_manager.ts";
 import { openCcliReportModal } from "./ccli_report_modal.ts";
-import { ICON_SETS, ICON_SET_PREVIEW_ICONS, iconUrl, normalizeIconSet } from "../core/icon_sets.ts";
+import { ICON_SETS, ICON_SET_PREVIEW_ICONS, IconSetDef, iconUrl, resolveTheme } from "../core/icon_sets.ts";
 
 export interface SettingsContext {
   getAppOptions: () => Record<string, any>;
@@ -27,7 +27,8 @@ export interface SettingsContext {
   areTranslationsEquivalent: (a: string, b: string) => boolean;
   getDisplayOutputs: () => DisplayOutputConfig[];
   saveDisplayOutputs: (outputs: DisplayOutputConfig[]) => Promise<void> | void;
-  setIconSet: (id: string) => Promise<void> | void;
+  /** Saves and applies theme options (`iconSet`, `colorTheme`, `themeLinked`). */
+  setThemeOptions: (changes: Record<string, string>) => Promise<void> | void;
   switchToPairingTab: () => void;
   switchToAdbProvisionTab: () => void;
   showFirstTimeSetup: () => void;
@@ -125,6 +126,16 @@ export function renderSettingsSidebar() {
   });
 }
 
+/** Leaves the search results and shows a category's own panel (the "Open ..." buttons on 'panel' rows). */
+function openSettingsCategory(categoryId: string) {
+  settingsSearchQuery = '';
+  const searchEl = document.getElementById('settings-search') as HTMLInputElement | null;
+  if (searchEl) searchEl.value = '';
+  activeSettingsCategory = categoryId;
+  renderSettingsSidebar();
+  renderSettingsContent();
+}
+
 export function renderSettingRow(def: SettingDef, highlight: boolean): HTMLElement {
   const row = document.createElement('div');
   row.className = 'settings-row' + (highlight ? ' settings-row--highlight' : '');
@@ -143,6 +154,13 @@ export function renderSettingRow(def: SettingDef, highlight: boolean): HTMLEleme
     span.className = 'settings-readonly-value';
     span.textContent = getSettingValue(def.key) || '—';
     controlWrap.appendChild(span);
+  } else if (def.control === 'panel') {
+    const btn = document.createElement('button');
+    btn.className = 'btn';
+    btn.id = `setting-panel-${def.key}`;
+    btn.textContent = def.actionLabel || 'Open';
+    btn.addEventListener('click', () => openSettingsCategory(def.category));
+    controlWrap.appendChild(btn);
   } else if (def.control === 'action') {
     const btn = document.createElement('button');
     btn.className = 'btn';
@@ -543,40 +561,21 @@ async function persistOutputs(outputs: DisplayOutputConfig[]) {
   if (currentContext) await currentContext.saveDisplayOutputs(outputs);
 }
 
+type ThemeCardKind = 'both' | 'icons' | 'colors';
+
 /**
- * Settings > Theme: the icon-set picker. Each card previews a set with a few of its
- * icons; choosing one applies it right away (the ribbon updates behind the dialog)
- * and saves it with the other app options.
+ * One pickable card. 'icons' previews the set's icons, 'colors' mocks the interface
+ * accents, 'both' (the cohesive theme) shows the two together.
  */
-function renderThemeSettings(content: HTMLElement) {
-  content.innerHTML = '';
-  content.classList.remove('display-panel');
+function buildThemeCard(set: IconSetDef, kind: ThemeCardKind, selectedId: string, onPick: () => void): HTMLElement {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'icon-set-card' + (set.id === selectedId ? ' selected' : '');
+  card.id = `theme-card-${kind}-${set.id}`;
+  card.setAttribute('role', 'radio');
+  card.setAttribute('aria-checked', String(set.id === selectedId));
 
-  const header = document.createElement('div');
-  header.className = 'settings-group-header';
-  header.textContent = 'Icon Set';
-  content.appendChild(header);
-
-  const desc = document.createElement('div');
-  desc.className = 'settings-row-desc';
-  desc.textContent = 'Color of the toolbar and menu icons. Takes effect immediately.';
-  content.appendChild(desc);
-
-  const grid = document.createElement('div');
-  grid.className = 'icon-set-grid';
-  grid.setAttribute('role', 'radiogroup');
-  grid.setAttribute('aria-label', 'Icon set');
-  content.appendChild(grid);
-
-  const selected = normalizeIconSet(currentContext?.getAppOptions().iconSet);
-  ICON_SETS.forEach(set => {
-    const card = document.createElement('button');
-    card.type = 'button';
-    card.className = 'icon-set-card' + (set.id === selected ? ' selected' : '');
-    card.id = `icon-set-card-${set.id}`;
-    card.setAttribute('role', 'radio');
-    card.setAttribute('aria-checked', String(set.id === selected));
-
+  if (kind !== 'colors') {
     const preview = document.createElement('div');
     preview.className = 'icon-set-preview';
     ICON_SET_PREVIEW_ICONS.forEach(name => {
@@ -587,19 +586,91 @@ function renderThemeSettings(content: HTMLElement) {
       preview.appendChild(img);
     });
     card.appendChild(preview);
+  }
 
-    const meta = document.createElement('div');
-    meta.className = 'icon-set-meta';
-    const swatch = set.tones.map(c => `<span class="icon-set-dot" style="background:${c}"></span>`).join('');
-    meta.innerHTML = `<span class="icon-set-name">${escapeHtml(set.label)}</span><span class="icon-set-swatch">${swatch}</span>`;
-    card.appendChild(meta);
+  const c = set.colors;
+  if (kind !== 'icons') {
+    const mock = document.createElement('div');
+    mock.className = 'theme-color-mock';
+    mock.innerHTML = `<span class="theme-color-mock-btn" style="background:${c.primary}">Aa</span>`
+      + `<span class="theme-color-mock-bar" style="background:${c.highlight}"></span>`
+      + `<span class="theme-color-mock-bar" style="background:${c.deep}"></span>`
+      + `<span class="theme-color-mock-bar" style="background:${c.bright}"></span>`;
+    card.appendChild(mock);
+  }
 
-    card.addEventListener('click', async () => {
-      await currentContext?.setIconSet(set.id);
-      renderThemeSettings(content);
-    });
-    grid.appendChild(card);
+  const dots = (kind === 'icons' ? set.tones : [c.primary, c.highlight, c.deep])
+    .map(col => `<span class="icon-set-dot" style="background:${col}"></span>`).join('');
+  const meta = document.createElement('div');
+  meta.className = 'icon-set-meta';
+  meta.innerHTML = `<span class="icon-set-name">${escapeHtml(set.label)}</span><span class="icon-set-swatch">${dots}</span>`;
+  card.appendChild(meta);
+
+  card.addEventListener('click', onPick);
+  return card;
+}
+
+/**
+ * Settings > Theme: icon set and interface color theme. By default they are one
+ * cohesive theme (one pick sets both); turning "Match Icons and Colors" off shows
+ * two independent pickers. Choices apply immediately (the app behind the dialog
+ * changes) and are saved with the other app options.
+ */
+function renderThemeSettings(content: HTMLElement) {
+  content.innerHTML = '';
+  content.classList.remove('display-panel');
+  const theme = resolveTheme(currentContext?.getAppOptions() ?? {});
+  const rerender = () => renderThemeSettings(content);
+  const change = async (changes: Record<string, string>) => {
+    await currentContext?.setThemeOptions(changes);
+    rerender();
+  };
+
+  const linkRow = document.createElement('div');
+  linkRow.className = 'settings-row';
+  linkRow.innerHTML = '<div class="settings-row-label"><label class="form-label" for="theme-linked-toggle">Match Icons and Colors</label>'
+    + '<div class="settings-row-desc">One cohesive theme for the icons and the interface colors. Turn off to choose them independently.</div></div>';
+  const linkControl = document.createElement('div');
+  linkControl.className = 'settings-row-control';
+  const toggle = document.createElement('input');
+  toggle.type = 'checkbox';
+  toggle.id = 'theme-linked-toggle';
+  toggle.checked = theme.linked;
+  toggle.addEventListener('change', () => {
+    // Linking adopts the icon set's colors; unlinking keeps what's showing now.
+    void change(toggle.checked
+      ? { themeLinked: 'true', colorTheme: theme.iconSet }
+      : { themeLinked: 'false', colorTheme: theme.colorTheme });
   });
+  linkControl.appendChild(toggle);
+  linkRow.appendChild(linkControl);
+  content.appendChild(linkRow);
+
+  const section = (title: string, desc: string, kind: ThemeCardKind, selectedId: string, pick: (id: string) => Record<string, string>) => {
+    const header = document.createElement('div');
+    header.className = 'settings-group-header';
+    header.textContent = title;
+    content.appendChild(header);
+    const d = document.createElement('div');
+    d.className = 'settings-row-desc';
+    d.textContent = desc;
+    content.appendChild(d);
+    const grid = document.createElement('div');
+    grid.className = 'icon-set-grid';
+    grid.setAttribute('role', 'radiogroup');
+    grid.setAttribute('aria-label', title);
+    ICON_SETS.forEach(set => grid.appendChild(buildThemeCard(set, kind, selectedId, () => void change(pick(set.id)))));
+    content.appendChild(grid);
+  };
+
+  if (theme.linked) {
+    section('Theme', 'Icons and interface colors together. Takes effect immediately.', 'both', theme.iconSet,
+      id => ({ iconSet: id, colorTheme: id }));
+  } else {
+    section('Icon Set', 'Color of the toolbar and menu icons.', 'icons', theme.iconSet, id => ({ iconSet: id }));
+    section('Color Theme', 'Accent colors across the interface: selection, buttons and highlights.', 'colors', theme.colorTheme,
+      id => ({ colorTheme: id }));
+  }
 }
 
 function renderDisplaySettings(content: HTMLElement) {

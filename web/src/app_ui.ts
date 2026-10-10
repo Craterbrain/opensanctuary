@@ -1793,7 +1793,7 @@ on('btn-cancel-options', 'click', () => closeModal(optionsModal));
 on('btn-save-options', 'click', () => {
   const newOpts: Record<string, string> = {};
   SETTINGS_SCHEMA.forEach(def => {
-    if (def.control === 'readonly' || def.control === 'action') return;
+    if (def.control === 'readonly' || def.control === 'action' || def.control === 'panel') return;
     const el = document.getElementById(`setting-${def.key}`) as HTMLInputElement | HTMLSelectElement | null;
     if (!el) return;
     const value = 'value' in el ? el.value : '';

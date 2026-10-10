@@ -21,3 +21,12 @@ re-split rather than editing both.
 Packaging: `Cargo.toml` lists each color folder in both asset lists (main and
 `no-tv-apk`) -- add a line there when adding a color. The tarball and Windows
 installer scripts copy the whole `web/icons` directory.
+
+## Color themes
+
+Each set has a matching interface color theme (`colors` in
+`src/core/icon_sets.ts`), applied by overriding the `--os-brand-*` CSS variables
+that `style.css` builds its accents from. In Settings > Theme the two are one
+cohesive theme by default (`themeLinked`); turn that off to pick the icon set
+(`iconSet`) and the color theme (`colorTheme`) independently. Keep white text
+readable on each theme's `primary` (a unit test checks this).
