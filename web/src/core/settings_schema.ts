@@ -46,6 +46,7 @@ export const SETTINGS_CATEGORIES: SettingCategoryDef[] = [
   { id: 'general', label: 'General', icon: '⚙' },
   { id: 'live-output', label: 'Live Output', icon: '🖥' },
   { id: 'display', label: 'Display', icon: '🖵' },
+  { id: 'theme', label: 'Theme', icon: '🎨' },
   { id: 'network', label: 'Network', icon: '🌐' },
   { id: 'paired-devices', label: 'Paired Devices', icon: '📺' },
   { id: 'alerts', label: 'Alerts & Nursery', icon: '🔔' },

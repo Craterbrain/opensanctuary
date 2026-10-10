@@ -74,6 +74,7 @@ import { initMediaImagePicker, openMediaImagePicker } from './ui/media_image_pic
 import { initVideoPicker } from './ui/video_picker.ts';
 import { dialogManager } from './ui/dialog_manager.ts';
 import { contextMenuManager } from './ui/context_menu_manager.ts';
+import { DEFAULT_ICON_SET, applyIconSet, normalizeIconSet } from './core/icon_sets.ts';
 import { createEngineWebSocket, EngineWebSocketClient } from './core/ws_client.ts';
 
 // Functions app_ui.ts hands back after it loads (see main.ts's sequential
@@ -246,7 +247,8 @@ export let appOptions = {
   defaultBibleVersion: '',
   pexelsApiKey: '',
   pixabayApiKey: '',
-  displayOutputs: '[]'
+  displayOutputs: '[]',
+  iconSet: DEFAULT_ICON_SET
 };
 
 export async function loadAppOptions() {
@@ -292,6 +294,7 @@ export async function saveAppOptions(newOptions: any) {
 }
 
 function applyAppOptionsToUI() {
+  applyIconSet(appOptions.iconSet);
   const outAsp = document.getElementById('output-aspect-ratio-text');
   if (outAsp) outAsp.textContent = `${appOptions.aspectRatio || '16:9'} Hardware Mirror`;
   if (canvasFooterLeftEl && (!currentSnapshot || !currentSnapshot.state || !currentSnapshot.state.live_item)) {
@@ -529,6 +532,7 @@ initSettingsDialog({
   areTranslationsEquivalent: (a, b) => areTranslationsEquivalent(a, b),
   getDisplayOutputs: () => parseDisplayOutputs(appOptions.displayOutputs),
   saveDisplayOutputs: (outputs) => saveAppOptions({ displayOutputs: serializeDisplayOutputs(outputs) }),
+  setIconSet: (id) => saveAppOptions({ iconSet: normalizeIconSet(id) }),
   switchToPairingTab: () => uiCallbacks.switchToPairingTab?.(),
   switchToAdbProvisionTab: () => uiCallbacks.switchToAdbProvisionTab?.(),
   showFirstTimeSetup: () => uiCallbacks.showFirstTimeSetup?.(),

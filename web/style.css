@@ -4513,3 +4513,59 @@ video {
   background: transparent;
   padding: 1px;
 }
+
+/* Settings > Theme: icon-set picker */
+.icon-set-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.icon-set-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--os-bg-panel);
+  border: 1px solid var(--os-border);
+  border-radius: 6px;
+  color: var(--text-main);
+  cursor: pointer;
+  text-align: left;
+}
+.icon-set-card:hover {
+  border-color: var(--os-text-secondary);
+}
+.icon-set-card.selected {
+  border-color: var(--os-brand-primary);
+  box-shadow: 0 0 0 1px var(--os-brand-primary);
+}
+.icon-set-preview {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  background: var(--os-bg-studio);
+  border-radius: 4px;
+}
+.icon-set-preview img {
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+}
+.icon-set-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+}
+.icon-set-swatch {
+  display: flex;
+  gap: 4px;
+}
+.icon-set-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}

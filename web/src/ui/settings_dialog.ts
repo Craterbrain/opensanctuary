@@ -18,6 +18,7 @@ import { api, UpdateCheckResult } from "../core/api_client.ts";
 import { escapeHtml } from "../core/presentation_helpers.ts";
 import { closeModal, showConfirmDialog } from "./dialog_manager.ts";
 import { openCcliReportModal } from "./ccli_report_modal.ts";
+import { ICON_SETS, ICON_SET_PREVIEW_ICONS, iconUrl, normalizeIconSet } from "../core/icon_sets.ts";
 
 export interface SettingsContext {
   getAppOptions: () => Record<string, any>;
@@ -26,6 +27,7 @@ export interface SettingsContext {
   areTranslationsEquivalent: (a: string, b: string) => boolean;
   getDisplayOutputs: () => DisplayOutputConfig[];
   saveDisplayOutputs: (outputs: DisplayOutputConfig[]) => Promise<void> | void;
+  setIconSet: (id: string) => Promise<void> | void;
   switchToPairingTab: () => void;
   switchToAdbProvisionTab: () => void;
   showFirstTimeSetup: () => void;
@@ -434,6 +436,10 @@ export function renderSettingsContent() {
     renderDisplaySettings(content);
     return;
   }
+  if (!q && activeSettingsCategory === 'theme') {
+    renderThemeSettings(content);
+    return;
+  }
   if (!q && activeSettingsCategory === 'network') {
     renderNetworkSettings(content);
     return;
@@ -535,6 +541,65 @@ function getOutputs(): DisplayOutputConfig[] {
 
 async function persistOutputs(outputs: DisplayOutputConfig[]) {
   if (currentContext) await currentContext.saveDisplayOutputs(outputs);
+}
+
+/**
+ * Settings > Theme: the icon-set picker. Each card previews a set with a few of its
+ * icons; choosing one applies it right away (the ribbon updates behind the dialog)
+ * and saves it with the other app options.
+ */
+function renderThemeSettings(content: HTMLElement) {
+  content.innerHTML = '';
+  content.classList.remove('display-panel');
+
+  const header = document.createElement('div');
+  header.className = 'settings-group-header';
+  header.textContent = 'Icon Set';
+  content.appendChild(header);
+
+  const desc = document.createElement('div');
+  desc.className = 'settings-row-desc';
+  desc.textContent = 'Color of the toolbar and menu icons. Takes effect immediately.';
+  content.appendChild(desc);
+
+  const grid = document.createElement('div');
+  grid.className = 'icon-set-grid';
+  grid.setAttribute('role', 'radiogroup');
+  grid.setAttribute('aria-label', 'Icon set');
+  content.appendChild(grid);
+
+  const selected = normalizeIconSet(currentContext?.getAppOptions().iconSet);
+  ICON_SETS.forEach(set => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'icon-set-card' + (set.id === selected ? ' selected' : '');
+    card.id = `icon-set-card-${set.id}`;
+    card.setAttribute('role', 'radio');
+    card.setAttribute('aria-checked', String(set.id === selected));
+
+    const preview = document.createElement('div');
+    preview.className = 'icon-set-preview';
+    ICON_SET_PREVIEW_ICONS.forEach(name => {
+      const img = document.createElement('img');
+      img.src = iconUrl(set.id, name);
+      img.alt = '';
+      img.draggable = false;
+      preview.appendChild(img);
+    });
+    card.appendChild(preview);
+
+    const meta = document.createElement('div');
+    meta.className = 'icon-set-meta';
+    const swatch = set.tones.map(c => `<span class="icon-set-dot" style="background:${c}"></span>`).join('');
+    meta.innerHTML = `<span class="icon-set-name">${escapeHtml(set.label)}</span><span class="icon-set-swatch">${swatch}</span>`;
+    card.appendChild(meta);
+
+    card.addEventListener('click', async () => {
+      await currentContext?.setIconSet(set.id);
+      renderThemeSettings(content);
+    });
+    grid.appendChild(card);
+  });
 }
 
 function renderDisplaySettings(content: HTMLElement) {
