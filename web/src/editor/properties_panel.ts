@@ -45,7 +45,7 @@ export class PropertiesPanel {
     this.panelEl.innerHTML = '';
 
     if (!this.currentSlide) {
-      this.panelEl.innerHTML = '<div class="p-4 text-xs text-slate-500">No active slide selected</div>';
+      this.panelEl.innerHTML = '<div class="prop-empty">No active slide selected</div>';
       return;
     }
 
@@ -60,19 +60,19 @@ export class PropertiesPanel {
 
   private renderSlideProperties(): void {
     const header = document.createElement('div');
-    header.className = 'editor-props-header text-xs font-bold uppercase tracking-wider text-slate-400 p-3 border-b border-slate-700/60';
+    header.className = 'editor-props-header';
     header.textContent = 'Slide Properties';
     this.panelEl.appendChild(header);
 
     const content = document.createElement('div');
-    content.className = 'p-3 space-y-4 text-xs text-slate-300';
+    content.className = 'prop-body';
 
     // Slide Background Section
     const bgGroup = document.createElement('div');
-    bgGroup.className = 'space-y-2';
+    bgGroup.className = 'prop-section';
 
     const bgHeader = document.createElement('div');
-    bgHeader.className = 'font-semibold text-slate-400 flex items-center justify-between';
+    bgHeader.className = 'prop-section-title';
     bgHeader.innerHTML = '<span>Slide Background</span>';
     bgGroup.appendChild(bgHeader);
 
@@ -86,18 +86,18 @@ export class PropertiesPanel {
     }
 
     const modeTabs = document.createElement('div');
-    modeTabs.className = 'grid grid-cols-5 gap-1 p-0.5 bg-slate-900 rounded border border-slate-700/80 mb-2';
+    modeTabs.className = 'os-segmented prop-modes';
 
     const tabButtons: Record<string, HTMLButtonElement> = {};
     const modes: Array<'solid' | 'gradient' | 'animated' | 'image' | 'video'> = ['solid', 'gradient', 'animated', 'image', 'video'];
     for (const m of modes) {
       const btn = document.createElement('button');
-      btn.className = `py-1 text-[10px] font-medium rounded capitalize cursor-pointer ${m === activeMode ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`;
+      btn.className = m === activeMode ? 'active' : '';
       btn.textContent = m;
       btn.addEventListener('click', () => {
         activeMode = m;
         modes.forEach(mode => {
-          tabButtons[mode].className = `py-1 text-[10px] font-medium rounded capitalize cursor-pointer ${mode === activeMode ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`;
+          tabButtons[mode].className = mode === activeMode ? 'active' : '';
         });
         solidContainer.classList.toggle('hidden', activeMode !== 'solid');
         gradContainer.classList.toggle('hidden', activeMode !== 'gradient');
@@ -112,13 +112,13 @@ export class PropertiesPanel {
 
     // 1. Solid Mode Container
     const solidContainer = document.createElement('div');
-    solidContainer.className = `space-y-2 ${activeMode !== 'solid' ? 'hidden' : ''}`;
+    solidContainer.className = `prop-section ${activeMode !== 'solid' ? 'hidden' : ''}`;
 
     const swatchesGrid = document.createElement('div');
-    swatchesGrid.className = 'grid grid-cols-5 gap-1.5';
+    swatchesGrid.className = 'prop-swatches';
     for (const p of SOLID_PALETTE_PRESETS) {
       const sw = document.createElement('button');
-      sw.className = 'w-full h-5 rounded border border-slate-600 hover:scale-105 transition-transform cursor-pointer';
+      sw.className = 'prop-swatch';
       sw.style.background = p.color;
       sw.title = p.name;
       sw.addEventListener('click', () => {
@@ -132,12 +132,12 @@ export class PropertiesPanel {
     solidContainer.appendChild(swatchesGrid);
 
     const solidCustomRow = document.createElement('div');
-    solidCustomRow.className = 'flex items-center gap-2 pt-1';
-    solidCustomRow.innerHTML = '<span class="text-[10px] text-slate-500">Color:</span>';
+    solidCustomRow.className = 'prop-row';
+    solidCustomRow.innerHTML = '<span class="prop-label">Color:</span>';
     const colorInput = document.createElement('input');
     colorInput.type = 'color';
     colorInput.id = 'prop-slide-bg-color';
-    colorInput.className = 'w-7 h-7 bg-transparent cursor-pointer rounded';
+    colorInput.className = 'prop-color-sm';
     colorInput.value = curBg?.kind === 'Solid' ? curBg.data : (this.currentSlide?.background?.startsWith('#') ? this.currentSlide.background : '#000000');
     colorInput.addEventListener('input', () => {
       this.currentSlide!.background_v2 = { kind: 'Solid', data: colorInput.value };
@@ -149,18 +149,18 @@ export class PropertiesPanel {
 
     // 2. Gradient Mode Container
     const gradContainer = document.createElement('div');
-    gradContainer.className = `space-y-2 ${activeMode !== 'gradient' ? 'hidden' : ''}`;
+    gradContainer.className = `prop-section ${activeMode !== 'gradient' ? 'hidden' : ''}`;
 
     const gradPresetGrid = document.createElement('div');
-    gradPresetGrid.className = 'space-y-1';
+    gradPresetGrid.className = 'prop-presets';
     for (const g of GRADIENT_PRESETS) {
       const gRow = document.createElement('button');
-      gRow.className = 'w-full flex items-center gap-2 p-1 rounded hover:bg-slate-800 border border-slate-700 text-left cursor-pointer';
+      gRow.className = 'prop-preset';
       const prev = document.createElement('div');
-      prev.className = 'w-6 h-4 rounded border border-slate-600 flex-none';
+      prev.className = 'prop-preset-thumb';
       prev.style.background = g.preview;
       const lbl = document.createElement('span');
-      lbl.className = 'text-[10px] text-slate-300 truncate';
+      lbl.className = 'prop-preset-label';
       lbl.textContent = g.name;
       gRow.appendChild(prev);
       gRow.appendChild(lbl);
@@ -176,17 +176,17 @@ export class PropertiesPanel {
     // 3. Animated Mode Container — real, running previews via
     // applyResolvedBackground, not just a static swatch.
     const animContainer = document.createElement('div');
-    animContainer.className = `space-y-2 ${activeMode !== 'animated' ? 'hidden' : ''}`;
+    animContainer.className = `prop-section ${activeMode !== 'animated' ? 'hidden' : ''}`;
     const animPresetGrid = document.createElement('div');
-    animPresetGrid.className = 'space-y-1';
+    animPresetGrid.className = 'prop-presets';
     for (const a of ANIMATED_PATTERN_PRESETS) {
       const aRow = document.createElement('button');
-      aRow.className = 'w-full flex items-center gap-2 p-1 rounded hover:bg-slate-800 border border-slate-700 text-left cursor-pointer';
+      aRow.className = 'prop-preset';
       const prev = document.createElement('div');
-      prev.className = 'w-6 h-4 rounded border border-slate-600 flex-none overflow-hidden';
+      prev.className = 'prop-preset-thumb';
       applyResolvedBackground(prev, backgroundPresetDataString(a));
       const lbl = document.createElement('span');
-      lbl.className = 'text-[10px] text-slate-300 truncate';
+      lbl.className = 'prop-preset-label';
       lbl.textContent = a.name;
       aRow.appendChild(prev);
       aRow.appendChild(lbl);
@@ -201,20 +201,20 @@ export class PropertiesPanel {
 
     // 4. Image Mode Container
     const imgContainer = document.createElement('div');
-    imgContainer.className = `space-y-2 ${activeMode !== 'image' ? 'hidden' : ''}`;
+    imgContainer.className = `prop-section ${activeMode !== 'image' ? 'hidden' : ''}`;
     const imgPath = curBg?.kind === 'Image' ? curBg.data.file_path : '';
     const imgOpac = curBg?.kind === 'Image' && curBg.data.opacity !== undefined ? curBg.data.opacity : 1.0;
     imgContainer.innerHTML = `
-      <div>
-        <label class="text-[10px] text-slate-500 block mb-0.5">Image URL / Path</label>
-        <div class="flex gap-1.5">
-          <input type="text" id="prop-bg-img-path" class="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-xs text-slate-200" value="${escapeHtml(imgPath)}" placeholder="https://... or /assets/...">
-          <button type="button" id="prop-bg-browse-btn" class="px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded text-xs font-medium cursor-pointer flex-none" title="Open Background Grid Picker">Browse…</button>
+      <div class="prop-field">
+        <label class="prop-label">Image URL / Path</label>
+        <div class="prop-row">
+          <input type="text" id="prop-bg-img-path" value="${escapeHtml(imgPath)}" placeholder="https://... or /assets/...">
+          <button type="button" id="prop-bg-browse-btn" class="btn btn-sm" title="Open Background Grid Picker">Browse…</button>
         </div>
       </div>
-      <div>
-        <label class="text-[10px] text-slate-500 block mb-0.5">Opacity</label>
-        <input type="range" id="prop-bg-img-opacity" min="0" max="1" step="0.05" class="w-full cursor-pointer" value="${escapeHtml(imgOpac)}">
+      <div class="prop-field">
+        <label class="prop-label">Opacity</label>
+        <input type="range" id="prop-bg-img-opacity" min="0" max="1" step="0.05" value="${escapeHtml(imgOpac)}">
       </div>
     `;
     const imgPathInput = imgContainer.querySelector('#prop-bg-img-path') as HTMLInputElement;
@@ -242,19 +242,19 @@ export class PropertiesPanel {
 
     // 5. Video Mode Container
     const vidContainer = document.createElement('div');
-    vidContainer.className = `space-y-2 ${activeMode !== 'video' ? 'hidden' : ''}`;
+    vidContainer.className = `prop-section ${activeMode !== 'video' ? 'hidden' : ''}`;
     const vidPath = curBg?.kind === 'Video' ? curBg.data.file_path : '';
     vidContainer.innerHTML = `
-      <div>
-        <label class="text-[10px] text-slate-500 block mb-0.5">Video URL / Path</label>
-        <div class="flex gap-1.5">
-          <input type="text" id="prop-bg-vid-path" class="flex-1 bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-xs text-slate-200" value="${escapeHtml(vidPath)}" placeholder="/media/loop.mp4">
-          <button type="button" id="prop-bg-vid-browse" class="px-2 py-1 bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded text-[11px] font-medium text-slate-200">Browse…</button>
+      <div class="prop-field">
+        <label class="prop-label">Video URL / Path</label>
+        <div class="prop-row">
+          <input type="text" id="prop-bg-vid-path" value="${escapeHtml(vidPath)}" placeholder="/media/loop.mp4">
+          <button type="button" id="prop-bg-vid-browse" class="btn btn-sm">Browse…</button>
         </div>
       </div>
-      <div class="flex items-center gap-2 pt-1">
+      <div class="prop-row form-check">
         <input type="checkbox" id="prop-bg-vid-loop" checked>
-        <label for="prop-bg-vid-loop" class="text-[10px] text-slate-400">Loop Playback</label>
+        <label for="prop-bg-vid-loop">Loop Playback</label>
       </div>
     `;
     const vidPathInput = vidContainer.querySelector('#prop-bg-vid-path') as HTMLInputElement;
@@ -286,9 +286,9 @@ export class PropertiesPanel {
 
     // Reset button
     const resetRow = document.createElement('div');
-    resetRow.className = 'pt-1 flex justify-end';
+    resetRow.className = 'prop-row prop-row--end';
     const clearBgBtn = document.createElement('button');
-    clearBgBtn.className = 'text-[10px] text-rose-400 hover:text-rose-300 cursor-pointer';
+    clearBgBtn.className = 'prop-link-danger';
     clearBgBtn.textContent = 'Clear / Reset Background';
     clearBgBtn.addEventListener('click', () => {
       this.currentSlide!.background_v2 = undefined;
@@ -307,9 +307,10 @@ export class PropertiesPanel {
 
     // Transition
     const transGroup = document.createElement('div');
+    transGroup.className = 'prop-section';
     transGroup.innerHTML = `
-      <label class="block mb-1 text-slate-400">Slide Transition</label>
-      <select id="prop-slide-trans-type" class="w-full bg-slate-800 border border-slate-600 rounded p-1 text-xs text-slate-200">
+      <label class="prop-section-title" for="prop-slide-trans-type">Slide Transition</label>
+      <select id="prop-slide-trans-type">
         <option value="Cut">Cut (Instant)</option>
         <option value="Dissolve">Dissolve (Cross-fade)</option>
         <option value="Wipe">Wipe</option>
@@ -338,43 +339,44 @@ export class PropertiesPanel {
 
   private renderElementProperties(el: SlideElement): void {
     const header = document.createElement('div');
-    header.className = 'editor-props-header text-xs font-bold uppercase tracking-wider text-slate-400 p-3 border-b border-slate-700/60';
+    header.className = 'editor-props-header';
     header.textContent = `${el.type} Properties`;
     this.panelEl.appendChild(header);
 
     const content = document.createElement('div');
-    content.className = 'p-3 space-y-3 text-xs text-slate-300';
+    content.className = 'prop-body';
 
     // 1. Transform Section
     const t = el.transform;
     const tSection = document.createElement('div');
+    tSection.className = 'prop-section';
     tSection.innerHTML = `
-      <div class="font-semibold text-slate-400 mb-1">Transform</div>
-      <div class="grid grid-cols-2 gap-2">
-        <div>
-          <label class="text-[10px] text-slate-500">X (%)</label>
-          <input type="number" id="prop-tx" step="1" min="0" max="100" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${Math.round(t.x * 100)}">
+      <div class="prop-section-title">Transform</div>
+      <div class="prop-grid-2">
+        <div class="prop-field">
+          <label class="prop-label">X (%)</label>
+          <input type="number" id="prop-tx" step="1" min="0" max="100" value="${Math.round(t.x * 100)}">
         </div>
-        <div>
-          <label class="text-[10px] text-slate-500">Y (%)</label>
-          <input type="number" id="prop-ty" step="1" min="0" max="100" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${Math.round(t.y * 100)}">
+        <div class="prop-field">
+          <label class="prop-label">Y (%)</label>
+          <input type="number" id="prop-ty" step="1" min="0" max="100" value="${Math.round(t.y * 100)}">
         </div>
-        <div>
-          <label class="text-[10px] text-slate-500">Width (%)</label>
-          <input type="number" id="prop-tw" step="1" min="1" max="100" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${Math.round(t.w * 100)}">
+        <div class="prop-field">
+          <label class="prop-label">Width (%)</label>
+          <input type="number" id="prop-tw" step="1" min="1" max="100" value="${Math.round(t.w * 100)}">
         </div>
-        <div>
-          <label class="text-[10px] text-slate-500">Height (%)</label>
-          <input type="number" id="prop-th" step="1" min="1" max="100" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${Math.round(t.h * 100)}">
+        <div class="prop-field">
+          <label class="prop-label">Height (%)</label>
+          <input type="number" id="prop-th" step="1" min="1" max="100" value="${Math.round(t.h * 100)}">
         </div>
       </div>
-      <div class="mt-2 flex items-center justify-between">
-        <label class="text-[10px] text-slate-500">Opacity</label>
-        <input type="range" id="prop-opacity" min="0" max="1" step="0.05" class="w-32 cursor-pointer" value="${escapeHtml(t.opacity)}">
+      <div class="prop-row prop-row--between">
+        <label class="prop-label" for="prop-opacity">Opacity</label>
+        <input type="range" id="prop-opacity" class="prop-range-inline" min="0" max="1" step="0.05" value="${escapeHtml(t.opacity)}">
       </div>
-      <div class="mt-2 flex items-center gap-2">
+      <div class="prop-row form-check">
         <input type="checkbox" id="prop-locked" ${t.locked ? 'checked' : ''}>
-        <label for="prop-locked" class="text-xs text-slate-400">Lock Position & Size</label>
+        <label for="prop-locked">Lock Position & Size</label>
       </div>
     `;
     content.appendChild(tSection);
@@ -410,85 +412,85 @@ export class PropertiesPanel {
     if (el.type === 'TextBlock') {
       const tb = el.block;
       const textSection = document.createElement('div');
-      textSection.className = 'border-t border-slate-700/60 pt-3 space-y-2';
+      textSection.className = 'prop-section';
 
       const run0 = tb.runs[0] || { text: '' };
       const curAlign = tb.paragraph_style?.align || 'center';
 
       textSection.innerHTML = `
-        <div class="font-semibold text-slate-400 mb-1">Typography & Styling</div>
+        <div class="prop-section-title">Typography & Styling</div>
 
         <!-- Font Family -->
-        <div>
-          <label class="text-[10px] text-slate-500 block mb-0.5">Font Family</label>
-          <select id="prop-font-family" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-1 text-xs text-slate-200">
+        <div class="prop-field">
+          <label class="prop-label">Font Family</label>
+          <select id="prop-font-family">
             ${FONT_FAMILY_GROUPS.map(g => `<optgroup label="${g.label}">${g.fonts.map(f => `<option value="${f}" ${run0.font_family === f ? 'selected' : ''}>${f}</option>`).join('')}</optgroup>`).join('')}
           </select>
         </div>
 
         <!-- Font Size & Color -->
-        <div class="grid grid-cols-2 gap-2">
-          <div>
-            <label class="text-[10px] text-slate-500 block mb-0.5">Font Size (pt)</label>
-            <input type="number" id="prop-font-size" min="8" max="150" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${escapeHtml(run0.font_size_pt || 36)}">
+        <div class="prop-grid-2">
+          <div class="prop-field">
+            <label class="prop-label">Font Size (pt)</label>
+            <input type="number" id="prop-font-size" min="8" max="150" value="${escapeHtml(run0.font_size_pt || 36)}">
           </div>
-          <div>
-            <label class="text-[10px] text-slate-500 block mb-0.5">Text Color</label>
-            <input type="color" id="prop-text-color" class="w-full h-7 bg-transparent rounded cursor-pointer" value="${escapeHtml(run0.color?.startsWith('#') ? run0.color : '#ffffff')}">
+          <div class="prop-field">
+            <label class="prop-label">Text Color</label>
+            <input type="color" id="prop-text-color" value="${escapeHtml(run0.color?.startsWith('#') ? run0.color : '#ffffff')}">
           </div>
         </div>
 
         <!-- Styles: Bold, Italic, Underline & Alignment -->
-        <div>
-          <label class="text-[10px] text-slate-500 block mb-1">Styles & Alignment</label>
-          <div class="flex gap-1">
-            <button id="prop-style-bold" class="flex-1 py-1 rounded border border-slate-700 font-bold text-xs cursor-pointer ${run0.bold ? 'bg-sky-700 text-white' : 'bg-slate-800 text-slate-400'}">B</button>
-            <button id="prop-style-italic" class="flex-1 py-1 rounded border border-slate-700 italic font-serif text-xs cursor-pointer ${run0.italic ? 'bg-sky-700 text-white' : 'bg-slate-800 text-slate-400'}">I</button>
-            <button id="prop-style-underline" class="flex-1 py-1 rounded border border-slate-700 underline text-xs cursor-pointer ${run0.underline ? 'bg-sky-700 text-white' : 'bg-slate-800 text-slate-400'}">U</button>
-            <button id="prop-align-left" class="flex-1 py-1 rounded border border-slate-700 text-xs cursor-pointer ${curAlign === 'left' ? 'bg-sky-700 text-white' : 'bg-slate-800 text-slate-400'}">⇤</button>
-            <button id="prop-align-center" class="flex-1 py-1 rounded border border-slate-700 text-xs cursor-pointer ${curAlign === 'center' ? 'bg-sky-700 text-white' : 'bg-slate-800 text-slate-400'}">≡</button>
-            <button id="prop-align-right" class="flex-1 py-1 rounded border border-slate-700 text-xs cursor-pointer ${curAlign === 'right' ? 'bg-sky-700 text-white' : 'bg-slate-800 text-slate-400'}">⇥</button>
+        <div class="prop-field">
+          <label class="prop-label">Styles & Alignment</label>
+          <div class="prop-toggles">
+            <button id="prop-style-bold" class="prop-toggle prop-toggle--bold${run0.bold ? ' active' : ''}">B</button>
+            <button id="prop-style-italic" class="prop-toggle prop-toggle--italic${run0.italic ? ' active' : ''}">I</button>
+            <button id="prop-style-underline" class="prop-toggle prop-toggle--underline${run0.underline ? ' active' : ''}">U</button>
+            <button id="prop-align-left" class="prop-toggle${curAlign === 'left' ? ' active' : ''}">⇤</button>
+            <button id="prop-align-center" class="prop-toggle${curAlign === 'center' ? ' active' : ''}">≡</button>
+            <button id="prop-align-right" class="prop-toggle${curAlign === 'right' ? ' active' : ''}">⇥</button>
           </div>
         </div>
 
         <!-- Line Height & Autofit -->
-        <div class="grid grid-cols-2 gap-2 items-center">
-          <div>
-            <label class="text-[10px] text-slate-500 block mb-0.5">Line Height</label>
-            <input type="number" id="prop-line-height" min="0.8" max="2.5" step="0.05" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${escapeHtml(tb.paragraph_style?.line_height || 1.25)}">
+        <div class="prop-grid-2 prop-grid-2--end">
+          <div class="prop-field">
+            <label class="prop-label">Line Height</label>
+            <input type="number" id="prop-line-height" min="0.8" max="2.5" step="0.05" value="${escapeHtml(tb.paragraph_style?.line_height || 1.25)}">
           </div>
-          <div class="flex items-center gap-1.5 pt-3">
+          <div class="prop-row form-check">
             <input type="checkbox" id="prop-autofit" ${tb.autofit ? 'checked' : ''}>
-            <label for="prop-autofit" class="text-[11px] text-slate-400 cursor-pointer">Autofit</label>
+            <label for="prop-autofit">Autofit</label>
           </div>
         </div>
 
         <!-- Outline -->
-        <div class="border-t border-slate-700/40 pt-2">
-          <div class="font-medium text-slate-400 text-[11px] mb-1">Text Outline</div>
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="text-[10px] text-slate-500 block mb-0.5">Width (px)</label>
-              <input type="number" id="prop-outline-w" min="0" max="10" step="0.5" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${escapeHtml(tb.effects?.outline?.width || 0)}">
+        <div class="prop-subsection">
+          <div class="prop-subtitle">Text Outline</div>
+          <div class="prop-grid-2">
+            <div class="prop-field">
+              <label class="prop-label">Width (px)</label>
+              <input type="number" id="prop-outline-w" min="0" max="10" step="0.5" value="${escapeHtml(tb.effects?.outline?.width || 0)}">
             </div>
-            <div>
-              <label class="text-[10px] text-slate-500 block mb-0.5">Outline Color</label>
-              <input type="color" id="prop-outline-color" class="w-full h-7 bg-transparent rounded cursor-pointer" value="${escapeHtml(tb.effects?.outline?.color || '#000000')}">
+            <div class="prop-field">
+              <label class="prop-label">Outline Color</label>
+              <input type="color" id="prop-outline-color" value="${escapeHtml(tb.effects?.outline?.color || '#000000')}">
             </div>
           </div>
         </div>
 
         <!-- Shadow -->
-        <div class="border-t border-slate-700/40 pt-2">
-          <div class="font-medium text-slate-400 text-[11px] mb-1">Text Shadow</div>
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="text-[10px] text-slate-500 block mb-0.5">Blur (px)</label>
-              <input type="number" id="prop-shadow-blur" min="0" max="30" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${escapeHtml(tb.effects?.shadow?.blur || 0)}">
+        <div class="prop-subsection">
+          <div class="prop-subtitle">Text Shadow</div>
+          <div class="prop-grid-2">
+            <div class="prop-field">
+              <label class="prop-label">Blur (px)</label>
+              <input type="number" id="prop-shadow-blur" min="0" max="30" value="${escapeHtml(tb.effects?.shadow?.blur || 0)}">
             </div>
-            <div>
-              <label class="text-[10px] text-slate-500 block mb-0.5">Shadow Color</label>
-              <input type="color" id="prop-shadow-color" class="w-full h-7 bg-transparent rounded cursor-pointer" value="${escapeHtml(tb.effects?.shadow?.color?.startsWith('#') ? tb.effects.shadow.color : '#000000')}">
+            <div class="prop-field">
+              <label class="prop-label">Shadow Color</label>
+              <input type="color" id="prop-shadow-color" value="${escapeHtml(tb.effects?.shadow?.color?.startsWith('#') ? tb.effects.shadow.color : '#000000')}">
             </div>
           </div>
         </div>
@@ -559,7 +561,7 @@ export class PropertiesPanel {
         bBold.addEventListener('click', () => {
           const r = ensureRun();
           r.bold = !r.bold;
-          bBold.className = `flex-1 py-1 rounded border border-slate-700 font-bold text-xs cursor-pointer ${r.bold ? 'bg-sky-700 text-white' : 'bg-slate-800 text-slate-400'}`;
+          bBold.className = `prop-toggle prop-toggle--bold${r.bold ? ' active' : ''}`;
           this.notifyChange();
         });
       }
@@ -568,7 +570,7 @@ export class PropertiesPanel {
         bItalic.addEventListener('click', () => {
           const r = ensureRun();
           r.italic = !r.italic;
-          bItalic.className = `flex-1 py-1 rounded border border-slate-700 italic font-serif text-xs cursor-pointer ${r.italic ? 'bg-sky-700 text-white' : 'bg-slate-800 text-slate-400'}`;
+          bItalic.className = `prop-toggle prop-toggle--italic${r.italic ? ' active' : ''}`;
           this.notifyChange();
         });
       }
@@ -577,7 +579,7 @@ export class PropertiesPanel {
         bUnderline.addEventListener('click', () => {
           const r = ensureRun();
           r.underline = !r.underline;
-          bUnderline.className = `flex-1 py-1 rounded border border-slate-700 underline text-xs cursor-pointer ${r.underline ? 'bg-sky-700 text-white' : 'bg-slate-800 text-slate-400'}`;
+          bUnderline.className = `prop-toggle prop-toggle--underline${r.underline ? ' active' : ''}`;
           this.notifyChange();
         });
       }
@@ -586,9 +588,9 @@ export class PropertiesPanel {
         const setAlign = (align: 'left' | 'center' | 'right') => {
           if (!tb.paragraph_style) tb.paragraph_style = {};
           tb.paragraph_style.align = align;
-          bAlignL.className = `flex-1 py-1 rounded border border-slate-700 text-xs cursor-pointer ${align === 'left' ? 'bg-sky-700 text-white' : 'bg-slate-800 text-slate-400'}`;
-          bAlignC.className = `flex-1 py-1 rounded border border-slate-700 text-xs cursor-pointer ${align === 'center' ? 'bg-sky-700 text-white' : 'bg-slate-800 text-slate-400'}`;
-          bAlignR.className = `flex-1 py-1 rounded border border-slate-700 text-xs cursor-pointer ${align === 'right' ? 'bg-sky-700 text-white' : 'bg-slate-800 text-slate-400'}`;
+          bAlignL.className = `prop-toggle${align === 'left' ? ' active' : ''}`;
+          bAlignC.className = `prop-toggle${align === 'center' ? ' active' : ''}`;
+          bAlignR.className = `prop-toggle${align === 'right' ? ' active' : ''}`;
           this.notifyChange();
         };
 
@@ -635,12 +637,12 @@ export class PropertiesPanel {
       }
     } else if (el.type === 'Shape') {
       const shapeSection = document.createElement('div');
-      shapeSection.className = 'border-t border-slate-700/60 pt-3 space-y-2';
+      shapeSection.className = 'prop-section';
       shapeSection.innerHTML = `
-        <div class="font-semibold text-slate-400 mb-1">Shape Attributes</div>
-        <div>
-          <label class="text-[10px] text-slate-500">Fill Color</label>
-          <input type="color" id="prop-shape-fill" class="w-full h-7 bg-transparent rounded cursor-pointer" value="${escapeHtml(el.fill_color)}">
+        <div class="prop-section-title">Shape Attributes</div>
+        <div class="prop-field">
+          <label class="prop-label">Fill Color</label>
+          <input type="color" id="prop-shape-fill" value="${escapeHtml(el.fill_color)}">
         </div>
       `;
       content.appendChild(shapeSection);
@@ -654,29 +656,29 @@ export class PropertiesPanel {
     } else if (el.type === 'Image') {
       const crop = el.crop ?? { x: 0, y: 0, w: 1, h: 1 };
       const imgSection = document.createElement('div');
-      imgSection.className = 'border-t border-slate-700/60 pt-3 space-y-2';
+      imgSection.className = 'prop-section';
       imgSection.innerHTML = `
-        <div class="font-semibold text-slate-400 mb-1">Image Crop</div>
-        <div class="text-[10px] text-slate-500 mb-1">Right-click the image on canvas for the interactive crop tool, or fine-tune numerically here (% of the source image).</div>
-        <div class="grid grid-cols-2 gap-2">
-          <div>
-            <label class="text-[10px] text-slate-500">Crop X (%)</label>
-            <input type="number" id="prop-crop-x" step="1" min="0" max="99" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${Math.round(crop.x * 100)}">
+        <div class="prop-section-title">Image Crop</div>
+        <div class="prop-note">Right-click the image on canvas for the interactive crop tool, or fine-tune numerically here (% of the source image).</div>
+        <div class="prop-grid-2">
+          <div class="prop-field">
+            <label class="prop-label">Crop X (%)</label>
+            <input type="number" id="prop-crop-x" step="1" min="0" max="99" value="${Math.round(crop.x * 100)}">
           </div>
-          <div>
-            <label class="text-[10px] text-slate-500">Crop Y (%)</label>
-            <input type="number" id="prop-crop-y" step="1" min="0" max="99" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${Math.round(crop.y * 100)}">
+          <div class="prop-field">
+            <label class="prop-label">Crop Y (%)</label>
+            <input type="number" id="prop-crop-y" step="1" min="0" max="99" value="${Math.round(crop.y * 100)}">
           </div>
-          <div>
-            <label class="text-[10px] text-slate-500">Crop Width (%)</label>
-            <input type="number" id="prop-crop-w" step="1" min="1" max="100" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${Math.round(crop.w * 100)}">
+          <div class="prop-field">
+            <label class="prop-label">Crop Width (%)</label>
+            <input type="number" id="prop-crop-w" step="1" min="1" max="100" value="${Math.round(crop.w * 100)}">
           </div>
-          <div>
-            <label class="text-[10px] text-slate-500">Crop Height (%)</label>
-            <input type="number" id="prop-crop-h" step="1" min="1" max="100" class="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" value="${Math.round(crop.h * 100)}">
+          <div class="prop-field">
+            <label class="prop-label">Crop Height (%)</label>
+            <input type="number" id="prop-crop-h" step="1" min="1" max="100" value="${Math.round(crop.h * 100)}">
           </div>
         </div>
-        <button id="prop-crop-reset" class="w-full mt-1 text-[10px] bg-slate-800 border border-slate-700 rounded py-1 hover:bg-slate-700">Reset Crop</button>
+        <button id="prop-crop-reset" class="btn btn-sm btn-block">Reset Crop</button>
       `;
       content.appendChild(imgSection);
 
@@ -713,15 +715,15 @@ export class PropertiesPanel {
 
   private renderMultiSelectProperties(): void {
     const header = document.createElement('div');
-    header.className = 'editor-props-header text-xs font-bold uppercase tracking-wider text-slate-400 p-3 border-b border-slate-700/60';
+    header.className = 'editor-props-header';
     header.textContent = `Multiple Selection (${this.selectedElements.length})`;
     this.panelEl.appendChild(header);
 
     const content = document.createElement('div');
-    content.className = 'p-3 space-y-3 text-xs text-slate-400';
+    content.className = 'prop-body';
     content.innerHTML = `
-      <p>${this.selectedElements.length} elements selected.</p>
-      <p class="text-[11px] text-slate-500">Use toolbar alignment buttons or right-click to group / arrange.</p>
+      <p class="prop-section-title">${this.selectedElements.length} elements selected.</p>
+      <p class="prop-note">Use toolbar alignment buttons or right-click to group / arrange.</p>
     `;
     this.panelEl.appendChild(content);
   }

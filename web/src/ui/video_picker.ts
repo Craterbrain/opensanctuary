@@ -114,7 +114,7 @@ export function initVideoPicker(context: VideoPickerContext) {
       urlPreviewVideo.load();
       if (urlStatus) {
         urlStatus.textContent = `Selected: "${selectedVideoName}"`;
-        urlStatus.style.color = '#81c784';
+        urlStatus.style.color = 'var(--os-success-text)';
       }
     }
   };
@@ -148,7 +148,7 @@ export function initVideoPicker(context: VideoPickerContext) {
       const url = (ytdlUrlInput?.value || '').trim();
       if (!url) {
         if (ytdlStatus) {
-          ytdlStatus.innerHTML = '<span style="color: #ff5252;">⚠️ Please enter or paste a video URL.</span>';
+          ytdlStatus.innerHTML = '<span style="color: var(--os-danger-text);">⚠️ Please enter or paste a video URL.</span>';
         }
         if (ytdlUrlInput) ytdlUrlInput.focus();
         return;
@@ -162,7 +162,7 @@ export function initVideoPicker(context: VideoPickerContext) {
       if (btnYtdlStart) btnYtdlStart.disabled = true;
 
       if (ytdlStatus) {
-        ytdlStatus.innerHTML = '<span style="color: #00e5ff;">⏳ Initializing download with yt-dlp...</span>';
+        ytdlStatus.innerHTML = '<span style="color: var(--os-accent-text);">⏳ Initializing download with yt-dlp...</span>';
       }
 
       try {
@@ -197,7 +197,7 @@ export function initVideoPicker(context: VideoPickerContext) {
                 clearInterval(ytdlpPollingInterval);
                 ytdlpPollingInterval = null;
                 if (btnYtdlStart) btnYtdlStart.disabled = false;
-                if (ytdlStatus) ytdlStatus.innerHTML = '<span style="color: #ff5252;">❌ Download progress connection lost.</span>';
+                if (ytdlStatus) ytdlStatus.innerHTML = '<span style="color: var(--os-danger-text);">❌ Download progress connection lost.</span>';
               }
               return;
             }
@@ -214,8 +214,8 @@ export function initVideoPicker(context: VideoPickerContext) {
             if (ytdlStatus) {
               ytdlStatus.innerHTML = `
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
-                  <span style="color: #00e5ff;">${currentContext!.escapeHtml(progress.status || 'Downloading...')}${currentContext!.escapeHtml(speed)}${currentContext!.escapeHtml(eta)}</span>
-                  <span style="font-weight: 700; color: #00e676;">${pct.toFixed(1)}%</span>
+                  <span style="color: var(--os-accent-text);">${currentContext!.escapeHtml(progress.status || 'Downloading...')}${currentContext!.escapeHtml(speed)}${currentContext!.escapeHtml(eta)}</span>
+                  <span style="font-weight: 700; color: var(--os-success-text);">${pct.toFixed(1)}%</span>
                 </div>`;
             }
 
@@ -226,14 +226,14 @@ export function initVideoPicker(context: VideoPickerContext) {
 
               if (progress.error) {
                 if (ytdlStatus) {
-                  ytdlStatus.innerHTML = `<span style="color: #ff5252;">❌ Download failed: ${currentContext!.escapeHtml(progress.error)}</span>`;
+                  ytdlStatus.innerHTML = `<span style="color: var(--os-danger-text);">❌ Download failed: ${currentContext!.escapeHtml(progress.error)}</span>`;
                 }
               } else {
                 const item = progress.media_item;
                 const title = item ? item.name : 'Downloaded Video';
                 if (ytdlProgressFill) ytdlProgressFill.style.width = '100%';
                 if (ytdlStatus) {
-                  ytdlStatus.innerHTML = `<span style="color: #4caf50; font-weight: 600;">✓ Successfully downloaded "${currentContext!.escapeHtml(title)}"!</span>`;
+                  ytdlStatus.innerHTML = `<span style="color: var(--os-success-text); font-weight: 600;">✓ Successfully downloaded "${currentContext!.escapeHtml(title)}"!</span>`;
                 }
                 if (ytdlUrlInput) ytdlUrlInput.value = '';
 
@@ -264,7 +264,7 @@ export function initVideoPicker(context: VideoPickerContext) {
         }
         if (btnYtdlStart) btnYtdlStart.disabled = false;
         if (ytdlStatus) {
-          ytdlStatus.innerHTML = `<span style="color: #ff5252;">❌ Error: ${currentContext!.escapeHtml(err.message)}</span>`;
+          ytdlStatus.innerHTML = `<span style="color: var(--os-danger-text);">❌ Error: ${currentContext!.escapeHtml(err.message)}</span>`;
         }
       }
     });

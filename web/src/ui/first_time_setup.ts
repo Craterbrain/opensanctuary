@@ -98,10 +98,10 @@ function stepHtml(step: Step): string {
   switch (step) {
     case "welcome":
       return `
-        <div style="text-align:center; padding: 12px 0;">
-          <div style="font-size: 42px; margin-bottom: 8px;">👋</div>
-          <h2 style="margin: 0 0 8px;">Welcome to OpenSanctuary</h2>
-          <p style="color: var(--text-dim); max-width: 480px; margin: 0 auto;">
+        <div class="fts-hero">
+          <div class="fts-hero-icon">👋</div>
+          <h2 class="fts-title">Welcome to OpenSanctuary</h2>
+          <p class="fts-text fts-text--center">
             A few quick steps to get your sanctuary name, Bible/song content, and network
             details set up. Everything here can be changed later in Settings.
           </p>
@@ -112,8 +112,8 @@ function stepHtml(step: Step): string {
       const legacyDir = info.legacy_library_detected;
       const legacyBanner = legacyDir
         ? `
-        <div id="fts-legacy-library-banner" style="padding: 10px 12px; background: rgba(255, 167, 38, 0.1); border: 1px solid var(--os-brand-amber, #ffa726); border-radius: 6px; display: flex; flex-direction: column; gap: 8px;">
-          <div style="font-size: 13px;">
+        <div id="fts-legacy-library-banner" class="os-callout os-callout--info fts-callout">
+          <div>
             📦 Found an existing library at <code>${escapeHtml(legacyDir)}</code> — looks like an
             older portable install. Use it instead of starting fresh?
           </div>
@@ -123,15 +123,15 @@ function stepHtml(step: Step): string {
         </div>`
         : "";
       return `
-        <h3 style="margin: 0;">Where your data lives</h3>
-        <p style="color: var(--text-dim);">
+        <h3 class="fts-step-title">Where your data lives</h3>
+        <p class="fts-text">
           Your library database, Bible/song content, and downloaded media are stored here:
         </p>
-        <div class="settings-readonly-value" style="padding: 10px 12px; background: var(--bg-elevated, #1a1a1a); border-radius: 6px; font-family: monospace;">
+        <div class="os-code-box fts-path">
           ${escapeHtml(info.data_dir || "(unavailable)")}
         </div>
         ${legacyBanner}
-        <p style="color: var(--text-dim); font-size: 12px;">
+        <p class="form-help">
           You can point individual content directories (Bibles, Songs, Media Cache) at a
           different location later in Settings &gt; Storage.
         </p>`;
@@ -140,8 +140,8 @@ function stepHtml(step: Step): string {
     case "church-name": {
       const current = getAppOptions().churchName || "";
       return `
-        <h3 style="margin: 0;">Church / Sanctuary Name</h3>
-        <p style="color: var(--text-dim);">
+        <h3 class="fts-step-title">Church / Sanctuary Name</h3>
+        <p class="fts-text">
           Shown on the live output footer and advertised to Roku/Android TV clients
           discovering this console on the network.
         </p>
@@ -153,32 +153,32 @@ function stepHtml(step: Step): string {
         .map((t) => `<option value="${escapeHtml(t.abbr)}">${escapeHtml(t.label)}</option>`)
         .join("");
       return `
-        <h3 style="margin: 0;">Bible Content</h3>
-        <p style="color: var(--text-dim);">
+        <h3 class="fts-step-title">Bible Content</h3>
+        <p class="fts-text">
           No Bible translations are bundled by default (most are copyrighted) -- download a
           public-domain translation now, or point at content you already have.
         </p>
-        <div style="display:flex; gap:8px; align-items:center;">
-          <select id="fts-bible-select" class="search-input" style="flex:1;">${options}</select>
+        <div class="form-row">
+          <select id="fts-bible-select" class="search-input fts-grow">${options}</select>
           <button class="btn btn-primary" id="fts-download-bible">⬇ Download</button>
         </div>
-        <div style="height: 1px; background: var(--border-color, #333); margin: 4px 0;"></div>
-        <p style="color: var(--text-dim); font-size: 12px; margin: 0;">Already have Bible files (.db) from another install?</p>
-        <div style="display:flex; gap:8px; align-items:center;">
-          <input type="text" id="fts-bibles-dir" class="search-input" style="flex:1;" placeholder="Path to a folder of Bible .db files">
+        <div class="os-divider"></div>
+        <p class="form-help">Already have Bible files (.db) from another install?</p>
+        <div class="form-row">
+          <input type="text" id="fts-bibles-dir" class="search-input" placeholder="Path to a folder of Bible .db files">
           <button class="btn" id="fts-bibles-browse" type="button">Browse…</button>
         </div>`;
     }
 
     case "songs":
       return `
-        <h3 style="margin: 0;">Song Content</h3>
-        <p style="color: var(--text-dim);">
+        <h3 class="fts-step-title">Song Content</h3>
+        <p class="fts-text">
           A handful of public-domain hymns are already included. If you have a larger song
           library (e.g. from another install), point at it here -- otherwise, skip.
         </p>
-        <div style="display:flex; gap:8px; align-items:center;">
-          <input type="text" id="fts-songs-dir" class="search-input" style="flex:1;" placeholder="Path to a folder of song databases">
+        <div class="form-row">
+          <input type="text" id="fts-songs-dir" class="search-input" placeholder="Path to a folder of song databases">
           <button class="btn" id="fts-songs-browse" type="button">Browse…</button>
         </div>`;
 
@@ -187,26 +187,26 @@ function stepHtml(step: Step): string {
       const base = `${protocol}//${hostname}${port ? ":" + port : ""}`;
       const hostAdvert = getAppOptions().networkHostname || "opensanctuary";
       return `
-        <h3 style="margin: 0;">Your Network Setup</h3>
-        <p style="color: var(--text-dim);">
+        <h3 class="fts-step-title">Your Network Setup</h3>
+        <p class="fts-text">
           This console is reachable at <code>${escapeHtml(base)}</code>, and advertises
           itself on the network as <code>${escapeHtml(hostAdvert)}.local</code>.
         </p>
-        <ul style="color: var(--text-dim); line-height: 1.8; margin: 0; padding-left: 20px;">
+        <ul class="fts-list">
           <li><strong>Operator Console</strong> — this window, where you build and run the schedule.</li>
           <li><strong>Live Output</strong> — <code>${escapeHtml(base)}/live.html</code>, what the congregation sees. Open on a second display/projector.</li>
           <li><strong>Stage Foldback</strong> — <code>${escapeHtml(base)}/stage.html</code>, a monitor-facing view for the stage/platform.</li>
           <li><strong>Remote Control</strong> — pair a phone from the Live menu to control the schedule remotely.</li>
         </ul>
-        <p style="color: var(--text-dim); font-size: 12px;">More detail and hostname/port options are in Settings &gt; Network.</p>`;
+        <p class="form-help">More detail and hostname/port options are in Settings &gt; Network.</p>`;
     }
 
     case "done":
       return `
-        <div style="text-align:center; padding: 12px 0;">
-          <div style="font-size: 42px; margin-bottom: 8px;">✅</div>
-          <h2 style="margin: 0 0 8px;">You're all set</h2>
-          <p style="color: var(--text-dim);">Revisit any of this anytime in Settings.</p>
+        <div class="fts-hero">
+          <div class="fts-hero-icon">✅</div>
+          <h2 class="fts-title">You're all set</h2>
+          <p class="fts-text">Revisit any of this anytime in Settings.</p>
         </div>`;
   }
 }

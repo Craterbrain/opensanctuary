@@ -222,10 +222,7 @@ export function renderSettingRow(def: SettingDef, highlight: boolean): HTMLEleme
 
     if (DIRECTORY_PICKER_KEYS.has(def.key)) {
       const group = document.createElement('div');
-      group.style.display = 'flex';
-      group.style.gap = '8px';
-      group.style.alignItems = 'center';
-      input.style.flex = '1';
+      group.className = 'form-row settings-path-row';
       group.appendChild(input);
 
       const browseBtn = document.createElement('button');
@@ -1201,20 +1198,14 @@ function renderNetworkSettings(content: HTMLElement) {
   // Elevation alert / prompt banner
   if (networkElevationInProgress) {
     const elevBanner = document.createElement('div');
-    elevBanner.className = 'network-badge network-badge--warning';
-    elevBanner.style.padding = '12px 14px';
-    elevBanner.style.width = '100%';
-    elevBanner.style.boxSizing = 'border-box';
+    elevBanner.className = 'os-callout os-callout--warning';
     elevBanner.innerHTML = '🔐 <strong>Elevation Required:</strong> Please respond to the administrator prompt (Polkit on Linux / UAC on Windows) to configure the virtual network adapter...';
     content.appendChild(elevBanner);
   }
 
   if (networkElevationError) {
     const errBanner = document.createElement('div');
-    errBanner.className = 'network-badge network-badge--error';
-    errBanner.style.padding = '10px 12px';
-    errBanner.style.width = '100%';
-    errBanner.style.boxSizing = 'border-box';
+    errBanner.className = 'os-callout os-callout--danger';
     errBanner.innerHTML = `⚠️ <strong>Error:</strong> ${escapeHtml(networkElevationError)}`;
     content.appendChild(errBanner);
   }
@@ -1240,7 +1231,7 @@ function renderNetworkSettings(content: HTMLElement) {
   hostInput.type = 'text';
   hostInput.className = 'search-input';
   hostInput.id = 'network-hostname-input';
-  hostInput.style.maxWidth = '260px';
+  hostInput.classList.add('network-input-md');
   hostInput.value = networkState.hostname;
 
   const hostBadge = document.createElement('span');
@@ -1290,7 +1281,6 @@ function renderNetworkSettings(content: HTMLElement) {
         if (data.suggested_hostname) {
           const sugBtn = document.createElement('button');
           sugBtn.className = 'btn btn-xs';
-          sugBtn.style.marginLeft = '6px';
           sugBtn.textContent = `Use "${data.suggested_hostname}"`;
           sugBtn.addEventListener('click', () => {
             hostInput.value = data.suggested_hostname;
@@ -1350,7 +1340,7 @@ function renderNetworkSettings(content: HTMLElement) {
   publicUrlInputEl.type = 'text';
   publicUrlInputEl.className = 'search-input';
   publicUrlInputEl.id = 'network-public-https-url-input';
-  publicUrlInputEl.style.maxWidth = '320px';
+  publicUrlInputEl.classList.add('network-input-lg');
   publicUrlInputEl.placeholder = 'https://connect.yourchurch.org';
   publicUrlInputEl.value = networkState.public_https_url || '';
 
@@ -1419,7 +1409,7 @@ function renderNetworkSettings(content: HTMLElement) {
   portInput.type = 'number';
   portInput.className = 'search-input';
   portInput.id = 'network-port-input';
-  portInput.style.maxWidth = '140px';
+  portInput.classList.add('network-input-sm');
   portInput.min = '1024';
   portInput.max = '65535';
   portInput.value = String(networkState.port);
@@ -1444,7 +1434,6 @@ function renderNetworkSettings(content: HTMLElement) {
         if (data.suggested_alternative) {
           const sugBtn = document.createElement('button');
           sugBtn.className = 'btn btn-xs';
-          sugBtn.style.marginLeft = '6px';
           sugBtn.textContent = `Use ${data.suggested_alternative}`;
           sugBtn.addEventListener('click', () => {
             portInput.value = String(data.suggested_alternative);
@@ -1498,8 +1487,6 @@ function renderNetworkSettings(content: HTMLElement) {
 
   const tlsRow = document.createElement('div');
   tlsRow.className = 'network-input-row';
-  tlsRow.style.alignItems = 'center';
-  tlsRow.style.gap = '12px';
 
   const regenBtn = document.createElement('button');
   regenBtn.type = 'button';
@@ -1616,8 +1603,7 @@ function renderNetworkSettings(content: HTMLElement) {
   ifacesCard.appendChild(ifacesHeader);
 
   const broadcastAllRow = document.createElement('div');
-  broadcastAllRow.className = 'network-input-row';
-  broadcastAllRow.style.marginBottom = '6px';
+  broadcastAllRow.className = 'network-input-row form-check';
 
   const bcastAllCheckbox = document.createElement('input');
   bcastAllCheckbox.type = 'checkbox';
@@ -1629,8 +1615,6 @@ function renderNetworkSettings(content: HTMLElement) {
 
   const bcastAllLabel = document.createElement('label');
   bcastAllLabel.htmlFor = 'network-broadcast-all-toggle';
-  bcastAllLabel.style.fontSize = '12.5px';
-  bcastAllLabel.style.cursor = 'pointer';
   bcastAllLabel.textContent = 'Broadcast across all active network interfaces simultaneously';
 
   broadcastAllRow.appendChild(bcastAllCheckbox);
@@ -1674,12 +1658,7 @@ function renderNetworkSettings(content: HTMLElement) {
     iCard.appendChild(meta);
 
     const toggleRow = document.createElement('label');
-    toggleRow.style.display = 'flex';
-    toggleRow.style.alignItems = 'center';
-    toggleRow.style.gap = '6px';
-    toggleRow.style.fontSize = '11.5px';
-    toggleRow.style.cursor = 'pointer';
-    toggleRow.style.marginTop = '4px';
+    toggleRow.className = 'form-check network-iface-toggle';
 
     const cb = document.createElement('input');
     cb.type = 'checkbox';
@@ -1721,21 +1700,17 @@ function renderNetworkSettings(content: HTMLElement) {
 
   // Policy 1: CSP Mode
   const cspRow = document.createElement('div');
-  cspRow.className = 'network-input-row';
-  cspRow.style.flexDirection = 'column';
-  cspRow.style.alignItems = 'flex-start';
-  cspRow.style.gap = '4px';
+  cspRow.className = 'form-field network-policy-field';
 
   const cspLabel = document.createElement('label');
   cspLabel.htmlFor = 'setting-securityCspMode';
-  cspLabel.style.fontSize = '12px';
-  cspLabel.style.fontWeight = '600';
+  cspLabel.className = 'form-label';
   cspLabel.textContent = 'Content Security Policy (CSP)';
 
   const cspSelect = document.createElement('select');
   cspSelect.className = 'search-input';
   cspSelect.id = 'setting-securityCspMode';
-  cspSelect.style.maxWidth = '380px';
+  cspSelect.classList.add('network-input-xl');
   cspSelect.innerHTML = `
     <option value="balanced">Balanced Protection (Recommended — Restricts external scripts, allows sanctuary media)</option>
     <option value="strict">Strict Hardening (Enforces HTTPS & Self Only — Disallows cleartext HTTP media)</option>
@@ -1746,8 +1721,7 @@ function renderNetworkSettings(content: HTMLElement) {
   cspSelect.addEventListener('change', () => { networkSettingsDirty = true; });
 
   const cspHelp = document.createElement('div');
-  cspHelp.className = 'network-card-desc';
-  cspHelp.style.fontSize = '11px';
+  cspHelp.className = 'form-help';
   cspHelp.textContent = 'Guards the operator console and presentation viewers against cross-site scripting (XSS) and rogue script execution.';
 
   cspRow.appendChild(cspLabel);
@@ -1757,21 +1731,17 @@ function renderNetworkSettings(content: HTMLElement) {
 
   // Policy 2: CORS Network Boundary Mode
   const corsRow = document.createElement('div');
-  corsRow.className = 'network-input-row';
-  corsRow.style.flexDirection = 'column';
-  corsRow.style.alignItems = 'flex-start';
-  corsRow.style.gap = '4px';
+  corsRow.className = 'form-field network-policy-field';
 
   const corsLabel = document.createElement('label');
   corsLabel.htmlFor = 'setting-securityCorsMode';
-  corsLabel.style.fontSize = '12px';
-  corsLabel.style.fontWeight = '600';
+  corsLabel.className = 'form-label';
   corsLabel.textContent = 'CORS Network Boundary Policy';
 
   const corsSelect = document.createElement('select');
   corsSelect.className = 'search-input';
   corsSelect.id = 'setting-securityCorsMode';
-  corsSelect.style.maxWidth = '380px';
+  corsSelect.classList.add('network-input-xl');
   corsSelect.innerHTML = `
     <option value="permissive">Permissive (Default — Allow all LAN clients, Roku, and Android TV displays)</option>
     <option value="restricted">Restricted (Sanctuary Subnet & Localhost Only — Rejects public web origins)</option>
@@ -1781,8 +1751,7 @@ function renderNetworkSettings(content: HTMLElement) {
   corsSelect.addEventListener('change', () => { networkSettingsDirty = true; });
 
   const corsHelp = document.createElement('div');
-  corsHelp.className = 'network-card-desc';
-  corsHelp.style.fontSize = '11px';
+  corsHelp.className = 'form-help';
   corsHelp.textContent = 'Restricted mode prevents malicious external websites visited in an operator browser from issuing background API requests to this console.';
 
   corsRow.appendChild(corsLabel);
@@ -1792,21 +1761,17 @@ function renderNetworkSettings(content: HTMLElement) {
 
   // Policy 3: Frame Embedding Policy (X-Frame-Options)
   const frameRow = document.createElement('div');
-  frameRow.className = 'network-input-row';
-  frameRow.style.flexDirection = 'column';
-  frameRow.style.alignItems = 'flex-start';
-  frameRow.style.gap = '4px';
+  frameRow.className = 'form-field network-policy-field';
 
   const frameLabel = document.createElement('label');
   frameLabel.htmlFor = 'setting-securityFrameOptions';
-  frameLabel.style.fontSize = '12px';
-  frameLabel.style.fontWeight = '600';
+  frameLabel.className = 'form-label';
   frameLabel.textContent = 'Frame Embedding Policy (X-Frame-Options)';
 
   const frameSelect = document.createElement('select');
   frameSelect.className = 'search-input';
   frameSelect.id = 'setting-securityFrameOptions';
-  frameSelect.style.maxWidth = '380px';
+  frameSelect.classList.add('network-input-xl');
   frameSelect.innerHTML = `
     <option value="sameorigin">Same-Origin Only (Recommended — Prevents external iframe clickjacking)</option>
     <option value="deny">Deny All Framing (Blocks all iframes)</option>
@@ -1817,8 +1782,7 @@ function renderNetworkSettings(content: HTMLElement) {
   frameSelect.addEventListener('change', () => { networkSettingsDirty = true; });
 
   const frameHelp = document.createElement('div');
-  frameHelp.className = 'network-card-desc';
-  frameHelp.style.fontSize = '11px';
+  frameHelp.className = 'form-help';
   frameHelp.textContent = 'Controls whether third-party web pages can embed your console or live outputs inside an iframe.';
 
   frameRow.appendChild(frameLabel);
@@ -1830,10 +1794,7 @@ function renderNetworkSettings(content: HTMLElement) {
 
   // 7. Save Button in Panel
   const saveRow = document.createElement('div');
-  saveRow.style.display = 'flex';
-  saveRow.style.justifyContent = 'flex-end';
-  saveRow.style.gap = '10px';
-  saveRow.style.marginTop = '8px';
+  saveRow.className = 'settings-panel-actions';
 
   const saveBtn = document.createElement('button');
   saveBtn.className = 'btn btn-primary';
@@ -1920,14 +1881,10 @@ export function renderPairedDevicesSettings(content: HTMLElement) {
 
   // 1. Header Overview Card
   const overviewCard = document.createElement('div');
-  overviewCard.className = 'network-overview-card';
-  overviewCard.style.display = 'flex';
-  overviewCard.style.justifyContent = 'space-between';
-  overviewCard.style.alignItems = 'center';
+  overviewCard.className = 'network-overview-card paired-overview';
 
   const statGroup = document.createElement('div');
-  statGroup.style.display = 'flex';
-  statGroup.style.gap = '24px';
+  statGroup.className = 'paired-overview-stats';
 
   const countStat = document.createElement('div');
   countStat.className = 'network-overview-stat';
@@ -1969,7 +1926,6 @@ export function renderPairedDevicesSettings(content: HTMLElement) {
   adbProvisionBtn.className = 'btn btn-secondary';
   adbProvisionBtn.id = 'btn-paired-devices-adb-provision';
   adbProvisionBtn.innerHTML = '📲 Install via ADB';
-  adbProvisionBtn.style.marginLeft = '8px';
   adbProvisionBtn.addEventListener('click', () => {
     const remoteModal = document.getElementById('remote-modal');
     if (remoteModal) {
@@ -1984,19 +1940,16 @@ export function renderPairedDevicesSettings(content: HTMLElement) {
   // 2. Paired Devices List or Empty State
   const sectionTitle = document.createElement('div');
   sectionTitle.className = 'settings-group-header';
-  sectionTitle.style.marginTop = '16px';
   sectionTitle.textContent = 'Registered TV & Sanctuary Displays';
   content.appendChild(sectionTitle);
 
   if (pairedDevicesList.length === 0) {
     const emptyCard = document.createElement('div');
-    emptyCard.className = 'settings-empty';
-    emptyCard.style.padding = '36px 20px';
-    emptyCard.style.textAlign = 'center';
+    emptyCard.className = 'ui-empty-state';
     emptyCard.innerHTML = `
-      <div style="font-size: 36px; margin-bottom: 8px;">📺</div>
-      <div style="font-weight: 600; font-size: 15px; margin-bottom: 6px; color: var(--text-main);">No Display Clients Paired</div>
-      <div style="font-size: 13px; color: var(--text-muted); max-width: 440px; margin: 0 auto 16px; line-height: 1.5;">
+      <div class="empty-state-icon">📺</div>
+      <div class="empty-state-title">No Display Clients Paired</div>
+      <div class="empty-state-desc">
         Pair Android TV or Roku sanctuary screens to prevent display hijacking on shared church networks.
       </div>
     `;
@@ -2014,42 +1967,33 @@ export function renderPairedDevicesSettings(content: HTMLElement) {
     content.appendChild(emptyCard);
   } else {
     const listWrap = document.createElement('div');
-    listWrap.className = 'network-card';
-    listWrap.style.padding = '0';
-    listWrap.style.overflow = 'hidden';
+    listWrap.className = 'network-card paired-device-list';
 
-    pairedDevicesList.forEach((device, idx) => {
+    pairedDevicesList.forEach((device) => {
       const row = document.createElement('div');
       row.className = 'paired-device-row';
-      row.style.display = 'flex';
-      row.style.alignItems = 'center';
-      row.style.justifyContent = 'space-between';
-      row.style.padding = '14px 18px';
-      row.style.borderBottom = idx < pairedDevicesList.length - 1 ? '1px solid var(--border-color)' : 'none';
 
       const left = document.createElement('div');
-      left.style.display = 'flex';
-      left.style.alignItems = 'center';
-      left.style.gap = '14px';
+      left.className = 'paired-device-main';
 
       const icon = document.createElement('div');
-      icon.style.fontSize = '24px';
+      icon.className = 'paired-device-icon';
       icon.textContent = device.platform.toLowerCase().includes('roku') ? '🟣' : '📺';
       left.appendChild(icon);
 
       const info = document.createElement('div');
       const isOnline = (Date.now() - device.last_seen) < 120000;
       const statusBadge = isOnline
-        ? '<span class="network-badge network-badge--success" style="font-size: 10px;">Online</span>'
-        : `<span class="network-badge network-badge--info" style="font-size: 10px;">Seen ${formatRelativeTime(device.last_seen)}</span>`;
+        ? '<span class="os-badge os-badge--success">Online</span>'
+        : `<span class="os-badge os-badge--neutral">Seen ${formatRelativeTime(device.last_seen)}</span>`;
 
       info.innerHTML = `
-        <div style="font-weight: 600; font-size: 14px; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
+        <div class="paired-device-name">
           ${escapeHtml(device.name)}
-          <span class="network-badge" style="background: rgba(255,255,255,0.06); font-size: 10px;">${escapeHtml(device.platform)}</span>
+          <span class="os-badge os-badge--neutral">${escapeHtml(device.platform)}</span>
           ${statusBadge}
         </div>
-        <div style="font-size: 11.5px; color: var(--text-muted); font-family: monospace; margin-top: 2px;">
+        <div class="paired-device-meta">
           ID: ${escapeHtml(device.id)} • Paired: ${new Date(device.paired_at).toLocaleDateString()}
         </div>
       `;
@@ -2057,15 +2001,11 @@ export function renderPairedDevicesSettings(content: HTMLElement) {
       row.appendChild(left);
 
       const right = document.createElement('div');
-      right.style.display = 'flex';
-      right.style.alignItems = 'center';
-      right.style.gap = '8px';
+      right.className = 'paired-device-actions';
 
       const unpairBtn = document.createElement('button');
-      unpairBtn.className = 'btn btn-secondary btn-unpair-device';
+      unpairBtn.className = 'btn btn-danger-ghost btn-unpair-device';
       unpairBtn.setAttribute('data-device-id', device.id);
-      unpairBtn.style.color = '#ff5252';
-      unpairBtn.style.borderColor = 'rgba(255, 82, 82, 0.3)';
       unpairBtn.textContent = 'Revoke / Unpair';
       unpairBtn.addEventListener('click', async () => {
         if (!confirm(`Are you sure you want to unpair "${device.name}"? The TV will be disconnected until re-paired.`)) {
@@ -2094,14 +2034,9 @@ export function renderPairedDevicesSettings(content: HTMLElement) {
 
   // 3. Information Banner
   const infoBanner = document.createElement('div');
-  infoBanner.className = 'network-card';
-  infoBanner.style.marginTop = '16px';
-  infoBanner.style.background = 'rgba(0, 229, 255, 0.04)';
-  infoBanner.style.border = '1px solid rgba(0, 229, 255, 0.2)';
+  infoBanner.className = 'os-callout os-callout--info paired-info';
   infoBanner.innerHTML = `
-    <div style="font-size: 12.5px; color: var(--text-main); line-height: 1.5;">
       <strong>🔒 Zero-Auth Web Display Guarantee:</strong> Regular browser displays (<code>/live.html</code>, <code>/stage.html</code>) and volunteer foldback screens do not require authentication or pairing. Pairing is specifically enforced on TV apps to prevent accidental hijacked broadcasts across shared sanctuary networks.
-    </div>
   `;
   content.appendChild(infoBanner);
 }

@@ -71,8 +71,8 @@ export class FilmstripSidebar {
     this.containerEl.style.flex = '0 0 200px';
     this.containerEl.style.display = 'flex';
     this.containerEl.style.flexDirection = 'column';
-    this.containerEl.style.background = '#18181b';
-    this.containerEl.style.borderRight = '1px solid #27272a';
+    this.containerEl.style.background = 'var(--os-bg-studio)';
+    this.containerEl.style.borderRight = '1px solid var(--os-border)';
     this.containerEl.style.height = '100%';
     this.containerEl.style.userSelect = 'none';
 
@@ -83,14 +83,14 @@ export class FilmstripSidebar {
     header.style.justifyContent = 'space-between';
     header.style.alignItems = 'center';
     header.style.padding = '8px 10px';
-    header.style.borderBottom = '1px solid #27272a';
+    header.style.borderBottom = '1px solid var(--os-border)';
 
     const titleSpan = document.createElement('span');
-    titleSpan.className = 'text-xs font-semibold text-slate-400';
+    titleSpan.className = 'os-eyebrow';
     titleSpan.textContent = `SLIDES (${this.slides.length})`;
 
     const addBtn = document.createElement('button');
-    addBtn.className = 'btn btn-tag text-xs font-semibold text-sky-400 hover:text-sky-300';
+    addBtn.className = 'btn btn-tag';
     addBtn.textContent = '➕ Slide';
     addBtn.title = 'Add New Slide';
     addBtn.addEventListener('click', () => this.callbacks.onAddSlide());
@@ -257,8 +257,8 @@ export class FilmstripSidebar {
     card.style.display = 'flex';
     card.style.flexDirection = 'column';
     card.style.borderRadius = '6px';
-    card.style.border = idx === this.activeIndex ? '2px solid #3b82f6' : '1px solid #27272a';
-    card.style.background = '#202024';
+    card.style.border = idx === this.activeIndex ? '2px solid var(--os-brand-primary)' : '1px solid var(--os-border)';
+    card.style.background = 'var(--os-bg-panel)';
     card.style.overflow = 'hidden';
     card.style.cursor = 'pointer';
     card.style.transition = 'all 0.15s ease';
@@ -271,7 +271,7 @@ export class FilmstripSidebar {
     cardHeader.style.alignItems = 'center';
     cardHeader.style.padding = '3px 6px';
     cardHeader.style.fontSize = '10px';
-    cardHeader.style.color = '#a1a1aa';
+    cardHeader.style.color = 'var(--os-text-secondary)';
     cardHeader.style.background = 'rgba(0,0,0,0.2)';
     cardHeader.style.gap = '4px';
 
@@ -337,7 +337,7 @@ export class FilmstripSidebar {
     dupBtn.style.padding = '1px 3px';
     dupBtn.style.background = 'transparent';
     dupBtn.style.border = 'none';
-    dupBtn.style.color = '#a1a1aa';
+    dupBtn.style.color = 'var(--os-text-secondary)';
     dupBtn.style.cursor = 'pointer';
     dupBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -352,7 +352,7 @@ export class FilmstripSidebar {
     delBtn.style.padding = '1px 3px';
     delBtn.style.background = 'transparent';
     delBtn.style.border = 'none';
-    delBtn.style.color = '#ef4444';
+    delBtn.style.color = 'var(--os-danger-text)';
     delBtn.style.cursor = 'pointer';
     delBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -434,16 +434,16 @@ export class FilmstripSidebar {
       if (e.dataTransfer) {
         e.dataTransfer.dropEffect = 'move';
       }
-      card.style.borderColor = '#10b981';
+      card.style.borderColor = 'var(--os-brand-amber)';
     });
 
     card.addEventListener('dragleave', () => {
-      card.style.borderColor = idx === this.activeIndex ? '#3b82f6' : '#27272a';
+      card.style.borderColor = idx === this.activeIndex ? 'var(--os-brand-primary)' : 'var(--os-border)';
     });
 
     card.addEventListener('drop', (e) => {
       e.preventDefault();
-      card.style.borderColor = idx === this.activeIndex ? '#3b82f6' : '#27272a';
+      card.style.borderColor = idx === this.activeIndex ? 'var(--os-brand-primary)' : 'var(--os-border)';
       if (this.draggedIndex !== null && this.draggedIndex !== idx) {
         this.callbacks.onReorderSlides(this.draggedIndex, idx);
       }

@@ -282,8 +282,8 @@ export class SlideEditor {
     this.container.style.flexDirection = 'column';
     this.container.style.width = '100%';
     this.container.style.height = '100%';
-    this.container.style.background = '#121214';
-    this.container.style.color = '#ffffff';
+    this.container.style.background = 'var(--os-bg-void)';
+    this.container.style.color = 'var(--os-text-primary)';
     this.container.style.overflow = 'hidden';
     this.container.style.boxSizing = 'border-box';
 
@@ -345,8 +345,8 @@ export class SlideEditor {
     filmstripMount.style.minWidth = '200px';
     filmstripMount.style.maxWidth = '200px';
     filmstripMount.style.height = '100%';
-    filmstripMount.style.borderRight = '1px solid #27272a';
-    filmstripMount.style.background = '#18181b';
+    filmstripMount.style.borderRight = '1px solid var(--os-border)';
+    filmstripMount.style.background = 'var(--os-bg-studio)';
     filmstripMount.style.overflow = 'hidden';
     filmstripMount.style.display = 'flex';
     filmstripMount.style.flexDirection = 'column';
@@ -373,7 +373,7 @@ export class SlideEditor {
     canvasViewport.style.width = 'auto';
     canvasViewport.style.position = 'relative';
     canvasViewport.style.overflow = 'hidden';
-    canvasViewport.style.background = '#0c0c0e';
+    canvasViewport.style.background = 'var(--os-bg-void)';
     middleRegion.appendChild(canvasViewport);
 
     this.canvas = new EditorCanvas(canvasViewport);
@@ -395,8 +395,8 @@ export class SlideEditor {
     sidebarColumn.style.height = '100%';
     sidebarColumn.style.display = 'flex';
     sidebarColumn.style.flexDirection = 'column';
-    sidebarColumn.style.borderLeft = '1px solid #27272a';
-    sidebarColumn.style.background = '#18181b';
+    sidebarColumn.style.borderLeft = '1px solid var(--os-border)';
+    sidebarColumn.style.background = 'var(--os-bg-panel)';
     sidebarColumn.style.overflow = 'hidden';
     middleRegion.appendChild(sidebarColumn);
 
@@ -415,7 +415,7 @@ export class SlideEditor {
     propsMount.style.flex = '1 1 0%';
     propsMount.style.minHeight = '0';
     propsMount.style.width = '100%';
-    propsMount.style.background = '#18181b';
+    propsMount.style.background = 'var(--os-bg-panel)';
     propsMount.style.overflowY = 'auto';
     propsMount.style.display = 'flex';
     propsMount.style.flexDirection = 'column';
