@@ -41,6 +41,8 @@ export interface BackgroundPatternSpec {
     timing: 'linear' | 'ease-in-out';
     /** Ping-pong instead of restarting. */
     alternate: boolean;
+    /** Motion lives inside the SVG layer itself (SMIL), not in CSS keyframes. */
+    selfAnimated?: boolean;
 }
 
 export interface BackgroundPatternMeta {
@@ -211,6 +213,122 @@ function rayFan(seed: number, from: number, to: number, count: number, rgb: stri
     }
     stops.push('transparent 360deg');
     return `conic-gradient(from 0deg at 50% -12%, ${stops.join(', ')})`;
+}
+
+
+/**
+ * A self-animating SVG (SMIL) of plants that grow stem-by-stem, unfurl leaves,
+ * hold, then lose their leaves to the wind and un-grow, and loop. Everything
+ * shares one timeline (dur = LOOP s) so the loop is seamless: at 0 and 1 every
+ * stem is undrawn and every leaf is scale 0 / opacity 0.
+ */
+const PLANT_LOOP_SEC = 28;
+
+function growingPlants(): string {
+    const rand = seeded(2024);
+    const PI = Math.PI;
+    const LEAF_COLORS = ['#2f8f55', '#3fae63', '#62c46c', '#8bd873', '#b4e27a', '#4cb87a'];
+    const STEM_COLORS = ['#5aa469', '#6fbf73', '#86d07f'];
+    const SPLINE = '0.45 0 0.2 1';
+    const f = (n: number): string => String(Math.round(n * 1000) / 1000);
+    const times = (...t: number[]): string => t.map(v => f(Math.min(1, Math.max(0, v)))).join(';');
+    const splines = (n: number): string => Array(n - 1).fill(SPLINE).join(';');
+
+    interface RawStem { d: string; w: number; depth: number; t0: number; t1: number; }
+    interface RawLeaf { x: number; y: number; ang: number; size: number; tGrow: number; color: string; }
+    const stems: RawStem[] = [];
+    const leaves: RawLeaf[] = [];
+
+    const branch = (x0: number, y0: number, angDeg: number, len: number, w: number, depth: number, tStart: number): void => {
+        const rad = angDeg * PI / 180;
+        const dx = Math.sin(rad), dy = -Math.cos(rad);
+        const bend = (rand() - 0.5) * len * 0.55;
+        const nx = -dy, ny = dx;
+        const p0 = [x0, y0], p1 = [x0 + dx * len * 0.5 + nx * bend, y0 + dy * len * 0.5 + ny * bend];
+        const p2 = [x0 + dx * len + nx * bend * 0.4, y0 + dy * len + ny * bend * 0.4];
+        const at = (t: number): [number, number, number] => {
+            const u = 1 - t;
+            const x = u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0];
+            const y = u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1];
+            const tx = 2 * u * (p1[0] - p0[0]) + 2 * t * (p2[0] - p1[0]);
+            const ty = 2 * u * (p1[1] - p0[1]) + 2 * t * (p2[1] - p1[1]);
+            return [x, y, Math.atan2(tx, -ty) * 180 / PI];
+        };
+        const dur = len / 330;
+        stems.push({ d: `M${r1(p0[0])},${r1(p0[1])} Q${r1(p1[0])},${r1(p1[1])} ${r1(p2[0])},${r1(p2[1])}`, w, depth, t0: tStart, t1: tStart + dur });
+
+        const nLeaves = depth === 0 ? 7 : depth === 1 ? 4 : 3;
+        for (let i = 0; i < nLeaves; i++) {
+            const t = 0.3 + (0.62 * i) / Math.max(1, nLeaves - 1);
+            const [x, y, a] = at(t);
+            const side = i % 2 === 0 ? 1 : -1;
+            leaves.push({
+                x, y, ang: a + side * (48 + rand() * 24),
+                size: (depth === 0 ? 150 : depth === 1 ? 118 : 92) * (1.05 - 0.45 * t) * (0.85 + rand() * 0.3),
+                tGrow: tStart + dur * t + 0.03, color: LEAF_COLORS[Math.floor(rand() * LEAF_COLORS.length)],
+            });
+        }
+        const [tx, ty, ta] = at(1);
+        leaves.push({ x: tx, y: ty, ang: ta + (rand() - 0.5) * 20, size: (depth === 0 ? 170 : 110) * (0.9 + rand() * 0.2), tGrow: tStart + dur, color: LEAF_COLORS[Math.floor(rand() * LEAF_COLORS.length)] });
+
+        if (depth < 2) {
+            const kids = depth === 0 ? [0.32, 0.5, 0.68] : [0.45, 0.72];
+            kids.forEach((t, i) => {
+                const [bx, by, ba] = at(t);
+                const side = (i + depth) % 2 === 0 ? 1 : -1;
+                branch(bx, by, ba + side * (34 + rand() * 20), len * (depth === 0 ? 0.56 : 0.58), w * 0.62, depth + 1, tStart + dur * t);
+            });
+        }
+    };
+
+    branch(430, 1090, 6, 680, 12, 0, 0);
+    branch(1450, 1090, -7, 640, 11, 0, 0.35);
+    branch(1010, 1090, 3, 330, 7, 1, 0.6);
+
+    let R = 0;
+    for (const s of stems) R = Math.max(R, s.t1);
+    for (const l of leaves) R = Math.max(R, l.tGrow + 0.2);
+    const GROW0 = 0.02, GROW1 = 0.42;
+    const F = (raw: number): number => GROW0 + (raw / R) * (GROW1 - GROW0);
+    const dur = `${PLANT_LOOP_SEC}s`;
+    const anim = (tag: string, attrs: string, kt: number[], values: string[]): string =>
+        `<${tag} ${attrs} dur='${dur}' repeatCount='indefinite' calcMode='spline' keyTimes='${times(...kt)}' keySplines='${splines(kt.length)}' values='${values.join(';')}'/>`;
+
+    let body = '';
+    for (const s of stems) {
+        const retract0 = 0.7 - s.depth * 0.05, retract1 = retract0 + 0.18;
+        body += `<path d='${s.d}' pathLength='1' fill='none' stroke='${STEM_COLORS[Math.min(2, s.depth)]}' stroke-width='${r1(s.w)}' stroke-linecap='round' stroke-dasharray='1 1' stroke-dashoffset='1'>` +
+            anim('animate', "attributeName='stroke-dashoffset'", [0, F(s.t0), F(s.t1), retract0, retract1, 1], ['1', '1', '0', '0', '-1', '-1']) + '</path>';
+    }
+    let leafBody = '';
+    for (const l of leaves) {
+        const g0 = F(l.tGrow), g1 = g0 + 0.06;
+        const fl0 = 0.56 + rand() * 0.15, fl1 = Math.min(0.97, fl0 + 0.17 + rand() * 0.1);
+        const wind = 260 + rand() * 760, rise = -150 + rand() * -480 + (rand() < 0.3 ? 700 : 0);
+        const sway = (rand() - 0.5) * 220;
+        const spin = (rand() < 0.5 ? -1 : 1) * (120 + rand() * 360);
+        const L = r1(l.size), W = r1(l.size * 0.34);
+        const kt = [0, g0, g1, fl0, (fl0 + fl1) / 2, fl1, 1];
+        const x = r1(l.x), y = r1(l.y);
+        const pos = [`${x},${y}`, `${x},${y}`, `${x},${y}`, `${x},${y}`,
+            `${r1(l.x + wind * 0.45)},${r1(l.y + rise * 0.55 + sway)}`, `${r1(l.x + wind)},${r1(l.y + rise)}`, `${r1(l.x + wind)},${r1(l.y + rise)}`];
+        const a = r1(l.ang);
+        leafBody +=
+            `<g transform='translate(${x} ${y})'>` +
+            anim('animateTransform', "attributeName='transform' type='translate'", kt, pos) +
+            `<g transform='rotate(${a})'>` +
+            anim('animateTransform', "attributeName='transform' type='rotate'", kt, [a, a, a, a, a + spin * 0.5, a + spin, a + spin].map(String)) +
+            `<g transform='scale(0)'>` +
+            anim('animateTransform', "attributeName='transform' type='scale'", kt, ['0', '0', '1', '1', '0.95', '0.6', '0.6']) +
+            `<g opacity='0'>` +
+            anim('animate', "attributeName='opacity'", kt, ['0', '0', '1', '1', '0.8', '0', '0']) +
+            `<path d='M0,0 C${W},${r1(-l.size * 0.25)} ${r1(W * 0.75)},${r1(-l.size * 0.75)} 0,${-L} C${r1(-W * 0.75)},${r1(-l.size * 0.75)} ${-W},${r1(-l.size * 0.25)} 0,0Z' fill='${l.color}' fill-opacity='.93'/>` +
+            `<path d='M0,0 L0,${r1(-l.size * 0.86)}' stroke='rgba(255,255,255,.28)' stroke-width='2' fill='none' stroke-linecap='round'/>` +
+            '</g></g></g></g>';
+    }
+
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1920 1080' preserveAspectRatio='xMidYMax slice'>${body}${leafBody}</svg>`;
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
 
 // ---- layer constructors ----------------------------------------------------
@@ -418,6 +536,18 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
             { image: 'radial-gradient(ellipse 28% 34% at 50% 100%, rgba(255,225,150,.5), transparent 100%)', size: '100% 100%', sizeTo: '80% 86%', repeat: 'no-repeat', from: '50% 100%', to: '50% 100%' },
             fixed('linear-gradient(180deg, #0a0604, #1a0d06 70%, #26120a)'),
         ], 3.6)
+    },
+    {
+        key: 'sprouting-leaves', name: 'Sprouting Leaves', animated: true,
+        preview: 'linear-gradient(180deg, #071a14, #0d2f22 70%, #143a28)',
+        build: () => ({
+            layers: [
+                { image: growingPlants(), size: '100% 100%', repeat: 'no-repeat', from: '50% 100%' },
+                fixed('radial-gradient(ellipse 70% 45% at 50% 105%, rgba(120,220,130,.22), transparent 100%)'),
+                fixed('linear-gradient(180deg, #071a14, #0d2f22 70%, #143a28)'),
+            ],
+            durationSec: 0, timing: 'linear' as const, alternate: false, selfAnimated: true,
+        })
     },
 
     // ---- still: new ----------------------------------------------------------

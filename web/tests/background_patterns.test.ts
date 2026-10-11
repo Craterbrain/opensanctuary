@@ -5,11 +5,11 @@ import {
 import { parseAnimatedPatternMarker } from '../src/core/presentation_helpers.ts';
 
 describe('background patterns', () => {
-    test('catalogue has the 5 originals + 10 new animated + 10 new still', () => {
-        expect(BACKGROUND_PATTERNS.filter(p => p.animated).length).toBe(15);
+    test('catalogue has the 5 originals + 11 new animated + 10 new still', () => {
+        expect(BACKGROUND_PATTERNS.filter(p => p.animated).length).toBe(16);
         expect(BACKGROUND_PATTERNS.filter(p => !p.animated).length).toBe(10);
-        expect(new Set(BACKGROUND_PATTERNS.map(p => p.key)).size).toBe(25);
-        expect(new Set(BACKGROUND_PATTERNS.map(p => p.name)).size).toBe(25);
+        expect(new Set(BACKGROUND_PATTERNS.map(p => p.key)).size).toBe(26);
+        expect(new Set(BACKGROUND_PATTERNS.map(p => p.name)).size).toBe(26);
     });
 
     test('every pattern builds, has a base layer, and matches its animated flag', () => {
@@ -17,7 +17,7 @@ describe('background patterns', () => {
             const spec = getPatternSpec(meta.key)!;
             expect(spec.layers.length).toBeGreaterThan(0);
             expect(spec.layers.every(l => l.image && l.size && !l.image.includes('NaN') && !l.image.includes('undefined'))).toBe(true);
-            expect(spec.durationSec > 0).toBe(meta.animated);
+            expect(spec.durationSec > 0 || !!spec.selfAnimated).toBe(meta.animated);
             expect(parseAnimatedPatternMarker('pattern:' + meta.key)).toBe(meta.key);
         }
     });
@@ -42,6 +42,7 @@ describe('background patterns', () => {
         for (const meta of BACKGROUND_PATTERNS) {
             const css = patternKeyframes(meta.key);
             if (!meta.animated) { expect(css).toBe(''); continue; }
+            if (getPatternSpec(meta.key)!.selfAnimated) { expect(css).toBe(''); continue; }
             expect(css).toContain(`@keyframes ${patternAnimationName(meta.key)}`);
             const n = getPatternSpec(meta.key)!.layers.length;
             const from = css.match(/from \{ background-position: ([^;]+);/)![1];
