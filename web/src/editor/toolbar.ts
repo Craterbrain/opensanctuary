@@ -1,9 +1,10 @@
-import { SlideElement, EditorSlide, SlideBackground, TextStyleUpdate, SOLID_PALETTE_PRESETS, GRADIENT_PRESETS, ANIMATED_PATTERN_PRESETS, FONT_FAMILY_GROUPS } from './types';
+import { SlideElement, EditorSlide, SlideBackground, TextStyleUpdate, SOLID_PALETTE_PRESETS, GRADIENT_PRESETS, PATTERN_PRESETS, FONT_FAMILY_GROUPS } from './types';
 import { createDefaultTextBlock } from './text_block';
 import { createDefaultShape } from './shape_library';
 import { createDefaultLine } from './line_tool';
 import { createDefaultTable } from './table';
-import { applyResolvedBackground, backgroundPresetDataString } from '../core/presentation_helpers';
+import { ensurePatternClip } from '../core/pattern_render';
+import { applyResolvedBackground, parseAnimatedPatternMarker, backgroundPresetDataString } from '../core/presentation_helpers';
 
 export type ArrangeAction = 'bringToFront' | 'sendToBack' | 'bringForward' | 'sendBackward';
 export type AlignAction = 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom';
@@ -196,7 +197,7 @@ export class EditorToolbar {
     if (bg) {
       if (bg.kind === 'Solid') {
         // Also covers the "pattern:<name>" animated marker (see
-        // ANIMATED_PATTERN_PRESETS) — applyResolvedBackground renders the
+        // PATTERN_PRESETS) — applyResolvedBackground renders the
         // real drifting background-image + animation here too, not just a
         // static swatch, so this ribbon indicator matches what's on the slide.
         applyResolvedBackground(this.currentBgPreview, bg.data);
@@ -559,7 +560,7 @@ export class EditorToolbar {
 
     const btnAnimated = document.createElement('button');
     btnAnimated.className = '';
-    btnAnimated.textContent = 'Animated';
+    btnAnimated.textContent = 'Patterns';
 
     tabs.appendChild(btnSolid);
     tabs.appendChild(btnGradient);
@@ -636,7 +637,7 @@ export class EditorToolbar {
     // you get" for the motion, not just the base color.
     const animatedPane = document.createElement('div');
     animatedPane.className = 'bg-popover-pane prop-presets hidden';
-    for (const a of ANIMATED_PATTERN_PRESETS) {
+    for (const a of PATTERN_PRESETS) {
       const aRow = document.createElement('button');
       aRow.className = 'prop-preset';
       const preview = document.createElement('div');
@@ -648,6 +649,8 @@ export class EditorToolbar {
       aRow.appendChild(preview);
       aRow.appendChild(label);
       aRow.addEventListener('click', () => {
+        const patternKey = parseAnimatedPatternMarker(backgroundPresetDataString(a));
+        if (patternKey) ensurePatternClip(patternKey);
         if (this.callbacks.onUpdateBackground) {
           this.callbacks.onUpdateBackground(a.background);
         }

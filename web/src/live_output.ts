@@ -9,6 +9,7 @@ import { renderSlideElements } from './core/slide_render';
 import { autoFitLyrics as autoFitLyricsCore } from './core/autofit';
 import {
   applyResolvedBackground,
+  parseAnimatedPatternMarker,
   parseParallelSlide,
   extractImageUrl,
   isVideoBackground,
@@ -23,6 +24,8 @@ import {
   DEFAULT_THEMES
 } from './core/presentation_helpers';
 import { clock } from './core/timesync';
+import { lookupPatternClip } from './core/pattern_render';
+import { patternPhaseSec } from './core/background_patterns';
 import { createEngineWebSocket, EngineWebSocketClient } from './core/ws_client';
 import {
   WebCodecsPlayer,
@@ -395,6 +398,42 @@ function disposeWebCodecsPlayer() {
   videoCanvasEl.style.display = 'none';
 }
 
+// A pre-rendered pattern clip takes over from the live (CSS/SVG) pattern without a seam:
+// both are locked to the same wall-clock phase (patternPhaseSec) and the video fades in
+// over the pattern, which is dropped once the fade is done.
+let livePatternShown = '';          // the "pattern:<key>" marker currently drawn live on #screen
+let patternHandoffActive = false;   // a clip is fading in over the live pattern
+let patternHandoffTimer: ReturnType<typeof setTimeout> | null = null;
+const PATTERN_FADE_MS = 800;
+
+function setCanvasOpacity(value: string, transition: string) {
+  videoCanvasEl.style.transition = transition;
+  videoCanvasEl.style.opacity = value;
+}
+
+function finishPatternHandoff() {
+  patternHandoffActive = false;
+  livePatternShown = '';
+  screenEl.style.animation = '';
+  screenEl.style.backgroundImage = '';
+  screenEl.style.background = '#000';
+}
+
+/** Begins showing a clip: fade it in over the live pattern when handing off, else show it at once. */
+function revealPatternClip(handoff: boolean) {
+  if (patternHandoffTimer) { clearTimeout(patternHandoffTimer); patternHandoffTimer = null; }
+  if (handoff) {
+    patternHandoffActive = true;
+    setCanvasOpacity('0', 'none');
+    void videoCanvasEl.offsetWidth; // commit opacity 0 before animating to 1
+    setCanvasOpacity('1', `opacity ${PATTERN_FADE_MS}ms ease-in-out`);
+    patternHandoffTimer = setTimeout(finishPatternHandoff, PATTERN_FADE_MS + 100);
+  } else {
+    setCanvasOpacity('1', 'none');
+    finishPatternHandoff();
+  }
+}
+
 function teardownVideoRenderers() {
   rendererSwitchToken++; // invalidate any in-flight switchVideoRenderer() call
   disposeWebCodecsPlayer();
@@ -406,7 +445,7 @@ function teardownVideoRenderers() {
   activeRenderer = androidTvBridge ? 'androidtv' : 'legacy';
 }
 
-async function switchVideoRenderer(url: string, fit: 'contain' | 'cover') {
+async function switchVideoRenderer(url: string, fit: 'contain' | 'cover', onReady?: () => void) {
   const token = ++rendererSwitchToken;
   disposeWebCodecsPlayer();
   activeRenderer = 'legacy';
@@ -436,6 +475,7 @@ async function switchVideoRenderer(url: string, fit: 'contain' | 'cover') {
     activeRenderer = 'webcodecs';
     videoBgEl.style.display = 'none';
     videoCanvasEl.style.display = 'block';
+    onReady?.();
   } catch (e) {
     console.warn('[WebCodecsPlayer] falling back to <video> for this file:', e);
     activeRenderer = 'legacy';
@@ -564,8 +604,11 @@ function fadeInFromBlack(durationSec = 0.4) {
   }, durationSec * 1000 + 40);
 }
 
+let lastSnapshot: any = null;
+
 function renderSnapshot(snapshot: any) {
   try {
+    lastSnapshot = snapshot;
     const state = snapshot.state;
     if (!state) return;
 
@@ -702,7 +745,22 @@ function renderSnapshot(snapshot: any) {
 
     const isDedicatedMedia = state.live_item && state.live_item.item_type === 'media';
 
+    // A pre-rendered clip of an animated pattern plays as a looping video, which is
+    // far cheaper for a TV browser than redrawing the pattern every frame. Until the
+    // lookup finds one (or if none exists) the live procedural background is used.
+    const patternMarker = currentBg;
+    const livePatternKey = parseAnimatedPatternMarker(currentBg);
+    let patternClip = false;
+    let patternAnchorMs = 0;
+    // (The Android TV app's native player isn't handed pattern clips: it keeps the live pattern.)
+    if (livePatternKey && !androidTvBridge) {
+      const clip = lookupPatternClip(livePatternKey, () => { if (lastSnapshot) renderSnapshot(lastSnapshot); });
+      if (clip) { currentBg = clip; patternClip = true; }
+    }
+    const patternHandoff = patternClip && (livePatternShown === patternMarker || patternHandoffActive);
+
     if (isVideoBackground(currentBg)) {
+      if (!patternClip) livePatternShown = '';
       const fit: 'contain' | 'cover' = isDedicatedMedia ? 'contain' : 'cover';
       const encodedUrl = encodeURI(currentBg);
       const srcKey = `${encodedUrl}|${fit}`;
@@ -735,7 +793,13 @@ function renderSnapshot(snapshot: any) {
         // to the legacy <video> + TimecodeSyncEngine path on any failure.
         if (currentVideoSrcKey !== srcKey) {
           currentVideoSrcKey = srcKey;
-          void switchVideoRenderer(encodedUrl, fit);
+          void switchVideoRenderer(encodedUrl, fit, patternClip ? () => {
+            // Phase-locked start: position = server clock mod clip length (anchor 0).
+            wcPlayer?.applySyncState({ isPlaying: true, baseTimeSec: 0, startAnchorEpochMs: patternAnchorMs, isFutureScheduled: false, loop: true, muted: true, volume: 0 });
+            revealPatternClip(patternHandoff);
+          } : undefined);
+        } else if (!patternClip && videoCanvasEl.style.opacity !== '1' && !patternHandoffActive) {
+          setCanvasOpacity('1', 'none');
         }
 
         if (activeRenderer === 'webcodecs' && wcPlayer) {
@@ -746,7 +810,7 @@ function renderSnapshot(snapshot: any) {
             wcPlayer.applySyncState({
               isPlaying: true,
               baseTimeSec: 0,
-              startAnchorEpochMs: clock.now(),
+              startAnchorEpochMs: patternClip ? patternAnchorMs : clock.now(),
               isFutureScheduled: false,
               loop: true,
               muted: isMuted,
@@ -765,6 +829,28 @@ function renderSnapshot(snapshot: any) {
             videoBgEl.dataset.src = currentBg;
             videoBgEl.preload = 'auto';
             videoBgEl.src = encodedUrl;
+            if (patternClip) {
+              // Legacy <video>: start at the shared phase, fade in over the live pattern.
+              videoBgEl.loop = true;
+              videoBgEl.style.transition = 'none';
+              videoBgEl.style.opacity = patternHandoff ? '0' : '1';
+              videoBgEl.addEventListener('loadedmetadata', () => {
+                const d = videoBgEl.duration;
+                if (d > 0) videoBgEl.currentTime = (clock.getServerTimeMs() / 1000) % d;
+              }, { once: true });
+              videoBgEl.addEventListener('playing', () => {
+                if (patternHandoff) {
+                  void videoBgEl.offsetWidth;
+                  videoBgEl.style.transition = `opacity ${PATTERN_FADE_MS}ms ease-in-out`;
+                  videoBgEl.style.opacity = '1';
+                }
+                patternHandoffTimer = setTimeout(finishPatternHandoff, patternHandoff ? PATTERN_FADE_MS + 100 : 0);
+                patternHandoffActive = patternHandoff;
+              }, { once: true });
+              if (patternHandoff) patternHandoffActive = true;
+            } else {
+              videoBgEl.style.opacity = '1';
+            }
             videoBgEl.load();
           }
           videoBgEl.style.display = 'block';
@@ -779,9 +865,13 @@ function renderSnapshot(snapshot: any) {
       imageBgEl.style.display = 'none';
       audioBgEl.pause();
       audioBgEl.dataset.src = '';
-      screenEl.style.animation = '';
-      screenEl.style.background = '#000';
+      if (!patternHandoffActive) {
+        // (While a pattern clip fades in, the live pattern stays underneath until it's done.)
+        screenEl.style.animation = '';
+        screenEl.style.background = '#000';
+      }
     } else if (isCameraFeed(currentBg)) {
+      livePatternShown = '';
       teardownVideoRenderers();
       timecodeSyncer.setMasterState(null, false);
       imageBgEl.style.display = 'none';
@@ -829,6 +919,7 @@ function renderSnapshot(snapshot: any) {
       screenEl.style.animation = '';
       screenEl.style.background = '#000';
     } else if (isAudioMedia(currentBg)) {
+      livePatternShown = '';
       teardownVideoRenderers();
       if (videoBgEl) {
         if (videoBgEl.srcObject) {
@@ -872,7 +963,21 @@ function renderSnapshot(snapshot: any) {
       imageBgEl.style.display = 'none';
       audioBgEl.pause();
       audioBgEl.dataset.src = '';
-      applyResolvedBackground(screenEl, currentBg);
+      // Animated patterns start phase-locked to the shared clock, so a pre-rendered clip
+      // (same phase) can replace them unnoticed. Re-applied only when the pattern changes,
+      // otherwise each snapshot would restart its animation.
+      if (patternHandoffTimer) { clearTimeout(patternHandoffTimer); patternHandoffTimer = null; }
+      patternHandoffActive = false;
+      const shownKey = parseAnimatedPatternMarker(currentBg);
+      if (shownKey) {
+        if (livePatternShown !== currentBg) {
+          applyResolvedBackground(screenEl, currentBg, undefined, undefined, patternPhaseSec(shownKey, clock.getServerTimeMs()));
+          livePatternShown = currentBg;
+        }
+      } else {
+        applyResolvedBackground(screenEl, currentBg);
+        livePatternShown = '';
+      }
     }
   } catch (e) {
     console.error(e);

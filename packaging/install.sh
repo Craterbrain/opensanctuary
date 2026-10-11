@@ -32,8 +32,8 @@ set -eu
 REPO="Craterbrain/opensanctuary"
 
 # Mirrors `RELEASE_PUBLIC_KEY_B64` in src/network/updater.rs exactly -- the
-# production release key (minisign ID 80DBAA0356AE9867).
-PUBLIC_KEY="RWRnmK5WA6rbgDlBqOj4+R+5vQK/wGsexQQ2NsjgUPiqkC5iUUZMmk42"
+# production release key (minisign ID C12205725EA34858).
+PUBLIC_KEY="RWRYSKNecgUiwS2YaMPmshtR2/ZAQA/XnunXaOBQw/SRkZPyMspLwhGw"
 
 # --- Argument parsing --------------------------------------------------------
 

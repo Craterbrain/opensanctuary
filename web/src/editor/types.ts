@@ -3,6 +3,8 @@
  * Invariant: inv.element.transform-normalized (x, y, w, h in 0.0..=1.0)
  */
 
+import { BACKGROUND_PATTERNS } from '../core/background_patterns';
+
 // NOTE: ElementTransform / TextBlock / SlideElement below are hand-mirrored by
 // src/core/models.rs (same names) — there's no shared schema or codegen between
 // them. If you add/rename/remove a field here, make the matching edit there too,
@@ -484,44 +486,23 @@ export const GRADIENT_PRESETS: BackgroundPreset[] = [
   }
 ];
 
-// Animated backgrounds: layered drifting radial-gradient "particle" fields
-// (dust, snow, stars, clouds, aurora bands) over a base gradient. Represented
-// as a Solid background whose `data` is a "pattern:<name>" marker instead of
-// a literal CSS color — the marker round-trips through the flat legacy
-// `background` string field exactly like a real color would (see
-// applyBackgroundToSlide), and is resolved into the actual animated
-// background-image + CSS animation by applyResolvedBackground
-// (core/presentation_helpers.ts) wherever a slide is actually rendered. The
-// `preview` field mirrors the pattern's own base gradient for any context
-// that only wants a static swatch; the picker itself renders these with the
-// real animation running (see toolbar.ts's Animated tab).
-export const ANIMATED_PATTERN_PRESETS: BackgroundPreset[] = [
-  {
-    name: 'Floating Dust',
-    background: { kind: 'Solid', data: 'pattern:floating-dust' },
-    preview: 'linear-gradient(160deg, #2b2013, #4a3820, #6b5227)'
-  },
-  {
-    name: 'Drifting Clouds',
-    background: { kind: 'Solid', data: 'pattern:drifting-clouds' },
-    preview: 'linear-gradient(180deg, #3a5a8a, #6683b0, #9db4d6)'
-  },
-  {
-    name: 'Gentle Snowfall',
-    background: { kind: 'Solid', data: 'pattern:gentle-snowfall' },
-    preview: 'linear-gradient(180deg, #0d1b2a, #1b3a5c, #2c5480)'
-  },
-  {
-    name: 'Aurora Waves',
-    background: { kind: 'Solid', data: 'pattern:aurora-waves' },
-    preview: 'linear-gradient(180deg, #050814, #0a1128, #030509)'
-  },
-  {
-    name: 'Starfield Drift',
-    background: { kind: 'Solid', data: 'pattern:starfield-drift' },
-    preview: 'radial-gradient(ellipse at center, #0a0e27, #000000)'
-  }
-];
+// Procedural backgrounds (see core/background_patterns.ts for the catalogue and
+// generators). Represented as a Solid background whose `data` is a
+// "pattern:<key>" marker instead of a literal CSS color -- the marker round-trips
+// through the flat legacy `background` string field exactly like a real color
+// would (see applyBackgroundToSlide) and is resolved into the layered
+// background + CSS animation by applyResolvedBackground wherever a slide is
+// rendered. `preview` is a static swatch for contexts that can't run the real
+// pattern; the pickers render the real thing.
+const toPresets = (animated: boolean): BackgroundPreset[] =>
+  BACKGROUND_PATTERNS.filter(p => p.animated === animated).map(p => ({
+    name: p.name,
+    background: { kind: 'Solid', data: 'pattern:' + p.key } as SlideBackground,
+    preview: p.preview
+  }));
+export const ANIMATED_PATTERN_PRESETS: BackgroundPreset[] = toPresets(true);
+export const STILL_PATTERN_PRESETS: BackgroundPreset[] = toPresets(false);
+export const PATTERN_PRESETS: BackgroundPreset[] = [...ANIMATED_PATTERN_PRESETS, ...STILL_PATTERN_PRESETS];
 
 export interface FontFamilyGroup {
   label: string;

@@ -52,6 +52,7 @@ export const SETTINGS_CATEGORIES: SettingCategoryDef[] = [
   { id: 'live-output', label: 'Live Output', icon: '🖥' },
   { id: 'display', label: 'Display', icon: '🖵' },
   { id: 'theme', label: 'Theme', icon: '🎨' },
+  { id: 'backgrounds', label: 'Animated Backgrounds', icon: '🎬' },
   { id: 'network', label: 'Network', icon: '🌐' },
   { id: 'paired-devices', label: 'Paired Devices', icon: '📺' },
   { id: 'alerts', label: 'Alerts & Nursery', icon: '🔔' },
@@ -60,7 +61,7 @@ export const SETTINGS_CATEGORIES: SettingCategoryDef[] = [
   { id: 'about', label: 'About', icon: 'ℹ' },
 ];
 
-// The "display" and "theme" categories are rendered by the bespoke renderDisplaySettings()
+// The "display", "theme" and "backgrounds" categories are rendered by the bespoke renderDisplaySettings()
 // / renderThemeSettings() in settings_dialog.ts (live monitor detection, per-output
 // Open/Close; icon-set and color-theme pickers) rather than the generic single-value row
 // renderer below. Their SETTINGS_SCHEMA entries are 'panel' rows: search-only pointers
@@ -141,6 +142,45 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
     category: 'live-output',
     control: 'action',
     actionLabel: 'Open Live Output Window',
+  },
+  {
+    key: 'patternPrerender',
+    label: 'Pre-render Animated Backgrounds',
+    description: 'Render animated backgrounds (growing leaves, rain, embers...) once into a video that the live output simply plays, instead of redrawing them every frame. Rendered clips are kept for 3 months after they were last used, then deleted automatically.',
+    category: 'backgrounds',
+    control: 'select',
+    options: [
+      { value: 'on', label: 'On' },
+      { value: 'off', label: 'Off (draw them live)' },
+    ],
+  },
+  {
+    key: 'patternResolution',
+    label: 'Pre-rendered Background Quality',
+    description: 'Resolution of pre-rendered animated backgrounds. Automatic uses 1440p, or 1080p when a connected monitor is smaller than 1440p.',
+    category: 'backgrounds',
+    control: 'select',
+    options: [
+      { value: 'auto', label: 'Automatic' },
+      { value: '1440', label: '1440p (2560×1440)' },
+      { value: '1080', label: '1080p (1920×1080)' },
+    ],
+  },
+  {
+    key: 'patternModes',
+    label: 'Choose Which Backgrounds Pre-render',
+    description: 'For each animated background: Auto (pre-render the demanding ones when used), Always (render ahead of time) or Never (always draw live). Each one shows how demanding it is.',
+    category: 'backgrounds',
+    control: 'panel',
+    actionLabel: 'Open Animated Backgrounds',
+  },
+  {
+    key: 'clearPatternCache',
+    label: 'Rendered Background Cache',
+    description: 'Delete every pre-rendered background clip now. They are re-created the next time an animated background is used.',
+    category: 'backgrounds',
+    control: 'action',
+    actionLabel: 'Clear Rendered Backgrounds',
   },
   {
     key: 'alertPosition',

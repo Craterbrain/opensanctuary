@@ -32,12 +32,12 @@ use sha2::{Digest, Sha256};
 /// (`is_release_download_url`). Keep `REPO` in `packaging/install.sh` in sync.
 pub const RELEASES_REPO: &str = "Craterbrain/opensanctuary";
 
-/// The release-signing public key (minisign key ID 80DBAA0356AE9867; the
+/// The release-signing public key (minisign key ID C12205725EA34858; the
 /// matching encrypted secret key is kept offline, never in this repo). Releases
 /// previously signed with the old throwaway test key will no longer verify.
 /// `RELEASES_REPO` above is still the test mirror and must be swapped to the
 /// real release repo before this verifies a release handed to real users.
-pub const RELEASE_PUBLIC_KEY_B64: &str = "RWRnmK5WA6rbgDlBqOj4+R+5vQK/wGsexQQ2NsjgUPiqkC5iUUZMmk42";
+pub const RELEASE_PUBLIC_KEY_B64: &str = "RWRYSKNecgUiwS2YaMPmshtR2/ZAQA/XnunXaOBQw/SRkZPyMspLwhGw";
 
 /// Verifies `data` was signed by the holder of the private key matching
 /// `public_key_b64`, using a detached minisign signature (the contents of a

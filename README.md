@@ -95,14 +95,14 @@ both against an embedded public key before ever applying an update, and
 `docs/release-signing-key.txt` (once published) for the production public
 key, independent of any single binary.
 
-Release signing public key (minisign, key ID `80DBAA0356AE9867`):
+Release signing public key (minisign, key ID `C12205725EA34858`):
 
 ```
-RWRnmK5WA6rbgDlBqOj4+R+5vQK/wGsexQQ2NsjgUPiqkC5iUUZMmk42
+RWRYSKNecgUiwS2YaMPmshtR2/ZAQA/XnunXaOBQw/SRkZPyMspLwhGw
 ```
 
 Verify a download manually with
-`minisign -Vm checksums.txt -P RWRnmK5WA6rbgDlBqOj4+R+5vQK/wGsexQQ2NsjgUPiqkC5iUUZMmk42`,
+`minisign -Vm checksums.txt -P RWRYSKNecgUiwS2YaMPmshtR2/ZAQA/XnunXaOBQw/SRkZPyMspLwhGw`,
 then check the installer's SHA-256 against `checksums.txt`.
 
 ## Building from source

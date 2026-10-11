@@ -5,6 +5,7 @@ mod keyring;
 mod library;
 mod network;
 mod pairing;
+mod pattern_cache;
 mod reports;
 mod schedule;
 mod settings;
@@ -249,6 +250,7 @@ pub fn create_router(app_state: AppState) -> Router {
         .merge(schedule::router())
         .merge(import::router())
         .merge(reports::router())
+        .merge(pattern_cache::router())
 
         .layer(from_fn_with_state(app_state.clone(), host_token_gate_middleware))
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))

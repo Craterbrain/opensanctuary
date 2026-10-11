@@ -8,6 +8,7 @@ pub mod media_search_providers;
 pub mod media_sniff;
 pub mod openlp_import;
 pub mod paths;
+pub mod pattern_cache;
 pub mod pptx_import;
 pub mod rtf;
 pub mod transcode;

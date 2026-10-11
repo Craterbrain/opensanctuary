@@ -14,6 +14,9 @@ import {
   createDefaultDisplayOutput,
 } from "../core/display_config.ts";
 import { debounce, showToast } from "../core/ui_utils.ts";
+import { hostTokenHeader } from "../core/host_session.ts";
+import { BACKGROUND_PATTERNS, patternAutoPrerender, patternFrameCount, patternLoopSec, patternPrerenderable, patternRevision } from "../core/background_patterns.ts";
+import { ensurePatternClip, modeFor, parsePatternModes, type PatternMode } from "../core/pattern_render.ts";
 import { api, UpdateCheckResult } from "../core/api_client.ts";
 import { escapeHtml } from "../core/presentation_helpers.ts";
 import { closeModal, showConfirmDialog } from "./dialog_manager.ts";
@@ -184,6 +187,19 @@ export function renderSettingRow(def: SettingDef, highlight: boolean): HTMLEleme
       btn.addEventListener('click', () => handleMoveDataDirectory(btn));
     } else if (def.key === 'revealDataDirectory') {
       btn.addEventListener('click', () => handleRevealDataDirectory(btn));
+    } else if (def.key === 'clearPatternCache') {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const res = await fetch('/api/pattern-cache', { method: 'DELETE', headers: hostTokenHeader() });
+          const j = res.ok ? await res.json() : null;
+          btn.textContent = j ? `Cleared ${j.removed} clip${j.removed === 1 ? '' : 's'}` : 'Could not clear';
+        } catch {
+          btn.textContent = 'Could not clear';
+        } finally {
+          setTimeout(() => { btn.disabled = false; btn.textContent = def.actionLabel || 'Run'; }, 2500);
+        }
+      });
     } else if (def.key === 'ccliReport') {
       btn.addEventListener('click', () => openCcliReportModal());
     }
@@ -455,6 +471,10 @@ export function renderSettingsContent() {
     renderThemeSettings(content);
     return;
   }
+  if (!q && activeSettingsCategory === 'backgrounds') {
+    renderBackgroundSettings(content);
+    return;
+  }
   if (!q && activeSettingsCategory === 'network') {
     renderNetworkSettings(content);
     return;
@@ -667,6 +687,137 @@ function renderThemeSettings(content: HTMLElement) {
     section('Icon Set', 'Color of the toolbar and menu icons.', 'icons', theme.iconSet, id => ({ iconSet: id }));
     section('Color Theme', 'Accent colors across the interface: selection, buttons and highlights.', 'colors', theme.colorTheme,
       id => ({ colorTheme: id }));
+  }
+}
+
+/**
+ * Settings > Animated Backgrounds: the pre-render master switch and quality, the
+ * clip cache, and a per-background choice of Auto / Always / Never with how
+ * demanding each one is to draw live and how big its render is.
+ */
+function renderBackgroundSettings(content: HTMLElement) {
+  content.innerHTML = '';
+  content.classList.remove('display-panel');
+  const opts = currentContext?.getAppOptions() ?? {};
+  const modes = parsePatternModes(opts.patternModes);
+  const change = async (changes: Record<string, string>) => {
+    await currentContext?.setThemeOptions(changes);
+  };
+
+  const row = (label: string, desc: string, control: HTMLElement): HTMLElement => {
+    const r = document.createElement('div');
+    r.className = 'settings-row';
+    const l = document.createElement('div');
+    l.className = 'settings-row-label';
+    const lab = document.createElement('div');
+    lab.className = 'form-label';
+    lab.textContent = label;
+    const d = document.createElement('div');
+    d.className = 'settings-row-desc';
+    d.textContent = desc;
+    l.append(lab, d);
+    const c = document.createElement('div');
+    c.className = 'settings-row-control';
+    c.appendChild(control);
+    r.append(l, c);
+    return r;
+  };
+  const select = (id: string, value: string, options: Array<[string, string]>, onChange: (v: string) => void): HTMLSelectElement => {
+    const sel = document.createElement('select');
+    sel.className = 'search-input';
+    sel.id = id;
+    options.forEach(([v, l]) => {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = l;
+      o.selected = v === value;
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', () => onChange(sel.value));
+    return sel;
+  };
+
+  content.appendChild(row('Pre-render Animated Backgrounds',
+    'Render an animated background once into a video that the live output simply plays, instead of redrawing it every frame. Until the video is ready the live version plays, and the video takes over in step with it. Rendered clips are kept for 3 months after they were last used, then deleted automatically.',
+    select('setting-patternPrerender', opts.patternPrerender === 'off' ? 'off' : 'on',
+      [['on', 'On'], ['off', 'Off (draw them live)']], v => void change({ patternPrerender: v }))));
+  content.appendChild(row('Quality',
+    'Automatic uses 1440p, or 1080p when a connected monitor is smaller than 1440p.',
+    select('setting-patternResolution', ['1440', '1080'].includes(opts.patternResolution) ? opts.patternResolution : 'auto',
+      [['auto', 'Automatic'], ['1440', '1440p (2560×1440)'], ['1080', '1080p (1920×1080)']], v => void change({ patternResolution: v }))));
+
+  const cacheInfo = document.createElement('span');
+  cacheInfo.className = 'settings-row-desc';
+  cacheInfo.textContent = 'Checking…';
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'btn';
+  clearBtn.id = 'setting-action-clearPatternCache';
+  clearBtn.textContent = 'Clear Rendered Backgrounds';
+  const loadInfo = () => {
+    fetch('/api/pattern-cache').then(r => (r.ok ? r.json() : null)).then(j => {
+      cacheInfo.textContent = j ? `${j.files} clip${j.files === 1 ? '' : 's'}, ${(j.bytes / 1048576).toFixed(1)} MB` : '';
+    }).catch(() => { cacheInfo.textContent = ''; });
+  };
+  loadInfo();
+  clearBtn.addEventListener('click', async () => {
+    clearBtn.disabled = true;
+    try { await fetch('/api/pattern-cache', { method: 'DELETE', headers: hostTokenHeader() }); } catch { /* ignore */ }
+    clearBtn.disabled = false;
+    loadInfo();
+    rows.forEach(r => r.refresh());
+  });
+  const cacheWrap = document.createElement('div');
+  cacheWrap.className = 'pattern-cache-controls';
+  cacheWrap.append(cacheInfo, clearBtn);
+  content.appendChild(row('Rendered Clips', 'Delete every rendered clip now; they are re-created the next time one is needed.', cacheWrap));
+
+  const header = document.createElement('div');
+  header.className = 'settings-group-header';
+  header.textContent = 'Choose Per Background';
+  content.appendChild(header);
+  const hint = document.createElement('div');
+  hint.className = 'settings-row-desc';
+  hint.textContent = 'Auto renders the demanding ones (Medium or Heavy) when you use them. Always renders it ahead of time, even a light one. Never always draws it live.';
+  content.appendChild(hint);
+
+  const rows: Array<{ refresh: () => void }> = [];
+  for (const meta of BACKGROUND_PATTERNS.filter(p => p.animated)) {
+    const frames = patternFrameCount(meta.key);
+    const loop = patternLoopSec(meta.key);
+    const status = document.createElement('span');
+    status.className = 'pattern-status';
+    const refresh = () => {
+      status.textContent = '';
+      status.className = 'pattern-status';
+      fetch(`/api/pattern-cache/lookup?key=${encodeURIComponent(meta.key)}&rev=${patternRevision(meta.key)}`)
+        .then(r => (r.ok ? r.json() : null)).then(j => {
+          if (j && j.url) { status.textContent = 'Rendered'; status.classList.add('is-ready'); }
+        }).catch(() => {});
+    };
+    rows.push({ refresh });
+    refresh();
+
+    const ctl = select(`setting-pattern-mode-${meta.key}`, modeFor(meta.key, modes),
+      [['auto', 'Auto'], ['always', 'Always'], ['never', 'Never']], v => {
+        const next = parsePatternModes(currentContext?.getAppOptions().patternModes);
+        if (v === 'auto') delete next[meta.key]; else next[meta.key] = v as PatternMode;
+        void Promise.resolve(change({ patternModes: JSON.stringify(next) })).then(() => {
+          if (v === 'always') ensurePatternClip(meta.key, 'ahead');
+        });
+      });
+    const wrap = document.createElement('div');
+    wrap.className = 'pattern-cache-controls';
+    wrap.append(status, ctl);
+
+    const r = row(meta.name,
+      `${Math.round(loop)} s loop · ${frames} frames${patternPrerenderable(meta.key) && !patternAutoPrerender(meta.key) ? ' · only renders when set to Always' : ''}`,
+      wrap);
+    const badge = document.createElement('span');
+    badge.className = `cost-badge cost-${meta.cost ?? 'light'}`;
+    badge.textContent = meta.cost === 'heavy' ? 'Heavy' : meta.cost === 'medium' ? 'Medium' : 'Light';
+    badge.title = 'How demanding it is to draw live';
+    r.querySelector('.form-label')?.appendChild(badge);
+    content.appendChild(r);
   }
 }
 
