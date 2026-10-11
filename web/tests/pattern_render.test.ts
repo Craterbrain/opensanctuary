@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
     BACKGROUND_PATTERNS, getPatternSpec, patternFrameStyle, patternLoopSec, patternPrerenderable,
-    patternRevision, PRERENDER_MAX_LOOP_SEC, cubicBezier,
+    patternRevision, patternFps, patternFrameCount, patternAutoPrerender, patternCost, patternPhaseSec,
+    MAX_RENDER_FRAMES, cubicBezier,
 } from '../src/core/background_patterns.ts';
 import { parseGradient, parseColor } from '../src/core/gradient_canvas.ts';
-import { resolutionFor } from '../src/core/pattern_render.ts';
+import { resolutionFor, shouldPrerender, modeFor, parsePatternModes, type PrerenderConfig } from '../src/core/pattern_render.ts';
 
 describe('loop length and eligibility', () => {
     test('still patterns have no loop; ping-pong patterns loop at twice one leg', () => {
@@ -13,11 +14,31 @@ describe('loop length and eligibility', () => {
         expect(patternLoopSec('soft-rain')).toBe(4.5);
         expect(patternLoopSec('sprouting-leaves')).toBe(28);
         expect(patternPrerenderable('horizon-glow')).toBe(false);
-        expect(patternPrerenderable('starfield-drift')).toBe(false);      // 420s: cheap to draw live
         expect(patternPrerenderable('sprouting-leaves')).toBe(true);
-        for (const p of BACKGROUND_PATTERNS) {
-            if (patternPrerenderable(p.key)) expect(patternLoopSec(p.key)).toBeLessThanOrEqual(PRERENDER_MAX_LOOP_SEC);
+    });
+
+    test('slow loops render at 10 fps so every animated pattern fits the frame limit', () => {
+        expect(patternFps('soft-rain')).toBe(30);
+        expect(patternFps('starfield-drift')).toBe(10);
+        expect(patternFrameCount('sprouting-leaves')).toBe(840);
+        for (const p of BACKGROUND_PATTERNS.filter(p => p.animated)) {
+            expect(patternPrerenderable(p.key), p.key).toBe(true);
+            expect(patternFrameCount(p.key)).toBeLessThanOrEqual(MAX_RENDER_FRAMES);
         }
+    });
+
+    test('every animated pattern has a cost; still ones do not', () => {
+        for (const p of BACKGROUND_PATTERNS) {
+            expect(patternCost(p.key) !== null, p.key).toBe(p.animated);
+        }
+        expect(patternCost('soft-rain')).toBe('heavy');
+        expect(patternCost('candle-pulse')).toBe('light');
+    });
+
+    test('phase is the wall clock modulo the loop', () => {
+        expect(patternPhaseSec('sprouting-leaves', 0)).toBe(0);
+        expect(patternPhaseSec('sprouting-leaves', 30_000)).toBeCloseTo(2, 6);
+        expect(patternPhaseSec('horizon-glow', 12345)).toBe(0);
     });
 
     test('revision is stable and changes with the definition', () => {
@@ -107,5 +128,32 @@ describe('resolution choice', () => {
         expect(resolutionFor('auto', [1440, 1080])).toEqual({ width: 1920, height: 1080 });
         expect(resolutionFor('1080', [2160])).toEqual({ width: 1920, height: 1080 });
         expect(resolutionFor('1440', [720])).toEqual({ width: 2560, height: 1440 });
+    });
+});
+
+describe('pre-render policy', () => {
+    const base: PrerenderConfig = { enabled: true, resolution: 'auto', modes: {} };
+    test('auto renders demanding patterns that are quick to render, not light or very slow ones', () => {
+        expect(shouldPrerender('soft-rain', 'use', base)).toBe(true);        // heavy, 135 frames
+        expect(shouldPrerender('sprouting-leaves', 'use', base)).toBe(true); // medium
+        expect(shouldPrerender('candle-pulse', 'use', base)).toBe(false);    // light
+        expect(patternAutoPrerender('starfield-drift')).toBe(false);          // heavy but 4200 frames
+        expect(shouldPrerender('horizon-glow', 'use', base)).toBe(false);    // not animated
+    });
+    test('always renders anything animated, and ahead of time; never renders nothing', () => {
+        const cfg: PrerenderConfig = { ...base, modes: { 'candle-pulse': 'always', 'soft-rain': 'never', 'starfield-drift': 'always' } };
+        expect(shouldPrerender('candle-pulse', 'use', cfg)).toBe(true);
+        expect(shouldPrerender('candle-pulse', 'ahead', cfg)).toBe(true);
+        expect(shouldPrerender('starfield-drift', 'ahead', cfg)).toBe(true);
+        expect(shouldPrerender('soft-rain', 'use', cfg)).toBe(false);
+        expect(shouldPrerender('sprouting-leaves', 'ahead', cfg)).toBe(false); // auto is never rendered ahead
+    });
+    test('the master switch beats every mode', () => {
+        expect(shouldPrerender('candle-pulse', 'use', { enabled: false, resolution: 'auto', modes: { 'candle-pulse': 'always' } })).toBe(false);
+    });
+    test('modes parse defensively', () => {
+        expect(parsePatternModes('{"a":"always","b":"nope","c":"never"}')).toEqual({ a: 'always', c: 'never' });
+        expect(parsePatternModes('not json')).toEqual({});
+        expect(modeFor('x', {})).toBe('auto');
     });
 });

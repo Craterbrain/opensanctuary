@@ -32,6 +32,8 @@ export interface PatternLayer {
     to?: string;
     /** Animated end size, for pulsing layers. */
     sizeTo?: string;
+    /** Self-animated layers: the layer as if its animation began `phaseSec` seconds ago. */
+    imageAt?: (phaseSec: number) => string;
     /** Self-animated layers: a static picture of the layer at loop position t (0..1). */
     frameImage?: (t: number) => string;
 }
@@ -49,12 +51,27 @@ export interface BackgroundPatternSpec {
     loopSec?: number;
 }
 
+/**
+ * How hard the live (procedural) version is to draw, from a frame-time benchmark
+ * at 1920x1080 in software-rendered headless Chromium (no GPU, so absolute numbers
+ * are pessimistic; the ranking is what matters). 60fps = 16.7ms.
+ *   light  <= ~20ms : liquid-gradient 16.7, gold-shimmer 16.7, slow-waves 16.8,
+ *                     candle-pulse 16.8, living-mesh 18.0, aurora-waves 20.1
+ *   medium  20-40ms : floating-dust 27, rising-embers 30, gentle-snowfall 33,
+ *                     sprouting-leaves 35, swaying-rays 37, fireflies 37
+ *   heavy    > 40ms : soft-rain 42, drifting-bokeh 47, starfield-drift 53,
+ *                     drifting-clouds 54
+ */
+export type PatternCost = 'light' | 'medium' | 'heavy';
+
 export interface BackgroundPatternMeta {
     key: string;
     name: string;
     /** Static CSS swatch for contexts that can't run the real pattern. */
     preview: string;
     animated: boolean;
+    /** Animated patterns only. */
+    cost?: PatternCost;
     build: () => BackgroundPatternSpec;
 }
 
@@ -264,7 +281,7 @@ const PLANT_LOOP_SEC = 28;
 /** Gaussian blur radius in the plant SVG's 1920-wide units. */
 const PLANT_BLUR = 5;
 
-function growingPlants(): { image: string; frameImage: (t: number) => string } {
+function growingPlants(): { image: string; imageAt: (phaseSec: number) => string; frameImage: (t: number) => string } {
     const rand = seeded(2024);
     const PI = Math.PI;
     const LEAF_COLORS = ['#2f8f55', '#3fae63', '#62c46c', '#8bd873', '#b4e27a', '#4cb87a'];
@@ -336,7 +353,7 @@ function growingPlants(): { image: string; frameImage: (t: number) => string } {
     // be emitted two ways: as SMIL (plays by itself) or as a static frame at a
     // given loop position (what the pre-renderer draws, since SMIL can't be seeked).
     const smil = (tag: string, attrs: string, a: Anim): string =>
-        `<${tag} ${attrs} dur='${dur}' repeatCount='indefinite' calcMode='spline' keyTimes='${times(...a.kt)}' keySplines='${splines(a.kt.length)}' values='${a.values.join(';')}'/>`;
+        `<${tag} ${attrs} dur='${dur}' begin='__BEGIN__' repeatCount='indefinite' calcMode='spline' keyTimes='${times(...a.kt)}' keySplines='${splines(a.kt.length)}' values='${a.values.join(';')}'/>`;
     const num = (a: Anim, t: number): number => Number(evalAnim(a, t));
 
     interface StemItem { s: RawStem; a: Anim }
@@ -387,7 +404,11 @@ function growingPlants(): { image: string; frameImage: (t: number) => string } {
             `<g transform='scale(0)'>` + smil('animateTransform', "attributeName='transform' type='scale'", it.scale) +
             `<g opacity='0'>` + smil('animate', "attributeName='opacity'", it.opacity) + leafShape(it.l) + '</g></g></g></g>';
     }
-    const liveImage = toUrl(wrap(live));
+    const liveSvg = wrap(live);
+    // SMIL accepts a negative begin, i.e. "started this many seconds ago": that is how the
+    // plant is phase-locked to the clock so a pre-rendered clip can take over seamlessly.
+    const imageAt = (phaseSec: number): string => toUrl(liveSvg.split('__BEGIN__').join(`-${r1(phaseSec * 100) / 100}s`));
+    const liveImage = imageAt(0);
 
     const frameImage = (t: number): string => {
         let body = '';
@@ -404,7 +425,7 @@ function growingPlants(): { image: string; frameImage: (t: number) => string } {
         return toUrl(wrap(body));
     };
 
-    return { image: liveImage, frameImage };
+    return { image: liveImage, imageAt, frameImage };
 }
 
 // ---- layer constructors ----------------------------------------------------
@@ -442,7 +463,7 @@ const still = (layers: PatternLayer[]): BackgroundPatternSpec =>
 export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
     // ---- animated: the original five, rebuilt --------------------------------
     {
-        key: 'floating-dust', name: 'Floating Dust', animated: true,
+        key: 'floating-dust', name: 'Floating Dust', animated: true, cost: 'medium',
         preview: 'linear-gradient(160deg, #2b2013, #4a3820, #6b5227)',
         build: () => drift([
             tile(dotField({ w: 1500, h: 1100, n: 38, seed: 11, rMin: 4, rMax: 11, opMin: .25, opMax: .55, colors: ['255,226,160', '255,240,205'], solid: .12 }), 1500, 1100, 1, -1),
@@ -452,7 +473,7 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
         ], 90)
     },
     {
-        key: 'drifting-clouds', name: 'Drifting Clouds', animated: true,
+        key: 'drifting-clouds', name: 'Drifting Clouds', animated: true, cost: 'heavy',
         preview: 'linear-gradient(180deg, #3a5a8a, #6683b0, #9db4d6)',
         build: () => {
             const cloud = (w: number, h: number, n: number, seed: number, opMax: number): string => {
@@ -481,7 +502,7 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
         }
     },
     {
-        key: 'gentle-snowfall', name: 'Gentle Snowfall', animated: true,
+        key: 'gentle-snowfall', name: 'Gentle Snowfall', animated: true, cost: 'medium',
         preview: 'linear-gradient(180deg, #0d1b2a, #1b3a5c, #2c5480)',
         build: () => drift([
             tile(dotField({ w: 2000, h: 1300, n: 26, seed: 31, rMin: 5, rMax: 12, opMin: .5, opMax: .9, colors: ['255,255,255', '226,240,255'], solid: .45 }), 2000, 1300, 1, 1),
@@ -491,7 +512,7 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
         ], 70)
     },
     {
-        key: 'aurora-waves', name: 'Aurora Waves', animated: true,
+        key: 'aurora-waves', name: 'Aurora Waves', animated: true, cost: 'light',
         preview: 'linear-gradient(180deg, #050814, #0a1128, #030509)',
         build: () => sway([
             glide(blob(50, 50, '0,255,157', .42, 50, 30), '170% 150%', '0% 0%', '100% 60%'),
@@ -502,7 +523,7 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
         ], 38)
     },
     {
-        key: 'starfield-drift', name: 'Starfield Drift', animated: true,
+        key: 'starfield-drift', name: 'Starfield Drift', animated: true, cost: 'heavy',
         preview: 'radial-gradient(ellipse at center, #0a0e27, #000000)',
         build: () => drift([
             tile(dotField({ w: 2700, h: 1900, n: 40, seed: 41, rMin: 3, rMax: 7, opMin: .55, opMax: 1, colors: ['255,236,200', '255,255,255'], solid: .1, core: '#ffffff' }), 2700, 1900, 1, 1),
@@ -516,7 +537,7 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
 
     // ---- animated: new -------------------------------------------------------
     {
-        key: 'rising-embers', name: 'Rising Embers', animated: true,
+        key: 'rising-embers', name: 'Rising Embers', animated: true, cost: 'medium',
         preview: 'linear-gradient(0deg, #4a1507, #1a0a08 55%, #0b0505)',
         build: () => drift([
             tile(dotField({ w: 2100, h: 1100, n: 30, seed: 51, rMin: 4, rMax: 10, opMin: .5, opMax: .95, colors: ['255,138,61', '255,179,71'], solid: .12, core: '#fff1c9' }), 2100, 1100, 1, -1),
@@ -526,7 +547,7 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
         ], 50)
     },
     {
-        key: 'drifting-bokeh', name: 'Drifting Bokeh', animated: true,
+        key: 'drifting-bokeh', name: 'Drifting Bokeh', animated: true, cost: 'heavy',
         preview: 'linear-gradient(135deg, #0d2330, #1a1b3f 60%, #2a1740)',
         build: () => drift([
             tile(dotField({ w: 2600, h: 1500, n: 14, seed: 61, rMin: 60, rMax: 150, opMin: .12, opMax: .3, colors: ['255,200,120', '255,150,170', '120,210,255'], solid: .5, ring: true }), 2600, 1500, 1, -1),
@@ -536,7 +557,7 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
         ], 180)
     },
     {
-        key: 'fireflies', name: 'Fireflies', animated: true,
+        key: 'fireflies', name: 'Fireflies', animated: true, cost: 'medium',
         preview: 'linear-gradient(180deg, #05110d, #0b2a1e 60%, #12392a)',
         build: () => drift([
             tile(dotField({ w: 1900, h: 1200, n: 16, seed: 71, rMin: 6, rMax: 15, opMin: .45, opMax: .9, colors: ['216,255,106', '240,255,150'], solid: .1, core: '#f6ffc4' }), 1900, 1200, 1, -1),
@@ -547,7 +568,7 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
         ], 140)
     },
     {
-        key: 'soft-rain', name: 'Soft Rain', animated: true,
+        key: 'soft-rain', name: 'Soft Rain', animated: true, cost: 'heavy',
         preview: 'linear-gradient(180deg, #0f1a26, #1c2b3c 60%, #26394d)',
         build: () => drift([
             tile(streakField(1500, 1500, 34, 81, 70, 140, 1.8, '205,225,255', .22, .5), 1500, 1500, 0, 1),
@@ -558,7 +579,7 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
         ], 4.5)
     },
     {
-        key: 'slow-waves', name: 'Slow Waves', animated: true,
+        key: 'slow-waves', name: 'Slow Waves', animated: true, cost: 'light',
         preview: 'linear-gradient(180deg, #07203a, #0b3a5c 60%, #0e5a7a)',
         build: () => drift([
             { image: waveBand(1800, 300, [[1, .1, 0], [3, .035, 1.3]], 'rgba(255,255,255,.085)'), size: '1800px 34%', repeat: 'repeat-x', from: '0px 100%', to: '1800px 100%' },
@@ -568,14 +589,14 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
         ], 70)
     },
     {
-        key: 'liquid-gradient', name: 'Liquid Gradient', animated: true,
+        key: 'liquid-gradient', name: 'Liquid Gradient', animated: true, cost: 'light',
         preview: 'linear-gradient(120deg, #1b0a3c, #4a1670, #8a2a6d, #2a3f8f)',
         build: () => sway([
             glide('linear-gradient(120deg, #1b0a3c 0%, #4a1670 22%, #8a2a6d 42%, #2a3f8f 62%, #123a63 80%, #1b0a3c 100%)', '400% 400%', '0% 50%', '100% 50%'),
         ], 32)
     },
     {
-        key: 'swaying-rays', name: 'Swaying Rays', animated: true,
+        key: 'swaying-rays', name: 'Swaying Rays', animated: true, cost: 'medium',
         preview: 'linear-gradient(180deg, #0d1020, #1a1f3c 60%, #2a2a4a)',
         build: () => sway([
             glide(rayFan(91, 150, 210, 7, '255,236,190', .07, .16), '150% 100%', '10% 0%', '90% 0%'),
@@ -585,7 +606,7 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
         ], 22)
     },
     {
-        key: 'gold-shimmer', name: 'Gold Shimmer', animated: true,
+        key: 'gold-shimmer', name: 'Gold Shimmer', animated: true, cost: 'light',
         preview: 'linear-gradient(135deg, #1c1407, #3a2a0c 50%, #1c1407)',
         build: () => sway([
             glide('linear-gradient(105deg, transparent 36%, rgba(255,215,130,.07) 44%, rgba(255,232,170,.24) 50%, rgba(255,215,130,.07) 56%, transparent 64%)', '320% 100%', '100% 0%', '0% 0%'),
@@ -594,7 +615,7 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
         ], 16)
     },
     {
-        key: 'living-mesh', name: 'Living Mesh', animated: true,
+        key: 'living-mesh', name: 'Living Mesh', animated: true, cost: 'light',
         preview: 'linear-gradient(135deg, #1a0d33, #3b1a5a 50%, #14305a)',
         build: () => sway([
             glide(blob(50, 50, '219,39,119', .5, 36, 36), '190% 190%', '0% 0%', '100% 70%'),
@@ -605,7 +626,7 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
         ], 26)
     },
     {
-        key: 'candle-pulse', name: 'Candlelight', animated: true,
+        key: 'candle-pulse', name: 'Candlelight', animated: true, cost: 'light',
         preview: 'linear-gradient(180deg, #0a0604, #3a1a08)',
         build: () => sway([
             { image: 'radial-gradient(ellipse 50% 58% at 50% 100%, rgba(255,175,70,.55), rgba(255,110,25,.2) 48%, transparent 78%)', size: '95% 95%', sizeTo: '125% 125%', repeat: 'no-repeat', from: '50% 100%', to: '50% 100%' },
@@ -614,13 +635,13 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
         ], 3.6)
     },
     {
-        key: 'sprouting-leaves', name: 'Sprouting Leaves', animated: true,
+        key: 'sprouting-leaves', name: 'Sprouting Leaves', animated: true, cost: 'medium',
         preview: 'linear-gradient(180deg, #071a14, #0d2f22 70%, #143a28)',
         build: () => {
             const plants = growingPlants();
             return {
             layers: [
-                { image: plants.image, frameImage: plants.frameImage, size: '100% 100%', repeat: 'no-repeat', from: '50% 100%' },
+                { image: plants.image, imageAt: plants.imageAt, frameImage: plants.frameImage, size: '100% 100%', repeat: 'no-repeat', from: '50% 100%' },
                 fixed('radial-gradient(ellipse 70% 45% at 50% 105%, rgba(120,220,130,.22), transparent 100%)'),
                 fixed('linear-gradient(180deg, #071a14, #0d2f22 70%, #143a28)'),
             ],
@@ -804,8 +825,12 @@ export function ensurePatternKeyframes(doc: Document, key: string, k = 1): void 
 // Deterministic frames (for pre-rendering to video)
 // ---------------------------------------------------------------------------
 
-/** Longest loop we will pre-render; slower patterns are cheap to draw live anyway. */
-export const PRERENDER_MAX_LOOP_SEC = 80;
+/** Loops longer than this are rendered at 10 fps (they drift a few px/s, so steps are invisible). */
+const SLOW_LOOP_SEC = 80;
+/** "Auto" mode only renders patterns that need at most this many frames (about 1-2 minutes of work). */
+export const AUTO_MAX_FRAMES = 2400;
+/** The server refuses more frames than this. */
+export const MAX_RENDER_FRAMES = 4800;
 
 /** Seconds for one seamless loop of the pattern's motion (0 for still patterns). */
 export function patternLoopSec(key: string): number {
@@ -816,10 +841,33 @@ export function patternLoopSec(key: string): number {
     return spec.alternate ? spec.durationSec * 2 : spec.durationSec;
 }
 
-/** Whether a pre-rendered clip is worth making (animated, loop short enough). */
+export function patternFps(key: string): number {
+    return patternLoopSec(key) > SLOW_LOOP_SEC ? 10 : 30;
+}
+
+export function patternFrameCount(key: string): number {
+    return Math.round(patternLoopSec(key) * patternFps(key));
+}
+
+export function patternCost(key: string): PatternCost | null {
+    return getPatternMeta(key)?.cost ?? null;
+}
+
+/** Whether a clip can be rendered at all (it animates and fits the frame limit). */
 export function patternPrerenderable(key: string): boolean {
+    const frames = patternFrameCount(key);
+    return frames > 0 && frames <= MAX_RENDER_FRAMES;
+}
+
+/** Whether "Auto" mode renders it: not light to draw live, and quick enough to render. */
+export function patternAutoPrerender(key: string): boolean {
+    return patternPrerenderable(key) && patternCost(key) !== 'light' && patternFrameCount(key) <= AUTO_MAX_FRAMES;
+}
+
+/** Position in the loop (seconds) at a wall-clock moment: everything phase-locks to this. */
+export function patternPhaseSec(key: string, epochMs: number): number {
     const loop = patternLoopSec(key);
-    return loop > 0 && loop <= PRERENDER_MAX_LOOP_SEC;
+    return loop > 0 ? ((epochMs / 1000) % loop + loop) % loop : 0;
 }
 
 /** Bump when the frame-drawing code changes, to invalidate every cached clip. */

@@ -319,6 +319,13 @@ export class WebCodecsPlayer {
           brokeForReseek = true;
           break; // decode fell too far behind real time -- jump forward instead of catching up frame-by-frame
         }
+        if (anchor.loop && this.durationSec > 0 && waitMs > (this.durationSec * 1000) / 2) {
+          // The wall clock wrapped to the start of the loop while this frame was being
+          // decoded, so its timestamp is now almost a whole loop "in the future". Sleeping
+          // for that would freeze the picture for up to a full loop; re-seek instead.
+          brokeForReseek = true;
+          break;
+        }
         if (waitMs > 0) {
           await sleep(waitMs);
           if (gen !== this.playGeneration) return;

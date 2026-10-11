@@ -13,21 +13,55 @@
  */
 
 import {
-    getPatternSpec, patternFrameStyle, patternLoopSec, patternPrerenderable, patternRevision,
+    BACKGROUND_PATTERNS, getPatternSpec, patternAutoPrerender, patternFps, patternFrameCount, patternFrameStyle,
+    patternPrerenderable, patternRevision,
 } from './background_patterns.ts';
 import { hostTokenHeader } from './host_session.ts';
 import { paintLayers, clearTileCache } from './gradient_canvas.ts';
 
-export const PRERENDER_FPS = 30;
-
 export type PatternResolutionSetting = 'auto' | '1440' | '1080';
 
+/**
+ * Per-pattern choice: 'auto' renders it when it is demanding to draw live (see
+ * PatternCost) and quick to render; 'always' renders it ahead of time even if light
+ * or slow to render; 'never' always draws it live.
+ */
+export type PatternMode = 'auto' | 'always' | 'never';
+
 export interface PrerenderConfig {
+    /** Master switch. Off = everything is drawn live, whatever the modes say. */
     enabled: boolean;
     resolution: PatternResolutionSetting;
+    modes: Record<string, PatternMode>;
 }
 
-let config: PrerenderConfig = { enabled: true, resolution: 'auto' };
+let config: PrerenderConfig = { enabled: true, resolution: 'auto', modes: {} };
+
+export function parsePatternModes(text: string | undefined | null): Record<string, PatternMode> {
+    try {
+        const raw = JSON.parse(text || '{}');
+        const out: Record<string, PatternMode> = {};
+        for (const [k, v] of Object.entries(raw || {})) {
+            if (v === 'always' || v === 'never' || v === 'auto') out[k] = v;
+        }
+        return out;
+    } catch {
+        return {};
+    }
+}
+
+export function modeFor(key: string, modes: Record<string, PatternMode> = config.modes): PatternMode {
+    return modes[key] ?? 'auto';
+}
+
+/** Should this pattern get a pre-rendered clip? `trigger` 'ahead' (startup) only honours 'always'. */
+export function shouldPrerender(key: string, trigger: 'use' | 'ahead' = 'use', cfg: PrerenderConfig = config): boolean {
+    if (!cfg.enabled || !patternPrerenderable(key)) return false;
+    const mode = modeFor(key, cfg.modes);
+    if (mode === 'never') return false;
+    if (mode === 'always') return true;
+    return trigger === 'use' && patternAutoPrerender(key);
+}
 
 export function configurePatternPrerender(next: Partial<PrerenderConfig>): void {
     config = { ...config, ...next };
@@ -93,9 +127,8 @@ export interface RenderOptions {
 /** Renders a whole loop and uploads it; resolves to the clip's URL, or null if not possible. */
 export async function renderPatternClip(key: string, opts: RenderOptions): Promise<string | null> {
     if (!patternPrerenderable(key)) return null;
-    const fps = opts.fps ?? PRERENDER_FPS;
-    const loop = patternLoopSec(key);
-    const frames = Math.round(loop * fps);
+    const fps = opts.fps ?? patternFps(key);
+    const frames = patternFrameCount(key);
     const rev = patternRevision(key);
 
     let started: { state: string; url?: string; job_id?: string };
@@ -160,8 +193,8 @@ export function setMonitorHeightsProvider(fn: () => Promise<number[]>): void {
  * Safe to call on every selection: it is a no-op when pre-rendering is off,
  * the pattern isn't worth rendering, or this session already tried it.
  */
-export function ensurePatternClip(key: string): void {
-    if (!config.enabled || !patternPrerenderable(key) || typeof document === 'undefined') return;
+export function ensurePatternClip(key: string, trigger: 'use' | 'ahead' = 'use'): void {
+    if (!shouldPrerender(key, trigger) || typeof document === 'undefined') return;
     const spec = getPatternSpec(key);
     if (!spec) return;
     const id = key + ':' + patternRevision(key) + ':' + config.resolution;
@@ -178,32 +211,70 @@ export function ensurePatternClip(key: string): void {
     });
 }
 
+/** Queues every pattern set to 'always' that has no clip yet (call once things have settled after startup). */
+export function prerenderAlwaysPatterns(): void {
+    for (const p of BACKGROUND_PATTERNS) {
+        if (p.animated) ensurePatternClip(p.key, 'ahead');
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Playback-side lookup (live output)
 // ---------------------------------------------------------------------------
 
 const clipCache = new Map<string, string | null>();
 const clipPending = new Set<string>();
+const firstLookAt = new Map<string, number>();
+
+// The live output has no console settings in memory, so it reads the (non-secret)
+// settings itself, briefly cached, to honour the master switch and 'never'.
+let playbackPolicy: { at: number; enabled: boolean; modes: Record<string, PatternMode> } | null = null;
+
+async function clipAllowed(key: string): Promise<boolean> {
+    if (!playbackPolicy || Date.now() - playbackPolicy.at > 15_000) {
+        try {
+            const res = await fetch('/api/settings');
+            const j = res.ok ? await res.json() : {};
+            playbackPolicy = { at: Date.now(), enabled: j.patternPrerender !== 'off', modes: parsePatternModes(j.patternModes) };
+        } catch {
+            playbackPolicy = { at: Date.now(), enabled: true, modes: {} };
+        }
+    }
+    return playbackPolicy.enabled && modeFor(key, playbackPolicy.modes) !== 'never';
+}
 
 /** Cached clip URL for a pattern, or null. Kicks off a lookup the first time and calls `onFound` if one exists. */
 export function lookupPatternClip(key: string, onFound?: () => void): string | null {
     if (!patternPrerenderable(key)) return null;
     const rev = patternRevision(key);
     const id = key + ':' + rev;
-    if (clipCache.has(id)) return clipCache.get(id) ?? null;
+    if (clipCache.has(id)) {
+        const url = clipCache.get(id) ?? null;
+        // A clip found earlier stops being used once the setting says never (as last read).
+        if (url && playbackPolicy && !(playbackPolicy.enabled && modeFor(key, playbackPolicy.modes) !== 'never')) return null;
+        return url;
+    }
     if (!clipPending.has(id)) {
         clipPending.add(id);
-        fetch(`/api/pattern-cache/lookup?key=${encodeURIComponent(key)}&rev=${rev}`)
-            .then(r => (r.ok ? r.json() : { url: null }))
+        if (!firstLookAt.has(id)) firstLookAt.set(id, Date.now());
+        clipAllowed(key)
+            .then(ok => (ok ? fetch(`/api/pattern-cache/lookup?key=${encodeURIComponent(key)}&rev=${rev}`) : null))
+            .then(r => (r && r.ok ? r.json() : { url: null }))
             .then((j: { url: string | null }) => {
                 clipPending.delete(id);
                 if (j.url) {
                     clipCache.set(id, j.url);
                     onFound?.();
                 } else {
-                    // Not rendered (yet): look again after a while, in case the console finishes one.
-                    setTimeout(() => clipCache.delete(id), 30_000);
+                    // Not rendered (yet): keep the miss for a while, then look again (every
+                    // 20s for up to 20 minutes) in case the console finishes a render while
+                    // the live pattern is on screen -- that is what triggers the handoff.
                     clipCache.set(id, null);
+                    if (Date.now() - firstLookAt.get(id)! < 20 * 60_000) {
+                        setTimeout(() => { clipCache.delete(id); lookupPatternClip(key, onFound); }, 20_000);
+                    } else {
+                        setTimeout(() => { clipCache.delete(id); firstLookAt.delete(id); }, 20_000);
+                    }
                 }
             })
             .catch(() => { clipPending.delete(id); });

@@ -5992,3 +5992,13 @@ video {
   opacity: 0;
   cursor: pointer;
 }
+
+/* Settings > Animated Backgrounds */
+.pattern-cache-controls { display: flex; align-items: center; gap: var(--space-3, 12px); }
+.pattern-status { font-size: 12px; color: var(--os-text-muted, #94a3b8); }
+.pattern-status.is-ready { color: var(--os-brand-primary); font-weight: 600; }
+.cost-badge { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: .02em; vertical-align: middle; border: 1px solid currentColor; }
+.cost-light { color: #4ade80; }
+.cost-medium { color: #facc15; }
+.cost-heavy { color: #fb7185; }
+.pattern-cache-controls .settings-row-desc { white-space: nowrap; }

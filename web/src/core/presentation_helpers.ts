@@ -366,13 +366,15 @@ export function applyResolvedBackground(
     el: HTMLElement,
     bg: string | null | undefined,
     defaultGradient: string = 'linear-gradient(135deg, #0f2027, #203a43, #2c5364)',
-    availableThemes: ThemeDefinition[] = DEFAULT_THEMES
+    availableThemes: ThemeDefinition[] = DEFAULT_THEMES,
+    /** Animated patterns: start this many seconds into the loop (see patternPhaseSec). */
+    phaseSec?: number
 ): void {
     const patternKey = parseAnimatedPatternMarker(bg);
     if (patternKey) {
         const spec = getPatternSpec(patternKey)!;
         el.style.background = '';
-        el.style.backgroundImage = spec.layers.map(l => l.image).join(', ');
+        el.style.backgroundImage = spec.layers.map(l => (phaseSec !== undefined && l.imageAt ? l.imageAt(phaseSec) : l.image)).join(', ');
         // Tiles are authored for a 1920px-wide screen; shrink them for thumbnails.
         const k = patternScaleFor(el.clientWidth);
         el.style.backgroundSize = spec.layers.map(l => scalePx(l.size, k)).join(', ');
@@ -380,7 +382,9 @@ export function applyResolvedBackground(
         el.style.backgroundPosition = spec.layers.map(l => scalePx(l.from ?? '0% 0%', k)).join(', ');
         if (spec.durationSec > 0) {
             ensurePatternKeyframes(el.ownerDocument, patternKey, k);
-            el.style.animation = `${patternAnimationName(patternKey, k)} ${spec.durationSec}s ${spec.timing} infinite${spec.alternate ? ' alternate' : ''}`;
+            // A negative delay starts the CSS animation mid-loop (a ping-pong loop is 2 legs long).
+            const delay = phaseSec !== undefined ? ` -${Math.round(phaseSec * 1000) / 1000}s` : '';
+            el.style.animation = `${patternAnimationName(patternKey, k)} ${spec.durationSec}s ${spec.timing}${delay} infinite${spec.alternate ? ' alternate' : ''}`;
         } else {
             el.style.animation = '';
         }

@@ -2,7 +2,7 @@
 import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { resolveHostSessionToken, hostTokenHeader, submitManualHostToken, getConsoleSessionId } from './core/host_session.ts';
 import { api } from './core/api_client.ts';
-import { ensurePatternClip, configurePatternPrerender, setMonitorHeightsProvider, onPatternRenderProgress, type PatternResolutionSetting } from './core/pattern_render.ts';
+import { ensurePatternClip, configurePatternPrerender, setMonitorHeightsProvider, onPatternRenderProgress, parsePatternModes, prerenderAlwaysPatterns, type PatternResolutionSetting } from './core/pattern_render.ts';
 import { attachClosestEdge, extractClosestEdge, type Edge } from '@atlaskit/pragmatic-drag-and-drop-hitbox/closest-edge';
 import { getReorderDestinationIndex } from '@atlaskit/pragmatic-drag-and-drop-hitbox/util/get-reorder-destination-index';
 import {
@@ -256,7 +256,9 @@ export let appOptions = {
   themeLinked: 'true',
   // Pre-rendered animated backgrounds (core/pattern_render.ts): 'on' | 'off', and 'auto' | '1440' | '1080'.
   patternPrerender: 'on',
-  patternResolution: 'auto'
+  patternResolution: 'auto',
+  // JSON {patternKey: 'auto' | 'always' | 'never'}: per-pattern pre-render choice.
+  patternModes: '{}'
 };
 
 // Auto resolution looks at the connected monitors (any below 1440p -> render 1080p).
@@ -266,6 +268,7 @@ setMonitorHeightsProvider(async () => {
   return ((data && data.monitors) || []).map((m: { height: number }) => m.height);
 });
 let patternRenderToastShown = false;
+let patternAlwaysQueued = false;
 onPatternRenderProgress(p => {
   if (!p) { patternRenderToastShown = false; return; }
   if (!patternRenderToastShown) {
@@ -321,7 +324,13 @@ function applyAppOptionsToUI() {
   configurePatternPrerender({
     enabled: appOptions.patternPrerender !== 'off',
     resolution: (['auto', '1440', '1080'].includes(appOptions.patternResolution) ? appOptions.patternResolution : 'auto') as PatternResolutionSetting,
+    modes: parsePatternModes(appOptions.patternModes),
   });
+  // Patterns set to "always" get rendered ahead of time, once things have settled.
+  if (!patternAlwaysQueued) {
+    patternAlwaysQueued = true;
+    setTimeout(prerenderAlwaysPatterns, 8000);
+  }
   const outAsp = document.getElementById('output-aspect-ratio-text');
   if (outAsp) outAsp.textContent = `${appOptions.aspectRatio || '16:9'} Hardware Mirror`;
   if (canvasFooterLeftEl && (!currentSnapshot || !currentSnapshot.state || !currentSnapshot.state.live_item)) {

@@ -24,12 +24,29 @@ renders one seamless loop of each eligible pattern into a cached video:
    ordinary looping video background, otherwise it keeps drawing the pattern
    live. Nothing waits on the render and any failure just leaves the live version.
 
-* **Resolution:** 2560x1440 by default, 1920x1080 when Settings > Live Output >
-  *Pre-rendered Background Quality* says so, or in Automatic mode when a connected
-  monitor is smaller than 1440p.
-* **Eligible patterns:** animated patterns whose loop is at most 80 s
-  (`PRERENDER_MAX_LOOP_SEC`). The very slow ones (Starfield Drift, Drifting Clouds,
-  ...) stay live: they are cheap to draw and would need thousands of frames.
+* **Resolution:** 2560x1440 by default, 1920x1080 when Settings > Animated
+  Backgrounds > *Quality* says so, or in Automatic mode when a connected monitor is
+  smaller than 1440p.
+* **Which backgrounds render (per background: Auto / Always / Never).** Every
+  animated pattern has a *cost* (Light / Medium / Heavy: how hard the live version is
+  to draw, measured as frame time at 1080p; see `PatternCost` in
+  `background_patterns.ts`).
+  * **Auto** (default): render it when it is used if it is Medium or Heavy and needs at
+    most 2400 frames (`AUTO_MAX_FRAMES`). Light ones and very slow ones are left live.
+  * **Always**: render it ahead of time (queued a few seconds after startup, or as soon
+    as you pick Always), whatever its cost or length.
+  * **Never**: always draw it live. The master *Pre-render* switch overrides all of
+    these.
+  Loops longer than 80 s (Drifting Clouds, Starfield Drift, ...) render at 10 fps: they
+  drift a few px/s so the steps are invisible. The Starfield needs 4200 frames, so only
+  renders when set to Always.
+* **Seamless handoff.** The live version is always shown first. It is phase-locked to
+  the wall clock (`patternPhaseSec`: CSS `animation-delay`, SMIL negative `begin` for
+  the plant), and the clip plays at the same clock position (WebCodecs anchor 0, i.e.
+  position = server time mod clip length). When the live output finds a new clip (it
+  re-checks every 20 s while a pattern is on screen) the video fades in over the
+  pattern for 0.8 s and the pattern is then dropped. The Android TV app's native
+  player is not given clips; it keeps drawing the pattern.
 * **Cache key:** the file name holds a revision hash of the pattern definition
   (`patternRevision`), so editing a pattern or the frame-drawing code (bump
   `RENDER_REVISION`) simply makes new clips; old ones age out.
@@ -39,3 +56,5 @@ renders one seamless loop of each eligible pattern into a cached video:
   *Settings > Live Output > Clear Rendered Backgrounds* (`DELETE /api/pattern-cache`)
   empties the cache immediately; `GET /api/pattern-cache` reports its size.
 * **Off switch:** *Pre-render Animated Backgrounds: Off* keeps everything live.
+* **Settings:** Settings > Animated Backgrounds has the switch, quality, the cache size and
+  clear button, and the per-background choices with their cost badge.
