@@ -4,7 +4,8 @@
  */
 
 import { getReorderDestinationIndex } from "@atlaskit/pragmatic-drag-and-drop-hitbox/util/get-reorder-destination-index";
-import { GRADIENT_PRESETS, ANIMATED_PATTERN_PRESETS, type SlideBackground, type BackgroundPreset } from "../editor/types.ts";
+import { getPatternMeta, getPatternSpec, ensurePatternKeyframes, patternAnimationName, patternScaleFor, scalePx } from "./background_patterns.ts";
+import { GRADIENT_PRESETS, PATTERN_PRESETS, type SlideBackground, type BackgroundPreset } from "../editor/types.ts";
 
 export type Edge = 'top' | 'bottom' | 'left' | 'right';
 
@@ -228,7 +229,7 @@ export const DEFAULT_THEMES: ThemeDefinition[] = [
 ];
 
 // Auto-populate the theme list from the slide editor's own background presets
-// (GRADIENT_PRESETS / ANIMATED_PATTERN_PRESETS in editor/types.ts) so a preset
+// (GRADIENT_PRESETS / PATTERN_PRESETS in editor/types.ts) so a preset
 // added there shows up everywhere DEFAULT_THEMES is used, instead of needing a
 // second hand-written entry kept in sync by hand. Solid-kind presets carry a
 // "pattern:<name>" marker (resolved by applyResolvedBackground at render
@@ -236,7 +237,7 @@ export const DEFAULT_THEMES: ThemeDefinition[] = [
 // marker, so use their already-CSS-valid `preview` string instead.
 {
     const existingThemeNames = new Set(DEFAULT_THEMES.map(t => t.name.toLowerCase()));
-    for (const preset of [...GRADIENT_PRESETS, ...ANIMATED_PATTERN_PRESETS]) {
+    for (const preset of [...GRADIENT_PRESETS, ...PATTERN_PRESETS]) {
         if (existingThemeNames.has(preset.name.toLowerCase())) continue;
         existingThemeNames.add(preset.name.toLowerCase());
         DEFAULT_THEMES.push({
@@ -324,93 +325,18 @@ export function formatCssBackground(
 }
 
 /**
- * Animated slide backgrounds: a handful of layered radial-gradient "particle"
- * fields (dust, snow, stars, clouds, aurora bands) over a base gradient, each
- * drifting slowly via a CSS keyframe animation on background-position. A
- * plain CSS background *value* (what formatCssBackground returns) can't
- * express motion — animation is a separate style property tied to a
- * @keyframes rule that has to exist in whatever document renders it — so
- * these are addressed by a "pattern:<name>" marker stored in the ordinary
- * flat `background` string field (it round-trips through everything that
- * already treats that field as an opaque CSS-ish string, including the
- * backend, with zero format changes) and resolved by applyResolvedBackground
- * below, which is the one place that knows how to turn the marker into the
- * actual layered background-image + animation. The @keyframes themselves are
- * defined once in style.css (in-app pages) and once in live.html's own
- * <style> block (a separate document with no access to style.css).
+ * Procedural slide backgrounds (moving particle fields, drifting gradients,
+ * still meshes and textures) are addressed by a "pattern:<key>" marker stored
+ * in the ordinary flat `background` string field, so they round-trip through
+ * everything that treats that field as an opaque CSS-ish string (including the
+ * backend) with no format change. The catalogue, tile generators and generated
+ * @keyframes live in background_patterns.ts; applyResolvedBackground below is
+ * the one place that turns a marker into the layered background + animation.
  */
-export interface AnimatedBackgroundPattern {
-    name: string;
-    backgroundImage: string;
-    backgroundSize: string;
-    animationName: string;
-    durationSec: number;
-}
-
-export const ANIMATED_BACKGROUND_PATTERNS: Record<string, AnimatedBackgroundPattern> = {
-    'floating-dust': {
-        name: 'Floating Dust',
-        backgroundImage:
-            'radial-gradient(circle at 20% 30%, rgba(255,235,180,0.9) 0px, rgba(255,235,180,0.9) 1.5px, transparent 2px), ' +
-            'radial-gradient(circle at 60% 70%, rgba(255,235,180,0.7) 0px, rgba(255,235,180,0.7) 1px, transparent 1.6px), ' +
-            'radial-gradient(circle at 80% 15%, rgba(255,245,210,0.8) 0px, rgba(255,245,210,0.8) 1.2px, transparent 1.8px), ' +
-            'radial-gradient(circle at 35% 85%, rgba(255,235,180,0.6) 0px, rgba(255,235,180,0.6) 1px, transparent 1.5px), ' +
-            'radial-gradient(circle at 90% 55%, rgba(255,245,210,0.7) 0px, rgba(255,245,210,0.7) 1.3px, transparent 1.9px), ' +
-            'linear-gradient(160deg, #2b2013, #4a3820, #6b5227)',
-        backgroundSize: '220px 220px, 180px 180px, 260px 260px, 200px 200px, 240px 240px, 100% 100%',
-        animationName: 'bgPatternFloatingDust',
-        durationSec: 50
-    },
-    'drifting-clouds': {
-        name: 'Drifting Clouds',
-        backgroundImage:
-            'radial-gradient(ellipse 220px 90px at 20% 30%, rgba(255,255,255,0.35), transparent 70%), ' +
-            'radial-gradient(ellipse 300px 110px at 65% 55%, rgba(255,255,255,0.28), transparent 70%), ' +
-            'radial-gradient(ellipse 260px 100px at 40% 75%, rgba(255,255,255,0.22), transparent 70%), ' +
-            'radial-gradient(ellipse 200px 80px at 85% 20%, rgba(255,255,255,0.3), transparent 70%), ' +
-            'linear-gradient(180deg, #3a5a8a, #6683b0, #9db4d6)',
-        backgroundSize: '1400px 800px, 1400px 800px, 1400px 800px, 1400px 800px, 100% 100%',
-        animationName: 'bgPatternDriftingClouds',
-        durationSec: 90
-    },
-    'gentle-snowfall': {
-        name: 'Gentle Snowfall',
-        backgroundImage:
-            'radial-gradient(circle, rgba(255,255,255,0.9) 1px, transparent 1.6px), ' +
-            'radial-gradient(circle, rgba(255,255,255,0.75) 1.2px, transparent 1.8px), ' +
-            'radial-gradient(circle, rgba(255,255,255,0.6) 0.8px, transparent 1.3px), ' +
-            'linear-gradient(180deg, #0d1b2a, #1b3a5c, #2c5480)',
-        backgroundSize: '140px 140px, 200px 200px, 100px 100px, 100% 100%',
-        animationName: 'bgPatternGentleSnowfall',
-        durationSec: 25
-    },
-    'aurora-waves': {
-        name: 'Aurora Waves',
-        backgroundImage:
-            'radial-gradient(ellipse 500px 250px at 30% 20%, rgba(0,255,157,0.35), transparent 70%), ' +
-            'radial-gradient(ellipse 550px 280px at 70% 40%, rgba(123,47,247,0.3), transparent 70%), ' +
-            'radial-gradient(ellipse 480px 240px at 50% 65%, rgba(0,200,255,0.28), transparent 70%), ' +
-            'linear-gradient(180deg, #050814, #0a1128, #030509)',
-        backgroundSize: '1600px 900px, 1600px 900px, 1600px 900px, 100% 100%',
-        animationName: 'bgPatternAuroraWaves',
-        durationSec: 70
-    },
-    'starfield-drift': {
-        name: 'Starfield Drift',
-        backgroundImage:
-            'radial-gradient(circle, rgba(255,255,255,0.95) 0.8px, transparent 1.3px), ' +
-            'radial-gradient(circle, rgba(255,255,255,0.7) 1px, transparent 1.6px), ' +
-            'radial-gradient(circle, rgba(200,220,255,0.5) 0.6px, transparent 1px), ' +
-            'radial-gradient(ellipse at center, #0a0e27, #000000)',
-        backgroundSize: '160px 160px, 240px 240px, 100px 100px, 100% 100%',
-        animationName: 'bgPatternStarfieldDrift',
-        durationSec: 140
-    }
-};
-
-export function parseAnimatedPatternMarker(bg: string | null | undefined): AnimatedBackgroundPattern | null {
+export function parseAnimatedPatternMarker(bg: string | null | undefined): string | null {
     if (!bg || typeof bg !== 'string' || !bg.startsWith('pattern:')) return null;
-    return ANIMATED_BACKGROUND_PATTERNS[bg.slice('pattern:'.length)] || null;
+    const key = bg.slice('pattern:'.length);
+    return getPatternMeta(key) ? key : null;
 }
 
 /**
@@ -442,13 +368,22 @@ export function applyResolvedBackground(
     defaultGradient: string = 'linear-gradient(135deg, #0f2027, #203a43, #2c5364)',
     availableThemes: ThemeDefinition[] = DEFAULT_THEMES
 ): void {
-    const pattern = parseAnimatedPatternMarker(bg);
-    if (pattern) {
+    const patternKey = parseAnimatedPatternMarker(bg);
+    if (patternKey) {
+        const spec = getPatternSpec(patternKey)!;
         el.style.background = '';
-        el.style.backgroundImage = pattern.backgroundImage;
-        el.style.backgroundSize = pattern.backgroundSize;
-        el.style.backgroundRepeat = 'repeat';
-        el.style.animation = `${pattern.animationName} ${pattern.durationSec}s linear infinite`;
+        el.style.backgroundImage = spec.layers.map(l => l.image).join(', ');
+        // Tiles are authored for a 1920px-wide screen; shrink them for thumbnails.
+        const k = patternScaleFor(el.clientWidth);
+        el.style.backgroundSize = spec.layers.map(l => scalePx(l.size, k)).join(', ');
+        el.style.backgroundRepeat = spec.layers.map(l => l.repeat).join(', ');
+        el.style.backgroundPosition = spec.layers.map(l => scalePx(l.from ?? '0% 0%', k)).join(', ');
+        if (spec.durationSec > 0) {
+            ensurePatternKeyframes(el.ownerDocument, patternKey, k);
+            el.style.animation = `${patternAnimationName(patternKey, k)} ${spec.durationSec}s ${spec.timing} infinite${spec.alternate ? ' alternate' : ''}`;
+        } else {
+            el.style.animation = '';
+        }
         return;
     }
     el.style.animation = '';

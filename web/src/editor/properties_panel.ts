@@ -1,4 +1,4 @@
-import { EditorSlide, SlideElement, SOLID_PALETTE_PRESETS, GRADIENT_PRESETS, ANIMATED_PATTERN_PRESETS, FONT_FAMILY_GROUPS } from './types';
+import { EditorSlide, SlideElement, SOLID_PALETTE_PRESETS, GRADIENT_PRESETS, PATTERN_PRESETS, FONT_FAMILY_GROUPS } from './types';
 import { applyResolvedBackground, backgroundPresetDataString, escapeHtml } from '../core/presentation_helpers';
 
 export class PropertiesPanel {
@@ -93,7 +93,7 @@ export class PropertiesPanel {
     for (const m of modes) {
       const btn = document.createElement('button');
       btn.className = m === activeMode ? 'active' : '';
-      btn.textContent = m;
+      btn.textContent = m === 'animated' ? 'patterns' : m;
       btn.addEventListener('click', () => {
         activeMode = m;
         modes.forEach(mode => {
@@ -179,7 +179,7 @@ export class PropertiesPanel {
     animContainer.className = `prop-section ${activeMode !== 'animated' ? 'hidden' : ''}`;
     const animPresetGrid = document.createElement('div');
     animPresetGrid.className = 'prop-presets';
-    for (const a of ANIMATED_PATTERN_PRESETS) {
+    for (const a of PATTERN_PRESETS) {
       const aRow = document.createElement('button');
       aRow.className = 'prop-preset';
       const prev = document.createElement('div');

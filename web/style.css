@@ -2538,39 +2538,8 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: var(--o
   to { opacity: 1; }
 }
 
-/* ==========================================================================
-   ANIMATED SLIDE BACKGROUND PATTERNS
-   Layered drifting radial-gradient "particle" fields, applied via
-   applyResolvedBackground (core/presentation_helpers.ts) whenever a slide's
-   background resolves to a "pattern:<name>" marker (see
-   ANIMATED_PATTERN_PRESETS, editor/types.ts). Mirrored in live.html's own
-   <style> block — a separate document with no access to this stylesheet.
-   ========================================================================== */
-@keyframes bgPatternFloatingDust {
-  0%   { background-position: 0% 0%, 0% 0%, 0% 0%, 0% 0%, 0% 0%, 0 0; }
-  100% { background-position: 220px -220px, -180px -180px, 260px -130px, -100px -200px, 120px -240px, 0 0; }
-}
-
-@keyframes bgPatternDriftingClouds {
-  0%   { background-position: 0% 0%, 0% 0%, 0% 0%, 0% 0%, 0 0; }
-  100% { background-position: 700px 20px, -700px -10px, 500px 15px, -600px 5px, 0 0; }
-}
-
-@keyframes bgPatternGentleSnowfall {
-  0%   { background-position: 0% 0%, 0% 0%, 0% 0%, 0 0; }
-  100% { background-position: 40px 140px, -60px 200px, 20px 100px, 0 0; }
-}
-
-@keyframes bgPatternAuroraWaves {
-  0%   { background-position: 0% 0%, 0% 0%, 0% 0%, 0 0; }
-  50%  { background-position: 300px -40px, -250px 30px, 200px 20px, 0 0; }
-  100% { background-position: 0% 0%, 0% 0%, 0% 0%, 0 0; }
-}
-
-@keyframes bgPatternStarfieldDrift {
-  0%   { background-position: 0% 0%, 0% 0%, 0% 0%, 0 0; }
-  100% { background-position: 160px 80px, 120px 240px, 50px 50px, 0 0; }
-}
+/* Animated slide background @keyframes are generated at runtime from
+   core/background_patterns.ts (ensurePatternKeyframes). */
 
 .canvas-overlay-logo {
   display: none;
