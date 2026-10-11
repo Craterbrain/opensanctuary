@@ -41,7 +41,7 @@ GitHub repo → **Settings** → **Secrets and variables** → **Actions**.
 |---|---|---|
 | **Secrets** tab | `MINISIGN_SECRET_KEY` | Entire contents of `opensanctuary_release.key` |
 | **Secrets** tab | `MINISIGN_PASSWORD` | The key's passphrase |
-| **Variables** tab | `MINISIGN_PUBLIC_KEY_B64` | `RWRnmK5WA6rbgDlBqOj4+R+5vQK/wGsexQQ2NsjgUPiqkC5iUUZMmk42` |
+| **Variables** tab | `MINISIGN_PUBLIC_KEY_B64` | `RWRYSKNecgUiwS2YaMPmshtR2/ZAQA/XnunXaOBQw/SRkZPyMspLwhGw` |
 
 The public key must be a **variable**, not a secret: the workflow reads it as
 `vars.MINISIGN_PUBLIC_KEY_B64`, so a secret with that name arrives empty and the
@@ -187,7 +187,7 @@ workflows), and the TLS keyring test now skips itself when no OS keyring exists.
 ```sh
 mkdir check && cd check
 gh release download v0.3.0 -R <owner>/<repo>
-minisign -Vm checksums.txt -P RWRnmK5WA6rbgDlBqOj4+R+5vQK/wGsexQQ2NsjgUPiqkC5iUUZMmk42
+minisign -Vm checksums.txt -P RWRYSKNecgUiwS2YaMPmshtR2/ZAQA/XnunXaOBQw/SRkZPyMspLwhGw
 sha256sum -c checksums.txt --ignore-missing
 ```
 
