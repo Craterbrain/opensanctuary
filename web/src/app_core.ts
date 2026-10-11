@@ -2,6 +2,7 @@
 import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { resolveHostSessionToken, hostTokenHeader, submitManualHostToken, getConsoleSessionId } from './core/host_session.ts';
 import { api } from './core/api_client.ts';
+import { ensurePatternClip, configurePatternPrerender, setMonitorHeightsProvider, onPatternRenderProgress, type PatternResolutionSetting } from './core/pattern_render.ts';
 import { attachClosestEdge, extractClosestEdge, type Edge } from '@atlaskit/pragmatic-drag-and-drop-hitbox/closest-edge';
 import { getReorderDestinationIndex } from '@atlaskit/pragmatic-drag-and-drop-hitbox/util/get-reorder-destination-index';
 import {
@@ -10,6 +11,7 @@ import {
   resolveSlideAt,
   resolveBackgroundAt,
   applyResolvedBackground,
+  parseAnimatedPatternMarker,
   isPrimaryDropTarget,
   DEFAULT_THEMES,
   extractImageUrl,
@@ -251,8 +253,26 @@ export let appOptions = {
   displayOutputs: '[]',
   iconSet: DEFAULT_ICON_SET,
   colorTheme: DEFAULT_ICON_SET,
-  themeLinked: 'true'
+  themeLinked: 'true',
+  // Pre-rendered animated backgrounds (core/pattern_render.ts): 'on' | 'off', and 'auto' | '1440' | '1080'.
+  patternPrerender: 'on',
+  patternResolution: 'auto'
 };
+
+// Auto resolution looks at the connected monitors (any below 1440p -> render 1080p).
+setMonitorHeightsProvider(async () => {
+  const res = await fetch('/api/displays');
+  const data = res.ok ? await res.json() : null;
+  return ((data && data.monitors) || []).map((m: { height: number }) => m.height);
+});
+let patternRenderToastShown = false;
+onPatternRenderProgress(p => {
+  if (!p) { patternRenderToastShown = false; return; }
+  if (!patternRenderToastShown) {
+    patternRenderToastShown = true;
+    showToast('Preparing smooth playback for an animated background. This runs in the background.', 'info', 5000);
+  }
+});
 
 export async function loadAppOptions() {
   try {
@@ -298,6 +318,10 @@ export async function saveAppOptions(newOptions: any) {
 
 function applyAppOptionsToUI() {
   applyTheme(appOptions);
+  configurePatternPrerender({
+    enabled: appOptions.patternPrerender !== 'off',
+    resolution: (['auto', '1440', '1080'].includes(appOptions.patternResolution) ? appOptions.patternResolution : 'auto') as PatternResolutionSetting,
+  });
   const outAsp = document.getElementById('output-aspect-ratio-text');
   if (outAsp) outAsp.textContent = `${appOptions.aspectRatio || '16:9'} Hardware Mirror`;
   if (canvasFooterLeftEl && (!currentSnapshot || !currentSnapshot.state || !currentSnapshot.state.live_item)) {
@@ -2553,6 +2577,9 @@ function reorderPreviewSlides(fromIdx: number, toIdx: number) {
 /** Paints a slide's resolved background onto a deck thumbnail, the way the main canvases do. */
 function slideBackgroundPainter(item: any, slideIdx: number, state: any): (el: HTMLElement) => void {
   const bg = resolveBackgroundAt(item, slideIdx, availableThemes, state.active_theme, state.global_theme);
+  // An animated pattern on a slide in the decks: make sure its pre-rendered clip exists.
+  const patternKey = parseAnimatedPatternMarker(bg);
+  if (patternKey) ensurePatternClip(patternKey);
   return (el: HTMLElement) => {
     const imgUrl = extractImageUrl(bg, availableThemes);
     if (imgUrl) {

@@ -143,6 +143,37 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
     actionLabel: 'Open Live Output Window',
   },
   {
+    key: 'patternPrerender',
+    label: 'Pre-render Animated Backgrounds',
+    description: 'Render animated backgrounds (growing leaves, rain, embers...) once into a video that the live output simply plays, instead of redrawing them every frame. Rendered clips are kept for 3 months after they were last used, then deleted automatically.',
+    category: 'live-output',
+    control: 'select',
+    options: [
+      { value: 'on', label: 'On' },
+      { value: 'off', label: 'Off (draw them live)' },
+    ],
+  },
+  {
+    key: 'patternResolution',
+    label: 'Pre-rendered Background Quality',
+    description: 'Resolution of pre-rendered animated backgrounds. Automatic uses 1440p, or 1080p when a connected monitor is smaller than 1440p.',
+    category: 'live-output',
+    control: 'select',
+    options: [
+      { value: 'auto', label: 'Automatic' },
+      { value: '1440', label: '1440p (2560×1440)' },
+      { value: '1080', label: '1080p (1920×1080)' },
+    ],
+  },
+  {
+    key: 'clearPatternCache',
+    label: 'Rendered Background Cache',
+    description: 'Delete every pre-rendered background clip now. They are re-created the next time an animated background is used.',
+    category: 'live-output',
+    control: 'action',
+    actionLabel: 'Clear Rendered Backgrounds',
+  },
+  {
     key: 'alertPosition',
     label: 'Alert Banner Position',
     description: 'Where the nursery/message alert banner appears on the live output screen.',

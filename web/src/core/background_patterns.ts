@@ -32,6 +32,8 @@ export interface PatternLayer {
     to?: string;
     /** Animated end size, for pulsing layers. */
     sizeTo?: string;
+    /** Self-animated layers: a static picture of the layer at loop position t (0..1). */
+    frameImage?: (t: number) => string;
 }
 
 export interface BackgroundPatternSpec {
@@ -43,6 +45,8 @@ export interface BackgroundPatternSpec {
     alternate: boolean;
     /** Motion lives inside the SVG layer itself (SMIL), not in CSS keyframes. */
     selfAnimated?: boolean;
+    /** Length of the self-animated loop in seconds (selfAnimated only). */
+    loopSec?: number;
 }
 
 export interface BackgroundPatternMeta {
@@ -222,11 +226,45 @@ function rayFan(seed: number, from: number, to: number, count: number, rgb: stri
  * shares one timeline (dur = LOOP s) so the loop is seamless: at 0 and 1 every
  * stem is undrawn and every leaf is scale 0 / opacity 0.
  */
+
+interface Anim { kt: number[]; values: string[]; }
+
+/** CSS/SMIL cubic-bezier easing: y for a given x. */
+export function cubicBezier(x1: number, y1: number, x2: number, y2: number, x: number): number {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    const bx = (t: number): number => 3 * (1 - t) * (1 - t) * t * x1 + 3 * (1 - t) * t * t * x2 + t * t * t;
+    const by = (t: number): number => 3 * (1 - t) * (1 - t) * t * y1 + 3 * (1 - t) * t * t * y2 + t * t * t;
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 28; i++) {
+        const mid = (lo + hi) / 2;
+        if (bx(mid) < x) lo = mid; else hi = mid;
+    }
+    return by((lo + hi) / 2);
+}
+
+const SMIL_EASE = (u: number): number => cubicBezier(0.45, 0, 0.2, 1, u);
+
+/** Value of a spline-eased key-time animation at loop position t (0..1), as text. */
+function evalAnim(a: Anim, t: number): string {
+    const kt = a.kt;
+    if (t <= kt[0]) return a.values[0];
+    for (let i = 0; i < kt.length - 1; i++) {
+        if (t <= kt[i + 1]) {
+            const span = kt[i + 1] - kt[i];
+            const e = span <= 0 ? 1 : SMIL_EASE((t - kt[i]) / span);
+            const p = a.values[i].split(',').map(Number), q = a.values[i + 1].split(',').map(Number);
+            return p.map((v, k) => r1((v + (q[k] - v) * e) * 1000) / 1000).join(',');
+        }
+    }
+    return a.values[a.values.length - 1];
+}
+
 const PLANT_LOOP_SEC = 28;
 /** Gaussian blur radius in the plant SVG's 1920-wide units. */
 const PLANT_BLUR = 5;
 
-function growingPlants(): string {
+function growingPlants(): { image: string; frameImage: (t: number) => string } {
     const rand = seeded(2024);
     const PI = Math.PI;
     const LEAF_COLORS = ['#2f8f55', '#3fae63', '#62c46c', '#8bd873', '#b4e27a', '#4cb87a'];
@@ -293,47 +331,80 @@ function growingPlants(): string {
     const GROW0 = 0.02, GROW1 = 0.42;
     const F = (raw: number): number => GROW0 + (raw / R) * (GROW1 - GROW0);
     const dur = `${PLANT_LOOP_SEC}s`;
-    const anim = (tag: string, attrs: string, kt: number[], values: string[]): string =>
-        `<${tag} ${attrs} dur='${dur}' repeatCount='indefinite' calcMode='spline' keyTimes='${times(...kt)}' keySplines='${splines(kt.length)}' values='${values.join(';')}'/>`;
 
-    let body = '';
-    for (const s of stems) {
+    // Every animated attribute is data (key times + values) so the same scene can
+    // be emitted two ways: as SMIL (plays by itself) or as a static frame at a
+    // given loop position (what the pre-renderer draws, since SMIL can't be seeked).
+    const smil = (tag: string, attrs: string, a: Anim): string =>
+        `<${tag} ${attrs} dur='${dur}' repeatCount='indefinite' calcMode='spline' keyTimes='${times(...a.kt)}' keySplines='${splines(a.kt.length)}' values='${a.values.join(';')}'/>`;
+    const num = (a: Anim, t: number): number => Number(evalAnim(a, t));
+
+    interface StemItem { s: RawStem; a: Anim }
+    interface LeafItem { l: RawLeaf; x: number; y: number; ang: number; pos: Anim; rot: Anim; scale: Anim; opacity: Anim }
+    const stemItems: StemItem[] = stems.map(s => {
         const retract0 = 0.7 - s.depth * 0.05, retract1 = retract0 + 0.18;
-        body += `<path d='${s.d}' pathLength='1' fill='none' stroke='${STEM_COLORS[Math.min(2, s.depth)]}' stroke-width='${r1(s.w)}' stroke-linecap='round' stroke-dasharray='1 1' stroke-dashoffset='1'>` +
-            anim('animate', "attributeName='stroke-dashoffset'", [0, F(s.t0), F(s.t1), retract0, retract1, 1], ['1', '1', '0', '0', '-1', '-1']) + '</path>';
-    }
-    let leafBody = '';
-    for (const l of leaves) {
+        return { s, a: { kt: [0, F(s.t0), F(s.t1), retract0, retract1, 1], values: ['1', '1', '0', '0', '-1', '-1'] } };
+    });
+    const leafItems: LeafItem[] = leaves.map(l => {
         const g0 = F(l.tGrow), g1 = g0 + 0.06;
         const fl0 = 0.56 + rand() * 0.15, fl1 = Math.min(0.97, fl0 + 0.17 + rand() * 0.1);
         const wind = 260 + rand() * 760, rise = -150 + rand() * -480 + (rand() < 0.3 ? 700 : 0);
         const sway = (rand() - 0.5) * 220;
         const spin = (rand() < 0.5 ? -1 : 1) * (120 + rand() * 360);
-        const L = r1(l.size), W = r1(l.size * 0.34);
         const kt = [0, g0, g1, fl0, (fl0 + fl1) / 2, fl1, 1];
         const x = r1(l.x), y = r1(l.y);
-        const pos = [`${x},${y}`, `${x},${y}`, `${x},${y}`, `${x},${y}`,
-            `${r1(l.x + wind * 0.45)},${r1(l.y + rise * 0.55 + sway)}`, `${r1(l.x + wind)},${r1(l.y + rise)}`, `${r1(l.x + wind)},${r1(l.y + rise)}`];
         const a = r1(l.ang);
-        leafBody +=
-            `<g transform='translate(${x} ${y})'>` +
-            anim('animateTransform', "attributeName='transform' type='translate'", kt, pos) +
-            `<g transform='rotate(${a})'>` +
-            anim('animateTransform', "attributeName='transform' type='rotate'", kt, [a, a, a, a, a + spin * 0.5, a + spin, a + spin].map(String)) +
-            `<g transform='scale(0)'>` +
-            anim('animateTransform', "attributeName='transform' type='scale'", kt, ['0', '0', '1', '1', '0.95', '0.6', '0.6']) +
-            `<g opacity='0'>` +
-            anim('animate', "attributeName='opacity'", kt, ['0', '0', '1', '1', '0.8', '0', '0']) +
-            `<path d='M0,0 C${W},${r1(-l.size * 0.25)} ${r1(W * 0.75)},${r1(-l.size * 0.75)} 0,${-L} C${r1(-W * 0.75)},${r1(-l.size * 0.75)} ${-W},${r1(-l.size * 0.25)} 0,0Z' fill='${l.color}' fill-opacity='.93'/>` +
-            `<path d='M0,0 L0,${r1(-l.size * 0.86)}' stroke='rgba(255,255,255,.28)' stroke-width='2' fill='none' stroke-linecap='round'/>` +
-            '</g></g></g></g>';
-    }
+        return {
+            l, x, y, ang: a,
+            pos: { kt, values: [`${x},${y}`, `${x},${y}`, `${x},${y}`, `${x},${y}`,
+                `${r1(l.x + wind * 0.45)},${r1(l.y + rise * 0.55 + sway)}`, `${r1(l.x + wind)},${r1(l.y + rise)}`, `${r1(l.x + wind)},${r1(l.y + rise)}`] },
+            rot: { kt, values: [a, a, a, a, a + spin * 0.5, a + spin, a + spin].map(String) },
+            scale: { kt, values: ['0', '0', '1', '1', '0.95', '0.6', '0.6'] },
+            opacity: { kt, values: ['0', '0', '1', '1', '0.8', '0', '0'] },
+        };
+    });
 
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1920 1080' preserveAspectRatio='xMidYMax slice'>` +
+    const stemPath = (s: StemItem, offset: string, inner: string): string =>
+        `<path d='${s.s.d}' pathLength='1' fill='none' stroke='${STEM_COLORS[Math.min(2, s.s.depth)]}' stroke-width='${r1(s.s.w)}' stroke-linecap='round' stroke-dasharray='1 1' stroke-dashoffset='${offset}'>${inner}</path>`;
+    const leafShape = (l: RawLeaf): string => {
+        const L = r1(l.size), W = r1(l.size * 0.34);
+        return `<path d='M0,0 C${W},${r1(-l.size * 0.25)} ${r1(W * 0.75)},${r1(-l.size * 0.75)} 0,${-L} C${r1(-W * 0.75)},${r1(-l.size * 0.75)} ${-W},${r1(-l.size * 0.25)} 0,0Z' fill='${l.color}' fill-opacity='.93'/>` +
+            `<path d='M0,0 L0,${r1(-l.size * 0.86)}' stroke='rgba(255,255,255,.28)' stroke-width='2' fill='none' stroke-linecap='round'/>`;
+    };
+
+    const wrap = (inner: string): string =>
+        `<svg xmlns='http://www.w3.org/2000/svg' width='1920' height='1080' viewBox='0 0 1920 1080' preserveAspectRatio='xMidYMax slice'>` +
         // Soft focus so it sits behind the text instead of competing with it.
         `<defs><filter id='soft' x='-5%' y='-5%' width='110%' height='110%'><feGaussianBlur stdDeviation='${PLANT_BLUR}'/></filter></defs>` +
-        `<g filter='url(#soft)' opacity='.88'>${body}${leafBody}</g></svg>`;
-    return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+        `<g filter='url(#soft)' opacity='.88'>${inner}</g></svg>`;
+    const toUrl = (svg: string): string => `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+
+    let live = '';
+    for (const s of stemItems) live += stemPath(s, '1', smil('animate', "attributeName='stroke-dashoffset'", s.a));
+    for (const it of leafItems) {
+        live += `<g transform='translate(${it.x} ${it.y})'>` + smil('animateTransform', "attributeName='transform' type='translate'", it.pos) +
+            `<g transform='rotate(${it.ang})'>` + smil('animateTransform', "attributeName='transform' type='rotate'", it.rot) +
+            `<g transform='scale(0)'>` + smil('animateTransform', "attributeName='transform' type='scale'", it.scale) +
+            `<g opacity='0'>` + smil('animate', "attributeName='opacity'", it.opacity) + leafShape(it.l) + '</g></g></g></g>';
+    }
+    const liveImage = toUrl(wrap(live));
+
+    const frameImage = (t: number): string => {
+        let body = '';
+        for (const s of stemItems) {
+            const off = num(s.a, t);
+            if (off >= 1 || off <= -1) continue; // not drawn
+            body += stemPath(s, String(r1(off * 1000) / 1000), '');
+        }
+        for (const it of leafItems) {
+            const op = num(it.opacity, t), sc = num(it.scale, t);
+            if (op <= 0.003 || sc <= 0.003) continue;
+            body += `<g transform='translate(${evalAnim(it.pos, t).replace(',', ' ')}) rotate(${r1(num(it.rot, t))}) scale(${r1(sc * 1000) / 1000})' opacity='${r1(op * 1000) / 1000}'>${leafShape(it.l)}</g>`;
+        }
+        return toUrl(wrap(body));
+    };
+
+    return { image: liveImage, frameImage };
 }
 
 // ---- layer constructors ----------------------------------------------------
@@ -545,14 +616,17 @@ export const BACKGROUND_PATTERNS: BackgroundPatternMeta[] = [
     {
         key: 'sprouting-leaves', name: 'Sprouting Leaves', animated: true,
         preview: 'linear-gradient(180deg, #071a14, #0d2f22 70%, #143a28)',
-        build: () => ({
+        build: () => {
+            const plants = growingPlants();
+            return {
             layers: [
-                { image: growingPlants(), size: '100% 100%', repeat: 'no-repeat', from: '50% 100%' },
+                { image: plants.image, frameImage: plants.frameImage, size: '100% 100%', repeat: 'no-repeat', from: '50% 100%' },
                 fixed('radial-gradient(ellipse 70% 45% at 50% 105%, rgba(120,220,130,.22), transparent 100%)'),
                 fixed('linear-gradient(180deg, #071a14, #0d2f22 70%, #143a28)'),
             ],
-            durationSec: 0, timing: 'linear' as const, alternate: false, selfAnimated: true,
-        })
+            durationSec: 0, timing: 'linear' as const, alternate: false, selfAnimated: true, loopSec: PLANT_LOOP_SEC,
+            };
+        }
     },
 
     // ---- still: new ----------------------------------------------------------
@@ -724,4 +798,89 @@ export function ensurePatternKeyframes(doc: Document, key: string, k = 1): void 
         doc.head.appendChild(style);
     }
     style.appendChild(doc.createTextNode(css + '\n'));
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic frames (for pre-rendering to video)
+// ---------------------------------------------------------------------------
+
+/** Longest loop we will pre-render; slower patterns are cheap to draw live anyway. */
+export const PRERENDER_MAX_LOOP_SEC = 80;
+
+/** Seconds for one seamless loop of the pattern's motion (0 for still patterns). */
+export function patternLoopSec(key: string): number {
+    const spec = getPatternSpec(key);
+    if (!spec) return 0;
+    if (spec.selfAnimated) return spec.loopSec ?? 0;
+    if (spec.durationSec <= 0) return 0;
+    return spec.alternate ? spec.durationSec * 2 : spec.durationSec;
+}
+
+/** Whether a pre-rendered clip is worth making (animated, loop short enough). */
+export function patternPrerenderable(key: string): boolean {
+    const loop = patternLoopSec(key);
+    return loop > 0 && loop <= PRERENDER_MAX_LOOP_SEC;
+}
+
+/** Bump when the frame-drawing code changes, to invalidate every cached clip. */
+const RENDER_REVISION = 1;
+
+/** Short hash of everything that changes how the pattern looks (cache key part). */
+export function patternRevision(key: string): string {
+    const spec = getPatternSpec(key);
+    if (!spec) return '0';
+    const text = JSON.stringify([RENDER_REVISION, spec.layers.map(l => [l.image, l.size, l.sizeTo, l.repeat, l.from, l.to]), spec.durationSec, spec.timing, spec.alternate, spec.loopSec]);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) {
+        h ^= text.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+const CSS_EASE_IN_OUT = (u: number): number => cubicBezier(0.42, 0, 0.58, 1, u);
+
+/** Linear interpolation between two "a b" position/size lists (same units per token). */
+function lerpTokens(from: string, to: string, e: number, k: number): string {
+    const a = from.split(/\s+/), b = to.split(/\s+/);
+    return a.map((tok, i) => {
+        const m = /^(-?\d*\.?\d+)(px|%)$/.exec(tok), n = /^(-?\d*\.?\d+)(px|%)$/.exec(b[i] ?? tok);
+        if (!m || !n || m[2] !== n[2]) return tok;
+        const v = parseFloat(m[1]) + (parseFloat(n[1]) - parseFloat(m[1])) * e;
+        return m[2] === 'px' ? `${r1(v * k)}px` : `${r1(v * 1000) / 1000}%`;
+    }).join(' ');
+}
+
+export interface PatternFrameStyle {
+    images: string[];
+    sizes: string[];
+    positions: string[];
+    repeats: string[];
+}
+
+/**
+ * The exact layer styles the browser would show `tSec` seconds into the loop,
+ * for drawing frames off-screen. `k` scales pixel lengths (see patternScaleFor)
+ * the same way applyResolvedBackground does.
+ */
+export function patternFrameStyle(key: string, tSec: number, k: number): PatternFrameStyle | null {
+    const spec = getPatternSpec(key);
+    if (!spec) return null;
+    const loop = patternLoopSec(key);
+    const t01 = loop > 0 ? (((tSec % loop) + loop) % loop) / loop : 0;
+    let e = 0;
+    if (!spec.selfAnimated && spec.durationSec > 0) {
+        const D = spec.durationSec;
+        const m = ((tSec % (spec.alternate ? 2 * D : D)) + 2 * D) % (spec.alternate ? 2 * D : D);
+        const x = spec.alternate ? (m < D ? m / D : 2 - m / D) : m / D;
+        e = spec.timing === 'linear' ? x : CSS_EASE_IN_OUT(x);
+    }
+    const out: PatternFrameStyle = { images: [], sizes: [], positions: [], repeats: [] };
+    for (const l of spec.layers) {
+        out.images.push(l.frameImage ? l.frameImage(t01) : l.image);
+        out.sizes.push(l.sizeTo ? lerpTokens(l.size, l.sizeTo, e, k) : scalePx(l.size, k));
+        out.positions.push(l.to ? lerpTokens(l.from ?? '0% 0%', l.to, e, k) : scalePx(l.from ?? '0% 0%', k));
+        out.repeats.push(l.repeat);
+    }
+    return out;
 }

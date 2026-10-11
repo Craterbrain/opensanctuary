@@ -1,5 +1,6 @@
 import { EditorSlide, SlideElement, SOLID_PALETTE_PRESETS, GRADIENT_PRESETS, PATTERN_PRESETS, FONT_FAMILY_GROUPS } from './types';
-import { applyResolvedBackground, backgroundPresetDataString, escapeHtml } from '../core/presentation_helpers';
+import { ensurePatternClip } from '../core/pattern_render';
+import { applyResolvedBackground, parseAnimatedPatternMarker, backgroundPresetDataString, escapeHtml } from '../core/presentation_helpers';
 
 export class PropertiesPanel {
   private panelEl: HTMLElement;
@@ -191,6 +192,8 @@ export class PropertiesPanel {
       aRow.appendChild(prev);
       aRow.appendChild(lbl);
       aRow.addEventListener('click', () => {
+        const patternKey = parseAnimatedPatternMarker(backgroundPresetDataString(a));
+        if (patternKey) ensurePatternClip(patternKey);
         this.currentSlide!.background_v2 = JSON.parse(JSON.stringify(a.background));
         this.currentSlide!.background = (a.background as any).data;
         this.notifyChange();

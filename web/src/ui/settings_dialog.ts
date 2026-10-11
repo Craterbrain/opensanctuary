@@ -14,6 +14,7 @@ import {
   createDefaultDisplayOutput,
 } from "../core/display_config.ts";
 import { debounce, showToast } from "../core/ui_utils.ts";
+import { hostTokenHeader } from "../core/host_session.ts";
 import { api, UpdateCheckResult } from "../core/api_client.ts";
 import { escapeHtml } from "../core/presentation_helpers.ts";
 import { closeModal, showConfirmDialog } from "./dialog_manager.ts";
@@ -184,6 +185,19 @@ export function renderSettingRow(def: SettingDef, highlight: boolean): HTMLEleme
       btn.addEventListener('click', () => handleMoveDataDirectory(btn));
     } else if (def.key === 'revealDataDirectory') {
       btn.addEventListener('click', () => handleRevealDataDirectory(btn));
+    } else if (def.key === 'clearPatternCache') {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const res = await fetch('/api/pattern-cache', { method: 'DELETE', headers: hostTokenHeader() });
+          const j = res.ok ? await res.json() : null;
+          btn.textContent = j ? `Cleared ${j.removed} clip${j.removed === 1 ? '' : 's'}` : 'Could not clear';
+        } catch {
+          btn.textContent = 'Could not clear';
+        } finally {
+          setTimeout(() => { btn.disabled = false; btn.textContent = def.actionLabel || 'Run'; }, 2500);
+        }
+      });
     } else if (def.key === 'ccliReport') {
       btn.addEventListener('click', () => openCcliReportModal());
     }

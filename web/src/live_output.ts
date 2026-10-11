@@ -9,6 +9,7 @@ import { renderSlideElements } from './core/slide_render';
 import { autoFitLyrics as autoFitLyricsCore } from './core/autofit';
 import {
   applyResolvedBackground,
+  parseAnimatedPatternMarker,
   parseParallelSlide,
   extractImageUrl,
   isVideoBackground,
@@ -23,6 +24,7 @@ import {
   DEFAULT_THEMES
 } from './core/presentation_helpers';
 import { clock } from './core/timesync';
+import { lookupPatternClip } from './core/pattern_render';
 import { createEngineWebSocket, EngineWebSocketClient } from './core/ws_client';
 import {
   WebCodecsPlayer,
@@ -564,8 +566,11 @@ function fadeInFromBlack(durationSec = 0.4) {
   }, durationSec * 1000 + 40);
 }
 
+let lastSnapshot: any = null;
+
 function renderSnapshot(snapshot: any) {
   try {
+    lastSnapshot = snapshot;
     const state = snapshot.state;
     if (!state) return;
 
@@ -701,6 +706,15 @@ function renderSnapshot(snapshot: any) {
     }
 
     const isDedicatedMedia = state.live_item && state.live_item.item_type === 'media';
+
+    // A pre-rendered clip of an animated pattern plays as a looping video, which is
+    // far cheaper for a TV browser than redrawing the pattern every frame. Until the
+    // lookup finds one (or if none exists) the live procedural background is used.
+    const livePatternKey = parseAnimatedPatternMarker(currentBg);
+    if (livePatternKey) {
+      const clip = lookupPatternClip(livePatternKey, () => { if (lastSnapshot) renderSnapshot(lastSnapshot); });
+      if (clip) currentBg = clip;
+    }
 
     if (isVideoBackground(currentBg)) {
       const fit: 'contain' | 'cover' = isDedicatedMedia ? 'contain' : 'cover';

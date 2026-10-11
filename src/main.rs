@@ -535,6 +535,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
 
+            // Deletes pre-rendered background clips unused for 3 months (and stuck renders).
+            tokio::spawn(os_next::storage::pattern_cache::maintenance_loop(app_state.media_dir.clone()));
+
             let db_for_tls = app_state.db.clone();
             let router = create_router(app_state);
             let addr = SocketAddr::from(([127, 0, 0, 1], server_port));

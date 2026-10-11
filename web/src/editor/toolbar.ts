@@ -3,7 +3,8 @@ import { createDefaultTextBlock } from './text_block';
 import { createDefaultShape } from './shape_library';
 import { createDefaultLine } from './line_tool';
 import { createDefaultTable } from './table';
-import { applyResolvedBackground, backgroundPresetDataString } from '../core/presentation_helpers';
+import { ensurePatternClip } from '../core/pattern_render';
+import { applyResolvedBackground, parseAnimatedPatternMarker, backgroundPresetDataString } from '../core/presentation_helpers';
 
 export type ArrangeAction = 'bringToFront' | 'sendToBack' | 'bringForward' | 'sendBackward';
 export type AlignAction = 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom';
@@ -648,6 +649,8 @@ export class EditorToolbar {
       aRow.appendChild(preview);
       aRow.appendChild(label);
       aRow.addEventListener('click', () => {
+        const patternKey = parseAnimatedPatternMarker(backgroundPresetDataString(a));
+        if (patternKey) ensurePatternClip(patternKey);
         if (this.callbacks.onUpdateBackground) {
           this.callbacks.onUpdateBackground(a.background);
         }
