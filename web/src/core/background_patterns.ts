@@ -223,6 +223,8 @@ function rayFan(seed: number, from: number, to: number, count: number, rgb: stri
  * stem is undrawn and every leaf is scale 0 / opacity 0.
  */
 const PLANT_LOOP_SEC = 28;
+/** Gaussian blur radius in the plant SVG's 1920-wide units. */
+const PLANT_BLUR = 5;
 
 function growingPlants(): string {
     const rand = seeded(2024);
@@ -327,7 +329,10 @@ function growingPlants(): string {
             '</g></g></g></g>';
     }
 
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1920 1080' preserveAspectRatio='xMidYMax slice'>${body}${leafBody}</svg>`;
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1920 1080' preserveAspectRatio='xMidYMax slice'>` +
+        // Soft focus so it sits behind the text instead of competing with it.
+        `<defs><filter id='soft' x='-5%' y='-5%' width='110%' height='110%'><feGaussianBlur stdDeviation='${PLANT_BLUR}'/></filter></defs>` +
+        `<g filter='url(#soft)' opacity='.88'>${body}${leafBody}</g></svg>`;
     return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
 
