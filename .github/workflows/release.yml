@@ -46,7 +46,10 @@
 # as docs/update.md's "Publishing the public key" section):
 #   MINISIGN_PUBLIC_KEY_B64 -- the base64 public key string
 #                          (opensanctuary_release.pub's second line, or
-#                          what `minisign -G` printed). Used below purely to
+#                          what `minisign -G` printed; the verify step pulls the
+#                          key out of whatever was pasted, so a comment line or
+#                          quotes won't break it, and it must equal the key in
+#                          docs/release-signing-key.txt). Used below purely to
 #                          re-verify the signature this workflow just
 #                          produced before publishing -- deliberately NOT
 #                          the same constant as `RELEASE_PUBLIC_KEY_B64` in
@@ -193,6 +196,14 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Only the committed public key file, for the cross-check in the verify step.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          sparse-checkout: docs/release-signing-key.txt
+          sparse-checkout-cone-mode: false
+          path: keyrepo
+
       - name: Download all platform artifacts into one flat directory
         uses: actions/download-artifact@v4
         with:
@@ -231,12 +242,35 @@ jobs:
         env:
           MINISIGN_PUBLIC_KEY_B64: ${{ vars.MINISIGN_PUBLIC_KEY_B64 }}
         run: |
-          if [ -z "$MINISIGN_PUBLIC_KEY_B64" ]; then
-            echo "::error::MINISIGN_PUBLIC_KEY_B64 repo variable is not set -- see this workflow's header comment" >&2
+          # A minisign public key is exactly 56 characters: "RW" + 54 of [A-Za-z0-9+/].
+          # People paste the whole .pub file (with its "untrusted comment:" line), add
+          # quotes, or leave a trailing newline / CR, and minisign then fails with the
+          # unhelpful "base64 conversion failed". So pick the key token out of whatever
+          # was pasted instead of passing the raw value to `-P`.
+          pick_key() { tr -d '\r"\047' | tr -s '[:space:]' '\n' | grep -E '^RW[A-Za-z0-9+/]{54}$' | tail -n 1 || true; }
+          var_key=$(printf '%s\n' "$MINISIGN_PUBLIC_KEY_B64" | pick_key)
+          repo_key=$(pick_key < keyrepo/docs/release-signing-key.txt)
+          if [ -z "$repo_key" ]; then
+            echo "::error::no public key found in docs/release-signing-key.txt at this tag" >&2
             exit 1
           fi
+          if [ -z "$var_key" ]; then
+            if [ -n "$MINISIGN_PUBLIC_KEY_B64" ]; then
+              echo "::warning::MINISIGN_PUBLIC_KEY_B64 is set but contains no valid public key (expected the 56-character RW... line); verifying against docs/release-signing-key.txt instead" >&2
+            else
+              echo "::warning::MINISIGN_PUBLIC_KEY_B64 repo variable is not set; verifying against docs/release-signing-key.txt" >&2
+            fi
+            key="$repo_key"
+          elif [ "$var_key" != "$repo_key" ]; then
+            # The app embeds the committed key (src/network/updater.rs, packaging/install.sh);
+            # a release signed by any other key would not verify on installed copies.
+            echo "::error::MINISIGN_PUBLIC_KEY_B64 ($var_key) differs from docs/release-signing-key.txt ($repo_key). Update whichever is stale (and the key embedded in src/network/updater.rs / packaging/install.sh) before releasing." >&2
+            exit 1
+          else
+            key="$var_key"
+          fi
           sudo apt-get update && sudo apt-get install -y --no-install-recommends minisign
-          minisign -V -P "$MINISIGN_PUBLIC_KEY_B64" -m dist/checksums.txt -x dist/checksums.txt.minisig
+          minisign -V -P "$key" -m dist/checksums.txt -x dist/checksums.txt.minisig
 
       - name: Create/update the GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2

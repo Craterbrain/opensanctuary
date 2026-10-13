@@ -200,7 +200,8 @@ second that each file matches it.
 |---|---|
 | `Tag vX does not match Cargo.toml version Y` | Bump `Cargo.toml` or retag; delete the bad tag with `git push origin :refs/tags/vX` |
 | `MINISIGN_SECRET_KEY and/or MINISIGN_PASSWORD ... not set` | Add the secrets (step 1); they must be repo secrets, not environment or org secrets the repo can't see |
-| `MINISIGN_PUBLIC_KEY_B64 repo variable is not set` | It's in Secrets, not Variables; add it on the Variables tab |
+| warning `MINISIGN_PUBLIC_KEY_B64 repo variable is not set` / `contains no valid public key` | The verify step fell back to `docs/release-signing-key.txt`. To use the variable, put it on the Variables tab (not Secrets) with the 56-character `RW...` line |
+| `MINISIGN_PUBLIC_KEY_B64 (...) differs from docs/release-signing-key.txt (...)` | The variable and the committed key are different keys (usually a key rotation that missed one). Fix the stale one, plus `RELEASE_PUBLIC_KEY_B64` in `src/network/updater.rs` and `PUBLIC_KEY` in `packaging/install.sh` |
 | `minisign -V` fails in the verify step | Wrong passphrase, wrong key pasted, or the variable isn't this key's public half; compare against `docs/release-signing-key.txt` |
 | 403 / "Resource not accessible by integration" on publish | Org or repo policy is blocking `contents: write`; allow it for Actions or run from a repo that does |
 | Checkout step fails fetching `refs/tags/<tag>` | The tag was never pushed (manual dispatch with a nonexistent tag) |
