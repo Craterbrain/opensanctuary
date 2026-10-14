@@ -34,6 +34,9 @@ describe("E2E Live Test: sandboxed plugin runs isolated and talks through the pe
     const card = page.locator('.plugin-card[data-plugin-id="sandbox_demo"]');
     await card.waitFor({ state: "visible", timeout: 10000 });
     expect(await card.innerText()).toContain("Sandboxed page");
+    // The review screen shows the ribbon button exactly as it will appear.
+    expect(await card.innerText()).toContain("Adds to the top ribbon");
+    expect(await card.locator(".plugin-toolbar-chip").first().innerText()).toContain("Demo Next");
     // Decline the optional command permission first: the plugin must be unable to send.
     await card.locator("label:has-text('commands.send') input").uncheck();
     await card.locator("button:has-text('Approve')").click();
@@ -90,5 +93,37 @@ describe("E2E Live Test: sandboxed plugin runs isolated and talks through the pe
     await frame!.waitForFunction(() => document.getElementById("status")?.textContent?.startsWith("Items:"), null, { timeout: 15000 });
     await frame!.locator("#next").click();
     await frame!.waitForFunction(() => document.getElementById("result")?.textContent === "NextSlide sent", null, { timeout: 8000 });
+
+    // The ribbon button (ui.toolbar): in its own marked group, attributed to the plugin, one event per click.
+    const group = page.locator("#ribbon-plugins");
+    await group.waitFor({ state: "visible", timeout: 10000 });
+    expect(await group.locator(".ribbon-plugins-caption").textContent()).toBe("Plugins");
+    const btn = group.locator('button[data-plugin-id="sandbox_demo"][data-item-id="next"]');
+    expect(await btn.locator(".label").innerText()).toBe("Demo Next");
+    expect(await btn.getAttribute("title")).toBe("Sandboxed Demo Panel (plugin): Send Next Slide");
+    expect(await btn.locator(".plugin-badge").count()).toBe(1);
+    // Not among the built-in controls: the left and right clusters hold no plugin button.
+    expect(await page.locator('#top-ribbon .ribbon-cluster:not(#ribbon-plugins) [data-plugin-id]').count()).toBe(0);
+    await page.screenshot({ path: `${artifactDir}/screenshot_plugin_toolbar.png`, clip: { x: 0, y: 0, width: 1280, height: 90 } });
+    await frame!.evaluate(() => {
+      (window as any).__toolbarEvents = 0;
+      document.getElementById("result")!.textContent = "";
+      window.addEventListener("message", (ev) => { if (ev.data?.type === "os.event" && ev.data.event === "toolbar") (window as any).__toolbarEvents++; });
+    });
+    await btn.dblclick(); // two clicks inside the debounce window
+    await frame!.waitForFunction(() => document.getElementById("result")?.textContent === "NextSlide sent", null, { timeout: 8000 });
+    await page.waitForTimeout(700);
+    expect(await frame!.evaluate(() => (window as any).__toolbarEvents)).toBe(1);
+    // It doesn't keep focus (Enter is the Go Live shortcut).
+    expect(await page.evaluate(() => document.activeElement?.closest("#ribbon-plugins") === null)).toBe(true);
+
+    // Revoking removes the button right away.
+    await page.keyboard.press("F2");
+    await page.waitForSelector("#options-modal", { state: "visible", timeout: 5000 });
+    await page.locator(".settings-category-btn:has-text('Plugins')").click();
+    await card.waitFor({ state: "visible", timeout: 10000 });
+    await card.locator("button:has-text('Revoke')").click();
+    await page.waitForFunction(() => (document.getElementById("ribbon-plugins") as HTMLElement).hidden === true, null, { timeout: 10000 });
+    expect(await page.locator('#ribbon-plugins button').count()).toBe(0);
   }, 120000);
 });

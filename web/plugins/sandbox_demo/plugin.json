@@ -26,12 +26,25 @@
       ],
       "optional": true,
       "reason": "Previous / Next buttons"
+    },
+    {
+      "id": "ui.toolbar",
+      "optional": true,
+      "reason": "Adds a \"Demo Next\" button to the top ribbon"
     }
   ],
   "ui": {
     "placements": [
       {
         "slot": "dock"
+      }
+    ],
+    "toolbar": [
+      {
+        "id": "next",
+        "label": "Demo Next",
+        "icon": "next",
+        "tooltip": "Send Next Slide"
       }
     ]
   }

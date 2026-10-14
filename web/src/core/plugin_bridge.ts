@@ -23,13 +23,17 @@
  *   ui.pasteText                  ui.panel: the clipboard's text (for a URL box)
  *   ui.theme                      the console's design tokens (--os-*) and icon set, so a page can look native
  *   ui.resize { height }          ui.panel
+ *   ui.toolbar.update { id, disabled?, pressed? } ui.toolbar: on/off and pressed state of one of the plugin's own ribbon
+ *                                 buttons (declared in plugin.json; label and icon can't change at runtime)
  *   log { message }
  * console -> plugin: `{ type: 'os.response', id, ok, result|error }`
+ *   and, with ui.toolbar, `{ type: 'os.event', event: 'toolbar', data: { id } }` when one of its ribbon buttons is clicked.
  *   and, with show.observe, `{ type: 'os.event', event: 'state', data }` for each state update.
  */
 import { api, type PluginInfo } from "./api_client.ts";
 import { getCurrentIconSet } from "./icon_sets.ts";
 import { registerLibrarySource, unregisterLibrarySource } from "../ui/library_panel.ts";
+import { addToolbarItems, removeToolbarItems, updateToolbarItem } from "./plugin_toolbar.ts";
 
 interface Running {
   plugin: PluginInfo;
@@ -44,6 +48,8 @@ function grantedList(p: PluginInfo, id: string, field: 'hosts' | 'categories' | 
 }
 
 const running = new Map<Window, Running>();
+/** The one frame of a plugin that receives its ribbon-button clicks (so two placements don't both act). */
+const primaryFrame = new Map<string, HTMLIFrameElement>();
 
 /** The console's design tokens (the --os-* custom properties), as currently computed. */
 function collectThemeVars(): Record<string, string> {
@@ -276,6 +282,14 @@ async function handle(r: Running, method: string, params: any): Promise<unknown>
     }
     case 'ui.theme':
       return { vars: collectThemeVars(), iconSet: getCurrentIconSet() };
+    case 'ui.toolbar.update': {
+      need('ui.toolbar');
+      const id = String(params?.id ?? '');
+      if (!updateToolbarItem(r.plugin.id, id, { disabled: params?.disabled, pressed: params?.pressed })) {
+        throw new Error(`no toolbar button '${id}'`);
+      }
+      return {};
+    }
     case 'ui.resize': {
       need('ui.panel');
       const h = Math.max(40, Math.min(600, Number(params?.height) || 0));
@@ -379,6 +393,7 @@ export function startSandboxedPlugin(plugin: PluginInfo): void {
   // still loading and sends its first request straight away, which would arrive before 'load' and be
   // ignored as coming from an unknown window. (The WindowProxy stays the same across the navigation.)
   const track = (frame: HTMLIFrameElement) => {
+    if (!primaryFrame.has(plugin.id)) primaryFrame.set(plugin.id, frame);
     const register = () => {
       const w = frame.contentWindow;
       if (w) running.set(w, { plugin, frame, granted, commands: grantedCommands(plugin), token: null });
@@ -445,6 +460,12 @@ export function startSandboxedPlugin(plugin: PluginInfo): void {
     document.body.appendChild(frame);
     track(frame);
   }
+  if (granted.has('ui.toolbar') && plugin.toolbar?.length) {
+    addToolbarItems(plugin, (pluginId, itemId) => {
+      // Exactly one frame hears the click, and the click carries no authority of its own.
+      primaryFrame.get(pluginId)?.contentWindow?.postMessage({ type: 'os.event', event: 'toolbar', data: { id: itemId } }, '*');
+    });
+  }
 }
 
 export function isSandboxedPluginRunning(id: string): boolean {
@@ -461,6 +482,8 @@ export function stopSandboxedPlugin(id: string): void {
     (frame.closest('.plugin-dock-card') ?? frame.closest('.plugin-source') ?? frame).remove();
   });
   unregisterLibrarySource(id);
+  removeToolbarItems(id);
+  primaryFrame.delete(id);
   const pickerPane = document.getElementById('plugin-picker-pane');
   if (pickerPane && !pickerPane.querySelector('.plugin-source')) {
     document.getElementById('plugin-picker-hint')?.classList.remove('hidden');

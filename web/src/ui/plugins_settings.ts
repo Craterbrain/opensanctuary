@@ -7,6 +7,7 @@
  */
 import { api, type PluginAuditEntry, type PluginInfo, type PluginPermissionInfo } from "../core/api_client.ts";
 import { showToast } from "../core/ui_utils.ts";
+import { getCurrentIconSet, iconUrl } from "../core/icon_sets.ts";
 
 const TIER_LABEL: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High', critical: 'Critical' };
 const ENFORCEMENT_NOTE: Record<string, string> = {
@@ -120,6 +121,23 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   if (plugin.placements?.length) {
     const where = plugin.placements.map((p) => p.slot === 'library-source' ? `the ${p.tab} library ("${p.label}")` : p.slot === 'video-picker' ? 'the video background picker' : 'a floating panel').join(', ');
     card.appendChild(el('div', 'settings-hint', `Appears in: ${where}.`));
+  }
+
+  if (plugin.toolbar?.length) {
+    const line = el('div', 'settings-hint plugin-toolbar-preview');
+    line.appendChild(document.createTextNode('Adds to the top ribbon: '));
+    for (const t of plugin.toolbar) {
+      const chip = el('span', 'plugin-toolbar-chip');
+      const img = document.createElement('img');
+      img.dataset.icon = t.icon;
+      img.src = iconUrl(getCurrentIconSet(), t.icon);
+      img.alt = '';
+      chip.append(img, document.createTextNode(` ${t.label}`));
+      if (t.tooltip) chip.title = t.tooltip;
+      line.appendChild(chip);
+    }
+    line.appendChild(document.createTextNode('. Plugin buttons are marked with a puzzle badge and always sit in the Plugins group.'));
+    card.appendChild(line);
   }
 
   const actions = el('div', 'plugin-actions');

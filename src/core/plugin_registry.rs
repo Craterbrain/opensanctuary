@@ -151,12 +151,14 @@ fn discover_native_dir(dir: &Path, host_version: &str) -> Option<Discovered> {
 }
 
 fn discover_web(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
+    // Ribbon-button icons are names of files in the app's icon set, `web/icons/crimson/` next to the plugins folder.
+    let icons_dir = web_plugins_dir.parent().map(|w| w.join("icons").join("crimson"));
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(web_plugins_dir) else { return out };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            if let Some(d) = discover_sandbox(&path, host_version) {
+            if let Some(d) = discover_sandbox(&path, host_version, icons_dir.as_deref()) {
                 out.push(d);
             }
             continue;
@@ -250,7 +252,7 @@ pub fn sandbox_dir_files(dir: &Path) -> Result<Vec<(String, String)>, String> {
     Ok(out)
 }
 
-fn discover_sandbox(dir: &Path, host_version: &str) -> Option<Discovered> {
+fn discover_sandbox(dir: &Path, host_version: &str, icons_dir: Option<&Path>) -> Option<Discovered> {
     let dir_name = dir.file_name()?.to_str()?.to_string();
     let bytes = std::fs::read(dir.join("plugin.json")).ok()?; // not a plugin folder
     let manifest_sha = sha256_hex(&bytes);
@@ -290,6 +292,11 @@ fn discover_sandbox(dir: &Path, host_version: &str) -> Option<Discovered> {
     match verify_signer(&bytes, &manifest, &dir.join("plugin.json.minisig")) {
         Ok(s) => d.signer = s,
         Err(e) => return Some(fail(d, e)),
+    }
+    if let (Some(icons), Some(ui)) = (icons_dir, manifest.ui.as_ref()) {
+        if let Some(item) = ui.toolbar.iter().find(|t| !icons.join(format!("{}.svg", t.icon)).is_file()) {
+            return Some(fail(d, format!("toolbar button '{}' uses icon '{}', which isn't in the app's icon set", item.id, item.icon)));
+        }
     }
     match sandbox_dir_files(dir) {
         Err(e) => Some(fail(d, e)),
@@ -475,6 +482,34 @@ mod tests {
         assert!(approved_natives(&db, &after).is_empty());
         let audit = db.list_plugin_audit(50).unwrap();
         assert!(audit.iter().any(|a| a.plugin_id == "org.example.thing" && a.action == "changed"));
+    }
+
+    #[test]
+    fn a_ribbon_button_icon_must_exist_in_the_icon_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let web = tmp.path().join("web");
+        let plugin_dir = web.join("plugins").join("tb");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::create_dir_all(web.join("icons").join("crimson")).unwrap();
+        std::fs::write(web.join("icons/crimson/refresh.svg"), "<svg/>").unwrap();
+        std::fs::write(plugin_dir.join("index.html"), "<html></html>").unwrap();
+        let write = |icon: &str| {
+            std::fs::write(
+                plugin_dir.join("plugin.json"),
+                serde_json::json!({
+                    "manifest_version": 1, "id": "tb", "name": "Tb", "web": {"entry": "index.html", "sandbox": true},
+                    "permissions": [{"id": "ui.toolbar"}],
+                    "ui": {"toolbar": [{"id": "go", "label": "Sync", "icon": icon}]}
+                }).to_string(),
+            ).unwrap();
+        };
+        write("refresh");
+        let found = discover(&tmp.path().join("plugins"), &web.join("plugins"), "0.2.0");
+        assert!(found.iter().find(|d| d.id == "tb").unwrap().error.is_none());
+        write("not-an-icon");
+        let found = discover(&tmp.path().join("plugins"), &web.join("plugins"), "0.2.0");
+        let err = found.iter().find(|d| d.id == "tb").unwrap().error.clone().unwrap_or_default();
+        assert!(err.contains("isn't in the app's icon set"), "{err}");
     }
 
     #[test]

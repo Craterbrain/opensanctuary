@@ -6137,3 +6137,19 @@ video {
 }
 .os-notif-btn:hover { color: var(--os-text-primary); background: var(--os-hover); }
 .os-notif-ico, .os-notif-level { display: inline-flex; align-items: center; }
+
+/* Plugin ribbon buttons (core/plugin_toolbar.ts): a separate, marked group */
+.ribbon-cluster--plugins { position: relative; border-top: 2px dashed var(--os-accent, #ff5722); padding-top: 2px; align-items: center; }
+.ribbon-cluster--plugins[hidden] { display: none; }
+.ribbon-plugins-caption { align-self: flex-start; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.7; margin: 0 6px 0 4px; }
+.ribbon-btn--plugin .icon { position: relative; }
+.ribbon-btn--plugin .plugin-badge { position: absolute; right: -5px; bottom: -3px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--os-accent, #ff5722) url("icons/white/plug.svg") center / 8px 8px no-repeat; }
+.ribbon-plugins-overflow { position: relative; }
+.ribbon-plugins-menu { position: absolute; top: 100%; right: 0; z-index: var(--os-z-toast); min-width: 200px; display: flex; flex-direction: column;
+  background: var(--os-bg-overlay); border: 1px solid var(--os-border-strong); border-radius: var(--os-radius-md); box-shadow: var(--os-shadow-md); padding: 4px; }
+.ribbon-plugins-menu-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: transparent; border: none; color: var(--os-text-primary); text-align: left; cursor: pointer; border-radius: var(--os-radius-sm); }
+.ribbon-plugins-menu-item:hover { background: var(--os-hover); }
+.ribbon-plugins-menu-item img { width: 16px; height: 16px; }
+.plugin-toolbar-chip { display: inline-flex; align-items: center; gap: 4px; margin: 0 6px; padding: 1px 8px; border: 1px dashed var(--os-border-strong); border-radius: 10px; }
+.plugin-toolbar-chip img { width: 14px; height: 14px; }

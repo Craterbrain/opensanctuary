@@ -81,7 +81,8 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 | `filesystem.plugin_data` | — | Low | consent-only; `host.data_dir()` returns `data_dir/plugin-data/<id>/` | n/a | |
 | `filesystem.read` / `.write` | `paths[]` | High / Critical | consent-only | n/a | |
 | `process.spawn` | — | Critical | consent-only | n/a | |
-| `ui.panel`, `ui.toolbar` | — | Medium | n/a | **E** (slots) | |
+| `ui.panel` | — | Medium | n/a | **E** (slots) | |
+| `ui.toolbar` | — | Medium | n/a | **E** (sandboxed web plugins) | Up to 2 ribbon buttons declared in `ui.toolbar`; see PLUGINS.md |
 | `notifications.post` | — | Low | n/a | **E** (`POST /api/plugin-host/notify`) | Posts to the console's notification center; see PLUGINS.md |
 
 **E** means the host enforces it. **Info** or **consent-only** means it is shown at consent time and recorded, but not technically enforced.
