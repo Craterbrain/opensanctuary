@@ -1,6 +1,8 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { resolve } from "path";
+import { resolve, join } from "path";
+import { existsSync } from "fs";
+import { homedir } from "os";
 import { spawnTestServer, teardownTestServer, type SpawnedTestServer } from "./e2e_helpers";
 
 describe("E2E Live Test: Unified Schedule Ingestion & Desktop Drag-and-Drop", () => {
@@ -8,8 +10,14 @@ describe("E2E Live Test: Unified Schedule Ingestion & Desktop Drag-and-Drop", ()
     let browser: Browser;
     let page: Page;
     const PORT = 9001;
-    const EWSX_PATH = resolve(__dirname, "../../test1.ewsx");
-    const EWPX_PATH = resolve(__dirname, "../../LCspring.ewpx");
+    // Real EasyWorship documents (not in the repo: LCspring.ewpx is someone's own presentation).
+    // Point OS_TEST_DOCS at a folder holding test1.ewsx and LCspring.ewpx; the tests that need
+    // them skip themselves when it isn't there.
+    const DOCS_DIR = process.env.OS_TEST_DOCS || join(homedir(), "Documents", "OpenSanctuary-test-docs");
+    const EWSX_PATH = resolve(DOCS_DIR, "test1.ewsx");
+    const EWPX_PATH = resolve(DOCS_DIR, "LCspring.ewpx");
+    const haveEwsx = existsSync(EWSX_PATH);
+    const haveEwpx = existsSync(EWPX_PATH);
 
     beforeAll(async () => {
         // Isolated OS temp dir: Database::new derives songs/bibles folders
@@ -34,7 +42,7 @@ describe("E2E Live Test: Unified Schedule Ingestion & Desktop Drag-and-Drop", ()
         await teardownTestServer(server);
     });
 
-    test("Unified Schedule Hub: inline mode toggle and single-step file ingestion", async () => {
+    test.skipIf(!haveEwsx)("Unified Schedule Hub: inline mode toggle and single-step file ingestion", async () => {
         // 1. Open Schedule Hub via header button
         await page.click("#btn-sched-open");
         await page.waitForSelector("#open-modal", { state: "visible" });
@@ -69,8 +77,8 @@ describe("E2E Live Test: Unified Schedule Ingestion & Desktop Drag-and-Drop", ()
         const appendRadioChecked = await page.$eval("#sched-mode-append", (el: any) => el.checked);
         expect(appendRadioChecked).toBe(true);
 
-        // Load sample EasyWorship service button while Append mode is active
-        await page.click("#btn-load-sample-ewsx");
+        // Ingest the same service again while Append mode is active
+        await (await page.$("#file-schedule-input"))!.setInputFiles(EWSX_PATH);
         await page.waitForSelector("#open-modal", { state: "hidden", timeout: 8000 });
 
         // Items should now be doubled
@@ -80,9 +88,9 @@ describe("E2E Live Test: Unified Schedule Ingestion & Desktop Drag-and-Drop", ()
 
         const itemsAfterAppend = await page.$$(".schedule-item");
         expect(itemsAfterAppend.length).toBe(countAfterReplace * 2);
-    });
+    }, 60000);
 
-    test("Unified Schedule Hub: Ingest EasyWorship .ewpx presentation package (Replace mode)", async () => {
+    test.skipIf(!haveEwpx)("Unified Schedule Hub: Ingest EasyWorship .ewpx presentation package (Replace mode)", async () => {
         // 1. Open Schedule Hub
         await page.click("#btn-sched-open");
         await page.waitForSelector("#open-modal", { state: "visible" });
@@ -112,7 +120,7 @@ describe("E2E Live Test: Unified Schedule Ingestion & Desktop Drag-and-Drop", ()
         await page.waitForSelector(".schedule-child-item", { timeout: 8000 });
         const childSlides = await page.$$(".schedule-child-item");
         expect(childSlides.length).toBe(17);
-    });
+    }, 60000);
 
     test("Resource Importer: 'Open Schedule Hub' cross-links directly to unified dialog", async () => {
         // Open Resource Importer
@@ -135,7 +143,7 @@ describe("E2E Live Test: Unified Schedule Ingestion & Desktop Drag-and-Drop", ()
         // Close Schedule Hub
         await page.click("#btn-close-open");
         await page.waitForSelector("#open-modal", { state: "hidden" });
-    });
+    }, 60000);
 
     test("Native Desktop Drag-and-Drop: split replace/append overlay responds to file drag events", async () => {
         // Simulate dragging external files over #schedule-panel
@@ -191,5 +199,5 @@ describe("E2E Live Test: Unified Schedule Ingestion & Desktop Drag-and-Drop", ()
             const overlay = document.getElementById("schedule-drop-overlay");
             return !overlay || overlay.style.display === "none";
         });
-    });
+    }, 60000);
 });

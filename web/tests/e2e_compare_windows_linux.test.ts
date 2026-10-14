@@ -2,11 +2,17 @@ import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
 import { spawn } from "bun";
 import { resolve, join } from "path";
-import { mkdtempSync } from "fs";
+import { mkdtempSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { spawnTestServer, waitForServerReady, teardownTestServer, ensureArtifactDir, type SpawnedTestServer } from "./e2e_helpers";
 
-describe("E2E Visual Comparison: Linux vs Windows Release Binaries", () => {
+// Needs `wine` and a cross-built Windows binary (cargo build --release --target x86_64-pc-windows-gnu);
+// without both there is nothing to compare, so the suite skips instead of failing on a server that
+// can never start. (The Windows VM run, vms/windows-test.sh, covers the real thing.)
+const WIN_BIN = resolve(__dirname, "../../target/x86_64-pc-windows-gnu/release/os-next.exe");
+const canCompare = existsSync(WIN_BIN) && Bun.which("wine") !== null;
+
+describe.skipIf(!canCompare)("E2E Visual Comparison: Linux vs Windows Release Binaries", () => {
   let linuxServer: SpawnedTestServer;
   let winServer: SpawnedTestServer;
   let browser: Browser;
@@ -77,7 +83,7 @@ describe("E2E Visual Comparison: Linux vs Windows Release Binaries", () => {
     // its own temp dir/process rather than going through `spawnTestServer`;
     // still uses the shared `waitForServerReady` poll.
     const winTestDir = mkdtempSync(join(tmpdir(), "os-next-win-comp-"));
-    const winBin = resolve(__dirname, "../../target/x86_64-pc-windows-gnu/release/os-next.exe");
+    const winBin = WIN_BIN;
     const winProc = spawn([
       "wine",
       winBin,

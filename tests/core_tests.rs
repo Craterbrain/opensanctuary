@@ -16,6 +16,38 @@ use os_next::storage::openlp_import::OpenLPImporter;
 use os_next::storage::pptx_import::PptxImporter;
 use os_next::render::pipeline::RenderTargetDimensions;
 
+/// An `AppState` with the defaults nearly every test wants (an empty engine, a throwaway
+/// broadcast channel, no HTTPS, no display, a fresh plugin manager, port 8080). A test overrides
+/// only what it cares about: `AppState { host_session_token: "x".into(), ..base_app_state(db) }`.
+fn base_app_state(db: Database) -> os_next::api::ws::AppState {
+    let engine = Arc::new(ShowEngine::new(Arc::new(EventLog::with_initial_sequence(5000, 0))));
+    os_next::api::ws::AppState {
+        engine,
+        db,
+        asset_graph: Arc::new(AssetGraph::new("web")),
+        web_dir: std::path::PathBuf::from("web"),
+        media_dir: std::path::PathBuf::from("web"),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
+        tx: tokio::sync::broadcast::channel(16).0,
+        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "test_host_session_token".to_string(),
+        server_port: 8080,
+        https_port: None,
+        https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+    }
+}
+
+
 #[test]
 fn test_event_sourced_engine_and_sequence_numbering() {
     let event_log = Arc::new(EventLog::new(100));
@@ -3939,26 +3971,11 @@ async fn test_freeshow_import_http_route() {
     let app_state = os_next::api::ws::AppState {
         tx,
         engine,
-        db: db.clone(),
         asset_graph,
         web_dir: web_dir.clone(),
         media_dir: web_dir.clone(),
-        data_dir: std::path::PathBuf::from("."),
-        skip_first_time_setup: true,
         plugin_manager,
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        host_session_token: "test_host_session_token".to_string(),
-        server_port: 8080,
-        https_port: None,
-        https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db.clone())
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4123,27 +4140,13 @@ async fn test_app_state_plugin_token_lifecycle() {
 
     let app = os_next::api::ws::AppState {
         engine,
-        db,
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        data_dir: std::path::PathBuf::from("."),
-        skip_first_time_setup: true,
         tx,
         plugin_manager,
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         host_session_token: "test_host_token_abc".to_string(),
-        server_port: 8080,
-        https_port: None,
-        https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db)
     };
 
     // Issue tokens for different plugins
@@ -4184,26 +4187,12 @@ async fn test_network_api_routes_and_conflict_detection() {
     let app_state = os_next::api::ws::AppState {
         tx,
         engine,
-        db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        data_dir: std::path::PathBuf::from("."),
-        skip_first_time_setup: true,
         plugin_manager,
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        host_session_token: "test_host_session_token".to_string(),
         server_port: bound_port,
-        https_port: None,
-        https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db.clone())
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4309,26 +4298,13 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
     let app_state = os_next::api::ws::AppState {
         tx,
         engine,
-        db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        data_dir: std::path::PathBuf::from("."),
-        skip_first_time_setup: true,
         plugin_manager,
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         host_session_token: "test_host_session_conflict".to_string(),
         server_port: bound_port,
-        https_port: None,
-        https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db.clone())
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4436,26 +4412,12 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
     let app_state = os_next::api::ws::AppState {
         tx,
         engine,
-        db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        data_dir: std::path::PathBuf::from("."),
-        skip_first_time_setup: true,
         plugin_manager,
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        host_session_token: "test_host_session_token".to_string(),
         server_port: addr.port(),
-        https_port: None,
-        https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db.clone())
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4734,28 +4696,15 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
     let app_state = os_next::api::ws::AppState {
         tx,
         engine,
-        db: db.clone(),
         asset_graph,
         // The real repo web dir — "hello_world" is a genuinely installed
         // plugin there (web/plugins/hello_world.js), loaded by main.ts.
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        data_dir: std::path::PathBuf::from("."),
-        skip_first_time_setup: true,
         plugin_manager,
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         host_session_token: "test_host_session_plugin".to_string(),
         server_port: addr.port(),
-        https_port: None,
-        https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db.clone())
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4829,26 +4778,13 @@ async fn test_command_endpoint_requires_host_token_for_unpaired_callers() {
     let app_state = os_next::api::ws::AppState {
         tx,
         engine,
-        db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        data_dir: std::path::PathBuf::from("."),
-        skip_first_time_setup: true,
         plugin_manager,
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         host_session_token: host_token.clone(),
         server_port: addr.port(),
-        https_port: None,
-        https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db.clone())
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4984,26 +4920,14 @@ async fn test_library_mutation_and_admin_routes_require_host_token() {
     let app_state = os_next::api::ws::AppState {
         tx,
         engine,
-        db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
         data_dir: test_dir.path().to_path_buf(),
-        skip_first_time_setup: true,
         plugin_manager,
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         host_session_token: host_token.clone(),
         server_port: addr.port(),
-        https_port: None,
-        https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db.clone())
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5110,26 +5034,13 @@ async fn test_tv_provision_start_and_progress_against_unreachable_device() {
     let app_state = os_next::api::ws::AppState {
         tx,
         engine,
-        db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        data_dir: std::path::PathBuf::from("."),
-        skip_first_time_setup: true,
         plugin_manager,
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         host_session_token: host_token.clone(),
         server_port: addr.port(),
-        https_port: None,
-        https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db.clone())
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5189,26 +5100,13 @@ async fn test_update_check_and_status_routes_against_real_test_repo() {
     let app_state = os_next::api::ws::AppState {
         tx,
         engine,
-        db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        data_dir: std::path::PathBuf::from("."),
-        skip_first_time_setup: true,
         plugin_manager,
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         host_session_token: host_token.clone(),
         server_port: addr.port(),
-        https_port: None,
-        https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db.clone())
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5278,26 +5176,13 @@ async fn test_only_one_console_connected_at_a_time() {
     let app_state = os_next::api::ws::AppState {
         tx,
         engine,
-        db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        data_dir: std::path::PathBuf::from("."),
-        skip_first_time_setup: true,
         plugin_manager,
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         host_session_token: host_token.clone(),
         server_port: addr.port(),
-        https_port: None,
-        https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db.clone())
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5393,26 +5278,15 @@ async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
     let app_state = os_next::api::ws::AppState {
         tx,
         engine,
-        db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        data_dir: std::path::PathBuf::from("."),
-        skip_first_time_setup: true,
         plugin_manager,
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         host_session_token: "test_host_session_split".to_string(),
         server_port: http_port,
         https_port: Some(https_port),
         https_enabled: true,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db.clone())
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5516,26 +5390,13 @@ async fn test_security_headers_and_cors_policies() {
     let app_state = os_next::api::ws::AppState {
         tx,
         engine,
-        db: db.clone(),
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        data_dir: std::path::PathBuf::from("."),
-        skip_first_time_setup: true,
         plugin_manager,
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         host_session_token: "test_host_session_sec".to_string(),
         server_port: http_addr.port(),
-        https_port: None,
-        https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db.clone())
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5705,26 +5566,12 @@ async fn spawn_test_app(host_session_token: &str) -> String {
     let app_state = os_next::api::ws::AppState {
         tx,
         engine,
-        db: db.clone(),
         asset_graph,
         web_dir: web_dir.clone(),
         media_dir: web_dir.clone(),
-        data_dir: std::path::PathBuf::from("."),
-        skip_first_time_setup: true,
         plugin_manager,
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         host_session_token: host_session_token.to_string(),
-        server_port: 8080,
-        https_port: None,
-        https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db.clone())
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5829,26 +5676,12 @@ async fn test_console_credential_survives_restart_and_is_revocable() {
         let app_state = os_next::api::ws::AppState {
             tx,
             engine,
-            db,
             asset_graph: Arc::new(os_next::media::AssetGraph::new(dir.join("media"))),
             web_dir: std::path::PathBuf::from("web"),
             media_dir: std::path::PathBuf::from("web"),
-            data_dir: std::path::PathBuf::from("."),
-            skip_first_time_setup: true,
-            plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-            last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-            display_manager: None,
-            plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             host_session_token: host_token.to_string(),
             server_port: addr.port(),
-            https_port: None,
-            https_enabled: false,
-            pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            active_console: Arc::new(std::sync::Mutex::new(None)),
-            pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-            security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-            update_status: Arc::new(std::sync::Mutex::new(None)),
+            ..base_app_state(db)
         };
         let router = os_next::api::create_router(app_state);
         tokio::spawn(async move {
@@ -6021,26 +5854,12 @@ async fn test_plugin_grant_routes_and_web_plugin_serving() {
     let app_state = os_next::api::ws::AppState {
         tx,
         engine,
-        db: db.clone(),
         asset_graph: Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media"))),
         web_dir: web_dir.clone(),
         media_dir: test_dir.path().join("media"),
-        data_dir: std::path::PathBuf::from("."),
-        skip_first_time_setup: true,
-        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         host_session_token: "plugin_test_host_token".to_string(),
         server_port: addr.port(),
-        https_port: None,
-        https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ..base_app_state(db.clone())
     };
     let app_for_plugin_token = app_state.clone();
     let router = os_next::api::create_router(app_state);
@@ -6154,22 +5973,14 @@ async fn test_scoped_plugin_tokens_for_commands_and_keyring() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app_state = os_next::api::ws::AppState {
-        tx, engine, db: db.clone(),
+        tx,
+        engine,
         asset_graph: Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media"))),
-        web_dir: web_dir.clone(), media_dir: test_dir.path().join("media"),
-        data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
-        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        host_session_token: "scoped_host".to_string(), server_port: addr.port(),
-        https_port: None, https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        web_dir: web_dir.clone(),
+        media_dir: test_dir.path().join("media"),
+        host_session_token: "scoped_host".to_string(),
+        server_port: addr.port(),
+        ..base_app_state(db.clone())
     };
     let router = os_next::api::create_router(app_state);
     tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
@@ -6316,21 +6127,16 @@ async fn test_real_cdylib_plugin_abi2_end_to_end() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let data_dir = tmp.path().join("data");
     let app_state = os_next::api::ws::AppState {
-        tx, engine, db: db.clone(),
+        tx,
+        engine,
         asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
-        web_dir: std::path::PathBuf::from("web"), media_dir: tmp.path().join("media"),
-        data_dir: data_dir.clone(), skip_first_time_setup: true,
+        web_dir: std::path::PathBuf::from("web"),
+        media_dir: tmp.path().join("media"),
+        data_dir: data_dir.clone(),
         plugin_manager: Arc::new(PluginManager::new()),
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        host_session_token: "abi2_host".to_string(), server_port: 0, https_port: None, https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        host_session_token: "abi2_host".to_string(),
+        server_port: 0,
+        ..base_app_state(db.clone())
     };
     let slot: os_next::api::plugin_host::AppSlot = Arc::new(std::sync::OnceLock::new());
     slot.set(app_state.clone()).ok();
@@ -6410,21 +6216,14 @@ async fn test_sandboxed_plugin_frame_serving_and_csp() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app_state = os_next::api::ws::AppState {
-        tx, engine, db: db.clone(),
+        tx,
+        engine,
         asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
-        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
-        data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
-        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        host_session_token: "sbx_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        web_dir: web_dir.clone(),
+        media_dir: tmp.path().join("media"),
+        host_session_token: "sbx_host".to_string(),
+        server_port: addr.port(),
+        ..base_app_state(db.clone())
     };
     let router = os_next::api::create_router(app_state);
     tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
@@ -6516,21 +6315,15 @@ async fn test_rest_ws_and_plugin_commands_share_one_pipeline() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app_state = os_next::api::ws::AppState {
-        tx, engine: engine.clone(), db: db.clone(),
+        tx,
+        engine: engine.clone(),
         asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
-        web_dir: std::path::PathBuf::from("web"), media_dir: tmp.path().join("media"),
-        data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
+        web_dir: std::path::PathBuf::from("web"),
+        media_dir: tmp.path().join("media"),
         plugin_manager: Arc::new(pm),
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        host_session_token: "pipe_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        host_session_token: "pipe_host".to_string(),
+        server_port: addr.port(),
+        ..base_app_state(db.clone())
     };
     let app_for_direct = app_state.clone();
     let router = os_next::api::create_router(app_state);
@@ -6613,21 +6406,14 @@ async fn test_plugin_host_fetch_and_add_song_for_the_genius_plugin() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app_state = os_next::api::ws::AppState {
-        tx, engine, db: db.clone(),
+        tx,
+        engine,
         asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
-        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
-        data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
-        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        host_session_token: "gen_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        web_dir: web_dir.clone(),
+        media_dir: tmp.path().join("media"),
+        host_session_token: "gen_host".to_string(),
+        server_port: addr.port(),
+        ..base_app_state(db.clone())
     };
     let router = os_next::api::create_router(app_state);
     tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
@@ -6744,21 +6530,14 @@ async fn test_online_bibles_plugin_host_api_adds_chapters() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app_state = os_next::api::ws::AppState {
-        tx, engine, db: db.clone(),
+        tx,
+        engine,
         asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
-        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
-        data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
-        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        host_session_token: "bib_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        web_dir: web_dir.clone(),
+        media_dir: tmp.path().join("media"),
+        host_session_token: "bib_host".to_string(),
+        server_port: addr.port(),
+        ..base_app_state(db.clone())
     };
     let router = os_next::api::create_router(app_state);
     tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
@@ -6891,21 +6670,15 @@ echo "{\"id\":\"abc123\",\"title\":\"Fake Title\",\"duration\":12.5,\"thumbnail\
     let addr = listener.local_addr().unwrap();
     let media_dir = tmp.path().join("media");
     let app_state = os_next::api::ws::AppState {
-        tx, engine, db: db.clone(),
+        tx,
+        engine,
         asset_graph: Arc::new(os_next::media::AssetGraph::new(&media_dir)),
-        web_dir: web_dir.clone(), media_dir: media_dir.clone(),
-        data_dir: data_dir.clone(), skip_first_time_setup: true,
-        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        host_session_token: "yt_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        web_dir: web_dir.clone(),
+        media_dir: media_dir.clone(),
+        data_dir: data_dir.clone(),
+        host_session_token: "yt_host".to_string(),
+        server_port: addr.port(),
+        ..base_app_state(db.clone())
     };
     let router = os_next::api::create_router(app_state);
     tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
@@ -7060,21 +6833,15 @@ async fn test_notification_bus_plugin_posts_and_console_reads() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app_state = os_next::api::ws::AppState {
-        tx, engine, db: db.clone(),
+        tx,
+        engine,
         asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
-        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
-        data_dir: tmp.path().to_path_buf(), skip_first_time_setup: true,
-        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        host_session_token: "nt_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        web_dir: web_dir.clone(),
+        media_dir: tmp.path().join("media"),
+        data_dir: tmp.path().to_path_buf(),
+        host_session_token: "nt_host".to_string(),
+        server_port: addr.port(),
+        ..base_app_state(db.clone())
     };
     let bus = app_state.notifications.clone();
     let router = os_next::api::create_router(app_state);
@@ -7171,21 +6938,15 @@ async fn test_stock_media_plugin_host_api_limits() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app_state = os_next::api::ws::AppState {
-        tx, engine, db: db.clone(),
+        tx,
+        engine,
         asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
-        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
-        data_dir: tmp.path().to_path_buf(), skip_first_time_setup: true,
-        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
-        display_manager: None,
-        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        host_session_token: "st_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
-        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-        active_console: Arc::new(std::sync::Mutex::new(None)),
-        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
-        update_status: Arc::new(std::sync::Mutex::new(None)),
+        web_dir: web_dir.clone(),
+        media_dir: tmp.path().join("media"),
+        data_dir: tmp.path().to_path_buf(),
+        host_session_token: "st_host".to_string(),
+        server_port: addr.port(),
+        ..base_app_state(db.clone())
     };
     let router = os_next::api::create_router(app_state);
     tokio::spawn(async move { let _ = axum::serve(listener, router).await; });

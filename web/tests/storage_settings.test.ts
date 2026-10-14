@@ -4,6 +4,15 @@ import { api } from '../src/core/api_client.ts';
 import { __resetHostSessionTokenForTests } from '../src/core/host_session.ts';
 
 describe('Storage Settings Schema & Move Data Directory', () => {
+  const hadWindow = Object.prototype.hasOwnProperty.call(globalThis, 'window');
+  const originalWindow = (globalThis as any).window;
+  // The fake window below must not outlive this file: other test files in the same process
+  // (ws_client, ...) expect a real-looking one, or none at all.
+  afterEach(() => {
+    if (hadWindow) (globalThis as any).window = originalWindow;
+    else delete (globalThis as any).window;
+  });
+
   beforeEach(() => {
     // `moveDataDir` resolves a host session token before calling out (see
     // api_client.ts); this module's cache is otherwise shared with every

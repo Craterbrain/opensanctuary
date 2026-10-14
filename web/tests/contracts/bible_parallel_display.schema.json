@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BibleParallelDisplayContract",
+  "description": "Formal wire protocol, delimiters, and parsed data structures for Scripture dual-column parallel display across Live, Stage, and remote surfaces",
+  "type": "object",
+  "definitions": {
+    "ParallelSlideContent": {
+      "type": "object",
+      "description": "Parsed dual-column parallel slide content produced by parseParallelSlide()",
+      "properties": {
+        "isParallel": {
+          "type": "boolean",
+          "description": "True if the slide contains dual-column scripture delimited by |||"
+        },
+        "leftText": {
+          "type": "string",
+          "description": "Raw text content for the left column (including optional [HEADER])"
+        },
+        "rightText": {
+          "type": "string",
+          "description": "Raw text content for the right column (including optional [HEADER])"
+        },
+        "primaryText": {
+          "type": "string",
+          "description": "Body text of the primary Bible translation without header tag"
+        },
+        "secondaryText": {
+          "type": "string",
+          "description": "Body text of the secondary Bible translation without header tag"
+        },
+        "primaryHeader": {
+          "type": "string",
+          "description": "Optional version tag or label extracted from [HEADER] on primary column"
+        },
+        "secondaryHeader": {
+          "type": "string",
+          "description": "Optional version tag or label extracted from [HEADER] on secondary column"
+        }
+      },
+      "required": [
+        "isParallel",
+        "leftText",
+        "rightText",
+        "primaryText",
+        "secondaryText"
+      ]
+    },
+    "CanonicalWireSlide": {
+      "type": "object",
+      "description": "Canonical slide format when transmitting dual-translation scripture over the wire",
+      "properties": {
+        "text": {
+          "type": "string",
+          "pattern": "\\|\\|\\|",
+          "description": "Text payload containing the canonical ||| column delimiter"
+        }
+      },
+      "required": [
+        "text"
+      ]
+    }
+  },
+  "properties": {
+    "PARALLEL_COLUMN_DELIMITER": {
+      "type": "string",
+      "enum": [
+        "|||"
+      ],
+      "default": "|||",
+      "description": "Canonical delimiter separating primary and secondary columns on parallel scripture slides"
+    },
+    "MAX_VERSES_PER_DUAL_SLIDE": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2,
+      "default": 2,
+      "description": "Legibility density threshold: at most 2 verses per slide for dual-translation parallel slides"
+    },
+    "BACKWARD_COMPATIBLE_FALLBACK": {
+      "type": "boolean",
+      "default": true,
+      "description": "Clients without dual-column flex layout render full text without crashing or dropping content"
+    }
+  },
+  "required": [
+    "PARALLEL_COLUMN_DELIMITER",
+    "MAX_VERSES_PER_DUAL_SLIDE",
+    "BACKWARD_COMPATIBLE_FALLBACK"
+  ],
+  "values": {
+    "PARALLEL_COLUMN_DELIMITER": "|||",
+    "MAX_VERSES_PER_DUAL_SLIDE": 2,
+    "BACKWARD_COMPATIBLE_FALLBACK": true
+  }
+}

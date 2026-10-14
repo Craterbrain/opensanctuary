@@ -3,7 +3,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import { mkdtempSync, writeFileSync, chmodSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { spawnTestServer, teardownTestServer, ensureArtifactDir, type SpawnedTestServer } from "./e2e_helpers";
+import { spawnTestServer, teardownTestServer, ensureArtifactDir, type SpawnedTestServer, expectNativeIcons } from "./e2e_helpers";
 
 // A stand-in for yt-dlp on PATH (the plugin uses a copy already on the computer, and never tries to
 // replace it): prints progress, writes a media file into the job folder, prints the JSON line.
@@ -24,23 +24,6 @@ sleep 0.4
 printf 'fake media' > "$dir/E2E Clip [zz9].$ext"
 echo "{\\"id\\":\\"zz9\\",\\"title\\":\\"E2E Clip\\",\\"duration\\":3.5,\\"_filename\\":\\"$dir/E2E Clip [zz9].webm\\"}"
 `;
-
-/** The page uses the console's icons, not emoji: <img class="ui-icon"> from __os/icons/<set>/, loaded, and no emoji glyphs left in the text. */
-async function expectNativeIcons(frame: import("playwright").Frame, atLeast: number) {
-  await frame.waitForFunction(
-    (n) => {
-      const imgs = Array.from(document.querySelectorAll<HTMLImageElement>("img.ui-icon"));
-      return imgs.length >= n && imgs.every((i) => i.complete && i.naturalWidth > 0);
-    },
-    atLeast, { timeout: 10000 },
-  );
-  const info = await frame.evaluate(() => ({
-    srcs: Array.from(document.querySelectorAll<HTMLImageElement>("img.ui-icon")).map((i) => i.getAttribute("src") || ""),
-    text: document.body.innerText,
-  }));
-  expect(info.srcs.every((s) => /^__os\/icons\/[a-z0-9-]+\/[a-z0-9-]+\.svg$/.test(s))).toBe(true);
-  expect(/[\u{1F300}-\u{1FAFF}\u2702\u2B07\u2728\u25B6\u25C0]/u.test(info.text)).toBe(false);
-}
 
 describe("E2E Live Test: Video Downloader plugin (yt-dlp) downloads through the host", () => {
   let server: SpawnedTestServer;

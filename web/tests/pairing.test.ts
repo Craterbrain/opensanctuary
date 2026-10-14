@@ -4,7 +4,7 @@ import jsQR from 'jsqr';
 import { SETTINGS_CATEGORIES } from '../src/core/settings_schema.ts';
 import { api } from '../src/core/api_client.ts';
 import { renderPairedDevicesSettings, resetOptionsModal } from '../src/ui/settings_dialog.ts';
-import pairingContract from '../../../spec-db-rs/contracts/client_pairing.schema.json';
+import pairingContract from './contracts/client_pairing.schema.json';
 
 // Several describe blocks below stub globalThis.fetch/document per-test.
 // bun runs every test file in one process, and (as observed directly: this
