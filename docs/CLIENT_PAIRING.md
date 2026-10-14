@@ -221,6 +221,17 @@ or guess.
 
 ### Remote console access
 
+**Persistent console credential.** The `#host_token=…` link only lives as long as the
+server process (a fresh token is generated at every start). The first time a browser
+opens that link it exchanges it (`POST /api/pairing/console-credential`) for a
+long-lived `console_tok_…` credential kept in that browser's `localStorage`. The
+server accepts it anywhere it accepts the host token, so the console keeps working
+across restarts with no re-linking. Only a SHA-256 of the credential is stored (as a
+`console` device in `paired_devices`); it appears in Settings > Paired Devices, and
+removing it there deauthenticates that browser immediately (lost or stolen laptop).
+Only the current per-run host token can mint credentials, so adding another browser
+means opening the current terminal link, and a stolen credential can't copy itself.
+
 The console doesn't have to run on the same machine as the server — e.g.
 the server runs headless on a small box wired to the projector, and the
 operator actually drives the show from their own laptop on the same LAN.

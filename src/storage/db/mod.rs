@@ -13,7 +13,7 @@ mod ccli;
 
 pub use core::Database;
 pub use bibles::InstalledBibleInfo;
-pub use paired_devices::PairedDevice;
+pub use paired_devices::{console_credential_hash, PairedDevice, CONSOLE_PLATFORM, REMOTE_CONTROL_PLATFORM};
 pub use ccli::CcliUsageRow;
 
 use crate::core::models::Slide;

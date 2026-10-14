@@ -27,6 +27,10 @@ pub(super) async fn save_schedule(
         (status, body.get("error").and_then(|v| v.as_str()).unwrap_or("Unauthorized").to_string())
     })?;
     let validated = validate_safe_path(&req.path)?;
+    // Only ever write schedule files: otherwise the host token is a write-anything primitive.
+    if !validated.extension().and_then(|e| e.to_str()).map_or(false, |e| e.eq_ignore_ascii_case("ewsx")) {
+        return Err((StatusCode::BAD_REQUEST, "Schedules can only be saved to a .ewsx file".to_string()));
+    }
     let target_str = validated.to_str().ok_or((StatusCode::BAD_REQUEST, "Invalid UTF-8 in file path".to_string()))?;
     let snapshot = app.engine.snapshot();
     crate::storage::EwsxManager::save_schedule_to_ewsx(&snapshot.schedule, target_str)

@@ -199,7 +199,7 @@ export const api = {
   },
 
   system: {
-    serverInfo: () => api.get<any>('/api/server-info'),
+    serverInfo: () => api.get<any>('/api/server-info', { headers: hostTokenHeader() }),
     displays: () => api.get<any>('/api/displays'),
     time: () => api.get<{ server_time_ms: number }>('/api/time'),
     clipboard: () => api.get<{ text: string }>('/api/system/clipboard'),

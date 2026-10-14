@@ -53,7 +53,7 @@ pub(super) fn require_host_token(headers: &HeaderMap, app: &AppState) -> Result<
     let ok = headers
         .get("x-host-token")
         .and_then(|v| v.to_str().ok())
-        .map(|v| v == app.host_session_token)
+        .map(|v| app.is_console_credential(v))
         .unwrap_or(false);
     if ok {
         Ok(())
@@ -126,10 +126,29 @@ pub(super) fn validate_https_url(raw: &str) -> Result<String, String> {
 }
 
 pub(super) fn validate_safe_path(path_str: &str) -> Result<std::path::PathBuf, (StatusCode, String)> {
+    if path_str.trim().is_empty() || path_str.contains('\0') {
+        return Err((StatusCode::BAD_REQUEST, "Invalid file path".to_string()));
+    }
+    // Network (UNC/SMB) and device paths: on Windows these make the OS reach
+    // out to an attacker-chosen host (leaking NTLM credentials, or loading
+    // code from a share). The console only ever works with local files.
+    let t = path_str.trim_start();
+    if t.starts_with("\\\\") || t.starts_with("//") {
+        return Err((StatusCode::BAD_REQUEST, "Network and device paths are not allowed".to_string()));
+    }
     let p = std::path::Path::new(path_str);
     for component in p.components() {
-        if component == std::path::Component::ParentDir {
-            return Err((StatusCode::BAD_REQUEST, "Path traversal forbidden: '..' is not allowed in file paths".to_string()));
+        match component {
+            std::path::Component::ParentDir => {
+                return Err((StatusCode::BAD_REQUEST, "Path traversal forbidden: '..' is not allowed in file paths".to_string()));
+            }
+            std::path::Component::Prefix(prefix) => {
+                use std::path::Prefix::*;
+                if !matches!(prefix.kind(), Disk(_)) {
+                    return Err((StatusCode::BAD_REQUEST, "Network and device paths are not allowed".to_string()));
+                }
+            }
+            _ => {}
         }
     }
     Ok(p.to_path_buf())
@@ -154,7 +173,7 @@ pub(super) async fn verify_host_token_handler(
     State(app): State<AppState>,
     Json(req): Json<VerifyDeviceRequest>,
 ) -> impl IntoResponse {
-    Json(serde_json::json!({ "valid": !app.host_session_token.is_empty() && req.token == app.host_session_token }))
+    Json(serde_json::json!({ "valid": app.is_console_credential(&req.token) }))
 }
 
 /// GET /api/internal/host-token
@@ -190,7 +209,19 @@ pub(super) async fn get_internal_host_token(
     if !is_same_machine_browser_request(&headers) {
         return Err(StatusCode::FORBIDDEN);
     }
+    // A reverse proxy that reports the original client (X-Forwarded-For -- the
+    // last entry is the one the proxy itself appended) is judged by that
+    // address. But other proxy signs *without* it mean the loopback TCP peer is
+    // a proxy that told us nothing about the visitor, and treating that as the
+    // local operator would hand every internet visitor the token.
     let forwarded_for = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    if forwarded_for.is_none() {
+        for h in ["forwarded", "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "via"] {
+            if headers.contains_key(h) {
+                return Err(StatusCode::FORBIDDEN);
+            }
+        }
+    }
     let real_ip = crate::network::resolve_real_client_ip(addr.ip(), forwarded_for);
     if !real_ip.is_loopback() {
         return Err(StatusCode::FORBIDDEN);

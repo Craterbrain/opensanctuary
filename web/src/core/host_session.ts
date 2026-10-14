@@ -22,12 +22,21 @@
  *    link/token again, and stripped from the visible URL immediately so it
  *    isn't left sitting there if the address is shared or bookmarked.
  *
+ *    That URL token only lives until the server restarts, so on first use
+ *    the console exchanges it for a persistent, revocable console credential
+ *    (`POST /api/pairing/console-credential`) kept in `localStorage`. The
+ *    server accepts that credential anywhere it accepts the host token, so
+ *    a remote console keeps working across restarts; removing its entry in
+ *    Settings > Paired Devices deauthenticates this browser (a lost or
+ *    stolen laptop), after which it falls back to needing a fresh link.
+ *
  * A LAN client, even a paired remote-control device, is never loopback and
  * never knows a bare URL fragment it wasn't handed out-of-band, so none of
  * this changes who *can* obtain the token.
  */
 
 const CONSOLE_TOKEN_STORAGE_KEY = 'os_console_host_token';
+const CONSOLE_CREDENTIAL_STORAGE_KEY = 'os_console_credential';
 const CONSOLE_SESSION_ID_STORAGE_KEY = 'os_console_session_id';
 
 let cachedToken: string | null = null;
@@ -43,6 +52,67 @@ function readTokenFromLocationHash(): string | null {
   if (hash.length <= 1) return null;
   const params = new URLSearchParams(hash.slice(1));
   return params.get('host_token');
+}
+
+/** 'invalid' only when the server answered and rejected it; a network failure is 'error', never a reason to discard a stored credential. */
+async function verifyTokenState(token: string): Promise<'valid' | 'invalid' | 'error'> {
+  try {
+    const res = await fetch('/api/internal/verify-host-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    if (!res.ok) return 'error';
+    const data = await res.json();
+    return data && data.valid ? 'valid' : 'invalid';
+  } catch (e) {
+    console.warn('[HostSession] Token verification request failed:', e);
+    return 'error';
+  }
+}
+
+function describeThisBrowser(): string {
+  try {
+    const nav: any = typeof navigator !== 'undefined' ? navigator : {};
+    const platform = (nav.userAgentData && nav.userAgentData.platform) || nav.platform || 'browser';
+    return `Console (${platform}, ${new Date().toISOString().slice(0, 10)})`;
+  } catch {
+    return 'Console';
+  }
+}
+
+/**
+ * Trades a verified per-run host token for a persistent console credential and
+ * adopts it. Falls back to using the host token itself (session-only) if the
+ * server can't issue one, so a failure here never locks the operator out.
+ */
+async function adoptBootstrapToken(hostToken: string): Promise<string> {
+  try {
+    const res = await fetch('/api/pairing/console-credential', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-host-token': hostToken },
+      body: JSON.stringify({ name: describeThisBrowser() }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && typeof data.credential === 'string' && data.credential) {
+        try {
+          if (typeof localStorage !== 'undefined') localStorage.setItem(CONSOLE_CREDENTIAL_STORAGE_KEY, data.credential);
+        } catch (e) {
+          console.warn('[HostSession] Failed to persist console credential:', e);
+        }
+        return data.credential;
+      }
+    }
+  } catch (e) {
+    console.warn('[HostSession] Console credential request failed:', e);
+  }
+  try {
+    if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(CONSOLE_TOKEN_STORAGE_KEY, hostToken);
+  } catch (e) {
+    console.warn('[HostSession] Failed to persist host token to sessionStorage:', e);
+  }
+  return hostToken;
 }
 
 async function verifyToken(token: string): Promise<boolean> {
@@ -95,17 +165,29 @@ export function resolveHostSessionToken(): Promise<string | null> {
       }
 
       if (await verifyToken(fromHash)) {
-        cachedToken = fromHash;
-        try {
-          if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(CONSOLE_TOKEN_STORAGE_KEY, fromHash);
-        } catch (e) {
-          console.warn('[HostSession] Failed to persist host token to sessionStorage:', e);
-        }
+        cachedToken = await adoptBootstrapToken(fromHash);
         return cachedToken;
       }
       // An invalid/stale link -- fall through to the other resolution paths
       // (a cached token from a prior load, or the loopback fetch) instead
       // of giving up outright.
+    }
+
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const stored = localStorage.getItem(CONSOLE_CREDENTIAL_STORAGE_KEY);
+        if (stored) {
+          const state = await verifyTokenState(stored);
+          if (state === 'valid') {
+            cachedToken = stored;
+            return cachedToken;
+          }
+          // Revoked in Paired Devices (or the library was reset): stop presenting it.
+          if (state === 'invalid') localStorage.removeItem(CONSOLE_CREDENTIAL_STORAGE_KEY);
+        }
+      }
+    } catch (e) {
+      console.warn('[HostSession] Failed to read stored console credential:', e);
     }
 
     try {
@@ -153,12 +235,7 @@ export async function submitManualHostToken(token: string): Promise<boolean> {
   const trimmed = token.trim();
   if (!trimmed) return false;
   if (!(await verifyToken(trimmed))) return false;
-  cachedToken = trimmed;
-  try {
-    if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(CONSOLE_TOKEN_STORAGE_KEY, trimmed);
-  } catch (e) {
-    console.warn('[HostSession] Failed to persist manually-entered host token to sessionStorage:', e);
-  }
+  cachedToken = await adoptBootstrapToken(trimmed);
   return true;
 }
 

@@ -107,6 +107,16 @@ fn build_ccli_csv_text(rows: &[CcliUsageRow]) -> String {
 /// quote, or newline) -- matches how every spreadsheet tool round-trips
 /// plain fields, and keeps the common case (a plain title) readable.
 fn csv_field(s: &str) -> String {
+    // Spreadsheets run a cell starting with = + - @ (or tab/CR) as a formula; a song
+    // title imported from the web must not be able to. A leading apostrophe makes
+    // it plain text.
+    let neutralized;
+    let s = if s.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        neutralized = format!("'{}", s);
+        neutralized.as_str()
+    } else {
+        s
+    };
     if s.contains(',') || s.contains('"') || s.contains('\n') {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
@@ -200,10 +210,18 @@ fn build_ccli_assist_init_script(username: &str, password: &str, csv: &str) -> S
     let username_json = serde_json::to_string(username).unwrap_or_else(|_| "\"\"".to_string());
     let password_json = serde_json::to_string(password).unwrap_or_else(|_| "\"\"".to_string());
     let csv_json = serde_json::to_string(csv).unwrap_or_else(|_| "\"\"".to_string());
-    CCLI_ASSIST_SCRIPT_TEMPLATE
+    let body = CCLI_ASSIST_SCRIPT_TEMPLATE
         .replace("__USERNAME_JSON__", &username_json)
         .replace("__PASSWORD_JSON__", &password_json)
-        .replace("__CSV_JSON__", &csv_json)
+        .replace("__CSV_JSON__", &csv_json);
+    // The script carries the saved CCLI password and fills any password field
+    // it finds, and an initialization script re-runs on every page the window
+    // navigates to -- so refuse to run anywhere but CCLI's own https hosts
+    // (a redirect or link to another origin must never see the credentials).
+    format!(
+        "(function(){{ if (location.protocol !== 'https:' || !/(^|\\.)ccli\\.com$/i.test(location.hostname)) {{ return; }}\n{}\n}})();",
+        body
+    )
 }
 
 /// POST /api/reports/ccli-open-assist

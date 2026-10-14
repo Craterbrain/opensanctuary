@@ -205,10 +205,12 @@ pub fn resolve_real_client_ip(connect_ip: std::net::IpAddr, forwarded_for: Optio
     if connect_ip.is_loopback() {
         if let Some(header) = forwarded_for {
             // X-Forwarded-For is a comma-separated hop chain,
-            // "client, proxy1, proxy2, ..."; the first entry is the
-            // original client as seen by the nearest (here, only) proxy.
-            if let Some(first) = header.split(',').next() {
-                if let Ok(ip) = first.trim().parse::<std::net::IpAddr>() {
+            // "client, proxy1, proxy2, ...". Everything but the entry our
+            // own (trusted, loopback) proxy appended is client-controlled,
+            // so take the LAST entry -- the peer address that proxy saw --
+            // never the first, which a visitor can forge as "127.0.0.1".
+            if let Some(last) = header.rsplit(',').next() {
+                if let Ok(ip) = last.trim().parse::<std::net::IpAddr>() {
                     return ip;
                 }
             }
@@ -271,7 +273,7 @@ mod tests {
         assert_eq!(resolve_real_client_ip(loopback, Some("127.0.0.1")), loopback);
 
         // Multi-hop header: first entry is the original client.
-        assert_eq!(resolve_real_client_ip(loopback, Some("203.0.113.7, 10.0.0.1")), "203.0.113.7".parse::<IpAddr>().unwrap());
+        assert_eq!(resolve_real_client_ip(loopback, Some("127.0.0.1, 203.0.113.7")), "203.0.113.7".parse::<IpAddr>().unwrap());
 
         // The critical negative case: the TCP peer is NOT loopback (a real
         // network caller), so its own forged `X-Forwarded-For: 127.0.0.1`

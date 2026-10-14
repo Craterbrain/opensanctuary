@@ -14,6 +14,36 @@ pub struct PairedDevice {
     pub token: String,
 }
 
+/// `platform` value only `POST /api/pairing/remote-session` (host-token gated)
+/// ever assigns -- the one role allowed to send show commands. The authorize
+/// route refuses to hand it out, so pairing a display can't produce it.
+pub const REMOTE_CONTROL_PLATFORM: &str = "mobile-remote";
+
+/// `platform` of a persistent console credential (see `console_credential_hash`).
+pub const CONSOLE_PLATFORM: &str = "console";
+
+/// What is stored in `paired_devices.token` for a console credential: the SHA-256 of the
+/// bearer secret, never the secret itself. The raw credential exists only in the
+/// browser that was issued it, so a copy of `library.db` (or the Paired Devices list)
+/// can't be turned into console access.
+pub fn console_credential_hash(raw: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(raw.as_bytes());
+    let mut out = String::from("sha256:");
+    for b in digest.iter() {
+        out.push_str(&format!("{:02x}", b));
+    }
+    out
+}
+
+impl PairedDevice {
+    /// Role check: paired *displays* (Android TV, Roku, ...) only receive
+    /// state; only a paired remote may drive the show.
+    pub fn can_control_show(&self) -> bool {
+        self.platform == REMOTE_CONTROL_PLATFORM
+    }
+}
+
 impl Database {
     // --- Paired Client Displays ---
 

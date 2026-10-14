@@ -214,8 +214,17 @@ pub(super) struct CheckHostnameQuery {
 /// GET /api/network/check-hostname?name=opensanctuary
 /// Checks whether a hostname has conflicts on the local network, excluding self IPs.
 pub(super) async fn check_hostname_handler(Query(query): Query<CheckHostnameQuery>) -> impl IntoResponse {
-    let self_ips = crate::network::get_all_local_ips();
-    let result = crate::network::check_hostname_conflict(&query.name, &self_ips);
+    let name = query.name.clone();
+    // Does blocking DNS lookups.
+    let result = match tokio::task::spawn_blocking(move || {
+        let self_ips = crate::network::get_all_local_ips();
+        crate::network::check_hostname_conflict(&name, &self_ips)
+    })
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => return Json(serde_json::json!({ "success": false, "error": "hostname check failed" })),
+    };
     Json(serde_json::json!({
         "success": true,
         "hostname": result.hostname,
@@ -351,8 +360,13 @@ pub(super) async fn toggle_dedicated_mac_handler(
     // creating the adapter, rather than only offering the check as advisory
     // UI.
     if payload.enable && !payload.confirm_conflict {
-        let self_ips = crate::network::get_all_local_ips();
-        let conflict = crate::network::check_hostname_conflict(&hostname, &self_ips);
+        let hostname_for_job = hostname.clone();
+        let conflict = tokio::task::spawn_blocking(move || {
+            let self_ips = crate::network::get_all_local_ips();
+            crate::network::check_hostname_conflict(&hostname_for_job, &self_ips)
+        })
+        .await
+        .unwrap_or_else(|_| crate::network::check_hostname_conflict("", &[]));
         if conflict.conflict_detected {
             return Json(serde_json::json!({
                 "success": false,
@@ -385,7 +399,14 @@ pub(super) async fn toggle_dedicated_mac_handler(
             return Json(serde_json::json!({ "success": false, "error": "Invalid parent interface name" }));
         }
 
-        match crate::network::VirtualAdapterManager::enable_dedicated_adapter(&parent, &hostname) {
+        // pkexec blocks until the operator answers the polkit prompt: keep it off the async workers.
+        let (parent_for_job, hostname_for_job) = (parent.clone(), hostname.clone());
+        let enable_result = tokio::task::spawn_blocking(move || {
+            crate::network::VirtualAdapterManager::enable_dedicated_adapter(&parent_for_job, &hostname_for_job)
+        })
+        .await
+        .unwrap_or_else(|e| Err(format!("adapter task failed: {e}")));
+        match enable_result {
             Ok(res) => {
                 let _ = app.db.set_setting("networkDedicatedMac", "true");
                 Json(serde_json::json!({
@@ -406,7 +427,10 @@ pub(super) async fn toggle_dedicated_mac_handler(
             })),
         }
     } else {
-        match crate::network::VirtualAdapterManager::disable_dedicated_adapter() {
+        let disable_result = tokio::task::spawn_blocking(crate::network::VirtualAdapterManager::disable_dedicated_adapter)
+            .await
+            .unwrap_or_else(|e| Err(format!("adapter task failed: {e}")));
+        match disable_result {
             Ok(()) => {
                 let _ = app.db.set_setting("networkDedicatedMac", "false");
                 Json(serde_json::json!({

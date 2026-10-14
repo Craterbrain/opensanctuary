@@ -259,7 +259,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (https_port_actual, tls_pem_pair) = match os_next::network::tls::get_or_create_tls_certificate(&db, network_hostname, &interfaces) {
         Ok(pair) => {
             let mut chosen_port = None;
-            for p in configured_https_port..=configured_https_port + 10 {
+            for p in configured_https_port..=configured_https_port.saturating_add(10) {
                 if p == server_port {
                     continue;
                 }
@@ -393,16 +393,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_ref()
         .map(|base| format!("{}/#host_token={}", base, host_session_token))
         .unwrap_or_else(|| self_signed_console_url.clone());
-    println!("  Remote Console Access : {}", remote_console_url);
-    if public_https_url.is_some() {
-        println!("    (Self-signed fallback, if the above isn't reachable: {})", self_signed_console_url);
-    }
-    if https_port_actual.is_none() {
-        println!("    (NOT ENCRYPTED -- HTTPS failed to start; this token will travel in cleartext over the LAN until it's fixed)");
-    }
-    println!("============================================================");
-    for line in os_next::network::render_terminal_qr(&remote_console_url) {
-        println!("  {}", line);
+    // The URL carries the host token (full control of the console), so only
+    // print it when a person is looking at a terminal -- not into journald or
+    // a redirected log file. OS_NEXT_PRINT_TOKEN=1 forces it for headless use.
+    let show_token = std::io::IsTerminal::is_terminal(&std::io::stdout())
+        || std::env::var("OS_NEXT_PRINT_TOKEN").map_or(false, |v| v == "1");
+    if show_token {
+        println!("  Remote Console Access : {}", remote_console_url);
+        if public_https_url.is_some() {
+            println!("    (Self-signed fallback, if the above isn't reachable: {})", self_signed_console_url);
+        }
+        if https_port_actual.is_none() {
+            println!("    (NOT ENCRYPTED -- HTTPS failed to start; this token will travel in cleartext over the LAN until it's fixed)");
+        }
+        println!("============================================================");
+        for line in os_next::network::render_terminal_qr(&remote_console_url) {
+            println!("  {}", line);
+        }
+    } else {
+        println!("  Remote Console Access : (hidden -- stdout is not a terminal; set OS_NEXT_PRINT_TOKEN=1 to print the token URL)");
     }
     println!("============================================================\n");
 
@@ -547,7 +556,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match os_next::network::tls::create_rustls_config(&cert_pem, &key_pem).await {
                     Ok(rustls_config) => {
                         let https_addr = SocketAddr::from(([0, 0, 0, 0], hp));
-                        let https_router = router.clone();
+                        let https_router = router.clone().layer(axum::middleware::from_fn(network_request_timeout));
                         tokio::spawn(async move {
                             tracing::info!("OS-Next network server listening on https://{}", https_addr);
                             // with_connect_info: GET /api/internal/host-token needs the real
@@ -572,7 +581,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 match os_next::network::tls::create_rustls_config(&new_cert, &new_key).await {
                                     Ok(rustls_config) => {
                                         let https_addr = SocketAddr::from(([0, 0, 0, 0], hp));
-                                        let https_router = router.clone();
+                                        let https_router = router.clone().layer(axum::middleware::from_fn(network_request_timeout));
                                         tokio::spawn(async move {
                                             tracing::info!("OS-Next network server listening on https://{} (recovered via fallback regeneration)", https_addr);
                                             if let Err(e) = axum_server::bind_rustls(https_addr, rustls_config)
@@ -626,4 +635,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// The network-facing server's per-request ceiling. A client that opens a request and
+/// then dribbles the body (or stalls mid-handler) would otherwise hold a task and its
+/// resources indefinitely. Once a response (or WebSocket upgrade) is returned the
+/// connection is no longer covered, so long-lived `/ws` sockets and media streams are
+/// unaffected; `/ws` has its own ping/idle handling.
+async fn network_request_timeout(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match tokio::time::timeout(std::time::Duration::from_secs(60), next.run(req)).await {
+        Ok(resp) => resp,
+        Err(_) => (axum::http::StatusCode::REQUEST_TIMEOUT, "request timed out").into_response(),
+    }
 }

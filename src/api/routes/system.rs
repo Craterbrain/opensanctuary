@@ -164,7 +164,22 @@ pub(super) async fn apply_local_update(
     // Console-only: without this, any LAN caller could hand the OS's
     // default file-open handler an arbitrary path with no auth at all.
     require_host_token(&headers, &app)?;
-    let path = std::path::Path::new(&req.path);
+    let validated = validate_safe_path(&req.path).map_err(|(status, msg)| {
+        (status, Json(serde_json::json!({ "ok": false, "error": msg })))
+    })?;
+    let path = validated.as_path();
+    // This hands the file to the OS's default opener, so it must be a real
+    // installer package -- never an arbitrary script/document/executable.
+    let is_installer = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map_or(false, |e| ["deb", "rpm", "appimage", "msi", "exe", "dmg", "pkg"].iter().any(|k| e.eq_ignore_ascii_case(k)));
+    if !is_installer || !path.is_file() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "ok": false, "error": "Not an installer file (.deb, .rpm, .AppImage, .msi, .exe, .dmg, .pkg)" })),
+        ));
+    }
     let checksum = crate::network::updater::check_local_file_against_sibling_checksums(
         path,
         crate::network::updater::RELEASE_PUBLIC_KEY_B64,
