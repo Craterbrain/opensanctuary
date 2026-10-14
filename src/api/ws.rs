@@ -62,6 +62,8 @@ pub struct AppState {
     pub skip_first_time_setup: bool,
     pub tx: broadcast::Sender<String>,
     pub plugin_manager: Arc<crate::core::plugins::PluginManager>,
+    /// Notifications from the host and approved plugins; consoles poll it.
+    pub notifications: Arc<crate::api::notifications::NotificationBus>,
     pub media_search: Arc<crate::storage::MediaSearchRegistry>,
     /// The `Schedule::schedule_version` last included (non-null) in a broadcast over `tx`.
     /// Lets `broadcast_snapshot` skip re-serializing/re-sending the full schedule to every

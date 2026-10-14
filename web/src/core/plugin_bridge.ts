@@ -108,6 +108,7 @@ async function mintToken(r: Running): Promise<string | null> {
   if (r.granted.has('network.outbound')) scopes.push({ id: 'network.outbound', hosts: grantedList(r.plugin, 'network.outbound', 'hosts') });
   if (r.granted.has('library.write')) scopes.push({ id: 'library.write', categories: grantedList(r.plugin, 'library.write', 'categories') });
   if (r.granted.has('process.run')) scopes.push({ id: 'process.run', commands: grantedList(r.plugin, 'process.run', 'commands') });
+  if (r.granted.has('notifications.post')) scopes.push({ id: 'notifications.post' });
   if (!scopes.length) return null;
   try {
     return (await api.plugins.token(r.plugin.id, scopes)).token;
@@ -231,6 +232,20 @@ async function handle(r: Running, method: string, params: any): Promise<unknown>
       if (!res.ok) throw new Error(body?.error || `couldn't add the media (${res.status})`);
       window.dispatchEvent(new CustomEvent('os-library-changed', { detail: { category: 'media', id: body.id } }));
       return { id: body.id, item: body.item };
+    }
+    case 'notify': {
+      need('notifications.post');
+      const res = await withToken(r, (t) => fetch('/api/plugin-host/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-plugin-token': t },
+        body: JSON.stringify({
+          level: params?.level, title: String(params?.title ?? ''), message: String(params?.message ?? ''),
+          key: params?.key === undefined ? undefined : String(params.key), sticky: !!params?.sticky,
+        }),
+      }));
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `notification refused (${res.status})`);
+      return { id: body.id };
     }
     case 'ui.pasteText': {
       need('ui.panel');

@@ -82,6 +82,7 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 | `filesystem.read` / `.write` | `paths[]` | High / Critical | consent-only | n/a | |
 | `process.spawn` | — | Critical | consent-only | n/a | |
 | `ui.panel`, `ui.toolbar` | — | Medium | n/a | **E** (slots) | |
+| `notifications.post` | — | Low | n/a | **E** (`POST /api/plugin-host/notify`) | Posts to the console's notification center; see PLUGINS.md |
 
 **E** means the host enforces it. **Info** or **consent-only** means it is shown at consent time and recorded, but not technically enforced.
 

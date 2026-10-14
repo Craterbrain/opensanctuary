@@ -142,5 +142,24 @@ describe("E2E Live Test: Video Downloader plugin (yt-dlp) downloads through the 
     // And it shows up in the Media list like anything else.
     await page.locator('.category-node:has-text("All Media")').click();
     await page.waitForSelector("text=E2E Clip", { timeout: 10000 });
+
+    // The plugin told the notification center (it was granted notifications.post): the bell badges,
+    // and the list names the plugin as the source, in plain text.
+    await page.waitForFunction(() => (document.querySelector(".os-notif-badge") as HTMLElement | null)?.hidden === false, null, { timeout: 10000 });
+    await page.click("#btn-notifications");
+    const panel = page.locator(".os-notif-panel");
+    await panel.waitFor({ state: "visible", timeout: 5000 });
+    const row = panel.locator(".os-notif-row:has-text('Download finished')");
+    await row.waitFor({ state: "visible", timeout: 10000 });
+    expect(await row.innerText()).toContain("E2E Clip");
+    expect(await row.innerText()).toContain("Video Downloader (yt-dlp)");
+    expect(await row.evaluate((el) => el.classList.contains("os-notif-success"))).toBe(true);
+    expect(await page.locator(".os-notif-badge").evaluate((el) => (el as HTMLElement).hidden)).toBe(true); // opening it marks all read
+    await page.screenshot({ path: `${artifactDir}/screenshot_notification_center.png` });
+    // Muting the plugin keeps the list entry; dismissing removes it (and tells the host).
+    await row.locator(".os-notif-btn").first().click();
+    expect(await page.evaluate(() => localStorage.getItem("os_notifications_muted"))).toContain("plugin:ytdlp");
+    await panel.locator(".os-notif-row:has-text('Download finished') .os-notif-btn").last().click();
+    await page.waitForFunction(() => !document.querySelector(".os-notif-panel")?.textContent?.includes("Download finished"), null, { timeout: 5000 });
   }, 120000);
 });

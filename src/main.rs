@@ -319,6 +319,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         plugin_manager: plugin_manager.clone(),
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: display_manager.clone(),
         plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         host_session_token: host_session_token.clone(),

@@ -4,6 +4,7 @@ mod import;
 mod keyring;
 mod library;
 mod network;
+mod notifications;
 mod pairing;
 pub(crate) mod plugins;
 mod pattern_cache;
@@ -101,6 +102,7 @@ pub(crate) fn needs_host_token(method: &axum::http::Method, path: &str) -> bool 
                 | "/api/plugin-host/process/release"
                 | "/api/plugin-host/tool/status"
                 | "/api/plugin-host/tool/update"
+                | "/api/plugin-host/notify"
         ) && (path == "/api/keyring/plugin/token" || !path.starts_with("/api/keyring/"));
     }
     // Plugin management: paths, digests and the audit trail are console-only reads.
@@ -110,6 +112,7 @@ pub(crate) fn needs_host_token(method: &axum::http::Method, path: &str) -> bool 
     matches!(
         path,
         "/api/network/interfaces"
+            | "/api/notifications"
             | "/api/network/check-port"
             | "/api/network/check-hostname"
             | "/api/schedule/export"
@@ -297,6 +300,7 @@ pub fn create_router(app_state: AppState) -> Router {
         .merge(keyring::router())
         .merge(pairing::router())
         .merge(plugins::router())
+        .merge(notifications::router())
         .merge(network::router())
         .merge(displays::router())
         .merge(system::router())

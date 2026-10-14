@@ -112,6 +112,20 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   library only through `library.addMedia`, which accepts a plain file name from *that job's* folder
   (right extension, moved not copied). What the tool itself then does (for example reaching the
   network) is not confined, which is exactly what the Critical-tier `process.run` grant tells you.
+- **Notifications: `notifications.post`.** The console has one notification center (the bell in
+  the ribbon, with an unread badge) that collects everything: its own toasts, notices from the host
+  (for example a finished tool update) and notifications from plugins. A sandboxed plugin granted
+  `notifications.post` calls `OS.notify(title, message, { level, key, sticky })`
+  (`level`: `info`, `success`, `warning`, `error`). The host stamps the source with the plugin's
+  name, so a plugin can't pose as the host or another plugin. Text is plain (no markup), clamped
+  to 80 / 400 characters, and a plugin is limited to 10 per 10 seconds. A later post with the same
+  `key` replaces the earlier one (progress, "still failing") instead of stacking; `sticky` keeps a
+  warning or error on screen until dismissed. The operator can mute a source (it still lands in the
+  list, with no pop-up), dismiss entries or clear them all. Notifications are kept in memory, the
+  last 200, and are not an audit trail. Host side: `src/api/notifications.rs` (the bus; the host's
+  own code posts with `post_host`), routes in `src/api/routes/notifications.rs`; the console
+  polls `GET /api/notifications?after=<id>` every 2 seconds (`&wait=<s>` makes the host hold the
+  request until something new arrives, for a client that wants it). Native plugins don't have this call yet.
 - **Video Downloader is a plugin.** Downloading with yt-dlp (YouTube and 1000+ other sites, optional
   browser cookies, SponsorBlock, audio-only) is `web/plugins/ytdlp/`: a sandboxed page in the Media
   library sidebar and in the video picker, built on `process.run` above. The old built-in downloader,

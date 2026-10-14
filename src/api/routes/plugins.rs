@@ -270,7 +270,7 @@ pub(super) struct TokenReq {
 }
 
 /// Permissions a token can carry at all.
-const TOKEN_SCOPES: [&str; 5] = ["keyring.own", "commands.send", "network.outbound", "library.write", "process.run"];
+const TOKEN_SCOPES: [&str; 6] = ["keyring.own", "commands.send", "network.outbound", "library.write", "process.run", "notifications.post"];
 
 /// POST /api/plugins/:id/token -- the console mints a token for an approved plugin, limited to
 /// (a subset of) what it was granted. The token is checked against the live grant on every use.
@@ -350,7 +350,7 @@ pub(crate) async fn authorize_plugin_command(app: &AppState, token: &str, cmd: &
 
 /// The plugin credential on a host-API call (`x-plugin-token`), resolved against the plugin's
 /// live grant.
-async fn plugin_caller(app: &AppState, headers: &HeaderMap) -> Result<crate::api::ws::PluginCaller, ApiErr> {
+pub(super) async fn plugin_caller(app: &AppState, headers: &HeaderMap) -> Result<crate::api::ws::PluginCaller, ApiErr> {
     let token = headers.get("x-plugin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
     app.resolve_plugin_caller(token)
         .await
@@ -697,6 +697,7 @@ pub(super) async fn tool_update(State(app): State<AppState>, headers: HeaderMap,
         return Ok(Json(tool_report(&app, &caller.plugin_id, &tool).await));
     }
     let (tools, plugin_id, db) = (tools_dir(&app), caller.plugin_id.clone(), app.db.clone());
+    let (bus, plugin_name) = (app.notifications.clone(), row.name.clone());
     let tool2 = tool.clone();
     tokio::spawn(async move {
         let outcome = crate::api::plugin_tools::check_and_update(&tools, &plugin_id, &tool2, &key).await;
@@ -707,6 +708,13 @@ pub(super) async fn tool_update(State(app): State<AppState>, headers: HeaderMap,
                 if outcome.error { "tool_update_failed" } else { "tool_updated" },
                 &serde_json::json!({ "tool": tool2.id, "version": outcome.version, "message": outcome.message }).to_string(),
             );
+            // The operator may have left the plugin's panel while a release downloaded.
+            let (level, title) = if outcome.error {
+                (crate::api::notifications::Level::Error, format!("{plugin_name}: couldn't update {}", tool2.id))
+            } else {
+                (crate::api::notifications::Level::Success, format!("{plugin_name}: {} updated", tool2.id))
+            };
+            bus.post_host(level, &title, &outcome.message);
         }
         tool_updates().lock().unwrap_or_else(|e| e.into_inner()).insert(key_id, (false, Some(outcome)));
     });
