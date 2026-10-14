@@ -491,6 +491,7 @@ export interface PluginInfo {
   loaded: boolean;
   restart_required: boolean;
   placements?: Array<{ slot: string; label?: string; tab?: string }>;
+  toolbar?: Array<{ id: string; label: string; icon: string; tooltip?: string }>;
   commands?: Array<{ id: string; tool: string; line: string; params: Array<{ name: string; type: string; values: string[]; optional: boolean }> }>;
   tools?: Array<{ id: string; github: string; assets: Record<string, string>; checksums: string; signature: string; system_command: string | null; key_sha256: string }>;
 }

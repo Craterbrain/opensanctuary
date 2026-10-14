@@ -112,6 +112,21 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   library only through `library.addMedia`, which accepts a plain file name from *that job's* folder
   (right extension, moved not copied). What the tool itself then does (for example reaching the
   network) is not confined, which is exactly what the Critical-tier `process.run` grant tells you.
+- **Ribbon buttons: `ui.toolbar`.** A sandboxed plugin can declare up to two buttons for the
+  console's top ribbon. In `plugin.json`, request `ui.toolbar` and list them under
+  `ui.toolbar`: `{ "id", "label", "icon", "tooltip" }`. They are fixed once approved and the review
+  screen shows each one with its real icon and label. Rules, so a plugin button can't pass for a
+  built-in one: the label is 1 to 16 letters, digits, spaces and `- . & ' ( ) +` (no emoji, control,
+  bidi or zero-width characters) and can't be a built-in button's name (Go Live, Black, Clear, Save,
+  Notices and so on); the icon is the *name* of a file in `web/icons/crimson/`, never one of the
+  live-control icons; unknown keys are rejected. The console draws them in their own **Plugins**
+  group (caption, dashed top border, a puzzle badge on each button, and "<plugin name> (plugin): ..."
+  in the tooltip), never among the built-in controls; past six buttons across all plugins the rest
+  go into a "More" menu. A click arrives as `OS.on('toolbar', ({ id }) => ...)` in exactly one frame of
+  the plugin (debounced to one per 500 ms), carries no authority of its own, and the button gives
+  up focus so Enter still means Go Live. The plugin can call `OS.call('ui.toolbar.update',
+  { id, disabled?, pressed? })` to grey a button out or show it pressed, nothing else. Revoking or
+  denying a plugin removes its buttons immediately. See the Sandboxed Demo Panel for a working one.
 - **Overriding what a plugin asks for (Advanced).** On any plugin's card in Settings > Plugins,
   "Advanced: override what this plugin asks for" opens an editor, behind a warning that this may
   break the plugin or give it more access than its author intended. Every permission it asked for

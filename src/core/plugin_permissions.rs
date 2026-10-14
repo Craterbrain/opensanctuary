@@ -47,7 +47,7 @@ const KNOWN: &[(&str, Tier, &str)] = &[
     ("process.spawn", Tier::Critical, "consent-only"),
     ("process.run", Tier::Critical, "enforced"),
     ("ui.panel", Tier::Medium, "enforced"),
-    ("ui.toolbar", Tier::Medium, "reserved"),
+    ("ui.toolbar", Tier::Medium, "enforced"),
     ("notifications.post", Tier::Low, "enforced"),
 ];
 
@@ -473,6 +473,68 @@ pub struct Placement {
 pub struct UiSection {
     #[serde(default)]
     pub placements: Vec<Placement>,
+    /// Buttons added to the console's top ribbon (`ui.toolbar`).
+    #[serde(default)]
+    pub toolbar: Vec<ToolbarItem>,
+}
+
+/// A ribbon button a sandboxed plugin declares. Everything here is shown to the operator at review
+/// and can't change at runtime. `icon` is the *name* of an icon in the app's icon set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolbarItem {
+    pub id: String,
+    pub label: String,
+    pub icon: String,
+    #[serde(default)]
+    pub tooltip: String,
+}
+
+/// Labels of the console's own ribbon buttons and their obvious synonyms: a plugin button can't
+/// carry one (compared case-insensitively with whitespace collapsed).
+const RESERVED_TOOLBAR_LABELS: &[&str] = &[
+    "new", "open", "save", "import", "store", "web", "remote", "notices", "notifications", "go live", "live", "alert",
+    "alerts", "logo", "black", "blackout", "clear", "clear text", "settings", "plugins",
+];
+
+/// Icons of the live-override cluster and the notification bell: not for plugin buttons.
+const RESERVED_TOOLBAR_ICONS: &[&str] = &["golive", "blackout", "clear-lyrics", "logo", "live-status", "alert"];
+
+pub const MAX_TOOLBAR_ITEMS: usize = 2;
+
+/// Letters, digits, spaces and a little punctuation. No control, bidi-override, zero-width or emoji
+/// characters, so a label can't imitate another or hide text.
+fn toolbar_text_ok(s: &str, punctuation: &str) -> bool {
+    s.chars().all(|c| c.is_alphanumeric() || c == ' ' || punctuation.contains(c))
+}
+
+impl ToolbarItem {
+    pub fn validate(&self) -> Result<(), String> {
+        if !valid_short_id(&self.id) {
+            return Err(format!("toolbar item id '{}' is not valid", self.id));
+        }
+        let label_chars = self.label.chars().count();
+        if self.label != self.label.trim() || !(1..=16).contains(&label_chars) {
+            return Err(format!("toolbar label '{}' must be 1 to 16 characters with no leading or trailing space", self.label));
+        }
+        if !toolbar_text_ok(&self.label, "-.&'()+") {
+            return Err(format!("toolbar label '{}' may only use letters, digits, spaces and - . & ' ( ) +", self.label));
+        }
+        let collapsed = self.label.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+        if RESERVED_TOOLBAR_LABELS.contains(&collapsed.as_str()) {
+            return Err(format!("toolbar label '{}' is the name of a built-in button", self.label));
+        }
+        if !(!self.icon.is_empty() && self.icon.len() <= 40 && self.icon.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')) {
+            return Err(format!("toolbar icon '{}' must be the name of an icon (letters, digits, dashes)", self.icon));
+        }
+        if RESERVED_TOOLBAR_ICONS.contains(&self.icon.as_str()) {
+            return Err(format!("toolbar icon '{}' is used by a built-in button", self.icon));
+        }
+        if self.tooltip.chars().count() > 80 || !toolbar_text_ok(&self.tooltip, "-.&'()+,:;!?/") {
+            return Err("toolbar tooltip must be at most 80 characters of plain text".to_string());
+        }
+        Ok(())
+    }
 }
 
 /// A command-line tool the host keeps installed and current for a plugin, from a GitHub release
@@ -811,8 +873,32 @@ impl PluginManifest {
     }
 
     fn validate_ui(&self) -> Result<(), ManifestError> {
-        let Some(ui) = &self.ui else { return Ok(()) };
+        let wants_toolbar = self.permissions.iter().any(|p| p.id == "ui.toolbar");
+        let Some(ui) = &self.ui else {
+            return if wants_toolbar { Err(ManifestError::Invalid("'ui.toolbar' needs at least one item under ui.toolbar".to_string())) } else { Ok(()) };
+        };
         let bad = |m: String| Err(ManifestError::Invalid(m));
+        if !ui.toolbar.is_empty() || wants_toolbar {
+            if !self.web.as_ref().is_some_and(|w| w.sandbox) {
+                return bad("ribbon buttons (ui.toolbar) are only for sandboxed web plugins".to_string());
+            }
+            if !wants_toolbar {
+                return bad("ribbon buttons need the 'ui.toolbar' permission".to_string());
+            }
+            if ui.toolbar.is_empty() {
+                return bad("'ui.toolbar' needs at least one item under ui.toolbar".to_string());
+            }
+            if ui.toolbar.len() > MAX_TOOLBAR_ITEMS {
+                return bad(format!("at most {MAX_TOOLBAR_ITEMS} toolbar buttons"));
+            }
+            let mut ids = std::collections::HashSet::new();
+            for item in &ui.toolbar {
+                item.validate().map_err(ManifestError::Invalid)?;
+                if !ids.insert(item.id.clone()) {
+                    return bad(format!("toolbar item id '{}' is listed twice", item.id));
+                }
+            }
+        }
         if !ui.placements.is_empty() && !self.web.as_ref().is_some_and(|w| w.sandbox) {
             return bad("ui placements are only for sandboxed web plugins".to_string());
         }
@@ -1023,6 +1109,49 @@ mod tests {
         assert!(manifest(&sandboxed("").replace("index.html", "../index.html")).is_err());
         assert!(manifest(&sandboxed("").replace("index.html", "main.js")).is_err());
         assert!(manifest(&sandboxed("").replace("index.html", "ui/index.html")).is_ok());
+    }
+
+    #[test]
+    fn ribbon_buttons_are_validated_hard() {
+        let with = |item: &str, perm: bool, sandbox: bool| {
+            format!(
+                r#"{{"manifest_version":1,"id":"tb","name":"T","web":{{"entry":"index.html","sandbox":{sandbox}}},"permissions":[{perm}],"ui":{{"toolbar":[{item}]}}}}"#,
+                perm = if perm { r#"{"id":"ui.toolbar"}"# } else { r#"{"id":"show.observe"}"# },
+            )
+        };
+        let good = r#"{"id":"sync","label":"Sync","icon":"refresh","tooltip":"Pull this week's plan"}"#;
+        assert!(manifest(&with(good, true, true)).is_ok());
+        assert!(manifest(&with(good, false, true)).is_err(), "needs the permission");
+        assert!(manifest(&with(good, true, false)).is_err(), "sandboxed plugins only");
+        // The permission without any item is meaningless.
+        assert!(manifest(&format!(r#"{{"manifest_version":1,"id":"tb","name":"T","web":{{"entry":"index.html","sandbox":true}},"permissions":[{{"id":"ui.toolbar"}}]}}"#)).is_err());
+        assert!(manifest(&with("", true, true)).is_err());
+        let item = |id: &str, label: &str, icon: &str| format!(r#"{{"id":"{id}","label":"{label}","icon":"{icon}"}}"#);
+        for (why, bad) in [
+            ("a built-in label", item("a", "Go Live", "refresh")),
+            ("a built-in label with odd spacing and case", item("a", "go  live", "refresh")),
+            ("another built-in label", item("a", "Blackout", "refresh")),
+            ("a bidi override", item("a", "Sy\\u202enc", "refresh")),
+            ("a zero-width space", item("a", "Sy\\u200bnc", "refresh")),
+            ("an emoji", item("a", "Sync \\ud83d\\udd04", "refresh")),
+            ("markup", item("a", "<b>x</b>", "refresh")),
+            ("leading space", item("a", " Sync", "refresh")),
+            ("too long", item("a", "Seventeen chars!!", "refresh")),
+            ("empty", item("a", "", "refresh")),
+            ("a reserved icon", item("a", "Sync", "golive")),
+            ("an icon that is a path", item("a", "Sync", "../x")),
+            ("a bad id", item("A B", "Sync", "refresh")),
+        ] {
+            assert!(manifest(&with(&bad, true, true)).is_err(), "{why}");
+        }
+        assert!(manifest(&with(r#"{"id":"a","label":"Sync","icon":"refresh","extra":1}"#, true, true)).is_err(), "unknown keys");
+        let long_tip = format!(r#"{{"id":"a","label":"Sync","icon":"refresh","tooltip":"{}"}}"#, "x".repeat(81));
+        assert!(manifest(&with(&long_tip, true, true)).is_err());
+        let three = format!("{},{},{}", item("a", "One", "refresh"), item("b", "Two", "refresh"), item("c", "Three", "refresh"));
+        assert!(manifest(&with(&three, true, true)).is_err(), "at most two");
+        let dup = format!("{},{}", item("a", "One", "refresh"), item("a", "Two", "refresh"));
+        assert!(manifest(&with(&dup, true, true)).is_err(), "duplicate id");
+        assert!(manifest(&with(&format!("{},{}", item("a", "One", "refresh"), item("b", "Two", "plus")), true, true)).is_ok());
     }
 
     #[test]

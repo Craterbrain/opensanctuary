@@ -138,6 +138,8 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         "commands": commands,
         "tools": tools,
         "placements": read_manifest(row).and_then(|m| m.ui).map(|u| u.placements).unwrap_or_default(),
+        // Ribbon buttons come from the manifest, which a sandboxed plugin's digest covers.
+        "toolbar": (row.kind == "sandbox").then(|| read_manifest(row)).flatten().and_then(|m| m.ui).map(|u| u.toolbar).unwrap_or_default(),
         "entry": entry,
         "id": row.plugin_id,
         "kind": row.kind,
