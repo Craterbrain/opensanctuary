@@ -166,17 +166,16 @@ Locally, `SKIP_TV_APK=1 packaging/build-deb.sh` (podman by default,
 
 ## Why tests aren't in the release workflow
 
-`ci.yml` runs tests on every push and PR; the release only checks the tag. Two
-things currently make CI's web tests unreliable, so fix them before relying on a
-green `ci.yml` as a release gate:
+`ci.yml` runs tests on every push and PR; the release only checks the tag. The web suite passes
+locally with no failures (the e2e cases also need Chromium installed for Playwright, and the release binary built): the schemas the contract tests read are vendored in
+`web/tests/contracts/`, and tests that need something a runner may not have skip themselves
+instead of failing:
 
-- `web/tests/contracts_validation.test.ts` and `web/tests/pairing.test.ts` import
-  schemas from `../../../spec-db-rs/contracts/`, a directory outside this repo.
-  They cannot pass on a runner. Either vendor the schemas into the repo or skip
-  those tests when the directory is missing.
-- Many "E2E Live Test" cases showed `(fail)` on the runner; this wasn't
-  diagnosed (they likely need a running server or browser setup that CI doesn't
-  provide).
+- `e2e_unified_schedule_hub` reads real EasyWorship documents from `$OS_TEST_DOCS` (default
+  `~/Documents/OpenSanctuary-test-docs`: `test1.ewsx`, `LCspring.ewpx`) and skips those cases
+  when they're missing.
+- `e2e_video_picker` makes its own clip with `ffmpeg` and skips without it.
+- `e2e_compare_windows_linux` needs `wine` and a cross-built `os-next.exe` and skips without them.
 
 Also fixed on `keytest`: `build.rs` runs `bun run build` on every `cargo build`,
 so `bun install --frozen-lockfile` must run in `web/` first (added to both

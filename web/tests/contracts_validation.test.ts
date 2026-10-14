@@ -1,8 +1,8 @@
 import { describe, test, expect } from "bun:test";
 import { parseParallelSlide, formatParallelSlide } from "../src/core/presentation_helpers.ts";
 import { PluginManager } from "../src/core/plugins.ts";
-import bibleContract from "../../../spec-db-rs/contracts/bible_parallel_display.schema.json";
-import pluginContract from "../../../spec-db-rs/contracts/frontend_plugins.schema.json";
+import bibleContract from "./contracts/bible_parallel_display.schema.json";
+import pluginContract from "./contracts/frontend_plugins.schema.json";
 
 describe("Formal Contract Validation: bible_parallel_display.schema.json", () => {
     test("Schema definitions and thresholds match canonical standards", () => {

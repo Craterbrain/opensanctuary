@@ -3,24 +3,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { spawnTestServer, teardownTestServer, ensureArtifactDir, type SpawnedTestServer } from "./e2e_helpers";
-
-/** The page uses the console's icons, not emoji: <img class="ui-icon"> from __os/icons/<set>/, loaded, and no emoji glyphs left in the text. */
-async function expectNativeIcons(frame: import("playwright").Frame, atLeast: number) {
-  await frame.waitForFunction(
-    (n) => {
-      const imgs = Array.from(document.querySelectorAll<HTMLImageElement>("img.ui-icon"));
-      return imgs.length >= n && imgs.every((i) => i.complete && i.naturalWidth > 0);
-    },
-    atLeast, { timeout: 10000 },
-  );
-  const info = await frame.evaluate(() => ({
-    srcs: Array.from(document.querySelectorAll<HTMLImageElement>("img.ui-icon")).map((i) => i.getAttribute("src") || ""),
-    text: document.body.innerText,
-  }));
-  expect(info.srcs.every((s) => /^__os\/icons\/[a-z0-9-]+\/[a-z0-9-]+\.svg$/.test(s))).toBe(true);
-  expect(/[\u{1F300}-\u{1FAFF}\u2702\u2B07\u2728\u25B6\u25C0]/u.test(info.text)).toBe(false);
-}
+import { spawnTestServer, teardownTestServer, ensureArtifactDir, type SpawnedTestServer, expectNativeIcons, pluginBridge } from "./e2e_helpers";
 
 describe("E2E Live Test: Online Bibles plugin replaces the built-in Bible downloader", () => {
   let server: SpawnedTestServer;
@@ -44,11 +27,7 @@ describe("E2E Live Test: Online Bibles plugin replaces the built-in Bible downlo
   });
 
   const frameOf = () => page.frames().find((f) => f.url().includes("/plugin-frame/online_bibles/"));
-  const bridge = (method: string, params: any) => frameOf()!.evaluate(([m, p]) => new Promise<any>((resolve) => {
-    const id = Math.floor(Math.random() * 1e9);
-    window.addEventListener("message", (ev) => { if (ev.data?.type === "os.response" && ev.data.id === id) resolve(ev.data); });
-    parent.postMessage({ type: "os.request", id, method: m, params: p }, "*");
-  }), [method, params] as [string, any]);
+  const bridge = pluginBridge(frameOf);
 
   test("the built-in downloader is gone; the plugin installs a Bible and stages a passage", async () => {
     await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: "networkidle" });

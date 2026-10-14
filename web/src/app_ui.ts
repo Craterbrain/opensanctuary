@@ -1252,40 +1252,6 @@ async function loadScheduleFile(file: File, mode: 'replace' | 'append') {
   }
 }
 
-on('btn-load-sample-ewsx', 'click', async () => {
-  const mode = getSelectedScheduleMode();
-  try {
-    const res = await fetch('/test1.ewsx');
-    if (!res.ok) throw new Error('Could not fetch test1.ewsx');
-    const buffer = await res.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    let binaryStr = '';
-    const chunkSize = 8192;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      binaryStr += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
-    }
-    const b64 = btoa(binaryStr);
-    await resolveHostSessionToken();
-    const apiRes = await fetch('/api/schedule/open', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...hostTokenHeader() },
-      body: JSON.stringify({ file_name: 'test1.ewsx', file_data_base64: b64, mode })
-    });
-    if (apiRes.ok) {
-      const data = await apiRes.json();
-      setCurrentSnapshot(data);
-      renderAll(data);
-      showToast(mode === 'append' ? "✓ Appended EasyWorship sample schedule 'test1.ewsx' items" : "✓ Loaded EasyWorship sample schedule 'test1.ewsx'", 'success');
-      closeModal(openModal);
-    } else {
-      const err = await apiRes.text();
-      showToast(`Could not load sample: ${err}`, 'error');
-    }
-  } catch (err: any) {
-    showToast(`Error loading test1.ewsx: ${err.message || err}`, 'error');
-  }
-});
-
 on('btn-load-sunday-service', 'click', async () => {
   const mode = getSelectedScheduleMode();
   if (mode === 'replace') {

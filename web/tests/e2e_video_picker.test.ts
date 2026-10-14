@@ -1,6 +1,9 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { resolve } from "path";
+import { join } from "path";
+import { mkdtempSync, mkdirSync } from "fs";
+import { tmpdir } from "os";
+import { spawnSync } from "child_process";
 import { spawnTestServer, teardownTestServer, ensureArtifactDir, type SpawnedTestServer } from "./e2e_helpers";
 
 describe("E2E Live Test: Background Picker Videos Tab & Video Background Playback", () => {
@@ -10,17 +13,21 @@ describe("E2E Live Test: Background Picker Videos Tab & Video Background Playbac
   const PORT = 9015;
   let artifactDir: string;
 
+  // A one-second clip made with ffmpeg into this test's own media folder (the picker lists the
+  // videos it finds there). Without ffmpeg there is nothing to play, so the test skips itself.
+  const mediaDir = mkdtempSync(join(tmpdir(), "os-next-video-picker-media-"));
+  mkdirSync(join(mediaDir, "videos"), { recursive: true });
+  const haveClip = spawnSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=1:size=160x90:rate=10",
+    "-c:v", "libvpx", "-b:v", "200k", join(mediaDir, "videos", "sample-loop.webm")]).status === 0;
+
   beforeAll(async () => {
     artifactDir = ensureArtifactDir();
     server = await spawnTestServer({
       port: PORT,
       tempPrefix: "os-next-video-picker-e2e-",
-      // Media (downloaded/searched backgrounds) lives alongside the database
-      // by default now, not under web_dir (docs/paths.md) -- this test
-      // exercises the video picker against the repo's real sample video
-      // fixture at web/media/videos, so point media-dir at it explicitly
-      // rather than the fresh per-test tmp dir --db-path would otherwise imply.
-      extraArgs: ["--media-dir", resolve(__dirname, "../media")],
+      // Media lives alongside the database by default (docs/paths.md); point it at the folder
+      // holding the clip made above instead of the fresh tmp dir --db-path implies.
+      extraArgs: ["--media-dir", mediaDir],
     });
 
     browser = await chromium.launch({ headless: true });
@@ -39,7 +46,7 @@ describe("E2E Live Test: Background Picker Videos Tab & Video Background Playbac
     await teardownTestServer(server);
   });
 
-  test("Video Background workflow: modal tabs, library grid, URL preview, canvas playback, and properties browse", async () => {
+  test.skipIf(!haveClip)("Video Background workflow: modal tabs, library grid, URL preview, canvas playback, and properties browse", async () => {
     // 1. Open slide editor
     await page.evaluate(() => (window as any).openSlideEditor('song'));
     await page.waitForSelector('#create-modal', { state: 'visible', timeout: 8000 });
@@ -109,15 +116,16 @@ describe("E2E Live Test: Background Picker Videos Tab & Video Background Playbac
     // Screenshot of URL tab
     await page.screenshot({ path: `${artifactDir}/screenshot_editor_bg_video_url_tab.png` });
 
-    // 6. Switch to 'Download (yt-dlp)' subtab
+    // 6. Switch to the download subtab
     await page.click('#btn-video-subtab-ytdl');
     await page.waitForTimeout(200);
 
     expect(await page.isVisible('#video-subview-ytdl')).toBe(true);
     expect(await page.isVisible('#video-subview-url')).toBe(false);
     expect(await page.isVisible('#video-subview-library')).toBe(false);
-    expect(await page.isVisible('#video-ytdl-url-input')).toBe(true);
-    expect(await page.isVisible('#btn-video-ytdl-start')).toBe(true);
+    // Downloading is the Video Downloader plugin now: until it's approved this tab points to Settings > Plugins.
+    expect(await page.isVisible('#plugin-picker-hint')).toBe(true);
+    expect(await page.isVisible('#btn-picker-enable-ytdlp')).toBe(true);
 
     // 7. Switch back to Library, select video card, and apply to active slide
     await page.click('#btn-video-subtab-library');

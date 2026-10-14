@@ -18,6 +18,7 @@
  * connect instead of `fetch`). Centralizing the whole sequence here means a
  * fix like that only has to happen once.
  */
+import { expect } from "bun:test";
 import { spawn, type Subprocess } from "bun";
 import { resolve, join } from "path";
 import { mkdtempSync, rmSync, mkdirSync } from "fs";
@@ -188,4 +189,32 @@ export const E2E_ARTIFACT_DIR = resolve(import.meta.dir, "../../target/e2e-artif
 export function ensureArtifactDir(): string {
   mkdirSync(E2E_ARTIFACT_DIR, { recursive: true });
   return E2E_ARTIFACT_DIR;
+}
+
+// --- Sandboxed plugin pages (tests/e2e_*_plugin.test.ts) -----------------------------------------
+
+/** The page uses the console's icons, not emoji: <img class="ui-icon"> from __os/icons/<set>/, loaded, and no emoji glyphs left in the text. */
+export async function expectNativeIcons(frame: import("playwright").Frame, atLeast: number): Promise<void> {
+  await frame.waitForFunction(
+    (n) => {
+      const imgs = Array.from(document.querySelectorAll<HTMLImageElement>("img.ui-icon"));
+      return imgs.length >= n && imgs.every((i) => i.complete && i.naturalWidth > 0);
+    },
+    atLeast, { timeout: 10000 },
+  );
+  const info = await frame.evaluate(() => ({
+    srcs: Array.from(document.querySelectorAll<HTMLImageElement>("img.ui-icon")).map((i) => i.getAttribute("src") || ""),
+    text: document.body.innerText,
+  }));
+  expect(info.srcs.every((s) => /^__os\/icons\/[a-z0-9-]+\/[a-z0-9-]+\.svg$/.test(s))).toBe(true);
+  expect(/[\u{1F300}-\u{1FAFF}\u2702\u2B07\u2728\u25B6\u25C0]/u.test(info.text)).toBe(false);
+}
+
+/** Calls a bridge method from inside a plugin's frame, the way the plugin's own page would. */
+export function pluginBridge(frameOf: () => import("playwright").Frame | undefined) {
+  return (method: string, params: any) => frameOf()!.evaluate(([m, p]) => new Promise<any>((resolve) => {
+    const id = Math.floor(Math.random() * 1e9);
+    window.addEventListener("message", (ev) => { if (ev.data?.type === "os.response" && ev.data.id === id) resolve(ev.data); });
+    parent.postMessage({ type: "os.request", id, method: m, params: p }, "*");
+  }), [method, params] as [string, any]);
 }

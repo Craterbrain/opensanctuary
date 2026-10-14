@@ -89,7 +89,8 @@ describe('Universal Grid Card: grid_card.ts', () => {
     expect(thumb.style.backgroundImage).toContain('mountains.jpg');
 
     const titleEl = card.querySelector('.grid-card-title');
-    expect(titleEl?.innerHTML).toBe('Mountain Sunrise');
+    // User text is wrapped so the emoji-to-icon pass leaves it alone (a title the user typed stays as typed).
+    expect(titleEl?.innerHTML).toBe('<span data-no-iconify>Mountain Sunrise</span>');
 
     card.click();
     expect(clicked).toBe(true);

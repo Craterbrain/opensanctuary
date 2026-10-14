@@ -1,0 +1,99 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FrontendPluginRuntimeContract",
+  "description": "Formal contract for dynamic frontend plugin registration, sandboxed context, and keyring vault isolation",
+  "type": "object",
+  "definitions": {
+    "PluginManifest": {
+      "type": "object",
+      "description": "Metadata and entrypoint definition for third-party OpenSanctuary frontend plugins",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Unique plugin identifier (used for vault isolation and registry keys)"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable display name of the plugin"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+.*$",
+          "description": "Semantic version string of the plugin package"
+        },
+        "description": {
+          "type": "string",
+          "description": "Brief description of the plugin's purpose and functionality"
+        },
+        "author": {
+          "type": "string",
+          "description": "Author or organization providing the plugin"
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "keyring",
+              "dom",
+              "network",
+              "storage"
+            ]
+          },
+          "description": "Declared runtime capability permissions"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "version"
+      ]
+    },
+    "PluginKeyringVault": {
+      "type": "object",
+      "description": "Isolated cryptographic vault injected into plugin runtime context",
+      "properties": {
+        "service": {
+          "type": "string",
+          "pattern": "^OpenSanctuary:Plugin:[a-zA-Z0-9_-]+$",
+          "description": "Service namespace enforcing plugin secret isolation"
+        }
+      },
+      "required": [
+        "service"
+      ]
+    }
+  },
+  "properties": {
+    "PLUGIN_KEYRING_PREFIX": {
+      "type": "string",
+      "enum": [
+        "OpenSanctuary:Plugin:"
+      ],
+      "default": "OpenSanctuary:Plugin:",
+      "description": "Required namespace prefix for all plugin credential isolation vaults"
+    },
+    "CRASH_BOUNDARY_ENABLED": {
+      "type": "boolean",
+      "default": true,
+      "description": "Host must trap third-party plugin init() and hook exceptions to prevent application crash"
+    },
+    "ROOT_KEYRING_MASKING": {
+      "type": "boolean",
+      "default": true,
+      "description": "ctx.keyring must be masked to plugin vault, strictly prohibiting cross-plugin secret access"
+    }
+  },
+  "required": [
+    "PLUGIN_KEYRING_PREFIX",
+    "CRASH_BOUNDARY_ENABLED",
+    "ROOT_KEYRING_MASKING"
+  ],
+  "values": {
+    "PLUGIN_KEYRING_PREFIX": "OpenSanctuary:Plugin:",
+    "CRASH_BOUNDARY_ENABLED": true,
+    "ROOT_KEYRING_MASKING": true
+  }
+}
