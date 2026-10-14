@@ -44,7 +44,7 @@ function paramsText(p: PluginPermissionInfo): string {
 }
 
 function isNative(p: PluginInfo): boolean {
-  return p.kind === 'native' || p.kind === 'legacy-native';
+  return p.kind === 'native';
 }
 
 function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {

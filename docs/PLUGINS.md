@@ -53,7 +53,7 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   (`filesystem.plugin_data`). See `examples/plugin_observer.rs`, a real plugin used as the
   template and by the dlopen test. The interface is a Rust trait object, so the plugin must be
   built with the same compiler and OS-Next version as the host; the host refuses a library whose
-  `OS_PLUGIN_HOST_VERSION` differs. The frozen v1 `OsPlugin` trait never changes.
+  `OS_PLUGIN_HOST_VERSION` differs. The `OsPlugin` trait's methods never change or reorder.
   **Update a plugin by replacing the file, not overwriting it in place:** the loaded library is
   memory-mapped, and truncating it crashes the server.
 - **Sandboxed web plugins** (`web.sandbox: true`, a folder `web/plugins/<id>/` with `plugin.json`
@@ -151,10 +151,14 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   asks only for `genius.com`, `library.write` on songs, and optionally `AddToSchedule`/`GoLive`). Approve
   it in Settings > Plugins and it appears as a panel. It is also the worked example of a plugin that
   needs the network.
-- **Existing plugins.** Loose `.so`/`.dll`/`.dylib` files already installed when permissions
-  shipped are approved once with the legacy v1 permission set and flagged for review; anything
-  that appears afterwards starts as pending. A web script with no manifest is treated as asking
-  for full console access.
+- **No pre-manifest plugins.** A bare `.so`/`.dll`/`.dylib` in the plugins folder (the old ABI 1
+  form), a bare `.js` script in `web/plugins/` with no `.plugin.json`, and the one-time
+  "grandfathering" that auto-approved them when permissions first shipped are all gone. They are
+  ignored with a warning in the log. A native plugin is a folder with a `plugin.json` that pins
+  its library and declares `"abi": 2`; a console-script web plugin needs `<id>.plugin.json`
+  beside `<id>.js`; or make it a sandboxed folder. Every plugin starts as pending until the
+  operator approves it. Rows an older version recorded for the removed kinds are deleted from
+  the plugin list on the next scan (the audit log keeps its history).
 
 ---
 

@@ -8,23 +8,17 @@
 use std::path::{Path, PathBuf};
 
 use crate::core::plugin_permissions::{
-    artifact_digest, legacy_requests, platform_key, sha256_file, sha256_hex, PermissionRequest, PermissionSet,
+    artifact_digest, platform_key, sha256_file, sha256_hex, PermissionRequest, PermissionSet,
     PluginManifest,
 };
 use crate::core::plugins::ApprovedNative;
 use crate::storage::db::{ObservedPlugin, PluginGrantRow};
 use crate::storage::Database;
 
-/// Settings key set once the first post-upgrade scan has run, so libraries that were
-/// already installed before permissions existed keep working exactly once.
-const GRANDFATHER_KEY: &str = "plugins.grandfathered_v1";
-
-pub const LEGACY_WEB_REQUESTS: [&str; 2] = ["ui.dom", "keyring.own"];
-
 #[derive(Debug, Clone)]
 pub struct Discovered {
     pub id: String,
-    /// `native`, `web`, `legacy-native` or `legacy-web`.
+    /// `native`, `web` or `sandbox`.
     pub kind: &'static str,
     pub name: String,
     pub version: Option<String>,
@@ -37,17 +31,6 @@ pub struct Discovered {
     pub error: Option<String>,
     /// Native library to load, when this build's platform has one.
     pub library: Option<PathBuf>,
-    /// Plugin ABI the manifest declares (legacy libraries are 1).
-    pub abi: u32,
-}
-
-fn sanitize_legacy_id(stem: &str) -> String {
-    let s: String = stem
-        .to_ascii_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' })
-        .collect();
-    format!("legacy.{s}")
 }
 
 #[cfg(unix)]
@@ -91,7 +74,6 @@ fn failed(id: String, kind: &'static str, source: &Path, msg: String) -> Discove
         requested: Vec::new(),
         error: Some(msg),
         library: None,
-        abi: 1,
     }
 }
 
@@ -131,7 +113,6 @@ fn discover_native_dir(dir: &Path, host_version: &str) -> Option<Discovered> {
         requested: manifest.permissions.clone(),
         error: None,
         library: None,
-        abi: manifest.backend.as_ref().map(|b| b.abi.max(1)).unwrap_or(1),
     };
     let fail = |mut d: Discovered, msg: String| {
         d.digest = sha256_hex(format!("{}{}", d.manifest_sha256.clone().unwrap_or_default(), msg).as_bytes());
@@ -224,27 +205,13 @@ fn discover_web(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
                         requested: m.permissions.clone(),
                         error: problem,
                         library: None,
-                        abi: 1,
                     });
                 }
             }
         } else {
-            // No manifest: runs in the console's own page, so it is treated as asking for
-            // everything that implies.
-            out.push(Discovered {
-                id: sanitize_legacy_id(&stem).replacen("legacy.", "", 1),
-                kind: "legacy-web",
-                name: stem.clone(),
-                version: None,
-                source_path: path.to_string_lossy().to_string(),
-                manifest_sha256: None,
-                digest: artifact_digest(&[(file_name, file_sha)]),
-                signer: None,
-                requested: LEGACY_WEB_REQUESTS.iter().map(|id| PermissionRequest::simple(id)).collect(),
-                error: None,
-                library: None,
-                abi: 1,
-            });
+            // A bare script with no manifest used to run with full console access. That is gone:
+            // a web plugin needs a `<id>.plugin.json` (or a sandboxed folder).
+            tracing::warn!("ignoring {path:?}: web plugins need a manifest ({stem}.plugin.json); loose scripts are no longer loaded");
         }
     }
     out
@@ -307,7 +274,6 @@ fn discover_sandbox(dir: &Path, host_version: &str) -> Option<Discovered> {
         requested: manifest.permissions.clone(),
         error: None,
         library: None,
-        abi: 1,
     };
     let fail = |mut d: Discovered, msg: String| {
         d.digest = sha256_hex(format!("{manifest_sha}{msg}").as_bytes());
@@ -350,29 +316,10 @@ pub fn discover(plugin_dir: &Path, web_plugins_dir: &Path, host_version: &str) -
                 if let Some(d) = discover_native_dir(&path, host_version) {
                     out.push(d);
                 }
-            } else if path.is_file() {
-                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if matches!(ext, "so" | "dll" | "dylib") {
-                    let Some(file_name) = path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()) else { continue };
-                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("plugin").to_string();
-                    match sha256_file(&path) {
-                        Ok(sha) => out.push(Discovered {
-                            id: sanitize_legacy_id(&stem),
-                            kind: "legacy-native",
-                            name: file_name.clone(),
-                            version: None,
-                            source_path: path.to_string_lossy().to_string(),
-                            manifest_sha256: None,
-                            digest: artifact_digest(&[(file_name, sha)]),
-                            signer: None,
-                            requested: legacy_requests(),
-                            error: None,
-                            library: Some(path),
-                            abi: 1,
-                        }),
-                        Err(e) => out.push(failed(sanitize_legacy_id(&stem), "legacy-native", &path, format!("unreadable: {e}"))),
-                    }
-                }
+            } else if path.is_file() && matches!(path.extension().and_then(|e| e.to_str()), Some("so" | "dll" | "dylib")) {
+                // A bare library with no manifest used to load as an ABI 1 plugin. That is gone:
+                // a native plugin is a folder with a plugin.json that pins its library.
+                tracing::warn!("ignoring {path:?}: native plugins need a folder with a plugin.json; bare libraries are no longer loaded");
             }
         }
     }
@@ -394,21 +341,12 @@ fn requested_json(d: &Discovered) -> String {
     serde_json::to_string(&d.requested).unwrap_or_else(|_| "[]".to_string())
 }
 
-/// Records the scan in the database. Libraries already installed when permissions first
-/// shipped are approved once, with an audit entry; anything new is `pending`.
+/// Records the scan in the database. Anything new is `pending` until the operator approves it.
 pub fn sync(db: &Database, discovered: &[Discovered]) {
-    let grandfather = db.get_setting(GRANDFATHER_KEY).ok().flatten().is_none();
-    let mut grandfathered = 0;
+    // Rows for the removed pre-manifest kinds would otherwise sit in the list forever.
+    let _ = db.purge_legacy_plugins();
     for d in discovered {
         let existing = db.get_plugin_grant(&d.id).ok().flatten();
-        let (status, granted) = match &existing {
-            Some(_) => ("pending", "[]".to_string()), // ignored by the upsert for existing rows
-            None if grandfather && d.kind == "legacy-native" && d.error.is_none() => {
-                grandfathered += 1;
-                ("approved", requested_json(d))
-            }
-            None => ("pending", "[]".to_string()),
-        };
         let observed = ObservedPlugin {
             plugin_id: &d.id,
             kind: d.kind,
@@ -421,22 +359,15 @@ pub fn sync(db: &Database, discovered: &[Discovered]) {
             requested_json: &requested_json(d),
             error: d.error.as_deref(),
         };
-        if db.upsert_observed_plugin(&observed, status, &granted).is_err() {
+        if db.upsert_observed_plugin(&observed).is_err() {
             continue;
         }
         match &existing {
-            None if status == "approved" => db.add_plugin_audit(&d.id, "system", "grandfathered", "{}"),
             None => db.add_plugin_audit(&d.id, "system", "discovered", &serde_json::json!({ "kind": d.kind }).to_string()),
             Some(row) if row.observed_digest != d.digest && row.status == "approved" => {
                 db.add_plugin_audit(&d.id, "system", "changed", &serde_json::json!({ "digest": d.digest }).to_string())
             }
             _ => {}
-        }
-    }
-    if grandfather {
-        let _ = db.set_setting(GRANDFATHER_KEY, "1");
-        if grandfathered > 0 {
-            tracing::info!("Approved {grandfathered} pre-existing native plugin(s) during the permissions upgrade; review them in Settings > Plugins");
         }
     }
 }
@@ -453,7 +384,7 @@ pub fn approved_natives(db: &Database, discovered: &[Discovered]) -> Vec<Approve
         .filter_map(|d| {
             let lib = d.library.clone()?;
             let row = db.get_plugin_grant(&d.id).ok().flatten()?;
-            (row.effective_state() == "active").then(|| ApprovedNative { id: d.id.clone(), library: lib, grants: parse_granted(&row), abi: d.abi })
+            (row.effective_state() == "active").then(|| ApprovedNative { id: d.id.clone(), library: lib, grants: parse_granted(&row) })
         })
         .collect()
 }
@@ -466,47 +397,96 @@ mod tests {
         Database::new(dir.join("t.db").to_str().unwrap()).unwrap()
     }
 
-    #[test]
-    fn grandfathers_existing_legacy_libraries_exactly_once() {
-        let tmp = tempfile::tempdir().unwrap();
-        let plugins = tmp.path().join("plugins");
-        std::fs::create_dir_all(&plugins).unwrap();
-        std::fs::write(plugins.join("Old Plugin.so"), b"not really a library").unwrap();
-        let db = temp_db(tmp.path());
-
-        let first = discover(&plugins, &tmp.path().join("web"), "0.2.0");
-        sync(&db, &first);
-        let row = db.get_plugin_grant("legacy.old_plugin").unwrap().unwrap();
-        assert_eq!(row.effective_state(), "active");
-        assert_eq!(row.decided_by.as_deref(), Some("system:grandfathered"));
-        assert_eq!(approved_natives(&db, &first).len(), 1);
-
-        // A library that shows up after the upgrade must be reviewed first.
-        std::fs::write(plugins.join("new.so"), b"another").unwrap();
-        let second = discover(&plugins, &tmp.path().join("web"), "0.2.0");
-        sync(&db, &second);
-        assert_eq!(db.get_plugin_grant("legacy.new").unwrap().unwrap().effective_state(), "pending");
-        assert_eq!(approved_natives(&db, &second).len(), 1);
+    /// A native plugin folder (plugin.json pinning lib/x.so) under `plugins`.
+    fn write_native_plugin(plugins: &Path, lib_bytes: &[u8]) -> PathBuf {
+        let dir = plugins.join("org.example.thing");
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        std::fs::write(dir.join("lib/x.so"), lib_bytes).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::set_permissions(dir.join("lib/x.so"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let manifest = serde_json::json!({
+            "manifest_version": 1, "id": "org.example.thing", "name": "Thing", "version": "1.0.0",
+            "backend": {"abi": 2, "libraries": { platform_key(): {"path": "lib/x.so", "sha256": sha256_hex(lib_bytes)}}},
+            "permissions": [{"id": "show.observe"}]
+        });
+        std::fs::write(dir.join("plugin.json"), manifest.to_string()).unwrap();
+        dir
     }
 
     #[test]
-    fn a_changed_binary_stops_loading_until_reapproved() {
+    fn bare_libraries_and_scripts_are_ignored_and_old_rows_are_purged() {
         let tmp = tempfile::tempdir().unwrap();
         let plugins = tmp.path().join("plugins");
+        let web = tmp.path().join("web_plugins");
         std::fs::create_dir_all(&plugins).unwrap();
-        let lib = plugins.join("thing.so");
-        std::fs::write(&lib, b"v1").unwrap();
-        let db = temp_db(tmp.path());
-        sync(&db, &discover(&plugins, &tmp.path().join("web"), "0.2.0"));
-        assert_eq!(db.get_plugin_grant("legacy.thing").unwrap().unwrap().effective_state(), "active");
+        std::fs::create_dir_all(&web).unwrap();
+        // The pre-manifest forms: a loose library and a loose script, neither with a manifest.
+        std::fs::write(plugins.join("Old Plugin.so"), b"not really a library").unwrap();
+        std::fs::write(web.join("demo.js"), b"export default {}").unwrap();
+        let found = discover(&plugins, &web, "0.2.0");
+        assert!(found.is_empty(), "{:?}", found.iter().map(|d| &d.id).collect::<Vec<_>>());
 
-        std::fs::write(&lib, b"v2 -- swapped").unwrap();
-        let after = discover(&plugins, &tmp.path().join("web"), "0.2.0");
+        // A row recorded by an older version for such a file is dropped; real plugins are not.
+        let db = temp_db(tmp.path());
+        for (id, kind) in [("legacy.old_plugin", "legacy-native"), ("demo", "legacy-web")] {
+            let observed = ObservedPlugin {
+                plugin_id: id, kind, name: id, version: None, source_path: "x", manifest_sha256: None, digest: "d",
+                signer: None, requested_json: "[]", error: None,
+            };
+            db.upsert_observed_plugin(&observed).unwrap();
+        }
+        write_native_plugin(&plugins, b"binary");
+        sync(&db, &discover(&plugins, &web, "0.2.0"));
+        assert!(db.get_plugin_grant("legacy.old_plugin").unwrap().is_none());
+        assert!(db.get_plugin_grant("demo").unwrap().is_none());
+        assert_eq!(db.get_plugin_grant("org.example.thing").unwrap().unwrap().effective_state(), "pending");
+    }
+
+    #[test]
+    fn nothing_is_approved_automatically_and_a_changed_binary_stops_loading_until_reapproved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        let web = tmp.path().join("web");
+        let db = temp_db(tmp.path());
+        let dir = write_native_plugin(&plugins, b"v1");
+        let first = discover(&plugins, &web, "0.2.0");
+        sync(&db, &first);
+        let row = db.get_plugin_grant("org.example.thing").unwrap().unwrap();
+        assert_eq!(row.effective_state(), "pending", "new plugins always wait for the operator");
+        assert!(approved_natives(&db, &first).is_empty());
+
+        // Approve what was seen: it may load.
+        let d = first.iter().find(|d| d.id == "org.example.thing").unwrap();
+        db.set_plugin_decision("org.example.thing", "approved", &requested_json(d), d.manifest_sha256.as_deref(), Some(&d.digest), None, "test").unwrap();
+        assert_eq!(db.get_plugin_grant("org.example.thing").unwrap().unwrap().effective_state(), "active");
+        assert_eq!(approved_natives(&db, &first).len(), 1);
+
+        // Swap the binary (and its pinned hash): a different digest, so it is `changed` and not loaded.
+        let manifest = std::fs::read_to_string(dir.join("plugin.json")).unwrap().replace(&sha256_hex(b"v1"), &sha256_hex(b"v2 -- swapped"));
+        std::fs::write(dir.join("lib/x.so"), b"v2 -- swapped").unwrap();
+        std::fs::write(dir.join("plugin.json"), manifest).unwrap();
+        let after = discover(&plugins, &web, "0.2.0");
         sync(&db, &after);
-        assert_eq!(db.get_plugin_grant("legacy.thing").unwrap().unwrap().effective_state(), "changed");
+        assert_eq!(db.get_plugin_grant("org.example.thing").unwrap().unwrap().effective_state(), "changed");
         assert!(approved_natives(&db, &after).is_empty());
         let audit = db.list_plugin_audit(50).unwrap();
-        assert!(audit.iter().any(|a| a.plugin_id == "legacy.thing" && a.action == "changed"));
+        assert!(audit.iter().any(|a| a.plugin_id == "org.example.thing" && a.action == "changed"));
+    }
+
+    #[test]
+    fn a_native_manifest_must_declare_abi_2() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins = tmp.path().join("plugins");
+        let dir = write_native_plugin(&plugins, b"binary");
+        let manifest = std::fs::read_to_string(dir.join("plugin.json")).unwrap().replace("\"abi\":2", "\"abi\":1");
+        std::fs::write(dir.join("plugin.json"), manifest).unwrap();
+        let found = discover(&plugins, &tmp.path().join("web"), "0.2.0");
+        let d = found.iter().find(|d| d.id == "org.example.thing").unwrap();
+        assert!(d.error.as_deref().unwrap_or("").contains("abi"), "{:?}", d.error);
     }
 
     #[test]
@@ -525,7 +505,7 @@ mod tests {
         let manifest = |sha: &str| {
             serde_json::json!({
                 "manifest_version": 1, "id": "org.example.good", "name": "Good", "version": "1.0.0",
-                "backend": {"abi": 1, "libraries": { platform_key(): {"path": "lib/x.so", "sha256": sha}}},
+                "backend": {"abi": 2, "libraries": { platform_key(): {"path": "lib/x.so", "sha256": sha}}},
                 "permissions": [{"id": "show.observe"}]
             })
             .to_string()
@@ -539,22 +519,6 @@ mod tests {
         std::fs::write(dir.join("plugin.json"), manifest(&sha256_hex(b"something else"))).unwrap();
         let found = discover(&plugins, &tmp.path().join("web"), "0.2.0");
         assert!(found.iter().find(|d| d.id == "org.example.good").unwrap().error.is_some());
-    }
-
-    #[test]
-    fn web_plugins_without_a_manifest_are_treated_as_full_console_access() {
-        let tmp = tempfile::tempdir().unwrap();
-        let web = tmp.path().join("web_plugins");
-        std::fs::create_dir_all(&web).unwrap();
-        std::fs::write(web.join("demo.js"), b"export default {}").unwrap();
-        let found = discover(&tmp.path().join("plugins"), &web, "0.2.0");
-        let d = found.iter().find(|d| d.id == "demo").unwrap();
-        assert_eq!(d.kind, "legacy-web");
-        assert!(d.requested.iter().any(|p| p.id == "ui.dom"));
-        let db = temp_db(tmp.path());
-        sync(&db, &found);
-        // Never grandfathered: it runs in the console's page.
-        assert_eq!(db.get_plugin_grant("demo").unwrap().unwrap().effective_state(), "pending");
     }
 
     fn write_signed_web_plugin(web: &Path, manifest_edit: impl Fn(String) -> String) -> String {

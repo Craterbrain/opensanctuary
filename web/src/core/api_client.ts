@@ -427,7 +427,7 @@ export interface PluginPermissionInfo {
 
 export interface PluginInfo {
   id: string;
-  kind: 'native' | 'web' | 'legacy-native' | 'legacy-web' | 'sandbox';
+  kind: 'native' | 'web' | 'sandbox';
   sandboxed?: boolean;
   entry?: string | null;
   name: string;

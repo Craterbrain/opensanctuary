@@ -5845,6 +5845,15 @@ async fn test_plugin_grant_routes_and_web_plugin_serving() {
     let web_dir = test_dir.path().join("web");
     std::fs::create_dir_all(web_dir.join("plugins")).unwrap();
     std::fs::write(web_dir.join("plugins/demo_gate.js"), b"export default { init() {} };").unwrap();
+    // A web plugin needs a manifest; a bare script with no manifest is not loaded at all.
+    std::fs::write(
+        web_dir.join("plugins/demo_gate.plugin.json"),
+        serde_json::json!({
+            "manifest_version": 1, "id": "demo_gate", "name": "Demo gate", "web": {"entry": "demo_gate.js"},
+            "permissions": [{"id": "ui.dom"}, {"id": "keyring.own"}]
+        }).to_string(),
+    ).unwrap();
+    std::fs::write(web_dir.join("plugins/loose.js"), b"export default {}").unwrap();
 
     let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
     let engine = Arc::new(ShowEngine::new(event_log));
@@ -5898,7 +5907,8 @@ async fn test_plugin_grant_routes_and_web_plugin_serving() {
     let list: serde_json::Value = client.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap().json().await.unwrap();
     let demo = list.as_array().unwrap().iter().find(|p| p["id"] == "demo_gate").unwrap().clone();
     assert_eq!(demo["state"], "pending");
-    assert_eq!(demo["kind"], "legacy-web");
+    assert_eq!(demo["kind"], "web");
+    assert!(list.as_array().unwrap().iter().all(|p| p["id"] != "loose"), "a script with no manifest isn't a plugin");
     let digest = demo["digest"].as_str().unwrap().to_string();
     let served = |path: &'static str| {
         let (client, base) = (client.clone(), base.clone());
@@ -5925,6 +5935,7 @@ async fn test_plugin_grant_routes_and_web_plugin_serving() {
     assert_eq!(served("/plugins/demo_gate.js").await, reqwest::StatusCode::OK);
     // Nothing else under /plugins/ is reachable, manifests and unknown files included.
     assert_eq!(served("/plugins/other.js").await, reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(served("/plugins/loose.js").await, reqwest::StatusCode::NOT_FOUND);
     assert_eq!(served("/plugins/demo_gate.plugin.json").await, reqwest::StatusCode::NOT_FOUND);
     let audit: serde_json::Value = client.get(format!("{base}/api/plugins/audit")).header("x-host-token", host).send().await.unwrap().json().await.unwrap();
     assert!(audit.as_array().unwrap().iter().any(|a| a["action"] == "approved" && a["actor"] == "console:console_x"));
@@ -6109,7 +6120,6 @@ async fn test_real_cdylib_plugin_abi2_end_to_end() {
     os_next::core::plugin_registry::sync(&db, &found);
     let d = found.iter().find(|d| d.id == "org.example.observer").unwrap();
     assert!(d.error.is_none(), "{:?}", d.error);
-    assert_eq!(d.abi, 2);
 
     // Unapproved: nothing loads.
     assert!(os_next::core::plugin_registry::approved_natives(&db, &found).is_empty());

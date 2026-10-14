@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { EngineWebSocketClient, createEngineWebSocket } from '../src/core/ws_client.ts';
+import { __resetHostSessionTokenForTests } from '../src/core/host_session.ts';
 
 describe('Unified WebSocket Client: EngineWebSocketClient', () => {
   let originalWebSocket: any;
@@ -7,6 +8,9 @@ describe('Unified WebSocket Client: EngineWebSocketClient', () => {
   let originalLocation: any;
 
   beforeEach(() => {
+    // The host-token cache is module-level and shared by every test file in this process; a token
+    // another file resolved must not turn these plain-command assertions into envelopes.
+    __resetHostSessionTokenForTests();
     originalWebSocket = globalThis.WebSocket;
     originalFetch = globalThis.fetch;
     originalLocation = globalThis.location;

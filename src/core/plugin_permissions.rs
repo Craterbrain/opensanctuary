@@ -102,12 +102,12 @@ impl PermissionRequest {
     pub fn enforcement_for(&self, kind: &str) -> &'static str {
         let base = KNOWN.iter().find(|(id, _, _)| *id == self.id).map(|(_, _, e)| *e).unwrap_or("unknown");
         match kind {
-            "native" | "legacy-native" => match self.id.as_str() {
+            "native" => match self.id.as_str() {
                 "show.observe" | "commands.intercept" | "resources.provide" => "enforced",
                 "native.code" => "informational",
                 _ => "consent-only",
             },
-            "web" | "legacy-web" => match self.id.as_str() {
+            "web" => match self.id.as_str() {
                 "keyring.own" | "commands.send" => "enforced",
                 "ui.dom" => "consent-only",
                 _ => if base == "enforced" { "consent-only" } else { base },
@@ -126,10 +126,10 @@ impl PermissionSet {
         Self(Vec::new())
     }
 
-    /// Everything the v1 plugin trait can do -- granted to plugins registered
-    /// programmatically in-process and to grandfathered legacy libraries.
-    pub fn legacy_full() -> Self {
-        Self(legacy_requests())
+    /// Everything the `OsPlugin` hooks can do -- granted to plugins registered programmatically
+    /// in-process (host code and tests). Anything loaded from disk goes through the grant flow.
+    pub fn in_process() -> Self {
+        Self(in_process_requests())
     }
 
     pub fn has(&self, id: &str) -> bool {
@@ -216,8 +216,8 @@ impl PermissionSet {
     }
 }
 
-/// Permissions synthesized for a library with no manifest (everything the v1 hooks can do).
-pub fn legacy_requests() -> Vec<PermissionRequest> {
+/// Everything the `OsPlugin` hooks can do.
+pub fn in_process_requests() -> Vec<PermissionRequest> {
     vec![
         PermissionRequest::simple("native.code"),
         PermissionRequest::simple("show.observe"),
@@ -517,6 +517,9 @@ impl PluginManifest {
             return bad("a plugin needs a backend and/or a web section".to_string());
         }
         if let Some(b) = &self.backend {
+            if b.abi != 2 {
+                return bad("backend.abi must be 2 (the original ABI 1 is no longer supported; rebuild the plugin against this version)".to_string());
+            }
             for (platform, lib) in &b.libraries {
                 if !relative_path_is_contained(&lib.path) {
                     return bad(format!("library path for {platform} escapes the plugin directory: {}", lib.path));
@@ -754,7 +757,7 @@ mod tests {
     const GOOD: &str = r#"{
         "manifest_version": 1, "id": "org.example.dmx", "name": "DMX", "version": "1.0.0",
         "host_api": ">=0.1.0, <1.0.0",
-        "backend": {"abi": 1, "libraries": {"linux-x86_64": {"path": "lib/x.so", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}}},
+        "backend": {"abi": 2, "libraries": {"linux-x86_64": {"path": "lib/x.so", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}}},
         "permissions": [
             {"id": "show.observe", "reason": "follow blackout"},
             {"id": "commands.send", "commands": ["NextSlide"], "optional": true},
@@ -825,7 +828,7 @@ mod tests {
         assert!(set.provides("songs"));
         assert!(!set.provides("themes"));
         assert!(!set.has("show.observe"));
-        assert!(PermissionSet::legacy_full().provides("themes"));
+        assert!(PermissionSet::in_process().provides("themes"));
         let wild = PermissionSet(vec![PermissionRequest { id: "commands.send".into(), commands: vec!["*".into()], ..Default::default() }]);
         assert_eq!(wild.0[0].tier(), Tier::High);
         assert!(wild.allows_command("Anything"));
