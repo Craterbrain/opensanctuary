@@ -145,7 +145,10 @@ fn discover_native_dir(dir: &Path, host_version: &str) -> Option<Discovered> {
     if !actual.eq_ignore_ascii_case(&entry.sha256) {
         return Some(fail(d, format!("{} does not match the sha256 in plugin.json", entry.path)));
     }
-    d.digest = artifact_digest(&[(entry.path.clone(), actual)]);
+    // The manifest is part of what was reviewed: editing it after approval (to widen a permission's
+    // list, say) must show up as a change, not just editing the library.
+    let manifest_hash = d.manifest_sha256.clone().unwrap_or_default();
+    d.digest = artifact_digest(&[(entry.path.clone(), actual), ("plugin.json".to_string(), manifest_hash)]);
     d.library = Some(lib_path);
     Some(d)
 }

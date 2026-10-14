@@ -6110,7 +6110,8 @@ async fn test_real_cdylib_plugin_abi2_end_to_end() {
             "backend": {"abi": 2, "libraries": { platform_key(): {"path": format!("lib/{lib_name}"), "sha256": sha256_hex(&lib_bytes)} }},
             "permissions": [
                 {"id": "show.observe"}, {"id": "filesystem.plugin_data"}, {"id": "keyring.own", "optional": true},
-                {"id": "commands.send", "commands": ["NextSlide"], "optional": true}
+                {"id": "commands.send", "commands": ["NextSlide"], "optional": true},
+                {"id": "commands.modify", "commands": ["SetScheduleTitle"], "optional": true}
             ]
         }).to_string(),
     ).unwrap();
@@ -6182,6 +6183,31 @@ async fn test_real_cdylib_plugin_abi2_end_to_end() {
     assert_eq!((queued.plugin_id.as_str(), queued.variant.as_str()), ("org.example.observer", "NextSlide"));
     assert!(pm.command_allowed("org.example.observer", "NextSlide"));
     assert!(!pm.command_allowed("org.example.observer", "NewSchedule"));
+
+    // commands.modify: the library exports a modifier, but it was not granted, so it is never built or called.
+    let title = serde_json::json!({ "SetScheduleTitle": "sunday" });
+    assert_eq!(pm.apply_modifiers(title.clone()).0, title, "no grant, no modifier");
+    // Loaded with the grant (the approval is applied at load time), it does its job, and only on what was listed.
+    let with_modify = os_next::core::plugins::ApprovedNative {
+        id: "org.example.observer".into(),
+        library: dir.join("lib").join(&lib_name),
+        grants: PermissionSet(vec![
+            PermissionRequest::simple("show.observe"),
+            PermissionRequest { id: "commands.modify".into(), commands: vec!["SetScheduleTitle".into()], ..Default::default() },
+        ]),
+    };
+    let mut pm2 = PluginManager::new();
+    pm2.load_approved(vec![with_modify], Some(&factory));
+    assert_eq!(pm2.plugin_count(), 1);
+    let (changed, events) = pm2.apply_modifiers(title.clone());
+    assert_eq!(changed, serde_json::json!({ "SetScheduleTitle": "SUNDAY" }));
+    assert_eq!(events.len(), 1);
+    assert_eq!(pm2.modifier_stats("org.example.observer"), Some((1, false)));
+    let other = serde_json::json!({ "AddScheduleHeader": { "title": "Sunday", "index": null } });
+    assert_eq!(pm2.apply_modifiers(other.clone()).0, other, "not in its list");
+    assert_eq!(pm2.apply_modifiers(serde_json::json!("ToggleBlackout")).0, serde_json::json!("ToggleBlackout"));
+    assert!(pm2.revoke("org.example.observer"));
+    assert_eq!(pm2.apply_modifiers(title.clone()).0, title, "revoked: unchanged");
 
     // Revoke: the hook is no longer even called, and a queued command would be dropped.
     assert!(pm.revoke("org.example.observer"));
@@ -7090,6 +7116,8 @@ async fn test_advanced_permission_override() {
         ("an unknown category", serde_json::json!([{ "id": "library.write", "categories": ["secrets"] }])),
         ("a scope the permission doesn't take", serde_json::json!([{ "id": "commands.send", "categories": ["media"], "commands": ["NextSlide"] }])),
         ("a duplicate", serde_json::json!([{ "id": "show.observe" }, { "id": "show.observe" }])),
+        ("commands.modify on a sandboxed page", serde_json::json!([{ "id": "commands.modify", "commands": ["GoLive"] }])),
+        ("keyring.service with a namespace that isn't shareable", serde_json::json!([{ "id": "keyring.service", "services": ["OpenSanctuary:System"], "access": "read" }])),
     ] {
         let r = approve(serde_json::json!({ "digest": digest, "override": grants })).await;
         assert_eq!(r.status(), reqwest::StatusCode::BAD_REQUEST, "{why}");
@@ -7283,5 +7311,226 @@ async fn test_shared_keyring_namespaces_between_plugins() {
     // Cleanup of real keyring entries this test created.
     for (svc, acct) in [(S, "api_key"), (S, "legacy"), (S, "mine"), ("OpenSanctuary:Plugin:kp_b", "own")] {
         let _ = os_next::storage::KeyringService::delete_secret(svc, acct);
+    }
+}
+
+// --- commands.modify: plugins rewrite commands in the real pipeline ---------------------------------
+
+mod modify_pipeline {
+    use super::*;
+    use os_next::api::command_pipeline::{run_command_pipeline, CommandOrigin};
+    use os_next::core::plugin_permissions::{PermissionRequest, PermissionSet};
+    use os_next::core::plugins::{CommandModifier, OsPlugin, PluginManager};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    struct Quiet(&'static str);
+    impl OsPlugin for Quiet {
+        fn name(&self) -> &'static str { self.0 }
+        fn on_state_change(&self, _s: &os_next::core::models::ShowState) {}
+        fn on_command(&self, _c: &str) -> bool { true }
+    }
+
+    /// Records every command text a veto hook is shown.
+    struct Spy(Arc<Mutex<Vec<String>>>);
+    impl OsPlugin for Spy {
+        fn name(&self) -> &'static str { "spy" }
+        fn on_state_change(&self, _s: &os_next::core::models::ShowState) {}
+        fn on_command(&self, c: &str) -> bool { self.0.lock().unwrap().push(c.to_string()); true }
+    }
+
+    /// A modifier built from a closure; counts how often it was asked.
+    struct Fn(Arc<AtomicUsize>, Box<dyn std::ops::Fn(&str) -> Option<String> + Send + Sync>);
+    impl CommandModifier for Fn {
+        fn modify_command(&self, cmd: &str) -> Option<String> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            (self.1)(cmd)
+        }
+    }
+
+    fn grant(commands: &[&str]) -> PermissionSet {
+        PermissionSet(vec![
+            PermissionRequest { id: "commands.modify".into(), commands: commands.iter().map(|c| c.to_string()).collect(), ..Default::default() },
+            PermissionRequest::simple("commands.intercept"),
+        ])
+    }
+
+    fn add(pm: &mut PluginManager, id: &str, commands: &[&str], f: impl std::ops::Fn(&str) -> Option<String> + Send + Sync + 'static) -> Arc<AtomicUsize> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let name: &'static str = Box::leak(id.to_string().into_boxed_str());
+        pm.register_plugin_with_grants(id.to_string(), Box::new(Quiet(name)), grant(commands));
+        assert!(pm.set_modifier(id, Box::new(Fn(calls.clone(), Box::new(f)))));
+        calls
+    }
+
+    fn app_with(pm: PluginManager) -> os_next::api::ws::AppState {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = os_next::storage::Database::new(tmp.path().join("m.db").to_str().unwrap()).unwrap();
+        std::mem::forget(tmp);
+        os_next::api::ws::AppState { plugin_manager: Arc::new(pm), ..base_app_state(db) }
+    }
+
+    fn run(app: &os_next::api::ws::AppState, cmd: serde_json::Value) -> Result<os_next::api::command_pipeline::Executed, os_next::api::command_pipeline::CommandRejection> {
+        run_command_pipeline(app, cmd, &CommandOrigin::Console { session_id: "t".into() })
+    }
+
+    fn title(app: &os_next::api::ws::AppState) -> String {
+        app.engine.snapshot().schedule.title
+    }
+
+    fn upper(text: &str) -> Option<String> {
+        let v: serde_json::Value = serde_json::from_str(text).ok()?;
+        Some(serde_json::json!({ "SetScheduleTitle": v["SetScheduleTitle"].as_str()?.to_uppercase() }).to_string())
+    }
+
+    #[test]
+    fn a_modifier_changes_only_the_commands_it_was_granted() {
+        let mut pm = PluginManager::new();
+        let calls = add(&mut pm, "up", &["SetScheduleTitle"], upper);
+        let app = app_with(pm);
+        run(&app, serde_json::json!({ "SetScheduleTitle": "hello" })).unwrap();
+        assert_eq!(title(&app), "HELLO");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // A command it wasn't granted never even reaches it.
+        run(&app, serde_json::json!({ "AddScheduleHeader": { "title": "hello", "index": null } })).unwrap();
+        run(&app, serde_json::json!("NextSlide")).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(app.plugin_manager.modifier_stats("up"), Some((1, false)));
+    }
+
+    #[test]
+    fn emergency_controls_never_reach_a_modifier_even_if_a_grant_lists_them() {
+        let mut pm = PluginManager::new();
+        // Granted by hand, bypassing manifest validation, to prove the host still never asks.
+        let calls = add(&mut pm, "evil", &["ToggleBlackout", "SetAlert", "ToggleClearText", "ToggleLogo", "SetWebStream", "NewSchedule"], |_| Some(r#"{"SetAlert":"pwned"}"#.to_string()));
+        let app = app_with(pm);
+        for cmd in [serde_json::json!("ToggleBlackout"), serde_json::json!({ "SetAlert": "fire" }), serde_json::json!("ToggleClearText"), serde_json::json!("ToggleLogo"), serde_json::json!("NewSchedule")] {
+            run(&app, cmd).unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(app.engine.snapshot().state.alert_text.as_deref(), Some("fire"), "the real alert ran, unchanged");
+    }
+
+    #[test]
+    fn a_rewrite_into_another_command_is_dropped_and_repeated_failures_switch_it_off() {
+        let mut pm = PluginManager::new();
+        let calls = add(&mut pm, "sneaky", &["SetScheduleTitle"], |_| Some(r#"{"SetAlert":"boo"}"#.to_string()));
+        let app = app_with(pm);
+        for i in 0..3 {
+            run(&app, serde_json::json!({ "SetScheduleTitle": format!("t{i}") })).unwrap();
+            assert_eq!(title(&app), format!("t{i}"), "the original command ran");
+        }
+        assert!(app.engine.snapshot().state.alert_text.is_none(), "no alert was ever produced");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(app.plugin_manager.modifier_stats("sneaky"), Some((0, true)), "switched off after three failures");
+        run(&app, serde_json::json!({ "SetScheduleTitle": "after" })).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 3, "not asked again");
+        assert_eq!(title(&app), "after");
+        let audit = app.db.list_plugin_audit(50).unwrap();
+        assert!(audit.iter().any(|a| a.plugin_id == "sneaky" && a.action == "modify_rejected"));
+        assert!(audit.iter().any(|a| a.plugin_id == "sneaky" && a.action == "modify_disabled"));
+        let notified = app.notifications.since(0);
+        assert!(notified.iter().any(|n| n.title.contains("switched off") && n.body.contains("sneaky")), "{notified:?}");
+    }
+
+    #[test]
+    fn modifiers_chain_in_plugin_id_order_and_the_veto_sees_the_final_command() {
+        let mut pm = PluginManager::new();
+        let append = |s: &'static str| move |text: &str| -> Option<String> {
+            let v: serde_json::Value = serde_json::from_str(text).ok()?;
+            Some(serde_json::json!({ "SetScheduleTitle": format!("{}{s}", v["SetScheduleTitle"].as_str()?) }).to_string())
+        };
+        // Registered out of order on purpose: "a_first" must still run before "z_last".
+        add(&mut pm, "z_last", &["SetScheduleTitle"], append("Z"));
+        add(&mut pm, "a_first", &["SetScheduleTitle"], append("A"));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        pm.register_plugin_with_grants("spy".into(), Box::new(Spy(seen.clone())), PermissionSet(vec![PermissionRequest::simple("commands.intercept")]));
+        let app = app_with(pm);
+        run(&app, serde_json::json!({ "SetScheduleTitle": "x" })).unwrap();
+        assert_eq!(title(&app), "xAZ");
+        // The veto hook was shown the rewritten command, never the original.
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(seen[0].contains("xAZ") && !seen[0].contains(r#""x""#), "{seen:?}");
+    }
+
+    #[test]
+    fn a_veto_still_blocks_a_rewritten_command() {
+        struct Block;
+        impl OsPlugin for Block {
+            fn name(&self) -> &'static str { "block" }
+            fn on_state_change(&self, _s: &os_next::core::models::ShowState) {}
+            fn on_command(&self, c: &str) -> bool { !c.contains("FORBIDDEN") }
+        }
+        let mut pm = PluginManager::new();
+        add(&mut pm, "up", &["SetScheduleTitle"], |_| Some(r#"{"SetScheduleTitle":"FORBIDDEN"}"#.to_string()));
+        pm.register_plugin_with_grants("block".into(), Box::new(Block), PermissionSet(vec![PermissionRequest::simple("commands.intercept")]));
+        let app = app_with(pm);
+        let before = title(&app);
+        assert!(run(&app, serde_json::json!({ "SetScheduleTitle": "fine" })).is_err(), "a modifier can't be used to sneak past a veto");
+        assert_eq!(title(&app), before);
+    }
+
+    #[test]
+    fn a_panicking_modifier_keeps_the_original_and_is_switched_off_after_three() {
+        let mut pm = PluginManager::new();
+        let calls = add(&mut pm, "boom", &["SetScheduleTitle"], |_| -> Option<String> { panic!("modifier bug") });
+        let app = app_with(pm);
+        for i in 0..4 {
+            run(&app, serde_json::json!({ "SetScheduleTitle": format!("p{i}") })).unwrap();
+            assert_eq!(title(&app), format!("p{i}"));
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 3, "asked three times, then switched off");
+        assert_eq!(app.plugin_manager.modifier_stats("boom"), Some((0, true)));
+    }
+
+    #[test]
+    fn a_slow_modifier_cannot_stall_a_command_and_is_switched_off() {
+        let mut pm = PluginManager::new();
+        let calls = add(&mut pm, "slow", &["SetScheduleTitle"], |t| { std::thread::sleep(std::time::Duration::from_millis(400)); upper(t) });
+        let app = app_with(pm);
+        let started = std::time::Instant::now();
+        run(&app, serde_json::json!({ "SetScheduleTitle": "quick" })).unwrap();
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_millis(250), "the command didn't wait for the slow modifier: {took:?}");
+        assert_eq!(title(&app), "quick", "the original ran");
+        assert_eq!(app.plugin_manager.modifier_stats("slow"), Some((0, true)));
+        run(&app, serde_json::json!({ "SetScheduleTitle": "again" })).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "never asked again");
+        assert!(app.db.list_plugin_audit(20).unwrap().iter().any(|a| a.plugin_id == "slow" && a.action == "modify_disabled"));
+    }
+
+    #[test]
+    fn revoking_stops_a_modifier_immediately() {
+        let mut pm = PluginManager::new();
+        let calls = add(&mut pm, "up", &["SetScheduleTitle"], upper);
+        let app = app_with(pm);
+        run(&app, serde_json::json!({ "SetScheduleTitle": "one" })).unwrap();
+        assert_eq!(title(&app), "ONE");
+        assert!(app.plugin_manager.revoke("up"));
+        run(&app, serde_json::json!({ "SetScheduleTitle": "two" })).unwrap();
+        assert_eq!(title(&app), "two");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn every_door_gets_the_same_modification() {
+        let mut pm = PluginManager::new();
+        add(&mut pm, "up", &["SetScheduleTitle"], upper);
+        let app = app_with(pm);
+        for (i, origin) in [CommandOrigin::Console { session_id: "c".into() }, CommandOrigin::Device { id: "d".into() }, CommandOrigin::Plugin { id: "p".into() }].into_iter().enumerate() {
+            run_command_pipeline(&app, serde_json::json!({ "SetScheduleTitle": format!("door{i}") }), &origin).unwrap();
+            assert_eq!(title(&app), format!("DOOR{i}"));
+        }
+    }
+
+    #[test]
+    fn unknown_fields_in_a_rewrite_are_dropped() {
+        let mut pm = PluginManager::new();
+        add(&mut pm, "noisy", &["AddScheduleHeader"], |_| Some(r#"{"AddScheduleHeader":{"title":"Clean","index":null,"smuggled":{"x":1}}}"#.to_string()));
+        let app = app_with(pm);
+        let out = run(&app, serde_json::json!({ "AddScheduleHeader": { "title": "Orig", "index": null } })).unwrap();
+        assert!(out.state.schedule.items.iter().any(|i| i.title == "Clean"));
+        assert!(!serde_json::to_string(&out.state.schedule).unwrap().contains("smuggled"));
     }
 }

@@ -71,7 +71,7 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 | `library.write` | `categories[]` | High | **E** (host API) | **E** | Future create/update/delete via host or token. |
 | `commands.send` | `commands[]`: ShowCommand variant names, or `"*"` | Medium if every listed variant is navigation (`NextSlide`, `PrevSlide`, `NextItem`, `PrevItem`, `JumpSlide`, `JumpSection`, `GoLive`, `StageItem`); otherwise High; `"*"` is High | **E** | **E** | `host.send_command()`, `/api/command` and `/ws` with a plugin credential. |
 | `commands.intercept` | — | High | **E** | n/a | `on_command` veto. The safety-critical set still always passes. |
-| `commands.modify` | — | Critical | reserved, not offered in v1 | | |
+| `commands.modify` | `commands[]` (explicit, no `*`) | Critical | **E** (native plugins only) | n/a | Rewrite a command before it runs, same kind of command only; never the emergency controls. See PLUGINS.md. |
 | `keyring.own` | — | Medium | **E** (host API) | **E** | The `OpenSanctuary:Plugin:<id>` namespace only. |
 | `keyring.service` | `services[]` (`OpenSanctuary:Shared:<name>`), `access` (`read`\|`write`) | Critical | **E** (sandboxed web, native host API) | | Shared keyring namespaces; owner rules in PLUGINS.md. Only the `Shared:` prefix is grantable, never System, another plugin's namespace or a host service. |
 | `settings.read` | `keys[]` | Medium | **E** (host API) | **E** | |
