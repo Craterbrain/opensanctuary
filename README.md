@@ -29,6 +29,14 @@ paths work and are used for real; some documented features
 (`docs/CCLI_REPORTING.md`, `docs/TUNNELS.md`) are design docs, not built
 yet — each doc under `docs/` says plainly whether it's implemented.
 
+## Screenshots
+
+The operator console (library, schedule, preview and live panes) and the slide builder:
+
+![Operator console](docs/screenshots/console.png)
+
+![Slide builder](docs/screenshots/slide-builder.png)
+
 ## Features
 
 **Live production**

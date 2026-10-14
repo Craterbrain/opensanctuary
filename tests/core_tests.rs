@@ -5863,3 +5863,123 @@ fn test_importers_refuse_non_media_files_for_served_media_dir() {
     }
     assert_eq!(std::fs::read_dir(media_dir.path()).unwrap().count(), 0, "nothing should be copied");
 }
+
+/// A remote console exchanges the per-run host token for a persistent console
+/// credential; it keeps working after a "restart" (new host token, same
+/// library.db) until the device is removed from Paired Devices.
+#[tokio::test]
+async fn test_console_credential_survives_restart_and_is_revocable() {
+    let test_dir = tempfile::tempdir().unwrap();
+    let db_path = test_dir.path().join("test_console_credential.db");
+    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+
+    async fn start(db: os_next::storage::Database, dir: &std::path::Path, host_token: &str) -> std::net::SocketAddr {
+        let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+        let engine = Arc::new(ShowEngine::new(event_log));
+        let (tx, _rx) = tokio::sync::broadcast::channel(16);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app_state = os_next::api::ws::AppState {
+            tx,
+            engine,
+            db,
+            asset_graph: Arc::new(os_next::media::AssetGraph::new(dir.join("media"))),
+            web_dir: std::path::PathBuf::from("web"),
+            media_dir: std::path::PathBuf::from("web"),
+            data_dir: std::path::PathBuf::from("."),
+            skip_first_time_setup: true,
+            plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
+            bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
+            media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
+            last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            display_manager: None,
+            plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            host_session_token: host_token.to_string(),
+            server_port: addr.port(),
+            https_port: None,
+            https_enabled: false,
+            pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            active_console: Arc::new(std::sync::Mutex::new(None)),
+            pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+            update_status: Arc::new(std::sync::Mutex::new(None)),
+            ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+        };
+        let router = os_next::api::create_router(app_state);
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        addr
+    }
+
+    let client = reqwest::Client::new();
+    let verify = |addr: std::net::SocketAddr, token: String| {
+        let client = client.clone();
+        async move {
+            let resp = client.post(format!("http://{}/api/internal/verify-host-token", addr))
+                .json(&serde_json::json!({ "token": token }))
+                .send().await.unwrap();
+            resp.json::<serde_json::Value>().await.unwrap()["valid"] == true
+        }
+    };
+
+    // Run 1: the browser holds the bootstrap host token and trades it in.
+    let addr1 = start(db.clone(), test_dir.path(), "run_one_host_token").await;
+    let resp = client.post(format!("http://{}/api/pairing/console-credential", addr1))
+        .header("x-host-token", "run_one_host_token")
+        .json(&serde_json::json!({ "name": "Laptop" }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let credential = body["credential"].as_str().unwrap().to_string();
+    let device_id = body["device_id"].as_str().unwrap().to_string();
+    assert!(credential.starts_with("console_tok_"));
+
+    // Only the bootstrap token may mint; a wrong token or a credential can't.
+    let resp = client.post(format!("http://{}/api/pairing/console-credential", addr1))
+        .header("x-host-token", &credential)
+        .json(&serde_json::json!({ "name": "Copy" }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // The secret itself is never stored, and never listed.
+    let stored = db.get_paired_devices().unwrap();
+    let dev = stored.iter().find(|d| d.id == device_id).unwrap();
+    assert_ne!(dev.token, credential);
+    assert!(dev.token.starts_with("sha256:"));
+    let resp = client.get(format!("http://{}/api/pairing/devices", addr1))
+        .header("x-host-token", &credential)
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let list: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(list.as_array().unwrap().iter().find(|d| d["id"] == device_id.as_str()).unwrap()["token"], "");
+
+    // "Restart": same library.db, brand-new host token. The old host token is dead,
+    // the credential still works for console-gated routes.
+    let addr2 = start(db.clone(), test_dir.path(), "run_two_host_token").await;
+    assert!(!verify(addr2, "run_one_host_token".to_string()).await);
+    assert!(verify(addr2, credential.clone()).await);
+    let resp = client.get(format!("http://{}/api/pairing/devices", addr2))
+        .header("x-host-token", &credential)
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+    // A console credential is not a show-control device token.
+    let resp = client.post(format!("http://{}/api/command", addr2))
+        .header("x-device-token", &credential)
+        .json(&serde_json::json!({ "ToggleBlackout": null }))
+        .send().await.unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["success"], false);
+
+    // Revoking the device (stolen laptop) deauthenticates it immediately.
+    let resp = client.delete(format!("http://{}/api/pairing/devices/{}", addr2, device_id))
+        .header("x-host-token", "run_two_host_token")
+        .send().await.unwrap();
+    assert!(resp.status().is_success());
+    assert!(!verify(addr2, credential.clone()).await);
+    let resp = client.get(format!("http://{}/api/pairing/devices", addr2))
+        .header("x-host-token", &credential)
+        .send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+}

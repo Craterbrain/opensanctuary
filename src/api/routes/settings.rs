@@ -52,8 +52,13 @@ pub(super) async fn post_settings(
 
     if let Some(hostname) = settings.get("networkHostname").cloned() {
         if !forced.contains("networkHostname") {
-            let self_ips = crate::network::get_all_local_ips();
-            let result = crate::network::check_hostname_conflict(&hostname, &self_ips);
+            let hostname_for_job = hostname.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let self_ips = crate::network::get_all_local_ips();
+                crate::network::check_hostname_conflict(&hostname_for_job, &self_ips)
+            })
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             if result.conflict_detected {
                 settings.remove("networkHostname");
                 conflicts.insert(

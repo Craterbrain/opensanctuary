@@ -78,10 +78,28 @@ pub(super) async fn delete_scripture(
 }
 
 pub(super) async fn get_media(State(app): State<AppState>) -> Result<impl IntoResponse, StatusCode> {
-    let images_dir = app.media_dir.join("images");
-    let _ = app.db.sync_media_folder(&images_dir);
-    let videos_dir = app.media_dir.join("videos");
-    let _ = app.db.sync_media_videos_folder(&videos_dir);
+    // This route is unauthenticated, and a folder rescan + DB writes on every hit
+    // is a cheap DoS lever: rescan at most every few seconds, off the async workers.
+    static LAST_SYNC: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    let due = {
+        let mut last = LAST_SYNC.lock().unwrap_or_else(|e| e.into_inner());
+        if last.map_or(true, |t| t.elapsed() >= std::time::Duration::from_secs(5)) {
+            *last = Some(std::time::Instant::now());
+            true
+        } else {
+            false
+        }
+    };
+    if due {
+        let db = app.db.clone();
+        let images_dir = app.media_dir.join("images");
+        let videos_dir = app.media_dir.join("videos");
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = db.sync_media_folder(&images_dir);
+            let _ = db.sync_media_videos_folder(&videos_dir);
+        })
+        .await;
+    }
     let media = app.db.get_media().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(merge_with_plugin_resources(&app, "media", media, None)))
 }

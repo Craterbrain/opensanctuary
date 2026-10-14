@@ -70,8 +70,17 @@ pub(super) async fn post_command(
     if let Some(token_header) = headers.get("x-device-token") {
         let token = token_header.to_str().unwrap_or("").trim();
         match app.db.get_paired_device_by_token(token) {
-            Ok(Some(dev)) => {
+            Ok(Some(dev)) if dev.can_control_show() => {
                 let _ = app.db.touch_paired_device(&dev.id);
+            }
+            Ok(Some(_)) => {
+                tracing::warn!("REST command rejected: paired display tokens cannot send show commands");
+                return Json(CommandResponse {
+                    success: false,
+                    state: app.engine.snapshot(),
+                    events: vec![],
+                    error: Some("display_token_cannot_control".to_string()),
+                });
             }
             _ => {
                 tracing::warn!("REST command rejected: invalid/unknown device token");
@@ -290,7 +299,10 @@ pub(super) fn classify_background(raw: Option<&str>) -> (String, String) {
         Some(s) => s,
         None => return ("solid".to_string(), DEFAULT_SOLID.to_string()),
     };
-    let lower = trimmed.to_lowercase();
+    // ASCII-only lowercasing keeps byte offsets identical to `trimmed`: `find("url(")` below
+    // slices `trimmed` with positions from `lower`, and Unicode lowercasing can change byte
+    // lengths (e.g. 'İ'), which would panic mid-character.
+    let lower = trimmed.to_ascii_lowercase();
 
     let is_video = lower.ends_with(".mp4")
         || lower.ends_with(".webm")
@@ -380,7 +392,11 @@ pub(super) fn extract_first_gradient_color(css: &str) -> Option<String> {
 /// this one route and use the returned token for unrestricted keyring access.
 /// The host token is now only ever handed to the actual console — see
 /// `get_internal_host_token` below.
-pub(super) async fn get_server_info(State(app): State<AppState>) -> Result<impl IntoResponse, StatusCode> {
+pub(super) async fn get_server_info(State(app): State<AppState>, headers: HeaderMap) -> Result<impl IntoResponse, StatusCode> {
+    // Filesystem paths (which include the OS username) are only for the console;
+    // this route is otherwise readable by any LAN device or cross-origin page.
+    let is_console = super::common::require_host_token(&headers, &app).is_ok();
+    let path_or_null = |v: Option<String>| if is_console { v } else { None };
     let settings = app.db.get_settings().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let instance_id = crate::discovery::get_or_create_instance_id(&app.db);
     let name = settings.get("churchName").cloned().unwrap_or_default();
@@ -393,10 +409,10 @@ pub(super) async fn get_server_info(State(app): State<AppState>) -> Result<impl 
         // Settings > Storage, and as the pre-filled starting value for the
         // bibles/songs/media directory overrides (empty until the operator
         // actually sets one).
-        "data_dir": app.data_dir.to_string_lossy(),
-        "bibles_dir": app.db.bibles_dir().map(|p| p.to_string_lossy().to_string()),
-        "songs_dir": app.db.songs_dir().map(|p| p.to_string_lossy().to_string()),
-        "media_dir": app.media_dir.to_string_lossy(),
+        "data_dir": path_or_null(Some(app.data_dir.to_string_lossy().to_string())),
+        "bibles_dir": path_or_null(app.db.bibles_dir().map(|p| p.to_string_lossy().to_string())),
+        "songs_dir": path_or_null(app.db.songs_dir().map(|p| p.to_string_lossy().to_string())),
+        "media_dir": path_or_null(Some(app.media_dir.to_string_lossy().to_string())),
         // Drives the first-time setup overlay (docs/first-time.md). A
         // settings flag rather than "did this process just create
         // library.db" -- the latter stays true for every page load across
@@ -408,8 +424,8 @@ pub(super) async fn get_server_info(State(app): State<AppState>) -> Result<impl 
         // (docs/first-time.md step 2, docs/paths.md "Legacy Import
         // Detection") -- an older portable/dev install's library.db sitting
         // next to the exe or in CWD that this run isn't already using.
-        "legacy_library_detected": crate::storage::paths::detect_legacy_portable_library(&app.data_dir)
-            .map(|p| p.to_string_lossy().to_string()),
+        "legacy_library_detected": path_or_null(crate::storage::paths::detect_legacy_portable_library(&app.data_dir)
+            .map(|p| p.to_string_lossy().to_string())),
     })))
 }
 
@@ -426,6 +442,14 @@ pub(super) fn router() -> Router<AppState> {
 #[cfg(test)]
 mod display_state_background_tests {
     use super::{classify_background, extract_first_gradient_color};
+
+    #[test]
+    fn non_ascii_lowercase_expansion_does_not_panic() {
+        // 'İ' lowercases to two chars with a different byte length; slicing the
+        // original string by offsets from the lowercased one used to panic.
+        let _ = classify_background(Some("İİİİİurl(éé)"));
+        assert_eq!(classify_background(Some("URL(a.png)")), ("image".to_string(), "a.png".to_string()));
+    }
 
     #[test]
     fn classifies_video_by_extension_and_folder() {

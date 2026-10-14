@@ -46,7 +46,10 @@ impl PluginManager {
                 if let Some(ext) = path.extension() {
                     // Load .so (Linux) or .dll (Windows) or .dylib (macOS)
                     if ext == "so" || ext == "dll" || ext == "dylib" {
-                        self.load_plugin(&path)?;
+                        // One broken plugin must not stop the rest from loading.
+                        if let Err(e) = self.load_plugin(&path) {
+                            tracing::error!("Failed to load plugin {:?}: {}", path, e);
+                        }
                     }
                 }
             }

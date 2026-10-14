@@ -32,7 +32,7 @@ use crate::api::ws::{ws_handler, AppState};
 /// - Private RFC 1918 subnets (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
 /// - Link-local (169.254.0.0/16 or fe80::/10)
 /// - mDNS domains ending with .local
-fn is_allowed_sanctuary_origin(origin_str: &str) -> bool {
+pub(crate) fn is_allowed_sanctuary_origin(origin_str: &str) -> bool {
     let host_with_port = if let Some(stripped) = origin_str.strip_prefix("http://") {
         stripped
     } else if let Some(stripped) = origin_str.strip_prefix("https://") {
@@ -42,7 +42,12 @@ fn is_allowed_sanctuary_origin(origin_str: &str) -> bool {
     };
 
     let host = host_with_port.split('/').next().unwrap_or(host_with_port);
-    let host = host.split(':').next().unwrap_or(host);
+    // Strip the port without mangling bracketed IPv6 ("[::1]:8080").
+    let host = if let Some(rest) = host.strip_prefix('[') {
+        rest.split(']').next().unwrap_or(rest)
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
 
     if host == "localhost" || host == "127.0.0.1" || host == "::1" || host.ends_with(".local") {
         return true;

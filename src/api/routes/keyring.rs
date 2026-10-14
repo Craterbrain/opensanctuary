@@ -27,7 +27,7 @@ pub(super) async fn authenticate_keyring_caller(
 
     if let Some(token_header) = headers.get("x-host-token") {
         if let Ok(token_str) = token_header.to_str() {
-            if token_str == app.host_session_token {
+            if app.is_console_credential(token_str) {
                 return Ok(KeyringCaller::Host);
             }
         }

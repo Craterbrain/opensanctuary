@@ -182,13 +182,24 @@ pub struct UpdateCheckResult {
 }
 
 fn releases_client() -> Result<reqwest::Client, String> {
+    releases_client_with_timeout(std::time::Duration::from_secs(15))
+}
+
+/// For installer downloads: the whole-request timeout is generous (a 100 MB+
+/// package on a slow link), while `read_timeout` still aborts a stalled stream.
+fn download_client() -> Result<reqwest::Client, String> {
+    releases_client_with_timeout(std::time::Duration::from_secs(30 * 60))
+}
+
+fn releases_client_with_timeout(total: std::time::Duration) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         // The GitHub Releases API 403s an unauthenticated request with no
         // User-Agent at all -- unlike this crate's other reqwest callers
         // (genius_import.rs, freeshow_import.rs), which set one to look
         // like a browser, this just needs to identify the app honestly.
         .user_agent(concat!("opensanctuary-updater/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(total)
+        .read_timeout(std::time::Duration::from_secs(30))
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))
@@ -350,7 +361,7 @@ pub async fn download_and_verify_release(release: &ReleaseInfo) -> Result<PathBu
         return Err(format!("Release {} is not newer than this build ({})", release.version, env!("CARGO_PKG_VERSION")));
     }
 
-    let client = releases_client()?;
+    let client = download_client()?;
     let dir = std::env::temp_dir().join(format!("os-next-update-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
 

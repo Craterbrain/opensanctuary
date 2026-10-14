@@ -505,11 +505,20 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
     // for this specific window to carry full keyring/pairing-management
     // trust: that trust is "you are this actual native process," not a
     // network-transmitted secret. See `web/src/core/host_session.ts`.
-    let init_script = format!("window.__OS_HOST_TOKEN__ = {:?};", host_session_token);
+    // Only hand the token to the console's own origin: if the window is ever
+    // navigated elsewhere (and the navigation handler below is the first line
+    // of defence), that page must not receive it.
+    let init_script = format!(
+        "if (location.origin === {:?}) {{ window.__OS_HOST_TOKEN__ = {:?}; }}",
+        url.trim_end_matches('/'),
+        host_session_token
+    );
+    let nav_origin = url.clone();
 
     let _webview = wry::WebViewBuilder::new_gtk(vbox)
         .with_url(&url)
         .with_initialization_script(&init_script)
+        .with_navigation_handler(move |next| next.starts_with(&nav_origin) || next == "about:blank")
         .with_devtools(true)
         .build()
         .expect("Failed to build wry webview on Linux");
@@ -613,7 +622,15 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
         .expect("Failed to create tao window");
 
     // See the matching comment in the Linux/GTK branch above.
-    let init_script = format!("window.__OS_HOST_TOKEN__ = {:?};", host_session_token);
+    // Only hand the token to the console's own origin: if the window is ever
+    // navigated elsewhere (and the navigation handler below is the first line
+    // of defence), that page must not receive it.
+    let init_script = format!(
+        "if (location.origin === {:?}) {{ window.__OS_HOST_TOKEN__ = {:?}; }}",
+        url.trim_end_matches('/'),
+        host_session_token
+    );
+    let nav_origin = url.clone();
 
     // Without an explicit data directory, WebView2 defaults to a
     // "<exe name>.WebView2" folder next to the exe -- inside the install
@@ -628,6 +645,7 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
         .with_web_context(&mut web_context)
         .with_url(&url)
         .with_initialization_script(&init_script)
+        .with_navigation_handler(move |next| next.starts_with(&nav_origin) || next == "about:blank")
         .with_devtools(true)
         .build()
         .expect("Failed to build wry webview on Windows/macOS");

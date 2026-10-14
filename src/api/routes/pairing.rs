@@ -8,6 +8,59 @@ use crate::api::ws::AppState;
 
 use super::common::require_host_token;
 
+#[derive(Deserialize)]
+pub(super) struct ConsoleCredentialRequest {
+    #[serde(default)]
+    name: String,
+}
+
+/// POST /api/pairing/console-credential
+///
+/// Exchanges the one-time-per-run host session token (the printed terminal
+/// URL/QR) for a persistent, revocable credential for *this browser*, so a
+/// remote console doesn't have to be re-linked every time the server
+/// restarts. The credential is stored hashed as a `console` device in the
+/// same `paired_devices` table, so it appears in Settings > Paired Devices
+/// and is revoked by removing it there (a lost or stolen laptop).
+///
+/// Deliberately requires the actual per-run host token, not another console
+/// credential: a stolen credential then can't mint copies of itself that
+/// survive its own revocation. Adding a second browser means opening the
+/// current terminal URL, same as the first.
+pub(super) async fn create_console_credential_handler(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ConsoleCredentialRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let presented = headers.get("x-host-token").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if app.host_session_token.is_empty() || !crate::api::ct_eq(presented, &app.host_session_token) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "success": false, "error": "The current host session token is required to issue a console credential" })),
+        ));
+    }
+    let name: String = req.name.trim().chars().take(100).collect();
+    let name = if name.is_empty() { "Console".to_string() } else { name };
+    let device_id = format!("console_{}", uuid::Uuid::new_v4().simple());
+    let raw = format!("console_tok_{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+    let now = chrono::Utc::now().timestamp_millis();
+    let device = crate::storage::PairedDevice {
+        id: device_id.clone(),
+        name,
+        platform: crate::storage::db::CONSOLE_PLATFORM.to_string(),
+        paired_at: now,
+        last_seen: now,
+        token: crate::storage::db::console_credential_hash(&raw),
+    };
+    if let Err(e) = app.db.upsert_paired_device(&device) {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "success": false, "error": format!("Failed to store credential: {}", e) })),
+        ));
+    }
+    Ok(Json(serde_json::json!({ "success": true, "device_id": device_id, "credential": raw })))
+}
+
 pub(super) async fn redirect_to_remote() -> impl IntoResponse {
     Redirect::temporary("/remote.html")
 }
@@ -36,7 +89,7 @@ pub(super) async fn create_remote_pairing_handler(
     let device = crate::storage::PairedDevice {
         id: device_id.clone(),
         name: "Mobile Remote".to_string(),
-        platform: "mobile-remote".to_string(),
+        platform: crate::storage::db::REMOTE_CONTROL_PLATFORM.to_string(),
         paired_at: now,
         last_seen: now,
         token: dev_token.clone(),
@@ -141,7 +194,20 @@ pub(super) async fn authorize_pairing_handler(
     let device = crate::storage::PairedDevice {
         id: device_id.to_string(),
         name: if req.name.trim().is_empty() { "Sanctuary Display".to_string() } else { req.name.trim().to_string() },
-        platform: if req.platform.trim().is_empty() { "android-tv".to_string() } else { req.platform.trim().to_string() },
+        platform: {
+            let p = req.platform.trim();
+            // The remote-control role is reserved: a display being authorized
+            // must never be able to claim it by naming it here.
+            if p.is_empty() {
+                "android-tv".to_string()
+            } else if p.eq_ignore_ascii_case(crate::storage::db::REMOTE_CONTROL_PLATFORM)
+                || p.eq_ignore_ascii_case(crate::storage::db::CONSOLE_PLATFORM)
+            {
+                "other".to_string()
+            } else {
+                p.to_string()
+            }
+        },
         paired_at: now,
         last_seen: now,
         token: dev_token.clone(),
@@ -225,7 +291,11 @@ pub(super) async fn get_paired_devices_handler(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     // Returns every paired device's permanent bearer token — console-only.
     require_host_token(&headers, &app)?;
-    let devices = app.db.get_paired_devices().unwrap_or_default();
+    let mut devices = app.db.get_paired_devices().unwrap_or_default();
+    // Console credentials are stored hashed; there is nothing useful (or safe) to show.
+    for d in devices.iter_mut().filter(|d| d.platform == crate::storage::db::CONSOLE_PLATFORM) {
+        d.token.clear();
+    }
     Ok(Json(devices))
 }
 
@@ -406,6 +476,7 @@ pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/remote", get(redirect_to_remote))
         .route("/api/pairing/remote-session", post(create_remote_pairing_handler))
+        .route("/api/pairing/console-credential", post(create_console_credential_handler))
         .route("/api/pairing/session", post(create_pairing_session_handler))
         .route("/api/pairing/authorize", post(authorize_pairing_handler))
         .route("/api/pairing/status", get(get_pairing_status_handler))

@@ -27,6 +27,38 @@ const TLS_KEYRING_SERVICE: &str = "OpenSanctuary:System";
 const TLS_KEYRING_ACCOUNT: &str = "tls_private_key";
 pub const DEFAULT_HTTPS_PORT: u16 = 8443;
 
+/// Owner-only file fallback for the private key when no OS keyring is
+/// available (headless server, no Secret Service). Without it the key would
+/// exist only in memory and every restart would mint a new certificate,
+/// breaking every client that pinned the old one.
+fn fallback_key_path() -> std::path::PathBuf {
+    crate::storage::paths::config_dir().join("tls_private_key.pem")
+}
+
+fn read_fallback_key() -> Option<String> {
+    std::fs::read_to_string(fallback_key_path()).ok().filter(|k| !k.trim().is_empty())
+}
+
+fn write_fallback_key(key_pem: &str) -> std::io::Result<()> {
+    let path = fallback_key_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        // Create with 0600 so the key is never briefly world-readable.
+        let _ = std::fs::remove_file(&path);
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+        f.write_all(key_pem.as_bytes())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&path, key_pem)
+    }
+}
+
 /// Generates a self-signed X.509 certificate with Subject Alternative Names (SANs)
 /// encompassing localhost, mDNS hostnames, and all active LAN IP addresses.
 pub fn generate_self_signed_cert(
@@ -99,7 +131,8 @@ pub fn get_or_create_tls_certificate(
     let keyring_key = KeyringService::get_secret(TLS_KEYRING_SERVICE, TLS_KEYRING_ACCOUNT)
         .ok()
         .flatten()
-        .filter(|k| !k.trim().is_empty());
+        .filter(|k| !k.trim().is_empty())
+        .or_else(read_fallback_key);
 
     if let (Some(cert), Some(key)) = (&cert, &keyring_key) {
         if validate_tls_keypair(cert, key) {
@@ -189,8 +222,16 @@ pub fn regenerate_tls_certificate(
 ) -> Result<(String, String), String> {
     let (cert_pem, key_pem) = generate_self_signed_cert(hostname, interfaces)?;
     let _ = db.set_setting(SETTING_KEY_TLS_CERT_PEM, &cert_pem);
-    if let Err(e) = KeyringService::set_secret(TLS_KEYRING_SERVICE, TLS_KEYRING_ACCOUNT, &key_pem) {
-        tracing::error!("Failed to store TLS private key in OS keyring: {} — HTTPS will regenerate a new cert every restart until this is resolved", e);
+    match KeyringService::set_secret(TLS_KEYRING_SERVICE, TLS_KEYRING_ACCOUNT, &key_pem) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(fallback_key_path());
+        }
+        Err(e) => {
+            tracing::warn!("Failed to store TLS private key in OS keyring: {} — falling back to an owner-only key file", e);
+            if let Err(fe) = write_fallback_key(&key_pem) {
+                tracing::error!("Failed to store TLS private key in fallback file: {} — HTTPS will regenerate a new cert every restart until this is resolved", fe);
+            }
+        }
     }
     // Clear any stale plaintext copy from a pre-migration deployment.
     let _ = db.delete_setting(LEGACY_SETTING_KEY_TLS_KEY_PEM);
