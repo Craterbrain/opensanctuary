@@ -152,6 +152,7 @@ async fn security_headers_middleware(
     next: Next,
 ) -> Response {
     let is_media = req.uri().path().starts_with("/media/");
+    let is_plugin_frame = req.uri().path().starts_with("/plugin-frame/");
     let mut response = next.run(req).await;
 
     let (csp_mode, frame_mode) = {
@@ -194,6 +195,17 @@ async fn security_headers_middleware(
         headers.insert(
             axum::http::header::HeaderName::from_static("content-security-policy"),
             HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+        );
+        return response;
+    }
+
+    // A sandboxed plugin's response already carries its own, stricter CSP -- never replace it
+    // with the console's.
+    if is_plugin_frame {
+        // Framed by the console itself, whatever the operator's frame setting says about others.
+        response.headers_mut().insert(
+            axum::http::header::HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("SAMEORIGIN"),
         );
         return response;
     }

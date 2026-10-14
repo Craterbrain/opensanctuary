@@ -55,7 +55,7 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   head.appendChild(el('strong', 'plugin-name', plugin.name));
   if (plugin.version) head.appendChild(el('span', 'plugin-version', ` v${plugin.version}`));
   head.appendChild(el('span', `os-badge plugin-state plugin-state--${plugin.state}`, STATE_LABEL[plugin.state] ?? plugin.state));
-  head.appendChild(el('span', 'os-badge os-badge--neutral', isNative(plugin) ? 'Backend library' : 'Console script'));
+  head.appendChild(el('span', 'os-badge os-badge--neutral', isNative(plugin) ? 'Backend library' : plugin.kind === 'sandbox' ? 'Sandboxed page' : 'Console script'));
   card.appendChild(head);
   card.appendChild(el('div', 'settings-hint', `id: ${plugin.id} · digest ${plugin.digest.slice(0, 12)}… · ${plugin.signed ? `signed (publisher key ${plugin.signer_id})` : 'unsigned'}`));
   if (plugin.signer_changed) {
@@ -67,6 +67,10 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   }
   if (plugin.state === 'changed') {
     card.appendChild(el('div', 'plugin-warning', 'This plugin\'s files changed since you approved it, so it is not running. Review the permissions again to re-approve.'));
+  }
+  if (plugin.kind === 'sandbox' && plugin.state !== 'active') {
+    card.appendChild(el('div', 'settings-hint',
+      'Runs in an isolated frame with no access to this console. It can only do what is checked below, and can reach the network only at the hosts listed (if any).'));
   }
   const critical = plugin.requested.some(p => p.id === 'native.code' || p.id === 'ui.dom');
   if (critical && plugin.state !== 'active') {

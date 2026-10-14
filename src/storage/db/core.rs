@@ -442,7 +442,7 @@ impl Database {
             -- while status = 'approved' AND observed_digest = approved_digest.
             CREATE TABLE IF NOT EXISTS plugin_grants (
                 plugin_id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL CHECK (kind IN ('native','web','legacy-native','legacy-web')),
+                kind TEXT NOT NULL CHECK (kind IN ('native','web','legacy-native','legacy-web','sandbox')),
                 name TEXT NOT NULL,
                 version TEXT,
                 source_path TEXT NOT NULL,

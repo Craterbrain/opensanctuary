@@ -43,7 +43,7 @@ const KNOWN: &[(&str, Tier, &str)] = &[
     ("filesystem.read", Tier::High, "consent-only"),
     ("filesystem.write", Tier::Critical, "consent-only"),
     ("process.spawn", Tier::Critical, "consent-only"),
-    ("ui.panel", Tier::Medium, "reserved"),
+    ("ui.panel", Tier::Medium, "enforced"),
     ("ui.toolbar", Tier::Medium, "reserved"),
 ];
 
@@ -203,8 +203,13 @@ pub struct BackendSection {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebSection {
-    /// File name of the plugin's ES module inside `web/plugins/`.
+    /// A same-realm plugin: file name of its ES module inside `web/plugins/`.
+    /// A sandboxed plugin (`sandbox: true`): its HTML page inside `web/plugins/<id>/`.
     pub entry: String,
+    /// Run in an iframe with an opaque origin and a per-plugin CSP, talking to the console only
+    /// through a permission-checked message bridge. Needs no `ui.dom`.
+    #[serde(default)]
+    pub sandbox: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -319,7 +324,17 @@ impl PluginManifest {
         }
         if let Some(w) = &self.web {
             let e = w.entry.as_str();
-            if e.is_empty() || e.contains('/') || e.contains('\\') || !e.ends_with(".js") {
+            if w.sandbox {
+                if !relative_path_is_contained(e) || e.contains('\\') || !e.ends_with(".html") {
+                    return bad("a sandboxed plugin's web.entry must be a relative .html path inside its folder".to_string());
+                }
+                if self.permissions.iter().any(|p| p.id == "ui.dom") {
+                    return bad("a sandboxed plugin can't request ui.dom; that is what the sandbox replaces".to_string());
+                }
+                if self.backend.is_some() {
+                    return bad("a sandboxed web plugin can't also ship a native library".to_string());
+                }
+            } else if e.is_empty() || e.contains('/') || e.contains('\\') || !e.ends_with(".js") {
                 return bad("web.entry must be a plain .js file name".to_string());
             }
         }
@@ -453,6 +468,20 @@ mod tests {
         assert!(manifest(&GOOD.replace(r#"{"id": "show.observe", "reason": "follow blackout"}"#, r#"{"id": "resources.provide", "categories": ["media"]}"#)).is_err());
         assert!(manifest(&GOOD.replace(r#""categories": ["songs"]"#, r#""categories": []"#)).is_err());
         assert!(manifest(&GOOD.replace(r#""commands": ["NextSlide"]"#, r#""commands": []"#)).is_err());
+    }
+
+    #[test]
+    fn sandboxed_web_plugins_have_their_own_rules() {
+        let sandboxed = |extra: &str| {
+            format!(
+                r#"{{"manifest_version":1,"id":"sbx","name":"S","web":{{"entry":"index.html","sandbox":true}},"permissions":[{{"id":"show.observe"}}{extra}]}}"#
+            )
+        };
+        assert!(manifest(&sandboxed("")).is_ok());
+        assert!(manifest(&sandboxed(r#",{"id":"ui.dom"}"#)).is_err(), "the sandbox replaces ui.dom");
+        assert!(manifest(&sandboxed("").replace("index.html", "../index.html")).is_err());
+        assert!(manifest(&sandboxed("").replace("index.html", "main.js")).is_err());
+        assert!(manifest(&sandboxed("").replace("index.html", "ui/index.html")).is_ok());
     }
 
     #[test]

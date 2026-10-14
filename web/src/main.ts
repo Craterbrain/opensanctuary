@@ -6,6 +6,7 @@ import { clock } from "./core/timesync.ts";
 import { VideoSyncController } from "./core/video_sync.ts";
 import { keyring } from "./core/keyring.ts";
 import { resolveHostSessionToken } from "./core/host_session.ts";
+import { startSandboxedPlugin } from "./core/plugin_bridge.ts";
 import { startEmojiIcons } from "./core/emoji_icons.ts";
 
 // 0. Swap emoji for the themed SVG icons (static markup now, rendered content as it appears)
@@ -40,7 +41,9 @@ clock.synchronize(5).then(async () => {
             if (!res.ok) return; // no console credential on this page (live/stage/remote)
             const list = await res.json();
             for (const p of Array.isArray(list) ? list : []) {
-                if (p && typeof p.id === "string") await pluginManager.loadLocalPlugin(`/plugins/${p.id}.js`, p.id);
+                if (!p || typeof p.id !== "string") continue;
+                if (p.kind === "sandbox") startSandboxedPlugin(p);
+                else await pluginManager.loadLocalPlugin(`/plugins/${p.id}.js`, p.id);
             }
         } catch (e) {
             console.warn("[Plugins] could not load approved plugins:", e);

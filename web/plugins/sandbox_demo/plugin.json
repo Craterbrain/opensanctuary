@@ -1,0 +1,14 @@
+{
+  "manifest_version": 1,
+  "id": "sandbox_demo",
+  "name": "Sandboxed Demo Panel",
+  "version": "1.0.0",
+  "publisher": "OpenSanctuary",
+  "description": "A demo panel that runs in an isolated frame: shows the live schedule size and has Previous/Next buttons. Use it as a template for your own sandboxed plugin.",
+  "web": { "entry": "index.html", "sandbox": true },
+  "permissions": [
+    { "id": "show.observe", "reason": "Shows the number of schedule items and blackout state" },
+    { "id": "ui.panel", "reason": "Appears as a small panel in the console" },
+    { "id": "commands.send", "commands": ["NextSlide", "PrevSlide"], "optional": true, "reason": "Previous / Next buttons" }
+  ]
+}

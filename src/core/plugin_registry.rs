@@ -174,6 +174,12 @@ fn discover_web(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
     let Ok(entries) = std::fs::read_dir(web_plugins_dir) else { return out };
     for entry in entries.flatten() {
         let path = entry.path();
+        if path.is_dir() {
+            if let Some(d) = discover_sandbox(&path, host_version) {
+                out.push(d);
+            }
+            continue;
+        }
         if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("js") {
             continue;
         }
@@ -242,6 +248,93 @@ fn discover_web(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
         }
     }
     out
+}
+
+/// Most files / bytes a sandboxed plugin folder may hold (it is hashed on every request).
+const SANDBOX_MAX_FILES: usize = 300;
+const SANDBOX_MAX_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Every regular file in a sandboxed plugin folder as `(relative path, sha256)`. Symlinks and
+/// anything over the caps are rejected: the digest must cover exactly what can be served.
+pub fn sandbox_dir_files(dir: &Path) -> Result<Vec<(String, String)>, String> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<(String, String)>, total: &mut u64) -> Result<(), String> {
+        for entry in std::fs::read_dir(dir).map_err(|e| format!("{dir:?}: {e}"))?.flatten() {
+            let path = entry.path();
+            let meta = std::fs::symlink_metadata(&path).map_err(|e| format!("{path:?}: {e}"))?;
+            if meta.file_type().is_symlink() {
+                return Err(format!("{path:?} is a symlink; sandboxed plugin folders can't contain any"));
+            }
+            if meta.is_dir() {
+                walk(base, &path, out, total)?;
+            } else if meta.is_file() {
+                *total += meta.len();
+                if *total > SANDBOX_MAX_BYTES || out.len() >= SANDBOX_MAX_FILES {
+                    return Err("plugin folder is too large".to_string());
+                }
+                let rel = path.strip_prefix(base).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/");
+                out.push((rel, sha256_file(&path).map_err(|e| format!("{path:?}: {e}"))?));
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    let mut total = 0u64;
+    walk(dir, dir, &mut out, &mut total)?;
+    Ok(out)
+}
+
+fn discover_sandbox(dir: &Path, host_version: &str) -> Option<Discovered> {
+    let dir_name = dir.file_name()?.to_str()?.to_string();
+    let bytes = std::fs::read(dir.join("plugin.json")).ok()?; // not a plugin folder
+    let manifest_sha = sha256_hex(&bytes);
+    let manifest = match PluginManifest::parse(&bytes).and_then(|m| m.validate(host_version).map(|_| m)) {
+        Ok(m) => m,
+        Err(e) => {
+            let mut d = failed(dir_name, "sandbox", dir, e.to_string());
+            d.manifest_sha256 = Some(manifest_sha);
+            return Some(d);
+        }
+    };
+    let mut d = Discovered {
+        id: manifest.id.clone(),
+        kind: "sandbox",
+        name: manifest.name.clone(),
+        version: Some(manifest.version.clone()).filter(|v| !v.is_empty()),
+        source_path: dir.to_string_lossy().to_string(),
+        manifest_sha256: Some(manifest_sha.clone()),
+        digest: String::new(),
+        signer: None,
+        requested: manifest.permissions.clone(),
+        error: None,
+        library: None,
+        abi: 1,
+    };
+    let fail = |mut d: Discovered, msg: String| {
+        d.digest = sha256_hex(format!("{manifest_sha}{msg}").as_bytes());
+        d.error = Some(msg);
+        d
+    };
+    let web = manifest.web.as_ref().filter(|w| w.sandbox);
+    let Some(web) = web else {
+        return Some(fail(d, "this folder's plugin.json isn't a sandboxed web plugin (web.sandbox must be true)".to_string()));
+    };
+    if manifest.id != dir_name {
+        return Some(fail(d, format!("plugin id '{}' must match its folder name '{}'", manifest.id, dir_name)));
+    }
+    match verify_signer(&bytes, &manifest, &dir.join("plugin.json.minisig")) {
+        Ok(s) => d.signer = s,
+        Err(e) => return Some(fail(d, e)),
+    }
+    match sandbox_dir_files(dir) {
+        Err(e) => Some(fail(d, e)),
+        Ok(files) => {
+            if !files.iter().any(|(rel, _)| *rel == web.entry) {
+                return Some(fail(d, format!("entry page '{}' is missing", web.entry)));
+            }
+            d.digest = artifact_digest(&files);
+            Some(d)
+        }
+    }
 }
 
 /// Scans the native plugin directory and the web plugins folder.

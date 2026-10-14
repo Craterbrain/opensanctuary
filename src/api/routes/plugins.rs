@@ -49,11 +49,19 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         v
     };
     let native = row.kind == "native" || row.kind == "legacy-native";
+    // A sandboxed plugin's entry page comes from its manifest (the folder is the plugin).
+    let entry = (row.kind == "sandbox")
+        .then(|| std::fs::read(std::path::Path::new(&row.source_path).join("plugin.json")).ok())
+        .flatten()
+        .and_then(|b| crate::core::plugin_permissions::PluginManifest::parse(&b).ok())
+        .and_then(|m| m.web.map(|w| w.entry));
     serde_json::json!({
+        "entry": entry,
         "id": row.plugin_id,
         "kind": row.kind,
         "name": row.name,
         "version": row.version,
+        "sandboxed": row.kind == "sandbox",
         "state": state,
         "status": row.status,
         "error": row.error,
@@ -94,7 +102,7 @@ pub(super) async fn list_plugins(
     let list: Vec<_> = rows
         .iter()
         .filter(|r| match q.kind.as_deref() {
-            Some("web") => r.kind == "web" || r.kind == "legacy-web",
+            Some("web") => r.kind == "web" || r.kind == "legacy-web" || r.kind == "sandbox",
             Some("native") => r.kind == "native" || r.kind == "legacy-native",
             _ => true,
         })
@@ -326,6 +334,135 @@ pub(crate) fn web_plugin_file_is_active(app: &AppState, file_name: &str) -> bool
     }
 }
 
+/// Digest of a sandboxed plugin folder, recomputed only when a file's size or mtime moved, so
+/// serving doesn't re-hash a folder on every request but an edit is still caught at once.
+static FRAME_DIGESTS: std::sync::Mutex<Option<std::collections::HashMap<String, (u64, String)>>> =
+    std::sync::Mutex::new(None);
+
+fn folder_signature(dir: &std::path::Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    fn walk(dir: &std::path::Path, h: &mut std::collections::hash_map::DefaultHasher) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir).map(|r| r.flatten().collect()).unwrap_or_default();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let path = e.path();
+            if let Ok(m) = std::fs::symlink_metadata(&path) {
+                path.hash(h);
+                m.len().hash(h);
+                m.modified().ok().hash(h);
+                if m.is_dir() {
+                    walk(&path, h);
+                }
+            }
+        }
+    }
+    walk(dir, &mut h);
+    h.finish()
+}
+
+fn current_folder_digest(id: &str, dir: &std::path::Path) -> Option<String> {
+    let sig = folder_signature(dir);
+    {
+        let guard = FRAME_DIGESTS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((s, d)) = guard.as_ref().and_then(|m| m.get(id)) {
+            if *s == sig {
+                return Some(d.clone());
+            }
+        }
+    }
+    let files = crate::core::plugin_registry::sandbox_dir_files(dir).ok()?;
+    let digest = crate::core::plugin_permissions::artifact_digest(&files);
+    FRAME_DIGESTS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(id.to_string(), (sig, digest.clone()));
+    Some(digest)
+}
+
+fn content_type_for(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        "woff2" => "font/woff2",
+        "txt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Only plain host[:port] (optionally with a `*.` wildcard) may reach a CSP source list.
+fn csp_host_ok(h: &str) -> bool {
+    !h.is_empty()
+        && h.len() <= 255
+        && h.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '*'))
+        && (!h.contains('*') || h.starts_with("*."))
+}
+
+/// GET /plugin-frame/:id/*path -- serves a sandboxed plugin's files, but only while the plugin is
+/// approved and the folder still hashes to what was reviewed. Every response carries a CSP that
+/// forbids everything except what the plugin was granted (`network.outbound` hosts), and a
+/// `sandbox` directive so it runs with an opaque origin even if opened outside the console's iframe.
+pub(super) async fn serve_plugin_frame(
+    State(app): State<AppState>,
+    AxumPath((id, rel)): AxumPath<(String, String)>,
+) -> axum::response::Response {
+    use axum::http::header;
+    let not_found = || (StatusCode::NOT_FOUND, "not found").into_response();
+    if !crate::core::plugin_permissions::valid_plugin_id(&id)
+        || !crate::core::plugin_permissions::relative_path_is_contained(&rel)
+        || rel.contains('\\')
+    {
+        return not_found();
+    }
+    let Some(row) = app.db.get_plugin_grant(&id).ok().flatten() else { return not_found() };
+    if row.kind != "sandbox" || row.effective_state() != "active" {
+        return not_found();
+    }
+    let dir = app.web_dir.join("plugins").join(&id);
+    let (app2, id2, dir2) = (app.clone(), id.clone(), dir.clone());
+    let approved = row.approved_digest.clone().unwrap_or_default();
+    let ok = tokio::task::spawn_blocking(move || {
+        let _ = &app2;
+        current_folder_digest(&id2, &dir2).is_some_and(|d| d == approved)
+    })
+    .await
+    .unwrap_or(false);
+    if !ok {
+        return not_found();
+    }
+    let file = dir.join(&rel);
+    match std::fs::symlink_metadata(&file) {
+        Ok(m) if m.is_file() => {}
+        _ => return not_found(),
+    }
+    let Ok(bytes) = std::fs::read(&file) else { return not_found() };
+
+    let granted = parse_granted(&row);
+    let mut sources: Vec<String> = Vec::new();
+    for p in granted.0.iter().filter(|p| p.id == "network.outbound") {
+        for h in p.hosts.iter().filter(|h| csp_host_ok(h)) {
+            sources.push(format!("https://{h} wss://{h} http://{h} ws://{h}"));
+        }
+    }
+    let connect = if sources.is_empty() { "'none'".to_string() } else { sources.join(" ") };
+    let csp = format!(
+        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
+         font-src 'self' data:; media-src 'self' blob:; connect-src {connect}; base-uri 'none'; form-action 'none'; \
+         frame-ancestors 'self'; sandbox allow-scripts"
+    );
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type_for(&rel))
+        .header(header::CONTENT_SECURITY_POLICY, csp)
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(axum::body::Body::from(bytes))
+        .unwrap_or_else(|_| not_found())
+}
+
 pub(super) fn router() -> Router<AppState> {
     use axum::routing::{get, post};
     Router::new()
@@ -335,4 +472,5 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/plugins/:id/deny", post(deny_plugin))
         .route("/api/plugins/:id/revoke", post(revoke_plugin))
         .route("/api/plugins/:id/token", post(mint_plugin_token))
+        .route("/plugin-frame/:id/*path", get(serve_plugin_frame))
 }

@@ -57,6 +57,18 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   `OS_PLUGIN_HOST_VERSION` differs. The frozen v1 `OsPlugin` trait never changes.
   **Update a plugin by replacing the file, not overwriting it in place:** the loaded library is
   memory-mapped, and truncating it crashes the server.
+- **Sandboxed web plugins** (`web.sandbox: true`, a folder `web/plugins/<id>/` with `plugin.json`
+  and an HTML entry page; see `web/plugins/sandbox_demo/`). The page runs in an iframe with
+  `sandbox="allow-scripts"` and no `allow-same-origin`, so it has an opaque origin: no access to the
+  console, its storage, the host token or the console credential. The server serves it from
+  `/plugin-frame/<id>/` only while approved and the whole folder still hashes to what was reviewed
+  (symlinks and oversized folders are refused), with a CSP that forbids everything except the
+  `network.outbound` hosts it was granted. It talks to the console only through `postMessage`
+  (`getState`, `sendCommand`, `keyring.*`, `ui.resize`, `log`, and a `state` event with
+  `show.observe`); the console's bridge checks each request against the grant and holds the
+  plugin's scoped token, and the server re-checks commands and keyring access against that token.
+  This is the only plugin type where the permission list is actually enforced end to end; prefer it
+  over a same-realm script (`ui.dom`) whenever the plugin only needs a panel and a few actions.
 - **Existing plugins.** Loose `.so`/`.dll`/`.dylib` files already installed when permissions
   shipped are approved once with the legacy v1 permission set and flagged for review; anything
   that appears afterwards starts as pending. A web script with no manifest is treated as asking

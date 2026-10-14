@@ -356,6 +356,11 @@ export const api = {
       await resolveHostSessionToken();
       return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/revoke`, {}, { headers: hostTokenHeader() });
     },
+    token: async (id: string, scopes?: Array<{ id: string; commands?: string[] }>) => {
+      await resolveHostSessionToken();
+      return api.post<{ success: boolean; token: string; service: string }>(
+        `/api/plugins/${encodeURIComponent(id)}/token`, scopes ? { scopes } : {}, { headers: hostTokenHeader() });
+    },
     audit: async () => {
       await resolveHostSessionToken();
       return api.get<PluginAuditEntry[]>('/api/plugins/audit?limit=100', { headers: hostTokenHeader() });
@@ -438,7 +443,9 @@ export interface PluginPermissionInfo {
 
 export interface PluginInfo {
   id: string;
-  kind: 'native' | 'web' | 'legacy-native' | 'legacy-web';
+  kind: 'native' | 'web' | 'legacy-native' | 'legacy-web' | 'sandbox';
+  sandboxed?: boolean;
+  entry?: string | null;
   name: string;
   version: string | null;
   state: 'pending' | 'active' | 'changed' | 'denied' | 'revoked' | 'incompatible';

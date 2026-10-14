@@ -6458,3 +6458,108 @@ async fn test_real_cdylib_plugin_abi2_end_to_end() {
     assert!(after.iter().find(|d| d.id == "org.example.observer").unwrap().error.is_some(), "digest/sha256 mismatch");
     assert!(os_next::core::plugin_registry::approved_natives(&db, &after).is_empty());
 }
+
+/// Sandboxed web plugins are served from /plugin-frame/<id>/ only while approved and unchanged,
+/// with a CSP that allows nothing beyond what was granted, and nothing escapes the folder.
+#[tokio::test]
+async fn test_sandboxed_plugin_frame_serving_and_csp() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("sbx.db").to_str().unwrap()).unwrap();
+    let web_dir = tmp.path().join("web");
+    let pdir = web_dir.join("plugins/sbx_demo");
+    std::fs::create_dir_all(pdir.join("ui")).unwrap();
+    std::fs::write(pdir.join("plugin.json"), serde_json::json!({
+        "manifest_version": 1, "id": "sbx_demo", "name": "Sandboxed",
+        "web": {"entry": "index.html", "sandbox": true},
+        "permissions": [
+            {"id": "show.observe"},
+            {"id": "network.outbound", "hosts": ["192.168.1.50:6454", "evil.example/\"; script-src *"], "optional": true}
+        ]
+    }).to_string()).unwrap();
+    std::fs::write(pdir.join("index.html"), b"<script src=\"ui/app.js\"></script>").unwrap();
+    std::fs::write(pdir.join("ui/app.js"), b"parent.postMessage('hi','*')").unwrap();
+    std::fs::write(web_dir.join("plugins/secret.txt"), b"not part of any plugin").unwrap();
+
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        tx, engine, db: db.clone(),
+        asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
+        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
+        data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
+        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
+        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
+        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "sbx_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{}", addr);
+    let c = reqwest::Client::new();
+    let host = "sbx_host";
+    let get = |path: &'static str| { let (c, base) = (c.clone(), base.clone()); async move { c.get(format!("{base}{path}")).send().await.unwrap() } };
+
+    // Discovered as a sandboxed plugin; not served until approved.
+    let list: serde_json::Value = c.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap().json().await.unwrap();
+    let p = list.as_array().unwrap().iter().find(|p| p["id"] == "sbx_demo").unwrap().clone();
+    assert_eq!(p["kind"], "sandbox");
+    assert_eq!(p["sandboxed"], true);
+    assert_eq!(p["entry"], "index.html");
+    assert_eq!(p["state"], "pending");
+    assert_eq!(get("/plugin-frame/sbx_demo/index.html").await.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // Approve observe only (the network permission is declined).
+    let digest = p["digest"].as_str().unwrap();
+    let r = c.post(format!("{base}/api/plugins/sbx_demo/approve")).header("x-host-token", host)
+        .json(&serde_json::json!({ "digest": digest, "granted": ["show.observe"] })).send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let r = get("/plugin-frame/sbx_demo/index.html").await;
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let csp = r.headers()["content-security-policy"].to_str().unwrap().to_string();
+    assert!(csp.contains("connect-src 'none'"), "no network without a grant: {csp}");
+    assert!(csp.contains("sandbox allow-scripts") && csp.contains("default-src 'none'"), "{csp}");
+    assert_eq!(r.headers()["x-frame-options"], "SAMEORIGIN");
+    assert_eq!(get("/plugin-frame/sbx_demo/ui/app.js").await.status(), reqwest::StatusCode::OK);
+
+    // Nothing outside the folder, and the raw folder isn't served as an ordinary static path.
+    for path in ["/plugin-frame/sbx_demo/../secret.txt", "/plugin-frame/sbx_demo/%2e%2e/secret.txt", "/plugin-frame/sbx_demo/..%2fsecret.txt",
+                 "/plugin-frame/nope/index.html", "/plugin-frame/sbx_demo/plugin.json.bak",
+                 "/plugins/sbx_demo/index.html", "/plugins/secret.txt"] {
+        let status = c.get(format!("{base}{path}")).send().await.unwrap().status();
+        assert_eq!(status, reqwest::StatusCode::NOT_FOUND, "{path}");
+    }
+
+    // Grant a network host: a well-formed one reaches the CSP, a malicious one is dropped.
+    let r = c.post(format!("{base}/api/plugins/sbx_demo/approve")).header("x-host-token", host)
+        .json(&serde_json::json!({ "digest": digest, "granted": ["show.observe", "network.outbound"] })).send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let csp = get("/plugin-frame/sbx_demo/index.html").await.headers()["content-security-policy"].to_str().unwrap().to_string();
+    assert!(csp.contains("https://192.168.1.50:6454"), "{csp}");
+    assert!(!csp.contains("evil.example") && !csp.contains("script-src *"), "a hostile host must not reach the CSP: {csp}");
+
+    // A symlink dropped into the folder after approval stops it being served at all (it could
+    // point anywhere), as does editing a file: the folder no longer matches what was reviewed.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("/etc/hostname", pdir.join("ui/link.txt")).unwrap();
+        assert_eq!(get("/plugin-frame/sbx_demo/index.html").await.status(), reqwest::StatusCode::NOT_FOUND);
+        assert_eq!(get("/plugin-frame/sbx_demo/ui/link.txt").await.status(), reqwest::StatusCode::NOT_FOUND);
+        std::fs::remove_file(pdir.join("ui/link.txt")).unwrap();
+        assert_eq!(get("/plugin-frame/sbx_demo/index.html").await.status(), reqwest::StatusCode::OK);
+    }
+    std::fs::write(pdir.join("ui/app.js"), b"alert('swapped')").unwrap();
+    assert_eq!(get("/plugin-frame/sbx_demo/index.html").await.status(), reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(get("/plugin-frame/sbx_demo/ui/app.js").await.status(), reqwest::StatusCode::NOT_FOUND);
+}
