@@ -109,7 +109,29 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         }
         out
     };
+    // commands.modify: what it changed this run, whether it was switched off, and which other approved plugins
+    // also modify the same commands (modifiers run in plugin-id order, each on the previous one's output).
+    let modify = {
+        let mine = (if state == "active" { &granted } else { &requested }).iter().find(|p| p.id == "commands.modify");
+        mine.map(|m| {
+            let (changed, tripped) = app.plugin_manager.modifier_stats(&row.plugin_id).unwrap_or((0, false));
+            let runs_after: Vec<String> = app
+                .db
+                .list_plugin_grants()
+                .unwrap_or_default()
+                .iter()
+                .filter(|o| o.plugin_id != row.plugin_id && o.effective_state() == "active" && o.plugin_id < row.plugin_id)
+                .filter(|o| {
+                    let g: Vec<PermissionRequest> = serde_json::from_str(&o.granted_json).unwrap_or_default();
+                    g.iter().any(|p| p.id == "commands.modify" && p.commands.iter().any(|c| m.commands.contains(c)))
+                })
+                .map(|o| o.plugin_id.clone())
+                .collect();
+            serde_json::json!({ "changed": changed, "tripped": tripped, "runs_after": runs_after, "active": app.plugin_manager.modifier_stats(&row.plugin_id).is_some() })
+        })
+    };
     serde_json::json!({
+        "modify": modify,
         "shared_with": shared_with,
         "overridden": overridden,
         "override_diff": override_diff,

@@ -34,6 +34,7 @@ const KNOWN: &[(&str, Tier, &str)] = &[
     ("library.write", Tier::High, "enforced"),
     ("commands.send", Tier::Medium, "enforced"),
     ("commands.intercept", Tier::High, "enforced"),
+    ("commands.modify", Tier::Critical, "enforced"),
     ("keyring.own", Tier::Medium, "enforced"),
     ("keyring.service", Tier::Critical, "enforced"),
     ("settings.read", Tier::Medium, "reserved"),
@@ -110,7 +111,7 @@ impl PermissionRequest {
         let base = KNOWN.iter().find(|(id, _, _)| *id == self.id).map(|(_, _, e)| *e).unwrap_or("unknown");
         match kind {
             "native" => match self.id.as_str() {
-                "show.observe" | "commands.intercept" | "resources.provide" | "keyring.service" => "enforced",
+                "show.observe" | "commands.intercept" | "resources.provide" | "keyring.service" | "commands.modify" => "enforced",
                 "native.code" => "informational",
                 _ => "consent-only",
             },
@@ -186,7 +187,7 @@ impl PermissionSet {
             let Some(have) = grant.0.iter().find(|g| g.id == want.id) else { continue };
             let mut p = want.clone();
             match want.id.as_str() {
-                "commands.send" | "process.run" => {
+                "commands.send" | "process.run" | "commands.modify" => {
                     p.commands = narrow(&want.commands, &have.commands);
                     if p.commands.is_empty() {
                         continue;
@@ -229,6 +230,13 @@ impl PermissionSet {
             .max()
     }
 
+    /// Whether this grant lets a plugin rewrite commands of this variant (`commands.modify`). The
+    /// list is explicit (no wildcard) and never covers emergency or never-modifiable commands.
+    pub fn modifies(&self, variant: &str) -> bool {
+        self.0.iter().any(|p| p.id == "commands.modify" && p.commands.iter().any(|c| c == variant))
+            && crate::core::commands::modifiable_variants().contains(&variant)
+    }
+
     /// Whether `process.run` covers the manifest command `id`.
     pub fn runs(&self, id: &str) -> bool {
         self.0.iter().any(|p| p.id == "process.run" && p.commands.iter().any(|c| c == "*" || c == id))
@@ -246,7 +254,7 @@ impl PermissionSet {
 pub fn scope_kind(id: &str) -> &'static str {
     match id {
         "library.read" | "library.write" | "resources.provide" => "categories",
-        "commands.send" | "process.run" => "commands",
+        "commands.send" | "process.run" | "commands.modify" => "commands",
         "network.outbound" => "hosts",
         "filesystem.read" | "filesystem.write" => "paths",
         "network.listen" => "ports",
@@ -312,6 +320,41 @@ pub fn catalog_json() -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// What `commands.modify` may list: explicit command names that carry data, never `*`, an emergency
+/// control or something in `NEVER_MODIFIABLE`.
+pub fn check_modify_commands(commands: &[String]) -> Result<(), String> {
+    use crate::core::commands::{modifiable_variants, NEVER_MODIFIABLE, SHOW_COMMAND_VARIANTS, UNIT_COMMANDS};
+    if commands.is_empty() || commands.len() > 32 {
+        return Err("'commands.modify' needs a list of 1 to 32 command names".to_string());
+    }
+    let allowed = modifiable_variants();
+    for c in commands {
+        if c == "*" {
+            return Err("'commands.modify' can't use '*': list the commands it may change".to_string());
+        }
+        if SAFETY_CRITICAL_COMMANDS.contains(&c.as_str()) {
+            return Err(format!("'commands.modify' can never change '{c}': emergency controls are off limits"));
+        }
+        if NEVER_MODIFIABLE.contains(&c.as_str()) {
+            return Err(format!("'commands.modify' can never change '{c}'"));
+        }
+        if UNIT_COMMANDS.contains(&c.as_str()) {
+            return Err(format!("'{c}' has nothing to rewrite (it carries no data)"));
+        }
+        if !SHOW_COMMAND_VARIANTS.contains(&c.as_str()) {
+            return Err(format!("'{c}' isn't a known command"));
+        }
+        if !allowed.contains(&c.as_str()) {
+            return Err(format!("'commands.modify' can't change '{c}'"));
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    if !commands.iter().all(|c| seen.insert(c)) {
+        return Err("'commands.modify' lists a command twice".to_string());
+    }
+    Ok(())
+}
+
 /// Checks a permission the *operator* is granting by hand (the Advanced override on the review
 /// screen), which may differ from anything the plugin asked for: a known id, one that makes sense
 /// for this kind of plugin, and well-formed scope lists. `kind` is the plugin's kind.
@@ -348,6 +391,12 @@ pub fn validate_grant(p: &PermissionRequest, kind: &str) -> Result<(), String> {
         if let Some(c) = p.categories.iter().find(|c| *c != "*" && !RESOURCE_CATEGORIES.contains(&c.as_str())) {
             return Err(format!("'{}': unknown category '{c}'", p.id));
         }
+    }
+    if p.id == "commands.modify" {
+        if kind != "native" {
+            return Err("'commands.modify' only applies to a native plugin".to_string());
+        }
+        check_modify_commands(&p.commands)?;
     }
     if p.id == "keyring.service" {
         if kind == "web" {
@@ -737,6 +786,12 @@ impl PluginManifest {
             } else if p.access.is_some() || !p.services.is_empty() {
                 return bad(format!("'{}' doesn't take services or an access mode", p.id));
             }
+            if p.id == "commands.modify" {
+                if self.backend.is_none() {
+                    return bad("'commands.modify' is for native plugins only: a page in a browser tab can't sit in the command path".to_string());
+                }
+                check_modify_commands(&p.commands).map_err(ManifestError::Invalid)?;
+            }
             if p.id == "commands.send" && p.commands.is_empty() {
                 return bad("'commands.send' needs a commands list".to_string());
             }
@@ -1032,6 +1087,45 @@ mod tests {
         // A same-realm console script already has console authority: not offered.
         let script = format!(r#"{{"manifest_version":1,"id":"ks","name":"K","web":{{"entry":"ks.js"}},"permissions":[{{"id":"keyring.service","services":[{s}]}}]}}"#);
         assert!(manifest(&script).is_err());
+    }
+
+    #[test]
+    fn commands_modify_is_explicit_native_only_and_never_for_emergency_commands() {
+        let native = |perm: &str| format!(
+            r#"{{"manifest_version":1,"id":"org.example.mod","name":"M","backend":{{"abi":2,"libraries":{{"linux-x86_64":{{"path":"lib/x.so","sha256":"{}"}}}}}},"permissions":[{perm}]}}"#,
+            "0".repeat(64)
+        );
+        assert!(manifest(&native(r#"{"id":"commands.modify","commands":["AddToSchedule","SetItemTheme"]}"#)).is_ok());
+        assert_eq!(PermissionRequest::simple("commands.modify").tier(), Tier::Critical);
+        for (why, bad) in [
+            ("no list", r#"{"id":"commands.modify"}"#),
+            ("an empty list", r#"{"id":"commands.modify","commands":[]}"#),
+            ("a wildcard", r#"{"id":"commands.modify","commands":["*"]}"#),
+            ("blackout", r#"{"id":"commands.modify","commands":["ToggleBlackout"]}"#),
+            ("an alert", r#"{"id":"commands.modify","commands":["SetAlert"]}"#),
+            ("clear text", r#"{"id":"commands.modify","commands":["ToggleClearText"]}"#),
+            ("logo", r#"{"id":"commands.modify","commands":["ToggleLogo"]}"#),
+            ("a web stream", r#"{"id":"commands.modify","commands":["SetWebStream"]}"#),
+            ("replacing the schedule", r#"{"id":"commands.modify","commands":["LoadSchedule"]}"#),
+            ("a new schedule", r#"{"id":"commands.modify","commands":["NewSchedule"]}"#),
+            ("history", r#"{"id":"commands.modify","commands":["Undo"]}"#),
+            ("a command with nothing to rewrite", r#"{"id":"commands.modify","commands":["NextSlide"]}"#),
+            ("an unknown command", r#"{"id":"commands.modify","commands":["Nope"]}"#),
+            ("a duplicate", r#"{"id":"commands.modify","commands":["GoLive","GoLive"]}"#),
+        ] {
+            assert!(manifest(&native(bad)).is_err(), "{why}");
+        }
+        // A page in a browser tab can't sit in the command path: sandboxed and console-script plugins are refused.
+        let sandboxed = r#"{"manifest_version":1,"id":"sb","name":"S","web":{"entry":"index.html","sandbox":true},"permissions":[{"id":"commands.modify","commands":["GoLive"]}]}"#;
+        assert!(manifest(sandboxed).is_err());
+        let script = r#"{"manifest_version":1,"id":"sc","name":"S","web":{"entry":"sc.js"},"permissions":[{"id":"commands.modify","commands":["GoLive"]}]}"#;
+        assert!(manifest(script).is_err());
+        // The grant only ever covers what was listed, and a token-style narrowing never widens it.
+        let set = PermissionSet(vec![PermissionRequest { id: "commands.modify".into(), commands: vec!["GoLive".into()], ..Default::default() }]);
+        assert!(set.modifies("GoLive") && !set.modifies("AddToSchedule") && !set.modifies("SetAlert"));
+        // Even if a grant somehow listed an emergency command, it would not count.
+        let sneaky = PermissionSet(vec![PermissionRequest { id: "commands.modify".into(), commands: vec!["ToggleBlackout".into(), "*".into()], ..Default::default() }]);
+        assert!(!sneaky.modifies("ToggleBlackout") && !sneaky.modifies("GoLive"));
     }
 
     #[test]

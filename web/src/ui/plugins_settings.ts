@@ -263,6 +263,26 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
     card.appendChild(el('div', 'settings-hint', `Appears in: ${where}.`));
   }
 
+  // commands.modify: rewriting commands is as powerful as it sounds, so say so in plain words.
+  const modifyPerm = (plugin.state === 'active' ? plugin.granted : plugin.requested).find((p) => p.id === 'commands.modify');
+  if (modifyPerm) {
+    card.appendChild(el('div', 'plugin-error',
+      `Can change these commands before they run, including ones you send from this console: ${(modifyPerm.commands ?? []).join(', ')}. ` +
+      'It can change what appears on screen. Emergency controls (Blackout, Clear, Logo, Alert) are never changed, and a change can never turn a command into a different kind of command.'));
+    if (plugin.modify?.runs_after.length) {
+      card.appendChild(el('div', 'settings-hint', `Runs after: ${plugin.modify.runs_after.join(', ')} (changes are applied in plugin-id order).`));
+    }
+    if (plugin.state === 'active' && plugin.modify) {
+      if (plugin.modify.tripped) {
+        card.appendChild(el('div', 'plugin-warning', 'Switched off until OpenSanctuary restarts: it was too slow or kept failing while changing commands. Commands run as normal.'));
+      } else if (plugin.modify.active) {
+        card.appendChild(el('div', 'settings-hint', `Changed ${plugin.modify.changed} command${plugin.modify.changed === 1 ? '' : 's'} since OpenSanctuary started.`));
+      } else {
+        card.appendChild(el('div', 'settings-hint', 'Not changing commands yet: this takes effect after OpenSanctuary restarts (or the plugin has no modifier).'));
+      }
+    }
+  }
+
   // Shared keyring: say plainly what it can reach, who else can, and whether it could send it somewhere.
   const sharedPerms = (plugin.state === 'active' ? plugin.granted : plugin.requested).filter((p) => p.id === 'keyring.service');
   const reach = (plugin.state === 'active' ? plugin.granted : plugin.requested).filter((p) => p.id === 'network.outbound').flatMap((p) => p.hosts ?? []);

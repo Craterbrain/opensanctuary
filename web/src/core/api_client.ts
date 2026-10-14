@@ -467,6 +467,7 @@ export interface PluginCatalogEntry {
 }
 
 export interface PluginInfo {
+  modify?: { changed: number; tripped: boolean; runs_after: string[]; active: boolean } | null;
   shared_with?: Array<{ service: string; plugins: Array<{ id: string; name: string; access: string; state: string }> }>;
   overridden?: boolean;
   override_diff?: { added: string[]; removed: string[]; changed: string[] } | null;

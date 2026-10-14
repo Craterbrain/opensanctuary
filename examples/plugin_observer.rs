@@ -12,7 +12,7 @@
 //! allowed it to do -- so a permission that wasn't granted shows up as "denied".
 
 use os_next::core::models::ShowState;
-use os_next::core::plugins::{OsPlugin, PluginHost};
+use os_next::core::plugins::{CommandModifier, OsPlugin, PluginHost};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -56,3 +56,18 @@ impl OsPlugin for Observer {
 }
 
 os_next::export_plugin!(|host| Observer { host, seen: AtomicUsize::new(0) });
+
+/// `commands.modify`: shouts the schedule title. The host only builds this when the operator granted
+/// `commands.modify` (listing `SetScheduleTitle`); it can change that command's data, never turn it
+/// into another command, and never sees the emergency controls.
+struct Shouter;
+
+impl CommandModifier for Shouter {
+    fn modify_command(&self, cmd_json: &str) -> Option<String> {
+        let v: serde_json::Value = serde_json::from_str(cmd_json).ok()?;
+        let title = v.get("SetScheduleTitle")?.as_str()?;
+        Some(serde_json::json!({ "SetScheduleTitle": title.to_uppercase() }).to_string())
+    }
+}
+
+os_next::export_command_modifier!(|_host| Shouter);

@@ -144,6 +144,31 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   needs `keyring.own`). A native plugin uses `keyring_shared_get/set/delete` on its host handle. Both
   go through one policy (`src/api/keyring_policy.rs`). The first use and each refusal are audited
   (never the secret), and the check always uses the plugin's live grant, so a revoke stops it at once.
+- **Rewriting commands: `commands.modify`.** A native plugin can change a command before it runs
+  (`commands.intercept` can only veto). Critical tier, native plugins only: a page in a browser tab
+  can't sit in the command path (it is asynchronous, may be on another machine, and remote and
+  plugin commands never pass through a console), so sandboxed and console-script plugins are
+  refused. List the commands in `plugin.json`: `{ "id": "commands.modify", "commands": ["AddToSchedule", "SetItemTheme"] }`
+  (explicit names; no `*`; nothing for the emergency controls Blackout, Clear Text, Logo and Alert, nor
+  `SetWebStream`, `NewSchedule`, `LoadSchedule`, Undo/Redo, nor a command that carries no data). The
+  library exports a modifier next to its plugin with `os_next::export_command_modifier!(|host| ...)`
+  (an implementation of `CommandModifier::modify_command(&self, json) -> Option<String>`, see
+  `examples/plugin_observer.rs`). The host only builds it when the permission was granted, so approving
+  (or re-approving) takes effect after a restart; a revoke takes effect at once. In the command
+  pipeline it runs after shorthand expansion (it sees the full item that will really run) and **before**
+  the veto, so a `commands.intercept` plugin always judges the command that will actually execute and
+  can't be bypassed. Every door goes through it (console, remote, plugin). The rules for a rewrite:
+  a bare command, **the same kind of command** (it can never turn a slide change into a blackout, so
+  the scope checks made before still hold), under 256 KB and at most 4x the original plus 4 KB, and it
+  must parse; the host then re-encodes the parsed command, dropping any unknown fields. Several
+  modifiers run once each in plugin-id order, each on the previous one's output (the review screen
+  says "Runs after: ..."). Each gets 50 ms on its own thread (100 ms for all of them per command),
+  panics are caught, and any failure keeps the last good command, so this is **never a security
+  control** and can't stall a show; a modifier that is too slow, still busy, or fails three times in a
+  row is switched off until restart (audit `modify_disabled`, plus a notification). Audit: the first
+  rewrite per plugin and command (`command_modified`), refusals (`modify_rejected`); only hashes of
+  the before and after are logged, never the content. A native plugin's digest now also covers its
+  `plugin.json`, so editing the manifest after approval shows up as a change.
 - **Notifications: `notifications.post`.** The console has one notification center (the bell in
   the ribbon, with an unread badge) that collects everything: its own toasts, notices from the host
   (for example a finished tool update) and notifications from plugins. A sandboxed plugin granted
