@@ -514,11 +514,13 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
         host_session_token
     );
     let nav_origin = url.clone();
+    // Same-origin blob: URLs are how the console triggers file downloads.
+    let nav_blob = format!("blob:{}", url.trim_end_matches('/'));
 
     let _webview = wry::WebViewBuilder::new_gtk(vbox)
         .with_url(&url)
         .with_initialization_script(&init_script)
-        .with_navigation_handler(move |next| next.starts_with(&nav_origin) || next == "about:blank")
+        .with_navigation_handler(move |next| next.starts_with(&nav_origin) || next.starts_with(&nav_blob) || next == "about:blank")
         .with_devtools(true)
         .build()
         .expect("Failed to build wry webview on Linux");
@@ -631,6 +633,8 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
         host_session_token
     );
     let nav_origin = url.clone();
+    // Same-origin blob: URLs are how the console triggers file downloads.
+    let nav_blob = format!("blob:{}", url.trim_end_matches('/'));
 
     // Without an explicit data directory, WebView2 defaults to a
     // "<exe name>.WebView2" folder next to the exe -- inside the install
@@ -645,7 +649,7 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
         .with_web_context(&mut web_context)
         .with_url(&url)
         .with_initialization_script(&init_script)
-        .with_navigation_handler(move |next| next.starts_with(&nav_origin) || next == "about:blank")
+        .with_navigation_handler(move |next| next.starts_with(&nav_origin) || next.starts_with(&nav_blob) || next == "about:blank")
         .with_devtools(true)
         .build()
         .expect("Failed to build wry webview on Windows/macOS");
