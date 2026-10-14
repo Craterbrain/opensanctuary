@@ -131,5 +131,6 @@
   {"glyph": "⤊", "icon": "align-top", "note": "Align elements to top."},
   {"glyph": "⤋", "icon": "align-bottom", "note": "Align elements to bottom."},
   {"glyph": "ℹ", "icon": "info", "note": "About OpenSanctuary, About settings category, info toast icon. Also appears as ℹ+U+FE0F (ui_utils.ts toast map); like every entry in this map the glyph is stored without U+FE0F, so strip it before lookup."},
-  {"glyph": "＋", "icon": "plus", "note": "Fullwidth plus on the schedule bottom drop zone (\"Drop here to add to end of schedule\")."}
+  {"glyph": "＋", "icon": "plus", "note": "Fullwidth plus on the schedule bottom drop zone (\"Drop here to add to end of schedule\")."},
+  {"glyph": "🧩", "icon": "puzzle", "note": "Plugins: Settings > Plugins and plugin UI."}
 ]
