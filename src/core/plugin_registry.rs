@@ -37,6 +37,8 @@ pub struct Discovered {
     pub error: Option<String>,
     /// Native library to load, when this build's platform has one.
     pub library: Option<PathBuf>,
+    /// Plugin ABI the manifest declares (legacy libraries are 1).
+    pub abi: u32,
 }
 
 fn sanitize_legacy_id(stem: &str) -> String {
@@ -89,6 +91,7 @@ fn failed(id: String, kind: &'static str, source: &Path, msg: String) -> Discove
         requested: Vec::new(),
         error: Some(msg),
         library: None,
+        abi: 1,
     }
 }
 
@@ -128,6 +131,7 @@ fn discover_native_dir(dir: &Path, host_version: &str) -> Option<Discovered> {
         requested: manifest.permissions.clone(),
         error: None,
         library: None,
+        abi: manifest.backend.as_ref().map(|b| b.abi.max(1)).unwrap_or(1),
     };
     let fail = |mut d: Discovered, msg: String| {
         d.digest = sha256_hex(format!("{}{}", d.manifest_sha256.clone().unwrap_or_default(), msg).as_bytes());
@@ -214,6 +218,7 @@ fn discover_web(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
                         requested: m.permissions.clone(),
                         error: problem,
                         library: None,
+                        abi: 1,
                     });
                 }
             }
@@ -232,6 +237,7 @@ fn discover_web(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
                 requested: LEGACY_WEB_REQUESTS.iter().map(|id| PermissionRequest::simple(id)).collect(),
                 error: None,
                 library: None,
+                abi: 1,
             });
         }
     }
@@ -269,6 +275,7 @@ pub fn discover(plugin_dir: &Path, web_plugins_dir: &Path, host_version: &str) -
                             requested: legacy_requests(),
                             error: None,
                             library: Some(path),
+                            abi: 1,
                         }),
                         Err(e) => out.push(failed(sanitize_legacy_id(&stem), "legacy-native", &path, format!("unreadable: {e}"))),
                     }
@@ -353,7 +360,7 @@ pub fn approved_natives(db: &Database, discovered: &[Discovered]) -> Vec<Approve
         .filter_map(|d| {
             let lib = d.library.clone()?;
             let row = db.get_plugin_grant(&d.id).ok().flatten()?;
-            (row.effective_state() == "active").then(|| ApprovedNative { id: d.id.clone(), library: lib, grants: parse_granted(&row) })
+            (row.effective_state() == "active").then(|| ApprovedNative { id: d.id.clone(), library: lib, grants: parse_granted(&row), abi: d.abi })
         })
         .collect()
 }

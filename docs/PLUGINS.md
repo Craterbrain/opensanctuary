@@ -46,6 +46,17 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   `backend.libraries` map of `"<os>-<arch>"` to `{path, sha256}` for a native plugin, laid out as
   `<plugins dir>/<id>/plugin.json` + the library, or a `web.entry` for a console script. Unknown
   permissions are rejected, never ignored.
+- **ABI 2 (`PluginHost`).** A native plugin built with `os_next::export_plugin!` gets a host
+  handle in its constructor instead of reaching around the server. Each call is checked against
+  its live grant: `snapshot()` (`show.observe`), `send_command()` (`commands.send`, only the
+  granted command names, rate-limited, queued and run through the normal veto path, never
+  inline), `library_list()` (`library.read`), `keyring_*` (`keyring.own`), `data_dir()`
+  (`filesystem.plugin_data`). See `examples/plugin_observer.rs`, a real plugin used as the
+  template and by the dlopen test. The interface is a Rust trait object, so the plugin must be
+  built with the same compiler and OS-Next version as the host; the host refuses a library whose
+  `OS_PLUGIN_HOST_VERSION` differs. The frozen v1 `OsPlugin` trait never changes.
+  **Update a plugin by replacing the file, not overwriting it in place:** the loaded library is
+  memory-mapped, and truncating it crashes the server.
 - **Existing plugins.** Loose `.so`/`.dll`/`.dylib` files already installed when permissions
   shipped are approved once with the legacy v1 permission set and flagged for review; anything
   that appears afterwards starts as pending. A web script with no manifest is treated as asking

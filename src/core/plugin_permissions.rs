@@ -29,17 +29,17 @@ const KNOWN: &[(&str, Tier, &str)] = &[
     ("native.code", Tier::Critical, "informational"),
     ("ui.dom", Tier::Critical, "consent-only"),
     ("show.observe", Tier::Low, "enforced"),
-    ("library.read", Tier::Low, "informational"),
+    ("library.read", Tier::Low, "enforced"),
     ("resources.provide", Tier::Medium, "enforced"),
     ("library.write", Tier::High, "reserved"),
-    ("commands.send", Tier::Medium, "reserved"),
+    ("commands.send", Tier::Medium, "enforced"),
     ("commands.intercept", Tier::High, "enforced"),
     ("keyring.own", Tier::Medium, "enforced"),
     ("settings.read", Tier::Medium, "reserved"),
     ("settings.write", Tier::High, "reserved"),
     ("network.outbound", Tier::Medium, "consent-only"),
     ("network.listen", Tier::High, "consent-only"),
-    ("filesystem.plugin_data", Tier::Low, "consent-only"),
+    ("filesystem.plugin_data", Tier::Low, "enforced"),
     ("filesystem.read", Tier::High, "consent-only"),
     ("filesystem.write", Tier::Critical, "consent-only"),
     ("process.spawn", Tier::Critical, "consent-only"),
@@ -116,6 +116,12 @@ impl PermissionSet {
 
     pub fn has(&self, id: &str) -> bool {
         self.0.iter().any(|p| p.id == id)
+    }
+
+    pub fn reads(&self, category: &str) -> bool {
+        self.0
+            .iter()
+            .any(|p| p.id == "library.read" && p.categories.iter().any(|c| c == "*" || c == category))
     }
 
     pub fn provides(&self, category: &str) -> bool {

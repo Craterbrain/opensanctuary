@@ -6320,3 +6320,141 @@ async fn test_scoped_plugin_tokens_for_commands_and_keyring() {
         .json(&serde_json::json!({ "service": "OpenSanctuary:Plugin:scoped_demo", "account": "a" })).send().await.unwrap();
     assert_eq!(set.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
+
+/// Loads a real ABI 2 cdylib (`examples/plugin_observer.rs`) through the whole path: manifest
+/// discovery, digest pinning, approval, `dlopen`, the `PluginHost` handle, and per-call gating.
+/// Ignored by default because it builds the example; run with
+/// `cargo test --release --test core_tests real_cdylib -- --ignored`.
+#[tokio::test]
+#[ignore]
+async fn test_real_cdylib_plugin_abi2_end_to_end() {
+    use os_next::core::plugin_permissions::{platform_key, sha256_hex, PermissionRequest, PermissionSet};
+    use os_next::core::plugins::PluginManager;
+
+    // Build the example plugin in the profile this test runs under.
+    let mut build = std::process::Command::new(env!("CARGO"));
+    build.args(["build", "--example", "plugin_observer"]);
+    if !cfg!(debug_assertions) {
+        build.arg("--release");
+    }
+    assert!(build.status().expect("run cargo").success(), "building the example plugin failed");
+    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    let lib_name = format!("{}plugin_observer{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_SUFFIX);
+    let built = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(profile).join("examples").join(&lib_name);
+    let lib_bytes = std::fs::read(&built).unwrap_or_else(|e| panic!("{built:?}: {e}"));
+
+    // <plugins>/org.example.observer/{plugin.json, lib/<library>}
+    let tmp = tempfile::tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    let dir = plugins.join("org.example.observer");
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    std::fs::write(dir.join("lib").join(&lib_name), &lib_bytes).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(dir.join("lib").join(&lib_name), std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    std::fs::write(
+        dir.join("plugin.json"),
+        serde_json::json!({
+            "manifest_version": 1, "id": "org.example.observer", "name": "Observer", "version": "0.1.0",
+            "backend": {"abi": 2, "libraries": { platform_key(): {"path": format!("lib/{lib_name}"), "sha256": sha256_hex(&lib_bytes)} }},
+            "permissions": [
+                {"id": "show.observe"}, {"id": "filesystem.plugin_data"}, {"id": "keyring.own", "optional": true},
+                {"id": "commands.send", "commands": ["NextSlide"], "optional": true}
+            ]
+        }).to_string(),
+    ).unwrap();
+
+    let db = os_next::storage::Database::new(tmp.path().join("abi2.db").to_str().unwrap()).unwrap();
+    let found = os_next::core::plugin_registry::discover(&plugins, &tmp.path().join("web"), env!("CARGO_PKG_VERSION"));
+    os_next::core::plugin_registry::sync(&db, &found);
+    let d = found.iter().find(|d| d.id == "org.example.observer").unwrap();
+    assert!(d.error.is_none(), "{:?}", d.error);
+    assert_eq!(d.abi, 2);
+
+    // Unapproved: nothing loads.
+    assert!(os_next::core::plugin_registry::approved_natives(&db, &found).is_empty());
+    // Approve observe + data dir only.
+    let granted = vec![PermissionRequest::simple("show.observe"), PermissionRequest::simple("filesystem.plugin_data")];
+    let row = db.get_plugin_grant("org.example.observer").unwrap().unwrap();
+    db.set_plugin_decision("org.example.observer", "approved", &serde_json::to_string(&granted).unwrap(),
+        row.observed_manifest_sha256.as_deref(), Some(&row.observed_digest), None, "test").unwrap();
+    let approved = os_next::core::plugin_registry::approved_natives(&db, &found);
+    assert_eq!(approved.len(), 1);
+
+    // A server for the host handle to talk to.
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let data_dir = tmp.path().join("data");
+    let app_state = os_next::api::ws::AppState {
+        tx, engine, db: db.clone(),
+        asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
+        web_dir: std::path::PathBuf::from("web"), media_dir: tmp.path().join("media"),
+        data_dir: data_dir.clone(), skip_first_time_setup: true,
+        plugin_manager: Arc::new(PluginManager::new()),
+        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
+        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "abi2_host".to_string(), server_port: 0, https_port: None, https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let slot: os_next::api::plugin_host::AppSlot = Arc::new(std::sync::OnceLock::new());
+    slot.set(app_state.clone()).ok();
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel(8);
+    let factory = |id: &str, grants: Arc<os_next::core::plugins::GrantCell>| -> Arc<dyn os_next::core::plugins::PluginHost> {
+        Arc::new(os_next::api::plugin_host::AppPluginHost::new(id, grants, slot.clone(), cmd_tx.clone()))
+    };
+
+    // Without a host factory an ABI 2 plugin is refused rather than loaded half-working.
+    let mut refused = PluginManager::new();
+    refused.load_approved(os_next::core::plugin_registry::approved_natives(&db, &found), None);
+    assert_eq!(refused.plugin_count(), 0);
+
+    let mut pm = PluginManager::new();
+    pm.load_approved(approved, Some(&factory));
+    assert_eq!(pm.plugin_count(), 1, "the real library should load");
+    assert!(pm.is_loaded("org.example.observer"));
+
+    // The plugin's hook runs and records what the host let it do.
+    let observed = data_dir.join("plugin-data/org.example.observer/observed.txt");
+    pm.notify_state_change(&os_next::core::models::ShowState::default());
+    assert_eq!(std::fs::read_to_string(&observed).unwrap().trim(), "n=1 snapshot=ok keyring=denied send=denied");
+    assert!(cmd_rx.try_recv().is_err(), "nothing was granted to send");
+
+    // Grant it NextSlide: the command is queued, and only that command.
+    pm.set_grants("org.example.observer", PermissionSet(vec![
+        PermissionRequest::simple("show.observe"), PermissionRequest::simple("filesystem.plugin_data"),
+        PermissionRequest { id: "commands.send".into(), commands: vec!["NextSlide".into()], ..Default::default() },
+    ]));
+    pm.notify_state_change(&os_next::core::models::ShowState::default());
+    assert_eq!(std::fs::read_to_string(&observed).unwrap().trim(), "n=2 snapshot=ok keyring=denied send=ok");
+    let queued = cmd_rx.try_recv().expect("the granted command should be queued");
+    assert_eq!((queued.plugin_id.as_str(), queued.variant.as_str()), ("org.example.observer", "NextSlide"));
+    assert!(pm.command_allowed("org.example.observer", "NextSlide"));
+    assert!(!pm.command_allowed("org.example.observer", "NewSchedule"));
+
+    // Revoke: the hook is no longer even called, and a queued command would be dropped.
+    assert!(pm.revoke("org.example.observer"));
+    pm.notify_state_change(&os_next::core::models::ShowState::default());
+    assert_eq!(std::fs::read_to_string(&observed).unwrap().trim(), "n=2 snapshot=ok keyring=denied send=ok");
+    assert!(!pm.command_allowed("org.example.observer", "NextSlide"));
+
+    // Swap the binary on disk: it stops being loadable until it is reviewed again.
+    // (Replace the file, don't overwrite it in place: the loaded library is memory-mapped, and
+    // truncating a mapped file takes the whole process down with SIGBUS.)
+    std::fs::remove_file(dir.join("lib").join(&lib_name)).unwrap();
+    std::fs::write(dir.join("lib").join(&lib_name), b"swapped").unwrap();
+    let after = os_next::core::plugin_registry::discover(&plugins, &tmp.path().join("web"), env!("CARGO_PKG_VERSION"));
+    assert!(after.iter().find(|d| d.id == "org.example.observer").unwrap().error.is_some(), "digest/sha256 mismatch");
+    assert!(os_next::core::plugin_registry::approved_natives(&db, &after).is_empty());
+}
