@@ -30,7 +30,6 @@ fn base_app_state(db: Database) -> os_next::api::ws::AppState {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         tx: tokio::sync::broadcast::channel(16).0,
-        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -923,127 +922,6 @@ fn test_event_log_persistence_resumption_and_idempotence() {
     assert!(snap3.state.is_clear_text);
 
     let _ = std::fs::remove_file(&tmp_db_file);
-}
-
-#[test]
-fn test_backend_plugin_manager_lifecycle_and_interception() {
-    use os_next::core::plugins::{OsPlugin, PluginManager};
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
-    struct TestDmxPlugin {
-        state_changes: AtomicUsize,
-        block_next: AtomicBool,
-    }
-
-    impl OsPlugin for TestDmxPlugin {
-        fn name(&self) -> &'static str {
-            "DMX Lighting & PTZ Controller"
-        }
-
-        fn on_state_change(&self, _state: &os_next::core::models::ShowState) {
-            self.state_changes.fetch_add(1, Ordering::SeqCst);
-        }
-
-        fn on_command(&self, cmd: &str) -> bool {
-            if self.block_next.load(Ordering::SeqCst) && (cmd.contains("NextSlide") || cmd.contains("ToggleClearText")) {
-                return false; // Intercept & block command
-            }
-            true
-        }
-    }
-
-    let plugin = Arc::new(TestDmxPlugin {
-        state_changes: AtomicUsize::new(0),
-        block_next: AtomicBool::new(true),
-    });
-
-    struct PluginWrapper(Arc<TestDmxPlugin>);
-    impl OsPlugin for PluginWrapper {
-        fn name(&self) -> &'static str { self.0.name() }
-        fn on_state_change(&self, state: &os_next::core::models::ShowState) { self.0.on_state_change(state) }
-        fn on_command(&self, cmd: &str) -> bool { self.0.on_command(cmd) }
-    }
-
-    let mut pm = PluginManager::new();
-    pm.register_plugin(Box::new(PluginWrapper(plugin.clone())));
-    assert_eq!(pm.plugin_count(), 1);
-
-    // 1. Safety-critical commands bypass any plugin veto
-    assert!(pm.check_command("ToggleBlackout"));
-    assert!(pm.check_command("ToggleClearText"), "Safety-critical command must bypass plugin veto!");
-
-    // 2. Normal command interception
-    assert!(!pm.check_command("NextSlide"), "Normal command should be vetoed by plugin");
-
-    plugin.block_next.store(false, Ordering::SeqCst);
-    assert!(pm.check_command("NextSlide"), "Command allowed after block flag cleared");
-
-    // 3. Panic isolation at FFI boundary
-    struct PanickingPlugin;
-    impl OsPlugin for PanickingPlugin {
-        fn name(&self) -> &'static str { "Panicking Broken Plugin" }
-        fn on_state_change(&self, _: &os_next::core::models::ShowState) { panic!("Simulated FFI panic in state change"); }
-        fn on_command(&self, _: &str) -> bool { panic!("Simulated FFI panic in command hook"); }
-    }
-    pm.register_plugin(Box::new(PanickingPlugin));
-
-    // Host must NOT panic when broken plugin panics
-    assert!(pm.check_command("NextSlide"), "Panicking plugin must be isolated without aborting host");
-    let state = os_next::core::models::ShowState::default();
-    pm.notify_state_change(&state); // Must not panic
-    assert_eq!(plugin.state_changes.load(Ordering::SeqCst), 1);
-}
-
-#[test]
-fn test_plugin_manager_collects_resources_across_categories_and_isolates_panics() {
-    use os_next::core::plugins::{OsPlugin, PluginManager};
-
-    struct SongLibraryPlugin;
-    impl OsPlugin for SongLibraryPlugin {
-        fn name(&self) -> &'static str { "External Song Library" }
-        fn on_state_change(&self, _state: &os_next::core::models::ShowState) {}
-        fn on_command(&self, _cmd: &str) -> bool { true }
-        fn provide_resources(&self, category: &str) -> Vec<serde_json::Value> {
-            if category == "songs" {
-                vec![serde_json::json!({"id": "ext_1", "title": "Amazing Grace (External)"})]
-            } else {
-                Vec::new()
-            }
-        }
-    }
-
-    struct BrokenResourcePlugin;
-    impl OsPlugin for BrokenResourcePlugin {
-        fn name(&self) -> &'static str { "Broken Resource Plugin" }
-        fn on_state_change(&self, _state: &os_next::core::models::ShowState) {}
-        fn on_command(&self, _cmd: &str) -> bool { true }
-        fn provide_resources(&self, _category: &str) -> Vec<serde_json::Value> {
-            panic!("Simulated failure while enumerating resources");
-        }
-    }
-
-    let mut pm = PluginManager::new();
-    pm.register_plugin(Box::new(SongLibraryPlugin));
-    pm.register_plugin(Box::new(BrokenResourcePlugin));
-
-    let songs = pm.collect_resources("songs");
-    assert_eq!(songs.len(), 1, "the broken plugin must not suppress the working one's contribution");
-    assert_eq!(songs[0]["title"], "Amazing Grace (External)");
-
-    // A category no plugin provides yields nothing, not an error.
-    assert!(pm.collect_resources("themes").is_empty());
-
-    // A plugin that doesn't override provide_resources contributes nothing by default,
-    // and never panics — proving the trait's default implementation is safe to inherit.
-    struct MinimalPlugin;
-    impl OsPlugin for MinimalPlugin {
-        fn name(&self) -> &'static str { "Minimal Plugin" }
-        fn on_state_change(&self, _state: &os_next::core::models::ShowState) {}
-        fn on_command(&self, _cmd: &str) -> bool { true }
-    }
-    let mut pm2 = PluginManager::new();
-    pm2.register_plugin(Box::new(MinimalPlugin));
-    assert!(pm2.collect_resources("songs").is_empty());
 }
 
 #[test]
@@ -3966,7 +3844,6 @@ async fn test_freeshow_import_http_route() {
     let engine = Arc::new(ShowEngine::new(event_log));
     let asset_graph = Arc::new(AssetGraph::new(&web_dir));
     let (tx, _rx) = tokio::sync::broadcast::channel(512);
-    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
 
     let app_state = os_next::api::ws::AppState {
         tx,
@@ -3974,7 +3851,6 @@ async fn test_freeshow_import_http_route() {
         asset_graph,
         web_dir: web_dir.clone(),
         media_dir: web_dir.clone(),
-        plugin_manager,
         ..base_app_state(db.clone())
     };
 
@@ -4136,7 +4012,6 @@ async fn test_app_state_plugin_token_lifecycle() {
     let (tx, _) = tokio::sync::broadcast::channel(16);
 
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
-    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
 
     let app = os_next::api::ws::AppState {
         engine,
@@ -4144,7 +4019,6 @@ async fn test_app_state_plugin_token_lifecycle() {
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
         tx,
-        plugin_manager,
         host_session_token: "test_host_token_abc".to_string(),
         ..base_app_state(db)
     };
@@ -4178,7 +4052,6 @@ async fn test_network_api_routes_and_conflict_detection() {
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
-    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -4190,7 +4063,6 @@ async fn test_network_api_routes_and_conflict_detection() {
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        plugin_manager,
         server_port: bound_port,
         ..base_app_state(db.clone())
     };
@@ -4289,7 +4161,6 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
-    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -4301,7 +4172,6 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        plugin_manager,
         host_session_token: "test_host_session_conflict".to_string(),
         server_port: bound_port,
         ..base_app_state(db.clone())
@@ -4404,7 +4274,6 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
-    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -4415,7 +4284,6 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        plugin_manager,
         server_port: addr.port(),
         ..base_app_state(db.clone())
     };
@@ -4688,7 +4556,6 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
-    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -4701,7 +4568,6 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
         // plugin there (web/plugins/hello_world.js), loaded by main.ts.
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        plugin_manager,
         host_session_token: "test_host_session_plugin".to_string(),
         server_port: addr.port(),
         ..base_app_state(db.clone())
@@ -4736,8 +4602,7 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
     assert_eq!(unapproved.status(), reqwest::StatusCode::FORBIDDEN);
 
     // ...and once approved with keyring access it does.
-    let found = os_next::core::plugin_registry::discover(
-        &test_dir.path().join("native"), std::path::Path::new("web/plugins"), env!("CARGO_PKG_VERSION"));
+    let found = os_next::core::plugin_registry::discover(std::path::Path::new("web/plugins"), env!("CARGO_PKG_VERSION"));
     os_next::core::plugin_registry::sync(&db, &found);
     let row = db.get_plugin_grant("hello_world").unwrap().unwrap();
     db.set_plugin_decision(
@@ -4769,7 +4634,6 @@ async fn test_command_endpoint_requires_host_token_for_unpaired_callers() {
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
-    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -4781,7 +4645,6 @@ async fn test_command_endpoint_requires_host_token_for_unpaired_callers() {
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        plugin_manager,
         host_session_token: host_token.clone(),
         server_port: addr.port(),
         ..base_app_state(db.clone())
@@ -4908,7 +4771,6 @@ async fn test_library_mutation_and_admin_routes_require_host_token() {
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
-    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -4924,7 +4786,6 @@ async fn test_library_mutation_and_admin_routes_require_host_token() {
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
         data_dir: test_dir.path().to_path_buf(),
-        plugin_manager,
         host_session_token: host_token.clone(),
         server_port: addr.port(),
         ..base_app_state(db.clone())
@@ -5025,7 +4886,6 @@ async fn test_tv_provision_start_and_progress_against_unreachable_device() {
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
-    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -5037,7 +4897,6 @@ async fn test_tv_provision_start_and_progress_against_unreachable_device() {
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        plugin_manager,
         host_session_token: host_token.clone(),
         server_port: addr.port(),
         ..base_app_state(db.clone())
@@ -5091,7 +4950,6 @@ async fn test_update_check_and_status_routes_against_real_test_repo() {
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
-    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -5103,7 +4961,6 @@ async fn test_update_check_and_status_routes_against_real_test_repo() {
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        plugin_manager,
         host_session_token: host_token.clone(),
         server_port: addr.port(),
         ..base_app_state(db.clone())
@@ -5167,7 +5024,6 @@ async fn test_only_one_console_connected_at_a_time() {
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
-    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -5179,7 +5035,6 @@ async fn test_only_one_console_connected_at_a_time() {
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        plugin_manager,
         host_session_token: host_token.clone(),
         server_port: addr.port(),
         ..base_app_state(db.clone())
@@ -5257,7 +5112,6 @@ async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
-    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
 
     // 1. Generate TLS certificate
     let interfaces = os_next::network::NetworkInterfaceInfo::discover_all();
@@ -5281,7 +5135,6 @@ async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        plugin_manager,
         host_session_token: "test_host_session_split".to_string(),
         server_port: http_port,
         https_port: Some(https_port),
@@ -5382,7 +5235,6 @@ async fn test_security_headers_and_cors_policies() {
     let engine = Arc::new(ShowEngine::new(event_log));
     let asset_graph = Arc::new(AssetGraph::new(temp_dir.path().join("assets")));
     let (tx, _) = tokio::sync::broadcast::channel(100);
-    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
 
     let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let http_addr = http_listener.local_addr().unwrap();
@@ -5393,7 +5245,6 @@ async fn test_security_headers_and_cors_policies() {
         asset_graph,
         web_dir: std::path::PathBuf::from("web"),
         media_dir: std::path::PathBuf::from("web"),
-        plugin_manager,
         host_session_token: "test_host_session_sec".to_string(),
         server_port: http_addr.port(),
         ..base_app_state(db.clone())
@@ -5561,7 +5412,6 @@ async fn spawn_test_app(host_session_token: &str) -> String {
     let engine = Arc::new(ShowEngine::new(event_log));
     let asset_graph = Arc::new(AssetGraph::new(&web_dir));
     let (tx, _rx) = tokio::sync::broadcast::channel(512);
-    let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
 
     let app_state = os_next::api::ws::AppState {
         tx,
@@ -5569,7 +5419,6 @@ async fn spawn_test_app(host_session_token: &str) -> String {
         asset_graph,
         web_dir: web_dir.clone(),
         media_dir: web_dir.clone(),
-        plugin_manager,
         host_session_token: host_session_token.to_string(),
         ..base_app_state(db.clone())
     };
@@ -5760,80 +5609,6 @@ async fn test_console_credential_survives_restart_and_is_revocable() {
         .header("x-host-token", &credential)
         .send().await.unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
-}
-
-/// Plugin dispatch honours grants: a hook is only called for a plugin granted it, and a
-/// revoke stops the plugin at once.
-#[test]
-fn test_plugin_dispatch_respects_grants_and_revocation() {
-    use os_next::core::plugin_permissions::{PermissionRequest, PermissionSet};
-    use os_next::core::plugins::{OsPlugin, PluginManager};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    struct Counting {
-        commands: Arc<AtomicUsize>,
-        states: Arc<AtomicUsize>,
-        veto: bool,
-    }
-    impl OsPlugin for Counting {
-        fn name(&self) -> &'static str {
-            "counting"
-        }
-        fn on_state_change(&self, _s: &os_next::core::models::ShowState) {
-            self.states.fetch_add(1, Ordering::SeqCst);
-        }
-        fn on_command(&self, _c: &str) -> bool {
-            self.commands.fetch_add(1, Ordering::SeqCst);
-            !self.veto
-        }
-        fn provide_resources(&self, category: &str) -> Vec<serde_json::Value> {
-            vec![serde_json::json!({ "id": format!("x-{category}"), "title": "from plugin" })]
-        }
-    }
-
-    let (commands, states) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-    let mk = || Box::new(Counting { commands: commands.clone(), states: states.clone(), veto: true });
-    let state = os_next::core::models::ShowState::default();
-
-    // Granted nothing: never consulted, never vetoes, contributes nothing.
-    let mut pm = PluginManager::new();
-    pm.register_plugin_with_grants("counting".into(), mk(), PermissionSet::empty());
-    assert!(pm.check_command("NextSlide"));
-    pm.notify_state_change(&state);
-    assert!(pm.collect_resources("songs").is_empty());
-    assert_eq!((commands.load(Ordering::SeqCst), states.load(Ordering::SeqCst)), (0, 0));
-
-    // Granted exactly three things.
-    pm.set_grants(
-        "counting",
-        PermissionSet(vec![
-            PermissionRequest::simple("show.observe"),
-            PermissionRequest::with_categories("resources.provide", &["songs"]),
-        ]),
-    );
-    pm.notify_state_change(&state);
-    assert_eq!(states.load(Ordering::SeqCst), 1);
-    assert!(pm.check_command("NextSlide"), "observe/provide alone must not grant a veto");
-    assert_eq!(commands.load(Ordering::SeqCst), 0);
-    let songs = pm.collect_resources("songs");
-    assert_eq!(songs.len(), 1);
-    assert_eq!(songs[0]["_plugin"], "counting", "items are stamped with their source plugin");
-    assert!(pm.collect_resources("themes").is_empty(), "only the granted category");
-
-    // Intercept granted: it can veto -- but never an emergency command.
-    pm.set_grants("counting", PermissionSet(vec![PermissionRequest::simple("commands.intercept")]));
-    assert!(!pm.check_command(r#""NextSlide""#));
-    assert!(pm.check_command(r#""ToggleBlackout""#));
-    assert!(pm.check_command(r#"{"SetAlert":{"text":"fire"}}"#));
-    // A song titled like an emergency command does NOT get that bypass.
-    assert!(!pm.check_command(r#"{"AddToSchedule":{"title":"SetAlert ToggleBlackout"}}"#));
-
-    // Revoke: immediately inert.
-    assert!(pm.revoke("counting"));
-    let before = commands.load(Ordering::SeqCst);
-    assert!(pm.check_command(r#""NextSlide""#));
-    assert_eq!(commands.load(Ordering::SeqCst), before);
-    assert!(!pm.set_grants("not-loaded", PermissionSet::empty()));
 }
 
 /// The console's grant routes: who may call them, digest pinning, and that approval/
@@ -6069,162 +5844,6 @@ async fn test_scoped_plugin_tokens_for_commands_and_keyring() {
     assert_eq!(set.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
 
-/// Loads a real ABI 2 cdylib (`examples/plugin_observer.rs`) through the whole path: manifest
-/// discovery, digest pinning, approval, `dlopen`, the `PluginHost` handle, and per-call gating.
-/// Ignored by default because it builds the example; run with
-/// `cargo test --release --test core_tests real_cdylib -- --ignored`.
-#[tokio::test]
-#[ignore]
-async fn test_real_cdylib_plugin_abi2_end_to_end() {
-    use os_next::core::plugin_permissions::{platform_key, sha256_hex, PermissionRequest, PermissionSet};
-    use os_next::core::plugins::PluginManager;
-
-    // Build the example plugin in the profile this test runs under.
-    let mut build = std::process::Command::new(env!("CARGO"));
-    build.args(["build", "--example", "plugin_observer"]);
-    if !cfg!(debug_assertions) {
-        build.arg("--release");
-    }
-    assert!(build.status().expect("run cargo").success(), "building the example plugin failed");
-    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
-    let lib_name = format!("{}plugin_observer{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_SUFFIX);
-    let built = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(profile).join("examples").join(&lib_name);
-    let lib_bytes = std::fs::read(&built).unwrap_or_else(|e| panic!("{built:?}: {e}"));
-
-    // <plugins>/org.example.observer/{plugin.json, lib/<library>}
-    let tmp = tempfile::tempdir().unwrap();
-    let plugins = tmp.path().join("plugins");
-    let dir = plugins.join("org.example.observer");
-    std::fs::create_dir_all(dir.join("lib")).unwrap();
-    std::fs::write(dir.join("lib").join(&lib_name), &lib_bytes).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::set_permissions(dir.join("lib").join(&lib_name), std::fs::Permissions::from_mode(0o644)).unwrap();
-    }
-    std::fs::write(
-        dir.join("plugin.json"),
-        serde_json::json!({
-            "manifest_version": 1, "id": "org.example.observer", "name": "Observer", "version": "0.1.0",
-            "backend": {"abi": 2, "libraries": { platform_key(): {"path": format!("lib/{lib_name}"), "sha256": sha256_hex(&lib_bytes)} }},
-            "permissions": [
-                {"id": "show.observe"}, {"id": "filesystem.plugin_data"}, {"id": "keyring.own", "optional": true},
-                {"id": "commands.send", "commands": ["NextSlide"], "optional": true},
-                {"id": "commands.modify", "commands": ["SetScheduleTitle"], "optional": true}
-            ]
-        }).to_string(),
-    ).unwrap();
-
-    let db = os_next::storage::Database::new(tmp.path().join("abi2.db").to_str().unwrap()).unwrap();
-    let found = os_next::core::plugin_registry::discover(&plugins, &tmp.path().join("web"), env!("CARGO_PKG_VERSION"));
-    os_next::core::plugin_registry::sync(&db, &found);
-    let d = found.iter().find(|d| d.id == "org.example.observer").unwrap();
-    assert!(d.error.is_none(), "{:?}", d.error);
-
-    // Unapproved: nothing loads.
-    assert!(os_next::core::plugin_registry::approved_natives(&db, &found).is_empty());
-    // Approve observe + data dir only.
-    let granted = vec![PermissionRequest::simple("show.observe"), PermissionRequest::simple("filesystem.plugin_data")];
-    let row = db.get_plugin_grant("org.example.observer").unwrap().unwrap();
-    db.set_plugin_decision("org.example.observer", "approved", &serde_json::to_string(&granted).unwrap(),
-        row.observed_manifest_sha256.as_deref(), Some(&row.observed_digest), None, "test").unwrap();
-    let approved = os_next::core::plugin_registry::approved_natives(&db, &found);
-    assert_eq!(approved.len(), 1);
-
-    // A server for the host handle to talk to.
-    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
-    let engine = Arc::new(ShowEngine::new(event_log));
-    let (tx, _rx) = tokio::sync::broadcast::channel(16);
-    let data_dir = tmp.path().join("data");
-    let app_state = os_next::api::ws::AppState {
-        tx,
-        engine,
-        asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
-        web_dir: std::path::PathBuf::from("web"),
-        media_dir: tmp.path().join("media"),
-        data_dir: data_dir.clone(),
-        plugin_manager: Arc::new(PluginManager::new()),
-        host_session_token: "abi2_host".to_string(),
-        server_port: 0,
-        ..base_app_state(db.clone())
-    };
-    let slot: os_next::api::plugin_host::AppSlot = Arc::new(std::sync::OnceLock::new());
-    slot.set(app_state.clone()).ok();
-    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel(8);
-    let factory = |id: &str, grants: Arc<os_next::core::plugins::GrantCell>| -> Arc<dyn os_next::core::plugins::PluginHost> {
-        Arc::new(os_next::api::plugin_host::AppPluginHost::new(id, grants, slot.clone(), cmd_tx.clone()))
-    };
-
-    // Without a host factory an ABI 2 plugin is refused rather than loaded half-working.
-    let mut refused = PluginManager::new();
-    refused.load_approved(os_next::core::plugin_registry::approved_natives(&db, &found), None);
-    assert_eq!(refused.plugin_count(), 0);
-
-    let mut pm = PluginManager::new();
-    pm.load_approved(approved, Some(&factory));
-    assert_eq!(pm.plugin_count(), 1, "the real library should load");
-    assert!(pm.is_loaded("org.example.observer"));
-
-    // The plugin's hook runs and records what the host let it do.
-    let observed = data_dir.join("plugin-data/org.example.observer/observed.txt");
-    pm.notify_state_change(&os_next::core::models::ShowState::default());
-    assert_eq!(std::fs::read_to_string(&observed).unwrap().trim(), "n=1 snapshot=ok keyring=denied send=denied");
-    assert!(cmd_rx.try_recv().is_err(), "nothing was granted to send");
-
-    // Grant it NextSlide: the command is queued, and only that command.
-    pm.set_grants("org.example.observer", PermissionSet(vec![
-        PermissionRequest::simple("show.observe"), PermissionRequest::simple("filesystem.plugin_data"),
-        PermissionRequest { id: "commands.send".into(), commands: vec!["NextSlide".into()], ..Default::default() },
-    ]));
-    pm.notify_state_change(&os_next::core::models::ShowState::default());
-    assert_eq!(std::fs::read_to_string(&observed).unwrap().trim(), "n=2 snapshot=ok keyring=denied send=ok");
-    let queued = cmd_rx.try_recv().expect("the granted command should be queued");
-    assert_eq!((queued.plugin_id.as_str(), queued.variant.as_str()), ("org.example.observer", "NextSlide"));
-    assert!(pm.command_allowed("org.example.observer", "NextSlide"));
-    assert!(!pm.command_allowed("org.example.observer", "NewSchedule"));
-
-    // commands.modify: the library exports a modifier, but it was not granted, so it is never built or called.
-    let title = serde_json::json!({ "SetScheduleTitle": "sunday" });
-    assert_eq!(pm.apply_modifiers(title.clone()).0, title, "no grant, no modifier");
-    // Loaded with the grant (the approval is applied at load time), it does its job, and only on what was listed.
-    let with_modify = os_next::core::plugins::ApprovedNative {
-        id: "org.example.observer".into(),
-        library: dir.join("lib").join(&lib_name),
-        grants: PermissionSet(vec![
-            PermissionRequest::simple("show.observe"),
-            PermissionRequest { id: "commands.modify".into(), commands: vec!["SetScheduleTitle".into()], ..Default::default() },
-        ]),
-    };
-    let mut pm2 = PluginManager::new();
-    pm2.load_approved(vec![with_modify], Some(&factory));
-    assert_eq!(pm2.plugin_count(), 1);
-    let (changed, events) = pm2.apply_modifiers(title.clone());
-    assert_eq!(changed, serde_json::json!({ "SetScheduleTitle": "SUNDAY" }));
-    assert_eq!(events.len(), 1);
-    assert_eq!(pm2.modifier_stats("org.example.observer"), Some((1, false)));
-    let other = serde_json::json!({ "AddScheduleHeader": { "title": "Sunday", "index": null } });
-    assert_eq!(pm2.apply_modifiers(other.clone()).0, other, "not in its list");
-    assert_eq!(pm2.apply_modifiers(serde_json::json!("ToggleBlackout")).0, serde_json::json!("ToggleBlackout"));
-    assert!(pm2.revoke("org.example.observer"));
-    assert_eq!(pm2.apply_modifiers(title.clone()).0, title, "revoked: unchanged");
-
-    // Revoke: the hook is no longer even called, and a queued command would be dropped.
-    assert!(pm.revoke("org.example.observer"));
-    pm.notify_state_change(&os_next::core::models::ShowState::default());
-    assert_eq!(std::fs::read_to_string(&observed).unwrap().trim(), "n=2 snapshot=ok keyring=denied send=ok");
-    assert!(!pm.command_allowed("org.example.observer", "NextSlide"));
-
-    // Swap the binary on disk: it stops being loadable until it is reviewed again.
-    // (Replace the file, don't overwrite it in place: the loaded library is memory-mapped, and
-    // truncating a mapped file takes the whole process down with SIGBUS.)
-    std::fs::remove_file(dir.join("lib").join(&lib_name)).unwrap();
-    std::fs::write(dir.join("lib").join(&lib_name), b"swapped").unwrap();
-    let after = os_next::core::plugin_registry::discover(&plugins, &tmp.path().join("web"), env!("CARGO_PKG_VERSION"));
-    assert!(after.iter().find(|d| d.id == "org.example.observer").unwrap().error.is_some(), "digest/sha256 mismatch");
-    assert!(os_next::core::plugin_registry::approved_natives(&db, &after).is_empty());
-}
-
 /// Sandboxed web plugins are served from /plugin-frame/<id>/ only while approved and unchanged,
 /// with a CSP that allows nothing beyond what was granted, and nothing escapes the folder.
 #[tokio::test]
@@ -6321,30 +5940,15 @@ async fn test_sandboxed_plugin_frame_serving_and_csp() {
     assert_eq!(get("/plugin-frame/sbx_demo/ui/app.js").await.status(), reqwest::StatusCode::NOT_FOUND);
 }
 
-/// REST and WebSocket run commands through one pipeline: the same plugin veto on the same bare
-/// command text, the same shorthand expansion, the same credential rules (including that a paired
-/// display can't send), and a plugin's queued command takes that path too.
+/// REST and WebSocket run commands through one pipeline: the same shorthand expansion and the same
+/// credential rules (including that a paired display can't send), and a plugin-origin command takes
+/// that path too.
 #[tokio::test]
 async fn test_rest_ws_and_plugin_commands_share_one_pipeline() {
     use futures_util::{SinkExt, StreamExt};
-    use os_next::core::plugins::{OsPlugin, PluginManager};
-    use std::sync::Mutex;
-
-    struct Recorder(Arc<Mutex<Vec<String>>>, bool);
-    impl OsPlugin for Recorder {
-        fn name(&self) -> &'static str { "recorder" }
-        fn on_state_change(&self, _s: &os_next::core::models::ShowState) {}
-        fn on_command(&self, cmd: &str) -> bool {
-            self.0.lock().unwrap().push(cmd.to_string());
-            !self.1
-        }
-    }
 
     let tmp = tempfile::tempdir().unwrap();
     let db = os_next::storage::Database::new(tmp.path().join("pipe.db").to_str().unwrap()).unwrap();
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let mut pm = PluginManager::new();
-    pm.register_plugin(Box::new(Recorder(seen.clone(), false)));
     let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
@@ -6356,7 +5960,6 @@ async fn test_rest_ws_and_plugin_commands_share_one_pipeline() {
         asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
         web_dir: std::path::PathBuf::from("web"),
         media_dir: tmp.path().join("media"),
-        plugin_manager: Arc::new(pm),
         host_session_token: "pipe_host".to_string(),
         server_port: addr.port(),
         ..base_app_state(db.clone())
@@ -6406,17 +6009,9 @@ async fn test_rest_ws_and_plugin_commands_share_one_pipeline() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert!(blackout(), "the display's WS command must not have toggled it back");
 
-    // Emergency commands are never shown to plugins for a veto; ordinary ones are, and every door
-    // hands them the identical bare text: REST, WebSocket and a plugin's own queued command.
-    assert!(seen.lock().unwrap().is_empty(), "ToggleBlackout can't be vetoed, so plugins aren't asked");
-    rest(console.clone(), serde_json::json!("NextSlide")).await;
-    ws.send(tokio_tungstenite::tungstenite::Message::Text(
-        serde_json::json!({ "cmd": "NextSlide", "device_token": "rem_tok" }).to_string())).await.unwrap();
+    // A command from a plugin takes the same path (here the pipeline is driven directly).
     let origin = os_next::api::command_pipeline::CommandOrigin::Plugin { id: "recorder".into() };
     os_next::api::command_pipeline::run_command_pipeline(&app_for_direct, serde_json::json!("NextSlide"), &origin).unwrap();
-    for _ in 0..40 { if seen.lock().unwrap().len() >= 3 { break; } tokio::time::sleep(std::time::Duration::from_millis(25)).await; }
-    let log = seen.lock().unwrap().clone();
-    assert_eq!(log, vec!["\"NextSlide\"".to_string(); 3], "REST, WS and the plugin path all hand plugins the same text");
     // And an unparseable payload is a rejection, not a crash.
     assert!(os_next::api::command_pipeline::run_command_pipeline(&app_for_direct, serde_json::json!({"Nope": 1}), &origin).is_err());
 }
@@ -7110,13 +6705,13 @@ async fn test_advanced_permission_override() {
     for (why, grants) in [
         ("unknown permission", serde_json::json!([{ "id": "made.up" }])),
         ("ui.dom has no meaning for a sandboxed page", serde_json::json!([{ "id": "ui.dom" }])),
-        ("native.code has no meaning for a web page", serde_json::json!([{ "id": "native.code" }])),
+        ("native.code no longer exists", serde_json::json!([{ "id": "native.code" }])),
         ("a host that isn't a host", serde_json::json!([{ "id": "network.outbound", "hosts": ["evil.test/path"] }])),
         ("a wildcard in the middle", serde_json::json!([{ "id": "network.outbound", "hosts": ["a.*.test"] }])),
         ("an unknown category", serde_json::json!([{ "id": "library.write", "categories": ["secrets"] }])),
         ("a scope the permission doesn't take", serde_json::json!([{ "id": "commands.send", "categories": ["media"], "commands": ["NextSlide"] }])),
         ("a duplicate", serde_json::json!([{ "id": "show.observe" }, { "id": "show.observe" }])),
-        ("commands.modify on a sandboxed page", serde_json::json!([{ "id": "commands.modify", "commands": ["GoLive"] }])),
+        ("commands.modify no longer exists", serde_json::json!([{ "id": "commands.modify", "commands": ["GoLive"] }])),
         ("keyring.service with a namespace that isn't shareable", serde_json::json!([{ "id": "keyring.service", "services": ["OpenSanctuary:System"], "access": "read" }])),
     ] {
         let r = approve(serde_json::json!({ "digest": digest, "override": grants })).await;
@@ -7311,226 +6906,5 @@ async fn test_shared_keyring_namespaces_between_plugins() {
     // Cleanup of real keyring entries this test created.
     for (svc, acct) in [(S, "api_key"), (S, "legacy"), (S, "mine"), ("OpenSanctuary:Plugin:kp_b", "own")] {
         let _ = os_next::storage::KeyringService::delete_secret(svc, acct);
-    }
-}
-
-// --- commands.modify: plugins rewrite commands in the real pipeline ---------------------------------
-
-mod modify_pipeline {
-    use super::*;
-    use os_next::api::command_pipeline::{run_command_pipeline, CommandOrigin};
-    use os_next::core::plugin_permissions::{PermissionRequest, PermissionSet};
-    use os_next::core::plugins::{CommandModifier, OsPlugin, PluginManager};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
-
-    struct Quiet(&'static str);
-    impl OsPlugin for Quiet {
-        fn name(&self) -> &'static str { self.0 }
-        fn on_state_change(&self, _s: &os_next::core::models::ShowState) {}
-        fn on_command(&self, _c: &str) -> bool { true }
-    }
-
-    /// Records every command text a veto hook is shown.
-    struct Spy(Arc<Mutex<Vec<String>>>);
-    impl OsPlugin for Spy {
-        fn name(&self) -> &'static str { "spy" }
-        fn on_state_change(&self, _s: &os_next::core::models::ShowState) {}
-        fn on_command(&self, c: &str) -> bool { self.0.lock().unwrap().push(c.to_string()); true }
-    }
-
-    /// A modifier built from a closure; counts how often it was asked.
-    struct Fn(Arc<AtomicUsize>, Box<dyn std::ops::Fn(&str) -> Option<String> + Send + Sync>);
-    impl CommandModifier for Fn {
-        fn modify_command(&self, cmd: &str) -> Option<String> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            (self.1)(cmd)
-        }
-    }
-
-    fn grant(commands: &[&str]) -> PermissionSet {
-        PermissionSet(vec![
-            PermissionRequest { id: "commands.modify".into(), commands: commands.iter().map(|c| c.to_string()).collect(), ..Default::default() },
-            PermissionRequest::simple("commands.intercept"),
-        ])
-    }
-
-    fn add(pm: &mut PluginManager, id: &str, commands: &[&str], f: impl std::ops::Fn(&str) -> Option<String> + Send + Sync + 'static) -> Arc<AtomicUsize> {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let name: &'static str = Box::leak(id.to_string().into_boxed_str());
-        pm.register_plugin_with_grants(id.to_string(), Box::new(Quiet(name)), grant(commands));
-        assert!(pm.set_modifier(id, Box::new(Fn(calls.clone(), Box::new(f)))));
-        calls
-    }
-
-    fn app_with(pm: PluginManager) -> os_next::api::ws::AppState {
-        let tmp = tempfile::tempdir().unwrap();
-        let db = os_next::storage::Database::new(tmp.path().join("m.db").to_str().unwrap()).unwrap();
-        std::mem::forget(tmp);
-        os_next::api::ws::AppState { plugin_manager: Arc::new(pm), ..base_app_state(db) }
-    }
-
-    fn run(app: &os_next::api::ws::AppState, cmd: serde_json::Value) -> Result<os_next::api::command_pipeline::Executed, os_next::api::command_pipeline::CommandRejection> {
-        run_command_pipeline(app, cmd, &CommandOrigin::Console { session_id: "t".into() })
-    }
-
-    fn title(app: &os_next::api::ws::AppState) -> String {
-        app.engine.snapshot().schedule.title
-    }
-
-    fn upper(text: &str) -> Option<String> {
-        let v: serde_json::Value = serde_json::from_str(text).ok()?;
-        Some(serde_json::json!({ "SetScheduleTitle": v["SetScheduleTitle"].as_str()?.to_uppercase() }).to_string())
-    }
-
-    #[test]
-    fn a_modifier_changes_only_the_commands_it_was_granted() {
-        let mut pm = PluginManager::new();
-        let calls = add(&mut pm, "up", &["SetScheduleTitle"], upper);
-        let app = app_with(pm);
-        run(&app, serde_json::json!({ "SetScheduleTitle": "hello" })).unwrap();
-        assert_eq!(title(&app), "HELLO");
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        // A command it wasn't granted never even reaches it.
-        run(&app, serde_json::json!({ "AddScheduleHeader": { "title": "hello", "index": null } })).unwrap();
-        run(&app, serde_json::json!("NextSlide")).unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert_eq!(app.plugin_manager.modifier_stats("up"), Some((1, false)));
-    }
-
-    #[test]
-    fn emergency_controls_never_reach_a_modifier_even_if_a_grant_lists_them() {
-        let mut pm = PluginManager::new();
-        // Granted by hand, bypassing manifest validation, to prove the host still never asks.
-        let calls = add(&mut pm, "evil", &["ToggleBlackout", "SetAlert", "ToggleClearText", "ToggleLogo", "SetWebStream", "NewSchedule"], |_| Some(r#"{"SetAlert":"pwned"}"#.to_string()));
-        let app = app_with(pm);
-        for cmd in [serde_json::json!("ToggleBlackout"), serde_json::json!({ "SetAlert": "fire" }), serde_json::json!("ToggleClearText"), serde_json::json!("ToggleLogo"), serde_json::json!("NewSchedule")] {
-            run(&app, cmd).unwrap();
-        }
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-        assert_eq!(app.engine.snapshot().state.alert_text.as_deref(), Some("fire"), "the real alert ran, unchanged");
-    }
-
-    #[test]
-    fn a_rewrite_into_another_command_is_dropped_and_repeated_failures_switch_it_off() {
-        let mut pm = PluginManager::new();
-        let calls = add(&mut pm, "sneaky", &["SetScheduleTitle"], |_| Some(r#"{"SetAlert":"boo"}"#.to_string()));
-        let app = app_with(pm);
-        for i in 0..3 {
-            run(&app, serde_json::json!({ "SetScheduleTitle": format!("t{i}") })).unwrap();
-            assert_eq!(title(&app), format!("t{i}"), "the original command ran");
-        }
-        assert!(app.engine.snapshot().state.alert_text.is_none(), "no alert was ever produced");
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
-        assert_eq!(app.plugin_manager.modifier_stats("sneaky"), Some((0, true)), "switched off after three failures");
-        run(&app, serde_json::json!({ "SetScheduleTitle": "after" })).unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 3, "not asked again");
-        assert_eq!(title(&app), "after");
-        let audit = app.db.list_plugin_audit(50).unwrap();
-        assert!(audit.iter().any(|a| a.plugin_id == "sneaky" && a.action == "modify_rejected"));
-        assert!(audit.iter().any(|a| a.plugin_id == "sneaky" && a.action == "modify_disabled"));
-        let notified = app.notifications.since(0);
-        assert!(notified.iter().any(|n| n.title.contains("switched off") && n.body.contains("sneaky")), "{notified:?}");
-    }
-
-    #[test]
-    fn modifiers_chain_in_plugin_id_order_and_the_veto_sees_the_final_command() {
-        let mut pm = PluginManager::new();
-        let append = |s: &'static str| move |text: &str| -> Option<String> {
-            let v: serde_json::Value = serde_json::from_str(text).ok()?;
-            Some(serde_json::json!({ "SetScheduleTitle": format!("{}{s}", v["SetScheduleTitle"].as_str()?) }).to_string())
-        };
-        // Registered out of order on purpose: "a_first" must still run before "z_last".
-        add(&mut pm, "z_last", &["SetScheduleTitle"], append("Z"));
-        add(&mut pm, "a_first", &["SetScheduleTitle"], append("A"));
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        pm.register_plugin_with_grants("spy".into(), Box::new(Spy(seen.clone())), PermissionSet(vec![PermissionRequest::simple("commands.intercept")]));
-        let app = app_with(pm);
-        run(&app, serde_json::json!({ "SetScheduleTitle": "x" })).unwrap();
-        assert_eq!(title(&app), "xAZ");
-        // The veto hook was shown the rewritten command, never the original.
-        let seen = seen.lock().unwrap();
-        assert_eq!(seen.len(), 1);
-        assert!(seen[0].contains("xAZ") && !seen[0].contains(r#""x""#), "{seen:?}");
-    }
-
-    #[test]
-    fn a_veto_still_blocks_a_rewritten_command() {
-        struct Block;
-        impl OsPlugin for Block {
-            fn name(&self) -> &'static str { "block" }
-            fn on_state_change(&self, _s: &os_next::core::models::ShowState) {}
-            fn on_command(&self, c: &str) -> bool { !c.contains("FORBIDDEN") }
-        }
-        let mut pm = PluginManager::new();
-        add(&mut pm, "up", &["SetScheduleTitle"], |_| Some(r#"{"SetScheduleTitle":"FORBIDDEN"}"#.to_string()));
-        pm.register_plugin_with_grants("block".into(), Box::new(Block), PermissionSet(vec![PermissionRequest::simple("commands.intercept")]));
-        let app = app_with(pm);
-        let before = title(&app);
-        assert!(run(&app, serde_json::json!({ "SetScheduleTitle": "fine" })).is_err(), "a modifier can't be used to sneak past a veto");
-        assert_eq!(title(&app), before);
-    }
-
-    #[test]
-    fn a_panicking_modifier_keeps_the_original_and_is_switched_off_after_three() {
-        let mut pm = PluginManager::new();
-        let calls = add(&mut pm, "boom", &["SetScheduleTitle"], |_| -> Option<String> { panic!("modifier bug") });
-        let app = app_with(pm);
-        for i in 0..4 {
-            run(&app, serde_json::json!({ "SetScheduleTitle": format!("p{i}") })).unwrap();
-            assert_eq!(title(&app), format!("p{i}"));
-        }
-        assert_eq!(calls.load(Ordering::SeqCst), 3, "asked three times, then switched off");
-        assert_eq!(app.plugin_manager.modifier_stats("boom"), Some((0, true)));
-    }
-
-    #[test]
-    fn a_slow_modifier_cannot_stall_a_command_and_is_switched_off() {
-        let mut pm = PluginManager::new();
-        let calls = add(&mut pm, "slow", &["SetScheduleTitle"], |t| { std::thread::sleep(std::time::Duration::from_millis(400)); upper(t) });
-        let app = app_with(pm);
-        let started = std::time::Instant::now();
-        run(&app, serde_json::json!({ "SetScheduleTitle": "quick" })).unwrap();
-        let took = started.elapsed();
-        assert!(took < std::time::Duration::from_millis(250), "the command didn't wait for the slow modifier: {took:?}");
-        assert_eq!(title(&app), "quick", "the original ran");
-        assert_eq!(app.plugin_manager.modifier_stats("slow"), Some((0, true)));
-        run(&app, serde_json::json!({ "SetScheduleTitle": "again" })).unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "never asked again");
-        assert!(app.db.list_plugin_audit(20).unwrap().iter().any(|a| a.plugin_id == "slow" && a.action == "modify_disabled"));
-    }
-
-    #[test]
-    fn revoking_stops_a_modifier_immediately() {
-        let mut pm = PluginManager::new();
-        let calls = add(&mut pm, "up", &["SetScheduleTitle"], upper);
-        let app = app_with(pm);
-        run(&app, serde_json::json!({ "SetScheduleTitle": "one" })).unwrap();
-        assert_eq!(title(&app), "ONE");
-        assert!(app.plugin_manager.revoke("up"));
-        run(&app, serde_json::json!({ "SetScheduleTitle": "two" })).unwrap();
-        assert_eq!(title(&app), "two");
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn every_door_gets_the_same_modification() {
-        let mut pm = PluginManager::new();
-        add(&mut pm, "up", &["SetScheduleTitle"], upper);
-        let app = app_with(pm);
-        for (i, origin) in [CommandOrigin::Console { session_id: "c".into() }, CommandOrigin::Device { id: "d".into() }, CommandOrigin::Plugin { id: "p".into() }].into_iter().enumerate() {
-            run_command_pipeline(&app, serde_json::json!({ "SetScheduleTitle": format!("door{i}") }), &origin).unwrap();
-            assert_eq!(title(&app), format!("DOOR{i}"));
-        }
-    }
-
-    #[test]
-    fn unknown_fields_in_a_rewrite_are_dropped() {
-        let mut pm = PluginManager::new();
-        add(&mut pm, "noisy", &["AddScheduleHeader"], |_| Some(r#"{"AddScheduleHeader":{"title":"Clean","index":null,"smuggled":{"x":1}}}"#.to_string()));
-        let app = app_with(pm);
-        let out = run(&app, serde_json::json!({ "AddScheduleHeader": { "title": "Orig", "index": null } })).unwrap();
-        assert!(out.state.schedule.items.iter().any(|i| i.title == "Clean"));
-        assert!(!serde_json::to_string(&out.state.schedule).unwrap().contains("smuggled"));
     }
 }

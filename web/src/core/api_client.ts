@@ -467,12 +467,11 @@ export interface PluginCatalogEntry {
 }
 
 export interface PluginInfo {
-  modify?: { changed: number; tripped: boolean; runs_after: string[]; active: boolean } | null;
   shared_with?: Array<{ service: string; plugins: Array<{ id: string; name: string; access: string; state: string }> }>;
   overridden?: boolean;
   override_diff?: { added: string[]; removed: string[]; changed: string[] } | null;
   id: string;
-  kind: 'native' | 'web' | 'sandbox';
+  kind: 'web' | 'sandbox';
   sandboxed?: boolean;
   entry?: string | null;
   name: string;
@@ -488,8 +487,6 @@ export interface PluginInfo {
   granted: PluginPermissionInfo[];
   decided_at: number | null;
   decided_by: string | null;
-  loaded: boolean;
-  restart_required: boolean;
   placements?: Array<{ slot: string; label?: string; tab?: string }>;
   toolbar?: Array<{ id: string; label: string; icon: string; tooltip?: string }>;
   commands?: Array<{ id: string; tool: string; line: string; params: Array<{ name: string; type: string; values: string[]; optional: boolean }> }>;

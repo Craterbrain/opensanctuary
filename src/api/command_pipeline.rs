@@ -1,15 +1,13 @@
 //! The one path every show command takes, whatever door it came through (REST `/api/command`,
-//! the `/ws` envelope, or a native plugin's queued `send_command`).
+//! the `/ws` envelope, or a sandboxed plugin's `sendCommand`).
 //!
 //! Two steps, kept apart because the doors differ in *how* they carry a credential but not in
 //! what happens afterwards:
 //!
 //! 1. [`authenticate_command`]: who is this, and may they send this command? (plugin token,
 //!    paired remote, or console + the one-console-at-a-time lock).
-//! 2. [`run_command_pipeline`]: expand the frontend's shorthand, let plugins veto, parse,
-//!    execute, persist the events and broadcast the new state.
-//!
-//! Plugins see the same bare command text from every door, and a rejection looks the same too.
+//! 2. [`run_command_pipeline`]: expand the frontend's shorthand, parse, execute, persist the
+//!    events and broadcast the new state. A rejection looks the same from every door.
 
 use serde_json::Value;
 
@@ -18,7 +16,6 @@ use crate::core::commands::ShowCommand;
 use crate::core::engine::StateSnapshot;
 use crate::core::events::EventEnvelope;
 use crate::core::models::ToScheduleItem;
-use crate::core::plugins::ModifyEvent;
 
 /// Who a command is being run on behalf of (logging, and what the caller may do next).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,8 +107,6 @@ pub async fn authenticate_command(
 
 #[derive(Debug)]
 pub enum CommandRejection {
-    /// A plugin's `on_command` said no.
-    Vetoed,
     /// The payload isn't a `ShowCommand`.
     Unparseable(String),
 }
@@ -171,20 +166,6 @@ pub fn expand_shorthand(app: &AppState, value: Value) -> Value {
 pub fn run_command_pipeline(app: &AppState, value: Value, origin: &CommandOrigin) -> Result<Executed, CommandRejection> {
     let value = expand_shorthand(app, value);
 
-    // `commands.modify`: plugins may rewrite the command, after expansion (so they see what will really
-    // run) and before the veto (so `commands.intercept` plugins judge the final command). Every origin
-    // passes through here. Waiting for a modifier is bounded (100 ms in total) and a failure keeps the
-    // command as it was.
-    let (value, modify_events) = in_blocking_section(|| app.plugin_manager.apply_modifiers(value));
-    record_modify_events(app, &modify_events);
-
-    // Plugins see the same bare command text from every door.
-    let text = serde_json::to_string(&value).unwrap_or_default();
-    if !app.plugin_manager.check_command(&text) {
-        tracing::warn!("command from {:?} blocked by a plugin: {}", origin, text);
-        return Err(CommandRejection::Vetoed);
-    }
-
     let cmd: ShowCommand = serde_json::from_value(value.clone()).map_err(|e| {
         tracing::warn!("command from {:?} failed to parse, dropped: {} (payload: {})", origin, e, value);
         CommandRejection::Unparseable(e.to_string())
@@ -198,60 +179,4 @@ pub fn run_command_pipeline(app: &AppState, value: Value, origin: &CommandOrigin
     }
     let state = broadcast_snapshot(app);
     Ok(Executed { state, events })
-}
-
-/// Runs `f`, which may wait on a plugin thread for up to ~100 ms, without starving the async runtime
-/// when there is a multi-threaded one (it must not be used on a current-thread runtime).
-fn in_blocking_section<R>(f: impl FnOnce() -> R) -> R {
-    match tokio::runtime::Handle::try_current() {
-        Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(f),
-        _ => f(),
-    }
-}
-
-static MODIFIED_SEEN: std::sync::Mutex<Option<std::collections::HashSet<(String, String)>>> = std::sync::Mutex::new(None);
-static REJECTED_SEEN: std::sync::Mutex<Option<std::collections::HashSet<(String, String, String)>>> = std::sync::Mutex::new(None);
-
-/// Audits what the modifiers did: the first rewrite per (plugin, variant) per run, refusals once per
-/// reason, and anything that was switched off (which also tells the operator). Payloads are never
-/// logged, only hashes of the before and after.
-fn record_modify_events(app: &AppState, events: &[ModifyEvent]) {
-    for e in events {
-        match e {
-            ModifyEvent::Modified { plugin, variant, before_sha, after_sha } => {
-                tracing::info!("plugin '{plugin}' changed a {variant} command ({} -> {})", &before_sha[..12], &after_sha[..12]);
-                let first = {
-                    let mut g = MODIFIED_SEEN.lock().unwrap_or_else(|x| x.into_inner());
-                    let set = g.get_or_insert_with(Default::default);
-                    set.len() < 1000 && set.insert((plugin.clone(), variant.clone()))
-                };
-                if first {
-                    app.db.add_plugin_audit(plugin, &format!("plugin:{plugin}"), "command_modified", &serde_json::json!({ "variant": variant }).to_string());
-                }
-            }
-            ModifyEvent::Rejected { plugin, variant, reason } => {
-                let first = {
-                    let mut g = REJECTED_SEEN.lock().unwrap_or_else(|x| x.into_inner());
-                    let set = g.get_or_insert_with(Default::default);
-                    set.len() < 1000 && set.insert((plugin.clone(), variant.clone(), reason.clone()))
-                };
-                tracing::warn!("plugin '{plugin}': a change to a {variant} command was ignored: {reason}");
-                if first {
-                    app.db.add_plugin_audit(plugin, &format!("plugin:{plugin}"), "modify_rejected", &serde_json::json!({ "variant": variant, "reason": reason }).to_string());
-                }
-            }
-            ModifyEvent::Disabled { plugin, reason } => {
-                tracing::error!("plugin '{plugin}' was switched off from changing commands until restart: {reason}");
-                app.db.add_plugin_audit(plugin, "system", "modify_disabled", &serde_json::json!({ "reason": reason }).to_string());
-                app.notifications.post_host(
-                    crate::api::notifications::Level::Warning,
-                    "A plugin was switched off",
-                    &format!("{plugin} was switched off from changing commands until OpenSanctuary restarts, because {reason}. Commands still run as normal."),
-                );
-            }
-            ModifyEvent::BudgetExhausted { variant } => {
-                tracing::warn!("command modifiers ran out of their 100 ms budget on a {variant} command; the rest were skipped");
-            }
-        }
-    }
 }

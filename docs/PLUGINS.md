@@ -2,20 +2,20 @@
 
 _Last edited: 2026-09-16 20:04_
 
-OS-Next has **two separate, independent plugin systems** — one in the Rust backend, one in the
-TypeScript frontend. They don't share code, a manifest format, or a lifecycle. Pick the one that
-matches what you're extending: intercept/observe the show engine (backend), or extend the
-operator UI (frontend).
+A plugin extends OpenSanctuary in one of two ways, and **nothing runs until the operator approves it**
+in Settings > Plugins:
 
-Online Bible downloads and passage lookup used to be a built-in `BibleProvider` registry; they are now
-the **Online Bibles** plugin (`web/plugins/online_bibles/`, see "Sandboxed web plugins" below).
+- **Sandboxed web plugins** (the recommended kind): a folder in `web/plugins/` with a `plugin.json` and
+  an HTML page that runs in an isolated frame and reaches the app only through a permission-checked
+  bridge. Everything below about permissions, placements, the notification center, ribbon buttons, shared
+  secrets and running tools is about these. The bundled ones (Genius Lyrics, Online Bibles, Video
+  Downloader, Stock Images, a demo) are the worked examples.
+- **Console scripts** (`ui.dom`): a plain `.js` module that runs inside the operator console's own page with
+  the same access as the operator. Critical tier; see "Frontend plugins" at the end.
 
-`MediaSearchProvider` (`src/storage/media_search_providers.rs`, built-in `PexelsProvider` and
-`PixabayProvider`) is a stateless trait + registry
-for live external API integrations that need a query and a per-provider API key, which neither
-`OsPlugin` (synchronous, no query, dylib-only) nor the frontend `PluginManager` fit well. It backs
-the Media tab's "Online Images" search (`GET /api/media/online/search`) and isn't a general
-extension point either.
+There are **no native plugins**: loading compiled libraries into the server (the `OsPlugin` trait, the ABI 2
+`PluginHost` API, `commands.intercept` / `commands.modify` / `resources.provide`) was removed. Online Bible
+downloads, lyrics lookup, video download and stock-photo search are all sandboxed plugins now.
 
 ---
 
@@ -24,38 +24,25 @@ extension point either.
 A plugin does nothing until the operator approves it in **Settings > Plugins**. The full
 design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_PERMISSIONS.md).
 
-- **What is enforced.** A backend plugin's hooks are only called if it was granted the
-  matching permission: `commands.intercept` (`on_command`), `show.observe`
-  (`on_state_change`), `resources.provide` for a category (`provide_resources`). A web
-  plugin script is only served from `/plugins/` while approved, and its keyring token is only
-  minted if it was granted `keyring.own`. Emergency commands (`ToggleBlackout`,
-  `ToggleClearText`, `ToggleLogo`, `SetAlert`) can never be vetoed, decided on the parsed
-  command, not on text that merely mentions them.
-- **What is not.** A native library runs inside the server with its full privileges, so
-  approving one is a trust decision: the list of permissions describes what the plugin
-  *says* it will do, and `network.*`, `filesystem.*` and `process.*` are shown as "declared,
-  not enforced". A web plugin that runs in the console page itself (`ui.dom`) has the same
-  access as the operator.
+- **What is enforced.** Every permission a sandboxed plugin holds is enforced by the host: its frame
+  can only reach the hosts it was granted (the frame's CSP and the server-side `net.fetch`), every
+  bridge call is checked against the live grant, and a scoped token can never carry more than the
+  grant. A console script is only served from `/plugins/` while approved, and its keyring token is
+  only minted if it was granted `keyring.own`.
+- **What is not.** A console script (`ui.dom`) runs in the console page with the same access as the
+  operator, so approving one is a trust decision; the list of permissions describes what it *says* it
+  will do. That is why sandboxed plugins are the recommended kind.
 - **Pinning.** Approval is pinned to a SHA-256 of what was reviewed. If the file changes it
   stops running (`changed`) until it is reviewed again. Only a console (the host token or a
   persistent console credential) can approve, deny or revoke; paired displays, remotes and
   plugin tokens cannot. Every decision is recorded in the audit log.
-- **Manifest.** Put a `plugin.json` next to the plugin (see `web/plugins/hello_world.plugin.json`):
-  `manifest_version`, `id`, `name`, `permissions` (each with an optional `reason`), and a
-  `backend.libraries` map of `"<os>-<arch>"` to `{path, sha256}` for a native plugin, laid out as
-  `<plugins dir>/<id>/plugin.json` + the library, or a `web.entry` for a console script. Unknown
-  permissions are rejected, never ignored.
-- **ABI 2 (`PluginHost`).** A native plugin built with `os_next::export_plugin!` gets a host
-  handle in its constructor instead of reaching around the server. Each call is checked against
-  its live grant: `snapshot()` (`show.observe`), `send_command()` (`commands.send`, only the
-  granted command names, rate-limited, queued and run through the normal veto path, never
-  inline), `library_list()` (`library.read`), `keyring_*` (`keyring.own`), `data_dir()`
-  (`filesystem.plugin_data`). See `examples/plugin_observer.rs`, a real plugin used as the
-  template and by the dlopen test. The interface is a Rust trait object, so the plugin must be
-  built with the same compiler and OS-Next version as the host; the host refuses a library whose
-  `OS_PLUGIN_HOST_VERSION` differs. The `OsPlugin` trait's methods never change or reorder.
-  **Update a plugin by replacing the file, not overwriting it in place:** the loaded library is
-  memory-mapped, and truncating it crashes the server.
+- **Manifest.** Put a `plugin.json` next to the plugin (see `web/plugins/hello_world.plugin.json` for a
+  console script, or any folder in `web/plugins/` for a sandboxed one): `manifest_version`, `id`,
+  `name`, `permissions` (each with an optional `reason`), and a `web` section (`entry` and
+  `sandbox: true` for a sandboxed page, or the `.js` file name for a console script). A sandboxed plugin
+  is a folder `web/plugins/<id>/` holding `plugin.json` and the page; a console script is
+  `<id>.js` + `<id>.plugin.json`. Unknown permissions are rejected, never ignored, and a manifest with a
+  `backend` section (a native library) is refused.
 - **Sandboxed web plugins** (`web.sandbox: true`, a folder `web/plugins/<id>/` with `plugin.json`
   and an HTML entry page; see `web/plugins/sandbox_demo/`). The page runs in an iframe with
   `sandbox="allow-scripts"` and no `allow-same-origin`, so it has an opaque origin: no access to the
@@ -136,7 +123,7 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   break the plugin", then sends the exact set to grant (`POST /api/plugins/<id>/approve` with
   `override`; the permission list comes from `GET /api/plugins/permissions`). The host checks
   what you typed (known ids, scopes the permission actually takes, valid hosts and categories;
-  `ui.dom` is refused for a sandboxed page and `native.code` for anything but a native plugin) and
+  `ui.dom` is refused for a sandboxed page) and
   enforces exactly the result everywhere a normal grant applies: the frame's network policy,
   scoped tokens, command and library checks. The card then shows a "Permissions overridden" badge
   and what differs (extra, withheld, re-scoped), the audit log records the same, and approving
@@ -146,7 +133,7 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   instead: both request `keyring.service` with `services: ["OpenSanctuary:Shared:<name>"]` (1 to 4,
   lowercase letters, digits, `.`, `_`, `-`, exact; nothing else is ever grantable, so the System
   namespace, any plugin's own namespace and the app's own services stay out of reach) and
-  `access: "read"` (the default) or `"write"`. It is Critical tier, for sandboxed and native plugins
+  `access: "read"` (the default) or `"write"`. It is Critical tier, for sandboxed plugins
   (not console scripts, which already have console access). The review screen says which shared area
   a plugin can read, who else shares it, and warns when the plugin can also reach the network. The
   rules: a plugin can only read rows tagged as shared (`shared:plugin:<id>` or `shared:host`), so a
@@ -156,34 +143,8 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   them, never the values, with a Delete for each). In a sandboxed plugin:
   `OS.call('keyring.get', { service: 'OpenSanctuary:Shared:pexels', account: 'api_key' })`
   (`keyring.set` / `keyring.delete` likewise; with no `service` it is the plugin's own namespace and
-  needs `keyring.own`). A native plugin uses `keyring_shared_get/set/delete` on its host handle. Both
-  go through one policy (`src/api/keyring_policy.rs`). The first use and each refusal are audited
+  needs `keyring.own`). The rules live in one policy (`src/api/keyring_policy.rs`). The first use and each refusal are audited
   (never the secret), and the check always uses the plugin's live grant, so a revoke stops it at once.
-- **Rewriting commands: `commands.modify`.** A native plugin can change a command before it runs
-  (`commands.intercept` can only veto). Critical tier, native plugins only: a page in a browser tab
-  can't sit in the command path (it is asynchronous, may be on another machine, and remote and
-  plugin commands never pass through a console), so sandboxed and console-script plugins are
-  refused. List the commands in `plugin.json`: `{ "id": "commands.modify", "commands": ["AddToSchedule", "SetItemTheme"] }`
-  (explicit names; no `*`; nothing for the emergency controls Blackout, Clear Text, Logo and Alert, nor
-  `SetWebStream`, `NewSchedule`, `LoadSchedule`, Undo/Redo, nor a command that carries no data). The
-  library exports a modifier next to its plugin with `os_next::export_command_modifier!(|host| ...)`
-  (an implementation of `CommandModifier::modify_command(&self, json) -> Option<String>`, see
-  `examples/plugin_observer.rs`). The host only builds it when the permission was granted, so approving
-  (or re-approving) takes effect after a restart; a revoke takes effect at once. In the command
-  pipeline it runs after shorthand expansion (it sees the full item that will really run) and **before**
-  the veto, so a `commands.intercept` plugin always judges the command that will actually execute and
-  can't be bypassed. Every door goes through it (console, remote, plugin). The rules for a rewrite:
-  a bare command, **the same kind of command** (it can never turn a slide change into a blackout, so
-  the scope checks made before still hold), under 256 KB and at most 4x the original plus 4 KB, and it
-  must parse; the host then re-encodes the parsed command, dropping any unknown fields. Several
-  modifiers run once each in plugin-id order, each on the previous one's output (the review screen
-  says "Runs after: ..."). Each gets 50 ms on its own thread (100 ms for all of them per command),
-  panics are caught, and any failure keeps the last good command, so this is **never a security
-  control** and can't stall a show; a modifier that is too slow, still busy, or fails three times in a
-  row is switched off until restart (audit `modify_disabled`, plus a notification). Audit: the first
-  rewrite per plugin and command (`command_modified`), refusals (`modify_rejected`); only hashes of
-  the before and after are logged, never the content. A native plugin's digest now also covers its
-  `plugin.json`, so editing the manifest after approval shows up as a change.
 - **Notifications: `notifications.post`.** The console has one notification center (the bell in
   the ribbon, with an unread badge) that collects everything: its own toasts, notices from the host
   (for example a finished tool update) and notifications from plugins. A sandboxed plugin granted
@@ -197,7 +158,7 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   last 200, and are not an audit trail. Host side: `src/api/notifications.rs` (the bus; the host's
   own code posts with `post_host`), routes in `src/api/routes/notifications.rs`; the console
   polls `GET /api/notifications?after=<id>` every 2 seconds (`&wait=<s>` makes the host hold the
-  request until something new arrives, for a client that wants it). Native plugins don't have this call yet.
+  request until something new arrives, for a client that wants it).
 - **Stock Images is a plugin.** Searching Pexels and Pixabay (the Media library's "Online Images")
   is `web/plugins/stock_media/`, one plugin for both sites: a sandboxed page in the Media library
   sidebar with a search box, a source toggle per site, a thumbnail grid and an "API keys" section.
@@ -223,156 +184,12 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   asks only for `genius.com`, `library.write` on songs, and optionally `AddToSchedule`/`GoLive`). Approve
   it in Settings > Plugins and it appears as a panel. It is also the worked example of a plugin that
   needs the network.
-- **No pre-manifest plugins.** A bare `.so`/`.dll`/`.dylib` in the plugins folder (the old ABI 1
-  form), a bare `.js` script in `web/plugins/` with no `.plugin.json`, and the one-time
-  "grandfathering" that auto-approved them when permissions first shipped are all gone. They are
-  ignored with a warning in the log. A native plugin is a folder with a `plugin.json` that pins
-  its library and declares `"abi": 2`; a console-script web plugin needs `<id>.plugin.json`
-  beside `<id>.js`; or make it a sandboxed folder. Every plugin starts as pending until the
-  operator approves it. Rows an older version recorded for the removed kinds are deleted from
-  the plugin list on the next scan (the audit log keeps its history).
-
----
-
-## Backend plugins (Rust, native dynamic libraries)
-
-**What a plugin is:** a native shared library (`.so` on Linux, `.dll` on Windows, `.dylib` on
-macOS) that exports one C symbol, loaded into the server process via
-[`libloading`](https://docs.rs/libloading).
-
-**Where it lives:** `src/core/plugins.rs`.
-
-### The trait
-
-```rust
-pub trait OsPlugin: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn on_state_change(&self, state: &crate::core::models::ShowState);
-    fn on_command(&self, cmd: &str) -> bool; // Return false to intercept/block
-
-    // Optional — see "Providing Resource Library items" below. Defaults to
-    // contributing nothing, so existing plugins compile and run unchanged.
-    fn provide_resources(&self, category: &str) -> Vec<serde_json::Value> { Vec::new() }
-}
-```
-
-- `on_command` is called with the **raw incoming JSON command text**, *before* it's deserialized
-  or executed. Return `false` to veto the command — it's dropped entirely. Every loaded plugin
-  gets a vote; any single `false` blocks it.
-- `on_state_change` is called *after* a command has executed, with the resulting `ShowState`
-  snapshot. Observation only — it can't change anything.
-- Matching on `cmd` today is a plain substring check (`cmd.contains(...)`) against the raw JSON,
-  not a real parse. Match on the command's `event_type`/`data` tag text accordingly.
-
-### Safety-critical bypass
-
-`PluginManager::is_safety_critical_command` (`plugins.rs:68`) hardcodes four commands that no
-plugin can ever veto: `ToggleBlackout`, `ToggleClearText`, `ToggleLogo`, `SetAlert`. These always
-pass through regardless of what any plugin's `on_command` returns.
-
-### Sandboxing
-
-Every call into a plugin — both hooks — is wrapped in `std::panic::catch_unwind`. A panicking
-plugin is logged via `tracing::error!` and otherwise ignored: the command is permitted, or the
-state-change notification is just skipped for that plugin. **The host never crashes.** This is
-exercised by `tests/core_tests.rs::test_backend_plugin_manager_lifecycle_and_interception`.
-
-### Loading and registration
-
-- `PluginManager::load_plugins_from_dir(dir)` creates `dir` if it doesn't exist, then scans it
-  (non-recursively) for `.so`/`.dll`/`.dylib` files and loads each one.
-- `main.rs` wires this to `~/.config/OpenSanctuary/plugins/`, scanned **once at server startup**.
-  There is no hot-reload and no runtime add/remove API — drop a plugin file in that directory and
-  restart the server.
-- `load_plugin` expects the library to export exactly:
-  ```rust
-  #[no_mangle]
-  pub extern "C" fn create_plugin() -> *mut dyn OsPlugin { ... }
-  ```
-  The manager calls it, wraps the raw pointer in a `Box`, and keeps the `Library` handle alive for
-  the process's lifetime (required — dropping it would invalidate the vtable).
-- `register_plugin(Box<dyn OsPlugin>)` registers an already-constructed plugin in-process, with no
-  dynamic-library loading. This is the path integration tests use, and also a valid way to embed a
-  first-party plugin directly into the binary instead of shipping it as a separate `.so`.
-
-### How to write one
-
-1. New crate, `crate-type = ["cdylib"]` in `Cargo.toml`, depending on `os-next` as a library for
-   the `OsPlugin` trait and `ShowState` type.
-2. Implement `OsPlugin`, then export the constructor:
-   ```rust
-   struct MyPlugin;
-   impl OsPlugin for MyPlugin {
-       fn name(&self) -> &'static str { "My Plugin" }
-       fn on_state_change(&self, state: &ShowState) { /* e.g. drive DMX/lighting off state.is_blackout */ }
-       fn on_command(&self, cmd: &str) -> bool { true /* observe-only; veto by returning false */ }
-   }
-
-   #[no_mangle]
-   pub extern "C" fn create_plugin() -> *mut dyn OsPlugin {
-       Box::into_raw(Box::new(MyPlugin))
-   }
-   ```
-3. Build it, copy the resulting `.so`/`.dll`/`.dylib` into `~/.config/OpenSanctuary/plugins/`,
-   restart the server.
-
-`tests/core_tests.rs` (`TestDmxPlugin`, `PanickingPlugin` in the same test) is the best in-repo
-reference, though it's registered in-process via `register_plugin` rather than built as a real
-cdylib.
-
-### Providing Resource Library items (Songs, Scriptures, Media, Presentations, Themes)
-
-A backend plugin can contribute rows into the operator's Resource Library tabs by overriding
-`provide_resources(category) -> Vec<serde_json::Value>`. `category` is one of the five tab/route
-names — `"songs"`, `"scriptures"`, `"media"`, `"presentations"`, `"themes"` — and is called once
-per `GET /api/<category>` request. Return an empty `Vec` (the default) for any category this
-plugin doesn't provide.
-
-- **Shape:** each returned `Value` should be a JSON object shaped like that category's normal
-  database row (e.g. a `Song`-shaped object for `"songs"`: `{"id", "title", "author", "slides", ...}`
-  — see the struct definitions in `src/core/models.rs`). Using plain JSON rather than the real Rust
-  structs means a plugin isn't coupled to OS-Next's exact internal type definitions — the frontend
-  consumes these as loosely-typed JS objects, so only the fields a given tab's rendering actually
-  reads need to be present (check the relevant branch in `web/src/app_core.ts`'s catalog rendering
-  for what it expects). At minimum, give every item a unique `id` distinct
-  from anything already in the database, so schedule/undo logic (which tracks items by ID) doesn't
-  collide with a real library row.
-- **Merging:** contributed items are appended *after* the database's own rows, unfiltered, sorted,
-  or deduplicated against them — a plugin is responsible for not re-offering something already in
-  the local library if that matters for its use case.
-- **Search:** when the operator has an active search query in a tab, plugin-contributed items are
-  filtered by a simple case-insensitive substring match over each item's serialized JSON (not the
-  richer per-field matching the database's own `search_songs`/`search_scriptures` use) — so a
-  query matches if it appears anywhere in the item's JSON, including field names. `"media"`,
-  `"presentations"`, and `"themes"` don't support search at the route level at all (their
-  `GET` handlers take no query), so plugin items for those three always appear unfiltered.
-- **Sandboxing:** same as the other two hooks — wrapped in `catch_unwind`; a panicking
-  `provide_resources` call is logged and contributes nothing for that request, it doesn't fail the
-  whole `GET`.
-
-Example — a plugin that surfaces songs from an external catalog:
-
-```rust
-impl OsPlugin for MyLibraryPlugin {
-    fn name(&self) -> &'static str { "My External Song Library" }
-    fn on_state_change(&self, _state: &ShowState) {}
-    fn on_command(&self, _cmd: &str) -> bool { true }
-
-    fn provide_resources(&self, category: &str) -> Vec<serde_json::Value> {
-        if category != "songs" { return Vec::new(); }
-        self.fetch_catalog() // however this plugin sources its data
-            .into_iter()
-            .map(|song| serde_json::json!({
-                "id": format!("mylib_{}", song.id),
-                "title": song.title,
-                "author": song.author,
-            }))
-            .collect()
-    }
-}
-```
-
----
+- **No pre-manifest or native plugins.** A bare `.js` script in `web/plugins/` with no `.plugin.json`, the
+  one-time "grandfathering" that auto-approved old plugins, and native plugins (compiled libraries, ABI 1
+  or 2, and everything built on them) are all gone. Bare scripts are ignored with a warning in the log;
+  a manifest with a `backend` section is refused with an explanation. Every plugin starts as pending until
+  the operator approves it. Rows an older version recorded for the removed kinds are deleted from the
+  plugin list on the next scan (the audit log keeps its history).
 
 ## Frontend plugins (TypeScript/JS, dynamic ES modules)
 
@@ -411,7 +228,7 @@ directly, there's just no curated/stable API surface for it yet.
 
 ### Lifecycle and sandboxing
 
-There is **no command-interception or state-change hook** on the frontend (unlike the backend) —
+There is **no command-interception or state-change hook** for a console script —
 a plugin gets exactly one call, `init(OS)`, at load time. `registerPlugin` wraps that call in a
 `try/catch`: a throwing `init` is caught and logged, registration returns `false`, and the
 `PluginManager` keeps working normally. Covered by `web/tests/plugins_runtime.test.ts`.
@@ -459,12 +276,14 @@ runs after the app has booted.
 
 ## Choosing between them
 
-| | Backend (`OsPlugin`) | Frontend (`PluginManager`) |
+| | Sandboxed web plugin | Console script (`ui.dom`) |
 |---|---|---|
-| Can veto/block a command | Yes (`on_command` → `false`) | No |
-| Observes engine state | Yes (`on_state_change`) | No hook — poll `window` internals yourself |
-| Provides Resource Library items | Yes (`provide_resources`) | No |
-| Extends the operator UI | No | Yes (full DOM access) |
-| Sandboxing | `catch_unwind` per call, every call | `try/catch` around `init` only |
-| Load timing | Once at server startup, from a config directory | Once at page load, from a hardcoded path list |
-| Distribution | Compiled native library per OS | Plain `.js` file |
+| Where it runs | An isolated frame (opaque origin) | Inside the console page itself |
+| Access | Only what the operator granted, through a permission-checked bridge | Everything the operator has |
+| Extends the operator UI | Through placements (library panels, the video picker, a dock) and ribbon buttons, in the app's own look | Full DOM access |
+| Network | Only the granted hosts, fetched by the server | Whatever the page can do |
+| Secrets | `keyring.own`, and `keyring.service` for shared namespaces | `keyring.own` |
+| Risk tier | Per permission (Low to Critical) | Critical (`ui.dom`) |
+| Distribution | A folder in `web/plugins/` | A `.js` file and a `.plugin.json` in `web/plugins/` |
+
+Use a sandboxed plugin unless you genuinely need to reach into the console's own page.

@@ -174,7 +174,6 @@ tempfile = "3.10"
 tao = { version = "0.28", optional = true }
 wry = { version = "0.40", optional = true }
 pollster = "1.0.1"
-libloading = "0.9.0"
 dirs = "7.0.0"
 rfd = { version = "0.17.2", optional = true }
 minisign-verify = "0.3.0"
@@ -205,9 +204,3 @@ panic = "abort"
 opt-level = 3
 lto = "thin"
 
-# A real native plugin (ABI 2) used as the plugin author's template and by the dlopen test in
-# tests/core_tests.rs. Build it with `cargo build --release --example plugin_observer`.
-[[example]]
-name = "plugin_observer"
-path = "examples/plugin_observer.rs"
-crate-type = ["cdylib"]

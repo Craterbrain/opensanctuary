@@ -74,8 +74,8 @@ The operator console (library, schedule, preview and live panes) and the slide b
   target TV hardware (`src/storage/transcode.rs`) — see `BUILDING.md`.
 
 **Extensibility & operations**
-- A permissioned plugin system — sandboxed web plugins, native (Rust)
-  plugins and console scripts, each approved by the operator — see
+- A permissioned plugin system — sandboxed web plugins (and, with full
+  console access, console scripts), each approved by the operator — see
   [Plugins](#plugins).
 - A notification center (the **Notices** button) that collects the app's own
   messages and notices from plugins, with per-source muting.
@@ -106,12 +106,13 @@ Bundled with the app (all sandboxed web plugins, off until you turn them on):
 
 ![Stock Images plugin](docs/screenshots/stock-media-plugin.png)
 
-Three kinds exist: **sandboxed web plugins** (an isolated page that can only ask the app
-for things through a permission-checked bridge, the recommended kind), **native plugins**
-(Rust libraries, ABI 2, pinned by hash) and **console scripts** (run inside the console
-page with full console access, so they are marked Critical). Plugins can add panels to the
-library sidebars, run a declared command-line tool, post to the notification center, and
-use the app's own icons and theme so they look native. To write one, start with
+Two kinds exist: **sandboxed web plugins** (an isolated page that can only ask the app
+for things through a permission-checked bridge, the recommended kind) and **console
+scripts** (run inside the console page with full console access, so they are marked
+Critical). Plugins can add panels to the library sidebars and buttons to the ribbon, run a
+declared command-line tool, share secrets, post to the notification center, and use the
+app's own icons and theme so they look native. There are no native (compiled library)
+plugins. To write one, start with
 `docs/PLUGINS.md` (the guide) and `docs/PLUGIN_PERMISSIONS.md` (the permission model);
 `web/plugins/` holds the bundled ones as worked examples.
 

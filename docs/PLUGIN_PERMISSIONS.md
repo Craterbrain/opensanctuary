@@ -1,16 +1,17 @@
 # Plugin permission system design for OpenSanctuary (OS-Next)
 
-Status: **implemented.** This began as a design (written by an Opus design pass) and is kept as the reference for how plugin permissions work; sections 0, 6 and 8 are history. What exists today:
+Status: **implemented.** This began as a design (written by an Opus design pass) and is kept as the reference for how plugin permissions work; sections 0, 6 and 8 and the "native" remarks in 5 and 7 are history. What exists today:
 
 - **Manifest, grants, digest pinning, signer pinning, audit log, scoped plugin tokens**, and a console review screen (Settings > Plugins) where only the console can approve, deny, revoke or **override** (an Advanced mode that grants exactly the permissions the operator picks, behind a warning; see section 4).
-- **Three kinds of plugin:** *sandboxed web* (an isolated frame behind a permission-checked bridge: the recommended kind), *native* (a Rust library, ABI 2, with the `PluginHost` API and `export_plugin!`; `examples/plugin_observer.rs`) and *console script* (`ui.dom`: runs in the console page, Critical). Pre-manifest forms (bare libraries and scripts, grandfathering, ABI 1) were removed; a native manifest must declare `backend.abi = 2`.
-- **Permissions in force:** every id in the table in section 2 marked enforced. `settings.read`, `settings.write`, `process.spawn`, `network.listen` and the `filesystem.*` ids are accepted in a manifest and shown at review, but the host does not (yet) act on them.
-- **Features built on it:** placements (`ui.placements`) and ribbon buttons (`ui.toolbar`), `net.fetch` with limited headers, `library.addSong/addScriptures/addMedia/addMediaUrl`, `process.run` with host-managed signed tools, `notifications.post`, shared keyring namespaces (`keyring.service`) and command rewriting (`commands.modify`). The bundled plugins (`web/plugins/`) are the worked examples. The guide for writing a plugin is `docs/PLUGINS.md`; this document is the permission model behind it.
-- **Commands** from REST, WebSocket and a native plugin's queue all go through `src/api/command_pipeline.rs`: shorthand expansion, `commands.modify` rewriting, one plugin veto on the final command, parse, execute, persist, broadcast.
-
+- **Two kinds of plugin:** *sandboxed web* (an isolated frame behind a permission-checked bridge: the recommended kind) and *console script* (`ui.dom`: runs in the console page, Critical). **There are no native plugins:** loading compiled libraries into the server (the `OsPlugin` trait, the ABI 2 `PluginHost` API, `commands.intercept`, `commands.modify`, `resources.provide`, `native.code` and the filesystem/process/listen permissions that only made sense for them) was removed, as were the pre-manifest forms before it. A manifest with a `backend` section is refused.
+- **Permissions in force:** every id in the table in section 2 marked enforced. `settings.read` and `settings.write` are accepted in a manifest and shown at review, but the host does not (yet) act on them.
+- **Features built on it:** placements (`ui.placements`) and ribbon buttons (`ui.toolbar`), `net.fetch` with limited headers, `library.addSong/addScriptures/addMedia/addMediaUrl`, `process.run` with host-managed signed tools, `notifications.post` and shared keyring namespaces (`keyring.service`). The bundled plugins (`web/plugins/`) are the worked examples. The guide for writing a plugin is `docs/PLUGINS.md`; this document is the permission model behind it.
+- **Commands** from REST, WebSocket and a sandboxed plugin's `sendCommand` all go through `src/api/command_pipeline.rs`: shorthand expansion, parse, execute, persist, broadcast.
 ---
 
 ## 0. What existed before this system (history)
+
+> History: this section describes the code before the permission system, including the native plugin loader that has since been removed.
 
 | Surface | Mechanism | Identity | Authorization today |
 |---|---|---|---|
@@ -39,7 +40,6 @@ Status: **implemented.** This began as a design (written by an Opus design pass)
 
 | Plugin type | Enforceable? | Why |
 |---|---|---|
-| **Native (in-process, libloading)** | **Only the surface the host mediates.** The host decides which hooks to call and which host-API calls to honour. It cannot contain the code. | The plugin runs with the server's full user privileges and address space. It can open `library.db` directly, read the host token from memory, open sockets, spawn processes, and start threads that outlive a revoke. `catch_unwind` does not stop `abort`, segfaults or infinite loops. |
 | **Same-realm web plugins (today's model)** | **Nothing, beyond whether the script loads at all.** | Same origin and same JS realm as the console. The plugin can take the host token or console credential and act as the console, including approving other plugins. |
 | **Sandboxed web plugins (iframe without `allow-same-origin`, phase 4)** | **Fully.** | Opaque origin with no access to the parent's storage or host token. It only talks through a `postMessage` bridge that the host checks against grants. It authenticates to the server with a scoped plugin token. A per-plugin CSP `connect-src` enforces `network.outbound`. |
 | **Out-of-process HTTP/WS clients holding a plugin token** | **Fully, for the routes that require auth.** | Scoped tokens are checked on each request. Caveat: library and state GETs are deliberately zero-auth (for the live, stage and remote pages), so a `library.read` permission over HTTP restricts nothing. |
@@ -52,49 +52,37 @@ Status: **implemented.** This began as a design (written by an Opus design pass)
 - (e) A device or remote credential tries to grant plugin permissions. Only console credentials may grant.
 
 **Threats out of scope (stated in the UI and docs):**
-- A malicious native plugin.
 - A local attacker with the OS user's write access. They can edit `library.db` grants, the plugin directory, or autostart entries.
 - TOCTOU between hashing a file and `dlopen`, which needs the same local-write attacker.
 
 **Recommendation:**
-- **Enforce:** hook dispatch, the host-API context, plugin-token scopes, web-plugin load gating, and later the iframe bridge.
-- **Treat as consent-only for native plugins:** `network.*`, `filesystem.*` and `process.*`. Show them clearly marked "declared, not enforced".
-- **Approving any native plugin means full trust.** The prompt says so first.
-
+- **Enforce:** plugin-token scopes, the iframe bridge and frame policy, web-plugin load gating.
+- **Console scripts are trust, not sandbox:** approving a `ui.dom` plugin gives it the console's own access; the prompt says so first.
 ---
 
 ## 2. Permission vocabulary
 
 Every permission is denied unless granted. A permission is an `id` plus optional parameters. Tiers set the UI emphasis: Low and Medium are pre-checked if requested, High needs an explicit checkbox, Critical shows a red warning.
 
-| id | Params | Tier | Native | Token / iframe | Gates |
-|---|---|---|---|---|---|
-| `native.code` | — | Critical | implicit, informational | n/a | Required for any backend library. |
-| `ui.dom` | — | Critical | n/a | consent-only | A same-realm (non-sandboxed) web plugin, equivalent to console access. |
-| `show.observe` | — | Low | **E** | **E** | `on_state_change`, `host.snapshot()`, WS state over the bridge. |
-| `library.read` | `categories[]` | Low | **E** (host API) | info (GETs are public) | `host.library_list()`. |
-| `resources.provide` | `categories[]` ⊆ {songs, scriptures, media, presentations, themes} | Medium | **E** | n/a | `provide_resources(category)`. |
-| `library.write` | `categories[]` | High | **E** (host API) | **E** | Future create/update/delete via host or token. |
-| `commands.send` | `commands[]`: ShowCommand variant names, or `"*"` | Medium if every listed variant is navigation (`NextSlide`, `PrevSlide`, `NextItem`, `PrevItem`, `JumpSlide`, `JumpSection`, `GoLive`, `StageItem`); otherwise High; `"*"` is High | **E** | **E** | `host.send_command()`, `/api/command` and `/ws` with a plugin credential. |
-| `commands.intercept` | — | High | **E** | n/a | `on_command` veto. The safety-critical set still always passes. |
-| `commands.modify` | `commands[]` (explicit, no `*`) | Critical | **E** (native plugins only) | n/a | Rewrite a command before it runs, same kind of command only; never the emergency controls. See PLUGINS.md. |
-| `keyring.own` | — | Medium | **E** (host API) | **E** | The `OpenSanctuary:Plugin:<id>` namespace only. |
-| `keyring.service` | `services[]` (`OpenSanctuary:Shared:<name>`), `access` (`read`\|`write`) | Critical | **E** (sandboxed web, native host API) | | Shared keyring namespaces; owner rules in PLUGINS.md. Only the `Shared:` prefix is grantable, never System, another plugin's namespace or a host service. |
-| `settings.read` | `keys[]` | Medium | reserved | reserved | Accepted and shown, not acted on yet. |
-| `settings.write` | `keys[]` | High | reserved | reserved | Accepted and shown, not acted on yet. If it is ever implemented it must never cover `csp_mode`, `frame_mode`, `cors_mode` or TLS settings. |
-| `network.outbound` | `hosts[]` | Medium | consent-only | **E** (iframe CSP) | |
-| `network.listen` | `ports[]` | High | consent-only | n/a | |
-| `filesystem.plugin_data` | — | Low | consent-only; `host.data_dir()` returns `data_dir/plugin-data/<id>/` | n/a | |
-| `filesystem.read` / `.write` | `paths[]` | High / Critical | consent-only | n/a | |
-| `process.spawn` | — | Critical | consent-only | n/a | A native library can already start anything; declared so the operator is told. |
-| `process.run` | `commands[]` (ids of commands declared in the manifest) | Critical | n/a | **E** | Sandboxed plugins only: the host runs exactly the manifest's declared command templates, no shell, throwaway job folders, with host-managed signed tools. See PLUGINS.md. |
-| `ui.panel` | — | Medium | n/a | **E** (slots) | |
-| `ui.toolbar` | — | Medium | n/a | **E** (sandboxed web plugins) | Up to 2 ribbon buttons declared in `ui.toolbar`; see PLUGINS.md |
-| `notifications.post` | — | Low | n/a | **E** (`POST /api/plugin-host/notify`) | Posts to the console's notification center; see PLUGINS.md |
+| id | Params | Tier | Enforced | Gates |
+|---|---|---|---|---|
+| `ui.dom` | — | Critical | consent-only | A same-realm (non-sandboxed) web plugin, equivalent to console access. |
+| `show.observe` | — | Low | **E** | `getState` and the state event stream over the bridge. |
+| `library.write` | `categories[]` | High | **E** | `library.addSong/addScriptures/addMedia/addMediaUrl`, per category. |
+| `commands.send` | `commands[]`: ShowCommand variant names, or `"*"` | Medium if every listed variant is navigation (`NextSlide`, `PrevSlide`, `NextItem`, `PrevItem`, `JumpSlide`, `JumpSection`, `GoLive`, `StageItem`); otherwise High; `"*"` is High | **E** | `host.send_command()`, `/api/command` and `/ws` with a plugin credential. |
+| `keyring.own` | — | Medium | **E** | The `OpenSanctuary:Plugin:<id>` namespace only. |
+| `keyring.service` | `services[]` (`OpenSanctuary:Shared:<name>`), `access` (`read`\|`write`) | Critical | **E** | Shared keyring namespaces; owner rules in PLUGINS.md. Only the `Shared:` prefix is grantable, never System, another plugin's namespace or a host service. |
+| `settings.read` | `keys[]` | Medium | reserved | Accepted and shown, not acted on yet. |
+| `settings.write` | `keys[]` | High | reserved | Accepted and shown, not acted on yet. If it is ever implemented it must never cover `csp_mode`, `frame_mode`, `cors_mode` or TLS settings. |
+| `network.outbound` | `hosts[]` | Medium | **E** (iframe CSP) | |
+| `process.run` | `commands[]` (ids of commands declared in the manifest) | Critical | **E** | Sandboxed plugins only: the host runs exactly the manifest's declared command templates, no shell, throwaway job folders, with host-managed signed tools. See PLUGINS.md. |
+| `ui.panel` | — | Medium | **E** (slots) | |
+| `ui.toolbar` | — | Medium | **E** (sandboxed web plugins) | Up to 2 ribbon buttons declared in `ui.toolbar`; see PLUGINS.md |
+| `notifications.post` | — | Low | **E** (`POST /api/plugin-host/notify`) | Posts to the console's notification center; see PLUGINS.md |
 
-**E** means the host enforces it. **Info** or **consent-only** means it is shown at consent time and recorded, but not technically enforced.  **Reserved** means the id is accepted but nothing acts on it yet.
+**E** means the host enforces it. **Consent-only** means it is shown at consent time and recorded, but not technically enforced (a console script shares the page, so nothing could enforce it).  **Reserved** means the id is accepted but nothing acts on it yet.
 
-**Which kinds can hold what.** `native.code`: native only. `ui.dom`: console scripts only. `ui.panel`, `ui.toolbar`, `process.run`, `notifications.post`: sandboxed web plugins. `commands.modify`: native plugins only (a browser tab can't sit in the command path). `keyring.service`: sandboxed and native (a console script already has console authority). The review screen's Advanced override refuses combinations that make no sense for the plugin's kind.
+**Which kinds can hold what.** `ui.dom`: console scripts only. Everything else: sandboxed web plugins (`keyring.service` is refused for a console script, which already has console authority). The review screen's Advanced override refuses combinations that make no sense for the plugin's kind.
 
 **How scopes narrow.** A scoped plugin token (`POST /api/plugins/:id/token`) can carry `keyring.own`, `keyring.service`, `commands.send`, `network.outbound`, `library.write`, `process.run` and `notifications.post`, and never more than the live grant: `PermissionSet::narrowed_by` intersects every list (commands, hosts, categories, services) and takes the lower access for `keyring.service`. Asking for more than was granted is refused, not silently reduced. Every use re-checks the live grant, so a revoke stops a token at once.
 
@@ -107,38 +95,29 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 **Layout.** No new dependencies: JSON via serde_json, digests via `sha2`, signatures via `minisign-verify`, version ranges via `semver`.
 
 ```
-<plugin_dir()>/<id>/plugin.json            # required for new-style plugins
-<plugin_dir()>/<id>/plugin.json.minisig    # optional detached signature over plugin.json bytes
-<plugin_dir()>/<id>/lib/<platform file>    # native
-<plugin_dir()>/<id>/web/…                  # optional sandboxed web part (phase 4)
-<plugin_dir()>/*.so|dll|dylib              # bare libraries (no manifest): ignored with a warning (removed)
-<web_dir>/plugins/<stem>.js (+ <stem>.plugin.json)  # bundled web plugins
+<web_dir>/plugins/<id>/plugin.json            # a sandboxed plugin: the folder is the plugin (plugin.json + its pages)
+<web_dir>/plugins/<id>/plugin.json.minisig    # optional detached signature over plugin.json bytes
+<web_dir>/plugins/<stem>.js (+ <stem>.plugin.json)  # a console script and its manifest
 ```
 
-**Example `plugin.json`:**
+**Example `plugin.json`** (a sandboxed plugin):
 
 ```json
 {
   "manifest_version": 1,
-  "id": "org.example.dmx-bridge",
-  "name": "DMX Lighting Bridge",
+  "id": "org.example.planning",
+  "name": "Planning Sync",
   "version": "1.2.0",
   "publisher": "Example Church AV",
-  "description": "Drives house lights from blackout/clear state.",
+  "description": "Pulls this week's plan and stages it.",
   "host_api": ">=0.2.0, <0.3.0",
-  "backend": {
-    "abi": 2,
-    "libraries": {
-      "linux-x86_64":   { "path": "lib/libdmx_bridge.so", "sha256": "9f…" },
-      "windows-x86_64": { "path": "lib/dmx_bridge.dll",   "sha256": "41…" }
-    }
-  },
-  "web": null,
+  "web": { "entry": "index.html", "sandbox": true },
   "permissions": [
-    { "id": "show.observe", "reason": "Follow blackout/clear-text state" },
-    { "id": "commands.send", "commands": ["ToggleBlackout"], "reason": "Hardware panic button", "optional": true },
-    { "id": "keyring.own", "reason": "Store the DMX gateway password" },
-    { "id": "network.outbound", "hosts": ["192.168.1.50:6454"], "reason": "Art-Net gateway" }
+    { "id": "ui.panel", "reason": "Shows its panel in the console" },
+    { "id": "network.outbound", "hosts": ["api.example.org"], "reason": "Fetches the plan" },
+    { "id": "library.write", "categories": ["songs"], "reason": "Adds the songs of the plan" },
+    { "id": "commands.send", "commands": ["AddToSchedule"], "optional": true, "reason": "Adds them to the schedule" },
+    { "id": "keyring.own", "reason": "Stores the API key" }
   ]
 }
 ```
@@ -146,12 +125,11 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 **Validation rules:**
 - `id` matches `^[a-z0-9][a-z0-9._-]{1,63}$` and must equal the directory name.
 - `host_api` must match `CARGO_PKG_VERSION`.
-- Every artifact path must stay inside the plugin directory: no `..`, no absolute paths, and symlinks are rejected.
-- On Unix, refuse files or directories that are group- or world-writable (std `PermissionsExt`).
+- Every file path (the entry page, a tool's key file, ...) must stay inside the plugin folder: no `..`, no absolute paths, and symlinks are rejected.
 
 **Pinning:**
 - `manifest_sha256` is the SHA-256 of the `plugin.json` bytes.
-- `artifact_digest` is the SHA-256 over the sorted lines `"<relpath>\0<sha256>\n"` for every file under `lib/` and `web/` (or the single script file of a same-realm web plugin). Each file's hash must also equal the `sha256` the manifest declares for it.
+- `artifact_digest` is the SHA-256 over the sorted lines `"<relpath>\0<sha256>\n"` for every file in a sandboxed plugin's folder (or the single script file of a console script). Each file's hash must also equal the `sha256` the manifest declares for it.
 - Approval records both values. On every boot, and on every web-plugin fetch, the host recomputes them. **Any mismatch moves the plugin to `changed`: it is not loaded, and the console asks for re-review.**
 
 **Signatures (optional, TOFU):**
@@ -160,29 +138,20 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 - Later versions signed by the same key get a one-click "Approve update" when they request no new permissions. A different key, or a signed plugin that becomes unsigned, triggers a full re-prompt with a warning.
 - Unsigned plugins are allowed and labelled "unsigned".
 
-**Native ABI marker** (required when `backend.abi >= 2`):
-
-```rust
-#[no_mangle] pub static OS_PLUGIN_ABI: u32 = 2;
-#[no_mangle] pub static OS_PLUGIN_HOST_VERSION: &str = env!("CARGO_PKG_VERSION"); // os-next version built against
-```
-
-The host refuses to load the library on a mismatch. A library with no marker (the removed ABI 1) is refused.
-
 ---
 
 ## 4. Grant and consent flow
 
 **Discovery** (`main.rs`, which already runs after the `Database` opens):
-1. Scan `plugin_dir()` and `web_dir/plugins`, and compute digests.
+1. Scan `web_dir/plugins`, and compute digests.
 2. Upsert a row into `plugin_grants` with `observed_*` set. Log a `discovered` or `changed` audit event.
-3. Load a native plugin only if `status='approved'` and `observed_digest = approved_digest`.
+3. Start or serve a plugin only if `status='approved'` and `observed_digest = approved_digest`.
 
 **Console UI:** a new Settings → Plugins tab.
 - Lists the states active, pending, changed, denied, revoked and incompatible, with publisher, signed/unsigned, version and digest prefix.
-- The review dialog opens with a red banner for `native.code` and `ui.dom` ("Runs with full access to this computer; the permissions below describe what it says it will do"). Below that, permissions are grouped by tier and each shows its `reason`. Consent-only items are tagged "declared, not enforced". Optional items have checkboxes.
+- The review dialog opens with a red banner for `ui.dom` ("Runs inside the console page with the same access as you; the permissions below describe what it says it will do"). Below that, permissions are grouped by tier and each shows its `reason`. Consent-only items are tagged "declared, not enforced". Optional items have checkboxes.
 - **Approve** sends back the digest the operator reviewed. The server refuses if the digest has changed since.
-- **Native approvals take effect at the next restart.** **Revocations take effect immediately for host-mediated paths**: hooks stop, host-API calls are denied and tokens are purged. The UI says "background threads stop on restart" for native plugins.
+- **Revocations take effect immediately**: bridge calls and tokens stop working, and the frame is removed.
 
 **HTTP API** (new `src/api/routes/plugins.rs`). All POSTs are already gated by `host_token_gate_middleware`; the GETs below get added to `needs_host_token`.
 
@@ -204,7 +173,7 @@ POST /api/plugins/{id}/token         {scopes?:[perm…]}           // console mi
 ```sql
 CREATE TABLE IF NOT EXISTS plugin_grants (
     plugin_id          TEXT PRIMARY KEY,
-    kind               TEXT NOT NULL CHECK (kind IN ('native','web','sandbox'))  -- older databases also allow the removed legacy kinds; those rows are deleted on scan,
+    kind               TEXT NOT NULL CHECK (kind IN ('native','web','sandbox'))  -- the table still allows 'native' (and the old legacy kinds) because SQLite can't alter it; nothing writes them now and rows of those kinds are deleted on scan
     name               TEXT NOT NULL,
     version            TEXT,
     source_path        TEXT NOT NULL,
@@ -229,7 +198,7 @@ CREATE TABLE IF NOT EXISTS plugin_audit (
     ts_ms       INTEGER NOT NULL,
     plugin_id   TEXT NOT NULL,
     actor       TEXT NOT NULL,     -- 'system' | 'host' | 'console:<device id>' | 'plugin:<id>'
-    action      TEXT NOT NULL,     -- discovered|changed|approved|denied|revoked|token_issued|denied_call|load_failed|media_added|tool_updated|tool_update_failed|keyring_shared_access|command_modified|modify_rejected|modify_disabled  (an override is an `approved` entry whose detail has an `override` diff)
+    action      TEXT NOT NULL,     -- discovered|changed|approved|denied|revoked|token_issued|denied_call|load_failed|media_added|tool_updated|tool_update_failed|keyring_shared_access  (an override is an `approved` entry whose detail has an `override` diff)
     detail_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_plugin_audit_plugin ON plugin_audit(plugin_id, ts_ms);
@@ -248,11 +217,13 @@ The normal review grants a subset of what the plugin asked for. For the cases th
 - edit a permission's scope list (hosts, commands, library categories, paths, ports, services and access);
 - switch on **any permission the host knows** that the plugin did not ask for (the list comes from `GET /api/plugins/permissions`).
 
-`POST /api/plugins/:id/approve` takes the result as `override` (the exact list to grant; `granted` is ignored when it is present). The host validates it with `plugin_permissions::validate_grant` (known ids; no duplicates; only scope lists the permission actually takes; valid hosts and categories; `ui.dom` only for console scripts, `native.code` and `commands.modify` only for native plugins; `keyring.service` only for shareable namespaces; `commands.modify` lists checked like a manifest's) and the digest check still applies. What is stored is what is enforced, everywhere a normal grant is: the frame's network policy, scoped tokens, command and library checks. The card shows a **Permissions overridden** badge with what differs (extra, withheld, re-scoped); the audit entry for the approval carries the same diff and the server logs a warning. Approving again the normal way clears the override. Only the console can do it, like any approval.
+`POST /api/plugins/:id/approve` takes the result as `override` (the exact list to grant; `granted` is ignored when it is present). The host validates it with `plugin_permissions::validate_grant` (known ids; no duplicates; only scope lists the permission actually takes; valid hosts and categories; `ui.dom` only for console scripts; `keyring.service` only for shareable namespaces) and the digest check still applies. What is stored is what is enforced, everywhere a normal grant is: the frame's network policy, scoped tokens, command and library checks. The card shows a **Permissions overridden** badge with what differs (extra, withheld, re-scoped); the audit entry for the approval carries the same diff and the server logs a warning. Approving again the normal way clears the override. Only the console can do it, like any approval.
 
 ---
 
 ## 5. Enforcement points
+
+> Parts of this section describe the native host API and hook dispatch (`OsPlugin`, `PluginHost`, `check_command`) from the original design; native plugins were removed, so read those as history. The token, bridge and web-loading parts are current.
 
 **New module `src/core/plugin_permissions.rs`:**
 
@@ -358,6 +329,8 @@ ignored with a log warning, no plugin is ever approved automatically, and `plugi
 
 ## 7. Testing plan
 
+> Tests for native plugins (hooks, the dlopen test) were removed with them.
+
 **Unit tests**, in `#[cfg(test)]` modules next to the code, like `routes/common.rs`:
 - Manifest parsing and validation:
   - bad ids, path traversal and symlinks, an unknown permission with the same `manifest_version` (rejected) and a newer one (incompatible), `host_api` semver mismatch, an artifact whose hash differs from the declared hash.
@@ -396,6 +369,8 @@ ignored with a log warning, no plugin is ever approved automatically, and `plugi
 ---
 
 ## 8. Phased implementation
+
+> History: phases 1 to 3 include native gating and the native host API, which no longer exist.
 
 Each phase ships on its own.
 

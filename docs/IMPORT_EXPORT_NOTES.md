@@ -46,7 +46,7 @@ Two different "plugin" concepts got conflated initially — worth keeping separa
 
 Considered and **not recommended** as the app's native storage format. OS-Next's own
 `src/core/models.rs` schema exists because it needs things OpenLP's format wasn't designed for
-(live show state, remote sync, themes, plugin resource contribution). Coupling native storage to
+(live show state, remote sync, themes). Coupling native storage to
 a third-party format means every future feature is constrained by what that schema can represent,
 plus inheriting its migrations forever. Recommendation: keep `openlp_import.rs` as the
 always-compiled-in importer (most common migration source), everything else optional via feature

@@ -24,11 +24,7 @@ fn err(status: StatusCode, msg: &str) -> ApiErr {
 }
 
 pub(super) fn rescan(app: &AppState) -> Vec<Discovered> {
-    let found = discover(
-        &crate::storage::paths::plugin_dir(),
-        &app.web_dir.join("plugins"),
-        env!("CARGO_PKG_VERSION"),
-    );
+    let found = discover(&app.web_dir.join("plugins"), env!("CARGO_PKG_VERSION"));
     sync(&app.db, &found);
     found
 }
@@ -52,7 +48,6 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         v["enforcement"] = serde_json::Value::String(p.enforcement_for(&row.kind).to_string());
         v
     };
-    let native = row.kind == "native";
     // A sandboxed plugin's entry page comes from its manifest (the folder is the plugin).
     let entry = (row.kind == "sandbox")
         .then(|| std::fs::read(std::path::Path::new(&row.source_path).join("plugin.json")).ok())
@@ -109,29 +104,7 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         }
         out
     };
-    // commands.modify: what it changed this run, whether it was switched off, and which other approved plugins
-    // also modify the same commands (modifiers run in plugin-id order, each on the previous one's output).
-    let modify = {
-        let mine = (if state == "active" { &granted } else { &requested }).iter().find(|p| p.id == "commands.modify");
-        mine.map(|m| {
-            let (changed, tripped) = app.plugin_manager.modifier_stats(&row.plugin_id).unwrap_or((0, false));
-            let runs_after: Vec<String> = app
-                .db
-                .list_plugin_grants()
-                .unwrap_or_default()
-                .iter()
-                .filter(|o| o.plugin_id != row.plugin_id && o.effective_state() == "active" && o.plugin_id < row.plugin_id)
-                .filter(|o| {
-                    let g: Vec<PermissionRequest> = serde_json::from_str(&o.granted_json).unwrap_or_default();
-                    g.iter().any(|p| p.id == "commands.modify" && p.commands.iter().any(|c| m.commands.contains(c)))
-                })
-                .map(|o| o.plugin_id.clone())
-                .collect();
-            serde_json::json!({ "changed": changed, "tripped": tripped, "runs_after": runs_after, "active": app.plugin_manager.modifier_stats(&row.plugin_id).is_some() })
-        })
-    };
     serde_json::json!({
-        "modify": modify,
         "shared_with": shared_with,
         "overridden": overridden,
         "override_diff": override_diff,
@@ -160,9 +133,6 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         "decided_at": row.decided_at,
         "decided_by": row.decided_by,
         "first_seen": row.first_seen,
-        "loaded": app.plugin_manager.is_loaded(&row.plugin_id),
-        // A native library is only loaded at startup, so approving it takes effect then.
-        "restart_required": native && state == "active" && !app.plugin_manager.is_loaded(&row.plugin_id),
     })
 }
 
@@ -187,7 +157,6 @@ pub(super) async fn list_plugins(
         .iter()
         .filter(|r| match q.kind.as_deref() {
             Some("web") => r.kind == "web" || r.kind == "sandbox",
-            Some("native") => r.kind == "native",
             _ => true,
         })
         .filter(|r| !only_active || r.effective_state() == "active")
@@ -291,8 +260,6 @@ pub(super) async fn approve_plugin(
     if override_diff.is_some() {
         tracing::warn!("plugin '{id}' was approved with an operator override of its requested permissions");
     }
-    // A plugin that's already loaded (re-approval after a revoke) picks its grants up now.
-    app.plugin_manager.set_grants(&id, PermissionSet(granted));
     let fresh = app.db.get_plugin_grant(&id).ok().flatten().ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
     Ok(Json(view(&app, &fresh)))
 }
@@ -333,8 +300,7 @@ async fn decide(
         .set_plugin_decision(&id, status, "[]", None, None, None, &actor)
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
     app.db.add_plugin_audit(&id, &actor, if status == "denied" { "denied" } else { "revoked" }, "{}");
-    // Immediate for everything the host mediates (hooks, resources).
-    app.plugin_manager.revoke(&id);
+    // Immediate: every token the plugin holds stops working.
     app.revoke_plugin_tokens(&id).await;
     let fresh = app.db.get_plugin_grant(&id).ok().flatten().ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
     Ok(Json(view(&app, &fresh)))

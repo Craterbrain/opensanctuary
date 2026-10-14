@@ -11,5 +11,3 @@ pub use event_log::*;
 pub use engine::*;
 pub mod plugin_permissions;
 pub mod plugin_registry;
-pub mod plugins;
-pub use plugins::*;

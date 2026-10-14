@@ -37,12 +37,6 @@ pub fn config_dir() -> PathBuf {
         .join("OpenSanctuary")
 }
 
-/// Backend plugin directory -- unchanged in location, now computed here
-/// instead of via an inline `#[cfg(target_os = "windows")]` block in main.rs.
-pub fn plugin_dir() -> PathBuf {
-    config_dir().join("plugins")
-}
-
 fn install_config_path() -> PathBuf {
     config_dir().join("install.json")
 }

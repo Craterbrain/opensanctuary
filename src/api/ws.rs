@@ -61,7 +61,6 @@ pub struct AppState {
     /// database (see docs/first-time.md).
     pub skip_first_time_setup: bool,
     pub tx: broadcast::Sender<String>,
-    pub plugin_manager: Arc<crate::core::plugins::PluginManager>,
     /// Notifications from the host and approved plugins; consoles poll it.
     pub notifications: Arc<crate::api::notifications::NotificationBus>,
     /// The `Schedule::schedule_version` last included (non-null) in a broadcast over `tx`.
@@ -322,7 +321,6 @@ impl AppState {
 /// don't have to re-snapshot.
 pub fn broadcast_snapshot(app: &AppState) -> StateSnapshot {
     let snapshot = app.engine.snapshot();
-    app.plugin_manager.notify_state_change(&snapshot.state);
 
     let current_version = snapshot.schedule.schedule_version;
     let previous_version = app
