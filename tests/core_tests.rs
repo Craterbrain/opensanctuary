@@ -7034,3 +7034,106 @@ async fn test_stock_media_plugin_host_api_limits() {
         .json(&serde_json::json!({ "scopes": [{ "id": "keyring.own" }] })).send().await.unwrap()).await["token"].as_str().unwrap().to_string();
     assert_eq!(media_url(serde_json::json!({ "url": "https://images.pexels.com/a.jpg", "title": "x" }), Some(narrow)).await.status(), reqwest::StatusCode::FORBIDDEN);
 }
+
+/// The Advanced override: the operator grants exactly the permissions they choose, which may
+/// differ from what the plugin asked for (extra, withheld, re-scoped), validated and audited.
+#[tokio::test]
+async fn test_advanced_permission_override() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("adv.db").to_str().unwrap()).unwrap();
+    let web_dir = tmp.path().join("web");
+    let dest = web_dir.join("plugins/stock_media");
+    std::fs::create_dir_all(&dest).unwrap();
+    for entry in std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/plugins/stock_media")).unwrap().flatten() {
+        std::fs::copy(entry.path(), dest.join(entry.file_name())).unwrap();
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"), data_dir: tmp.path().to_path_buf(),
+        host_session_token: "adv_host".to_string(), server_port: addr.port(),
+        ..base_app_state(db.clone())
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+    let host = "adv_host";
+    let json = |r: reqwest::Response| async move { r.json::<serde_json::Value>().await.unwrap() };
+
+    // The catalog lists every permission the host knows, console only.
+    assert_eq!(c.get(format!("{base}/api/plugins/permissions")).send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+    let catalog = json(c.get(format!("{base}/api/plugins/permissions")).header("x-host-token", host).send().await.unwrap()).await;
+    let entry = |id: &str| catalog.as_array().unwrap().iter().find(|e| e["id"] == id).cloned().unwrap_or_else(|| panic!("{id} missing"));
+    assert_eq!((entry("network.outbound")["scope"].as_str(), entry("library.write")["scope"].as_str(), entry("show.observe")["scope"].as_str()), (Some("hosts"), Some("categories"), Some("none")));
+    assert_eq!(entry("process.run")["tier"], "critical");
+
+    let list = json(c.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap()).await;
+    let p = list.as_array().unwrap().iter().find(|p| p["id"] == "stock_media").unwrap().clone();
+    let digest = p["digest"].clone();
+    let approve = |body: serde_json::Value| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugins/stock_media/approve")).header("x-host-token", "adv_host").json(&body).send().await.unwrap() }
+    };
+
+    // The ordinary path still refuses anything not requested, and a required permission can't be dropped.
+    assert_eq!(approve(serde_json::json!({ "digest": digest, "granted": ["ui.panel", "network.outbound", "keyring.own", "library.write", "show.observe"] })).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(approve(serde_json::json!({ "digest": digest, "granted": ["ui.panel"] })).await.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // The override validates what the operator types: unknown ids, kinds that don't fit, bad scopes, duplicates.
+    for (why, grants) in [
+        ("unknown permission", serde_json::json!([{ "id": "made.up" }])),
+        ("ui.dom has no meaning for a sandboxed page", serde_json::json!([{ "id": "ui.dom" }])),
+        ("native.code has no meaning for a web page", serde_json::json!([{ "id": "native.code" }])),
+        ("a host that isn't a host", serde_json::json!([{ "id": "network.outbound", "hosts": ["evil.test/path"] }])),
+        ("a wildcard in the middle", serde_json::json!([{ "id": "network.outbound", "hosts": ["a.*.test"] }])),
+        ("an unknown category", serde_json::json!([{ "id": "library.write", "categories": ["secrets"] }])),
+        ("a scope the permission doesn't take", serde_json::json!([{ "id": "commands.send", "categories": ["media"], "commands": ["NextSlide"] }])),
+        ("a duplicate", serde_json::json!([{ "id": "show.observe" }, { "id": "show.observe" }])),
+    ] {
+        let r = approve(serde_json::json!({ "digest": digest, "override": grants })).await;
+        assert_eq!(r.status(), reqwest::StatusCode::BAD_REQUEST, "{why}");
+    }
+    // A stale digest still wins over an override.
+    assert_eq!(approve(serde_json::json!({ "digest": "stale", "override": [] })).await.status(), reqwest::StatusCode::CONFLICT);
+
+    // A real override: drop required keyring.own and library.write, narrow the hosts, add two the plugin never asked for.
+    let r = approve(serde_json::json!({ "digest": digest, "override": [
+        { "id": "ui.panel" },
+        { "id": "network.outbound", "hosts": ["api.pexels.com"] },
+        { "id": "show.observe" },
+        { "id": "commands.send", "commands": ["NextSlide", "PrevSlide"] },
+    ] })).await;
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let v = json(r).await;
+    assert_eq!(v["state"], "active");
+    assert_eq!(v["overridden"], true);
+    let diff = &v["override_diff"];
+    assert_eq!(diff["added"], serde_json::json!(["show.observe", "commands.send"]));
+    assert_eq!(diff["changed"], serde_json::json!(["network.outbound"]));
+    let mut removed: Vec<&str> = diff["removed"].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
+    removed.sort();
+    assert_eq!(removed, ["keyring.own", "library.write", "notifications.post"]);
+
+    // It is what is enforced: the frame may reach only the narrowed host, and tokens carry the extras but not what was withheld.
+    let r = c.get(format!("{base}/plugin-frame/stock_media/index.html")).header("x-host-token", host).send().await.unwrap();
+    let csp = r.headers().get("content-security-policy").unwrap().to_str().unwrap().to_string();
+    assert!(csp.contains("https://api.pexels.com") && !csp.contains("pixabay"), "{csp}");
+    let mint = |scopes: serde_json::Value| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugins/stock_media/token")).header("x-host-token", "adv_host").json(&serde_json::json!({ "scopes": scopes })).send().await.unwrap() }
+    };
+    assert_eq!(mint(serde_json::json!([{ "id": "commands.send", "commands": ["NextSlide"] }])).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(mint(serde_json::json!([{ "id": "commands.send", "commands": ["GoLive"] }])).await.status(), reqwest::StatusCode::FORBIDDEN, "only the commands the operator chose");
+    assert_eq!(mint(serde_json::json!([{ "id": "library.write", "categories": ["media"] }])).await.status(), reqwest::StatusCode::FORBIDDEN, "withheld");
+    assert_eq!(mint(serde_json::json!([{ "id": "network.outbound", "hosts": ["pixabay.com"] }])).await.status(), reqwest::StatusCode::FORBIDDEN, "narrowed");
+
+    // The audit trail records the override.
+    let audit = json(c.get(format!("{base}/api/plugins/audit")).header("x-host-token", host).send().await.unwrap()).await.to_string();
+    assert!(audit.contains("override") && audit.contains("show.observe"), "{audit}");
+
+    // Approving again the ordinary way (all requested, no extras) clears the override.
+    let r = approve(serde_json::json!({ "digest": digest, "granted": ["ui.panel", "network.outbound", "keyring.own", "library.write"] })).await;
+    let v = json(r).await;
+    assert_eq!(v["overridden"], false);
+}

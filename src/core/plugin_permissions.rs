@@ -216,6 +216,85 @@ impl PermissionSet {
     }
 }
 
+/// Which scope list a permission takes: `categories`, `commands`, `hosts`, `paths`, `ports`,
+/// `keys` or `none`.
+pub fn scope_kind(id: &str) -> &'static str {
+    match id {
+        "library.read" | "library.write" | "resources.provide" => "categories",
+        "commands.send" | "process.run" => "commands",
+        "network.outbound" => "hosts",
+        "filesystem.read" | "filesystem.write" => "paths",
+        "network.listen" => "ports",
+        "settings.read" | "settings.write" => "keys",
+        _ => "none",
+    }
+}
+
+/// A granted-host entry: `example.com`, `*.example.com` or either with `:port`.
+pub fn valid_host_entry(h: &str) -> bool {
+    !h.is_empty()
+        && h.len() <= 255
+        && h.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '*'))
+        && (!h.contains('*') || h.starts_with("*."))
+}
+
+/// Every permission the host knows, for the console's "Advanced" review screen: id, base tier,
+/// what the host enforces, and which scope list it takes.
+pub fn catalog_json() -> Vec<serde_json::Value> {
+    KNOWN
+        .iter()
+        .map(|(id, tier, enforcement)| {
+            let probe = PermissionRequest::simple(id);
+            serde_json::json!({
+                "id": id, "tier": if *id == "commands.send" { probe.tier() } else { *tier }, "enforcement": enforcement,
+                "scope": scope_kind(id), "categories": RESOURCE_CATEGORIES,
+            })
+        })
+        .collect()
+}
+
+/// Checks a permission the *operator* is granting by hand (the Advanced override on the review
+/// screen), which may differ from anything the plugin asked for: a known id, one that makes sense
+/// for this kind of plugin, and well-formed scope lists. `kind` is the plugin's kind.
+pub fn validate_grant(p: &PermissionRequest, kind: &str) -> Result<(), String> {
+    if !KNOWN.iter().any(|(id, _, _)| *id == p.id) {
+        return Err(format!("unknown permission '{}'", p.id));
+    }
+    if p.id == "native.code" && kind != "native" {
+        return Err("'native.code' only applies to a native plugin".to_string());
+    }
+    if p.id == "ui.dom" && kind != "web" {
+        return Err("'ui.dom' only applies to a console script (a sandboxed page has no console access to grant)".to_string());
+    }
+    let plain = |s: &str| !s.is_empty() && s.len() <= 255 && !s.chars().any(|c| c.is_control());
+    for list in [&p.categories, &p.commands, &p.keys, &p.hosts, &p.paths] {
+        if list.len() > 64 || !list.iter().all(|e| plain(e)) {
+            return Err(format!("'{}': a scope list is too long or has an empty or invalid entry", p.id));
+        }
+    }
+    if p.ports.len() > 64 {
+        return Err(format!("'{}': too many ports", p.id));
+    }
+    // A scope the permission doesn't use is refused, not silently dropped: what is stored is what applies.
+    let kind_of_scope = scope_kind(&p.id);
+    let used = [
+        ("categories", !p.categories.is_empty()), ("commands", !p.commands.is_empty()), ("hosts", !p.hosts.is_empty()),
+        ("paths", !p.paths.is_empty()), ("ports", !p.ports.is_empty()), ("keys", !p.keys.is_empty()),
+    ];
+    if let Some((name, _)) = used.iter().find(|(name, set)| *set && *name != kind_of_scope) {
+        return Err(format!("'{}' doesn't take a {name} list", p.id));
+    }
+    if matches!(p.id.as_str(), "library.read" | "library.write" | "resources.provide") {
+        if let Some(c) = p.categories.iter().find(|c| *c != "*" && !RESOURCE_CATEGORIES.contains(&c.as_str())) {
+            return Err(format!("'{}': unknown category '{c}'", p.id));
+        }
+    }
+    if let Some(h) = p.hosts.iter().find(|h| !valid_host_entry(h)) {
+        return Err(format!("'{}': '{h}' isn't a valid host (use example.com, *.example.com, optionally :port)", p.id));
+    }
+    Ok(())
+}
+
 /// Everything the `OsPlugin` hooks can do.
 pub fn in_process_requests() -> Vec<PermissionRequest> {
     vec![

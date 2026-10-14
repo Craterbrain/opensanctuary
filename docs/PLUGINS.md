@@ -112,6 +112,20 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   library only through `library.addMedia`, which accepts a plain file name from *that job's* folder
   (right extension, moved not copied). What the tool itself then does (for example reaching the
   network) is not confined, which is exactly what the Critical-tier `process.run` grant tells you.
+- **Overriding what a plugin asks for (Advanced).** On any plugin's card in Settings > Plugins,
+  "Advanced: override what this plugin asks for" opens an editor, behind a warning that this may
+  break the plugin or give it more access than its author intended. Every permission it asked for
+  can be switched off (even one it marked required) and its lists (hosts, commands, library
+  categories, paths, ports) edited to narrow or widen them, and any permission the host knows
+  that it did *not* ask for can be switched on. Applying it needs a tick on "I understand this may
+  break the plugin", then sends the exact set to grant (`POST /api/plugins/<id>/approve` with
+  `override`; the permission list comes from `GET /api/plugins/permissions`). The host checks
+  what you typed (known ids, scopes the permission actually takes, valid hosts and categories;
+  `ui.dom` is refused for a sandboxed page and `native.code` for anything but a native plugin) and
+  enforces exactly the result everywhere a normal grant applies: the frame's network policy,
+  scoped tokens, command and library checks. The card then shows a "Permissions overridden" badge
+  and what differs (extra, withheld, re-scoped), the audit log records the same, and approving
+  again without the override clears it. Only the console can do this, like any approval.
 - **Notifications: `notifications.post`.** The console has one notification center (the bell in
   the ribbon, with an unread badge) that collects everything: its own toasts, notices from the host
   (for example a finished tool update) and notifications from plugins. A sandboxed plugin granted
