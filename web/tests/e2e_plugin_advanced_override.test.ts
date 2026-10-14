@@ -56,7 +56,7 @@ describe("E2E Live Test: Settings > Plugins Advanced override", () => {
 
     // The plain Approve button is replaced; the override can't be applied without acknowledging.
     expect(await card.locator("button:has-text('Approve')").first().isVisible()).toBe(true);
-    const apply = card.locator("button:has-text('Approve with override')");
+    const apply = card.locator("button:has-text('Apply override')");
     expect(await apply.isVisible()).toBe(true);
     await apply.click();
     await page.waitForTimeout(400);

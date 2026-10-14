@@ -306,12 +306,12 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
     }
   }
   if (advanced && plugin.state !== 'incompatible' && !plugin.error) {
-    const apply = el('button', 'btn btn-danger', plugin.state === 'active' ? 'Apply override' : 'Approve with override');
+    const apply = el('button', 'btn btn-danger', 'Apply override');
     apply.hidden = true;
     apply.addEventListener('click', () => {
       const grants = advanced!.collect();
       if (!grants) return;
-      void act(() => api.plugins.approveOverride(plugin.id, plugin.digest, grants), `${plugin.name} approved with your override`);
+      void act(() => api.plugins.approveOverride(plugin.id, plugin.digest, grants), `${plugin.name} updated with your override`);
     });
     actions.appendChild(apply);
     advancedApply = apply;
