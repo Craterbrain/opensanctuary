@@ -686,64 +686,17 @@
     <div class="modal-backdrop" id="import-modal">
       <div class="modal-dialog modal-dialog--md">
         <div class="modal-header">
-          <span>📥 Import Resources (Bibles, Videos, Media)</span>
+          <span>📥 Import Resources (Videos, Media, OpenLP)</span>
           <button class="modal-close-btn" id="btn-close-import">✖</button>
         </div>
         <div class="modal-body modal-body--stack">
           <div class="import-mode-tabs os-tabs" role="tablist">
-            <button class="import-tab-btn active" id="tab-btn-api" data-mode="api" role="tab">🌐 Online Bibles</button>
-            <button class="import-tab-btn" id="tab-btn-github" data-mode="github" role="tab">🐙 GitHub Repos</button>
-            <button class="import-tab-btn" id="tab-btn-ytdlp" data-mode="ytdlp" role="tab">🎥 Online Video (yt-dlp)</button>
+            <button class="import-tab-btn active" id="tab-btn-ytdlp" data-mode="ytdlp" role="tab">🎥 Online Video (yt-dlp)</button>
             <button class="import-tab-btn" id="tab-btn-local" data-mode="local" role="tab">📁 Local Files &amp; OpenLP</button>
           </div>
 
-          <div class="import-tab-content import-pane active" id="import-view-api" style="display: flex;">
-            <div class="form-row">
-              <div class="input-with-icon">
-                <span class="input-icon">🔍</span>
-                <input type="text" class="search-input" id="api-bible-search-input" placeholder="Search by name, abbreviation (e.g. KJV, ESV, NLT, Reina Valera)...">
-              </div>
-              <select id="api-bible-lang-filter" class="import-lang-filter">
-                <option value="all">All Languages</option>
-              </select>
-            </div>
-            <div class="import-list-meta">
-              <span id="api-bible-count-label">Loading library catalog...</span>
-              <span class="import-list-source">Sources: ChurchApps • Bolls.life • OpenLP</span>
-            </div>
-
-            <div class="freeshow-bible-list" id="api-bible-catalog-list">
-              <div class="list-message">Connecting to ChurchApps &amp; OpenLP Bible Catalog...</div>
-            </div>
-          </div>
-
-          <!-- TAB: GitHub Bible Repos -->
-          <div class="import-tab-content import-pane" id="import-view-github" style="display: none;">
-            <div class="store-card">
-              <h4>🐙 Import from GitHub Bible Repository</h4>
-              <p>Browse any GitHub repository structured like <strong>arron-taylor/bible-versions</strong> to discover and download Bible translations.</p>
-              <div class="form-row store-card-row">
-                <input type="text" class="search-input input-mono" id="gh-repo-input"
-                  placeholder="owner/repo  (e.g. arron-taylor/bible-versions)"
-                  value="arron-taylor/bible-versions">
-                <input type="text" class="search-input input-mono input-narrow" id="gh-versions-path-input"
-                  placeholder="versions path"
-                  value="versions"
-                  title="Sub-directory inside the repo containing language folders">
-                <button class="btn btn-primary" id="btn-gh-browse">🔍 Browse</button>
-              </div>
-            </div>
-            <div class="import-list-meta">
-              <span id="gh-bible-count-label">Enter a repo and click Browse.</span>
-              <span id="gh-bible-source-label" class="import-list-source"></span>
-            </div>
-            <div class="freeshow-bible-list" id="gh-bible-catalog-list">
-              <div class="list-message">No repo loaded yet.</div>
-            </div>
-          </div>
-
           <!-- TAB 2: yt-dlp Online Video Import with Browser Cookies & SponsorBlock -->
-          <div class="import-tab-content import-pane import-pane--scroll" id="import-view-ytdlp" style="display: none;">
+          <div class="import-tab-content import-pane import-pane--scroll active" id="import-view-ytdlp" style="display: flex;">
             <div class="store-card">
               <h4>🎥 Import Online Video via yt-dlp</h4>
               <p>Download and import high-definition videos or audio tracks directly from YouTube and 1000+ supported video platforms into your Media Library.</p>
@@ -1056,9 +1009,9 @@
               <button class="btn" disabled title="Not yet implemented — use the Import dialog's Online Video tab for royalty-free clips in the meantime.">Coming Soon</button>
             </div>
             <div class="store-card">
-              <h4>📖 Bible Gateways</h4>
-              <p>Install FreeShow, NIV, ESV, HCSB, NLT, and KJV multi-translation packs.</p>
-              <button class="btn btn-primary" id="btn-store-open-bibles">Browse Bibles</button>
+              <h4>📖 Online Bibles</h4>
+              <p>Download Bible translations and look up passages online. This is a plugin: turn it on in Settings → Plugins and it appears as a panel.</p>
+              <button class="btn btn-primary" id="btn-store-open-bibles">Open Plugins</button>
             </div>
             <div class="store-card">
               <h4>🎨 Presentation Themes</h4>

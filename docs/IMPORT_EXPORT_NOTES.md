@@ -33,7 +33,7 @@ Two different "plugin" concepts got conflated initially — worth keeping separa
   genuine third-party/optional extensions loaded from disk at runtime. Wrong shape for the
   importers — they're first-party code shipped in every build, not user-installed extensions.
 - **What actually fits:** a lightweight internal `trait Importer { fn detect(...); fn import(...); }`
-  + a static registry, same spirit as the existing `BibleProvider` / `MediaSearchProvider`
+  + a static registry, same spirit as the existing `MediaSearchProvider`
   trait-and-registry patterns already documented in `docs/PLUGINS.md`. Gets the structural win
   (clean per-format boundary, easy to add a format) without runtime-loading complexity.
 - **"Build without it" (smaller binary):** that's a Cargo feature-flag problem, not a

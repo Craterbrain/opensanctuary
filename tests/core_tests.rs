@@ -772,13 +772,6 @@ fn test_scriptures_batch_insert_and_installed_bibles() {
     assert_eq!(bibles[0].verse_count, 5);
 }
 
-#[tokio::test]
-async fn test_fetch_churchapps_catalog_live() {
-    let items = os_next::storage::freeshow_import::FreeShowImporter::fetch_churchapps_catalog().await.unwrap();
-    println!("Catalog items returned: {}", items.len());
-    assert!(!items.is_empty());
-}
-
 #[test]
 fn test_stage_item_preview_click_preserves_item() {
     let event_log = Arc::new(EventLog::new(100));
@@ -3942,7 +3935,6 @@ async fn test_freeshow_import_http_route() {
     let asset_graph = Arc::new(AssetGraph::new(&web_dir));
     let (tx, _rx) = tokio::sync::broadcast::channel(512);
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let app_state = os_next::api::ws::AppState {
@@ -3955,7 +3947,6 @@ async fn test_freeshow_import_http_route() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -4131,7 +4122,6 @@ async fn test_app_state_plugin_token_lifecycle() {
 
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let app = os_next::api::ws::AppState {
@@ -4144,7 +4134,6 @@ async fn test_app_state_plugin_token_lifecycle() {
         skip_first_time_setup: true,
         tx,
         plugin_manager,
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -4191,7 +4180,6 @@ async fn test_network_api_routes_and_conflict_detection() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4208,7 +4196,6 @@ async fn test_network_api_routes_and_conflict_detection() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -4320,7 +4307,6 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4337,7 +4323,6 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -4452,7 +4437,6 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4468,7 +4452,6 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -4754,7 +4737,6 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4772,7 +4754,6 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -4852,7 +4833,6 @@ async fn test_command_endpoint_requires_host_token_for_unpaired_callers() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4869,7 +4849,6 @@ async fn test_command_endpoint_requires_host_token_for_unpaired_callers() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -5008,7 +4987,6 @@ async fn test_library_mutation_and_admin_routes_require_host_token() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5028,7 +5006,6 @@ async fn test_library_mutation_and_admin_routes_require_host_token() {
         data_dir: test_dir.path().to_path_buf(),
         skip_first_time_setup: true,
         plugin_manager,
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -5146,7 +5123,6 @@ async fn test_tv_provision_start_and_progress_against_unreachable_device() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5163,7 +5139,6 @@ async fn test_tv_provision_start_and_progress_against_unreachable_device() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -5229,7 +5204,6 @@ async fn test_update_check_and_status_routes_against_real_test_repo() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5246,7 +5220,6 @@ async fn test_update_check_and_status_routes_against_real_test_repo() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -5322,7 +5295,6 @@ async fn test_only_one_console_connected_at_a_time() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5339,7 +5311,6 @@ async fn test_only_one_console_connected_at_a_time() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -5429,7 +5400,6 @@ async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     // 1. Generate TLS certificate
@@ -5458,7 +5428,6 @@ async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -5569,7 +5538,6 @@ async fn test_security_headers_and_cors_policies() {
     let asset_graph = Arc::new(AssetGraph::new(temp_dir.path().join("assets")));
     let (tx, _) = tokio::sync::broadcast::channel(100);
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5585,7 +5553,6 @@ async fn test_security_headers_and_cors_policies() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -5765,7 +5732,6 @@ async fn spawn_test_app(host_session_token: &str) -> String {
     let asset_graph = Arc::new(AssetGraph::new(&web_dir));
     let (tx, _rx) = tokio::sync::broadcast::channel(512);
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let app_state = os_next::api::ws::AppState {
@@ -5778,7 +5744,6 @@ async fn spawn_test_app(host_session_token: &str) -> String {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -5904,7 +5869,6 @@ async fn test_console_credential_survives_restart_and_is_revocable() {
             data_dir: std::path::PathBuf::from("."),
             skip_first_time_setup: true,
             plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-            bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
             media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
             last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             display_manager: None,
@@ -6098,7 +6062,6 @@ async fn test_plugin_grant_routes_and_web_plugin_serving() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
         media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -6231,7 +6194,6 @@ async fn test_scoped_plugin_tokens_for_commands_and_keyring() {
         web_dir: web_dir.clone(), media_dir: test_dir.path().join("media"),
         data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
         plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
         media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -6395,7 +6357,6 @@ async fn test_real_cdylib_plugin_abi2_end_to_end() {
         web_dir: std::path::PathBuf::from("web"), media_dir: tmp.path().join("media"),
         data_dir: data_dir.clone(), skip_first_time_setup: true,
         plugin_manager: Arc::new(PluginManager::new()),
-        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
         media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -6491,7 +6452,6 @@ async fn test_sandboxed_plugin_frame_serving_and_csp() {
         web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
         data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
         plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
         media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -6599,7 +6559,6 @@ async fn test_rest_ws_and_plugin_commands_share_one_pipeline() {
         web_dir: std::path::PathBuf::from("web"), media_dir: tmp.path().join("media"),
         data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
         plugin_manager: Arc::new(pm),
-        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
         media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -6698,7 +6657,6 @@ async fn test_plugin_host_fetch_and_add_song_for_the_genius_plugin() {
         web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
         data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
         plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
         media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: None,
@@ -6800,4 +6758,121 @@ async fn test_plugin_host_fetch_and_add_song_for_the_genius_plugin() {
     assert_eq!(post_song(song.clone(), net_only["token"].as_str().unwrap().to_string()).await.status(), reqwest::StatusCode::FORBIDDEN);
     c.post(format!("{base}/api/plugins/genius_lyrics/revoke")).header("x-host-token", host).send().await.unwrap();
     assert_eq!(post_song(song, token).await.status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+/// The host API behind the Online Bibles plugin: it can add chapters (ids and verse ranges are the
+/// host's, limits apply), re-adding replaces rather than duplicates, and only a plugin granted
+/// `library.write` on scriptures may.
+#[tokio::test]
+async fn test_online_bibles_plugin_host_api_adds_chapters() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new_with_dirs(
+        tmp.path().join("bibles_plugin.db").to_str().unwrap(),
+        &tmp.path().join("bibles"),
+        &tmp.path().join("songs"),
+    ).unwrap();
+    let web_dir = tmp.path().join("web");
+    let dest = web_dir.join("plugins/online_bibles");
+    std::fs::create_dir_all(&dest).unwrap();
+    for entry in std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/plugins/online_bibles")).unwrap().flatten() {
+        std::fs::copy(entry.path(), dest.join(entry.file_name())).unwrap();
+    }
+
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        tx, engine, db: db.clone(),
+        asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
+        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
+        data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
+        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
+        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "bib_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+    let host = "bib_host";
+    let json = |r: reqwest::Response| async move { r.json::<serde_json::Value>().await.unwrap() };
+
+    // The plugin asks for exactly the hosts the old built-in providers used, and nothing else.
+    let list = json(c.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap()).await;
+    let p = list.as_array().unwrap().iter().find(|p| p["id"] == "online_bibles").unwrap().clone();
+    assert_eq!((p["kind"].as_str(), p["error"].is_null()), (Some("sandbox"), true), "{p}");
+    let hosts: Vec<&str> = p["requested"][1]["hosts"].as_array().unwrap().iter().map(|h| h.as_str().unwrap()).collect();
+    assert_eq!(hosts, ["bolls.life", "api.churchapps.org", "bible-api.com", "api.github.com", "raw.githubusercontent.com"]);
+    assert_eq!(p["requested"][2]["categories"], serde_json::json!(["scriptures"]));
+    let r = c.post(format!("{base}/api/plugins/online_bibles/approve")).header("x-host-token", host)
+        .json(&serde_json::json!({ "digest": p["digest"], "granted": ["ui.panel", "network.outbound", "library.write"] })).send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+
+    let mint = |scopes: serde_json::Value| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugins/online_bibles/token")).header("x-host-token", "bib_host").json(&serde_json::json!({ "scopes": scopes })).send().await.unwrap() }
+    };
+    // Songs weren't granted, only scriptures.
+    assert_eq!(mint(serde_json::json!([{ "id": "library.write", "categories": ["songs"] }])).await.status(), reqwest::StatusCode::FORBIDDEN);
+    let token = json(mint(serde_json::json!([{ "id": "library.write", "categories": ["scriptures"] }])).await).await["token"].as_str().unwrap().to_string();
+    let post = |items: serde_json::Value, token: String| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugin-host/scriptures")).header("x-plugin-token", token).json(&serde_json::json!({ "items": items })).send().await.unwrap() }
+    };
+    assert_eq!(c.post(format!("{base}/api/plugin-host/scriptures")).json(&serde_json::json!({ "items": [] })).send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // Two chapters; verses arrive out of order and with attacker-chosen ids/ranges/reference.
+    let chapter = |book: &str, ch: u32| serde_json::json!({
+        "id": "attacker", "book": book, "chapter": ch, "verse_start": 99, "verse_end": 1, "version": "plugtest", "reference": "Evil 1:1",
+        "verses": [{ "verse_number": 2, "text": "second" }, { "verse_number": 1, "text": "first" }]
+    });
+    let r = post(serde_json::json!([chapter("John", 3), chapter("Genesis", 1)]), token.clone()).await;
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let body = json(r).await;
+    assert_eq!((body["chapters"].as_u64(), body["verses"].as_u64()), (Some(2), Some(4)));
+    let ids: Vec<String> = body["ids"].as_array().unwrap().iter().map(|i| i.as_str().unwrap().to_string()).collect();
+    assert!(ids.iter().all(|i| i.starts_with("scrip_") && i != "attacker"));
+
+    // Stored as the host derived it, under the upper-cased version, and listed as an installed Bible.
+    let stored = db.get_scripture_by_id(&ids[0]).unwrap().expect("chapter stored");
+    assert_eq!((stored.book.as_str(), stored.chapter, stored.version.as_str(), stored.verse_start, stored.verse_end, stored.reference.as_str()),
+               ("John", 3, "PLUGTEST", 1, 2, "John 3"));
+    assert_eq!(stored.verses.iter().map(|v| v.text.as_str()).collect::<Vec<_>>(), ["first", "second"]);
+    assert!(db.get_installed_bibles().unwrap().iter().any(|b| b.id == "PLUGTEST"));
+
+    // Sending the same chapter again replaces it (same id) instead of duplicating.
+    let again = json(post(serde_json::json!([chapter("John", 3)]), token.clone()).await).await;
+    assert_eq!(again["ids"][0], serde_json::Value::String(ids[0].clone()));
+    assert_eq!(db.get_installed_bibles().unwrap().iter().find(|b| b.id == "PLUGTEST").unwrap().verse_count, 2); // (it counts stored chapters)
+
+    // Limits.
+    assert_eq!(post(serde_json::json!([]), token.clone()).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    let many: Vec<_> = (0..501).map(|i| chapter("John", 1 + (i % 20))).collect();
+    assert_eq!(post(serde_json::json!(many), token.clone()).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    let mut no_verses = chapter("John", 3); no_verses["verses"] = serde_json::json!([]);
+    assert_eq!(post(serde_json::json!([no_verses]), token.clone()).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    let mut long_text = chapter("John", 3); long_text["verses"][0]["text"] = serde_json::json!("x".repeat(4001));
+    assert_eq!(post(serde_json::json!([long_text]), token.clone()).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    let mut bad_version = chapter("John", 3); bad_version["version"] = serde_json::json!("");
+    assert_eq!(post(serde_json::json!([bad_version]), token.clone()).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    // A version name can never become a path: it is sanitised to a plain file name.
+    let mut sneaky = chapter("John", 3); sneaky["version"] = serde_json::json!("../../etc/evil");
+    assert_eq!(post(serde_json::json!([sneaky]), token.clone()).await.status(), reqwest::StatusCode::OK);
+    assert!(!tmp.path().join("etc").exists());
+    assert!(std::fs::read_dir(tmp.path().join("bibles")).unwrap().flatten().all(|e| e.path().parent() == Some(&tmp.path().join("bibles"))));
+
+    // Revoke: the token is dead.
+    c.post(format!("{base}/api/plugins/online_bibles/revoke")).header("x-host-token", host).send().await.unwrap();
+    assert_eq!(post(serde_json::json!([chapter("John", 3)]), token).await.status(), reqwest::StatusCode::UNAUTHORIZED);
 }

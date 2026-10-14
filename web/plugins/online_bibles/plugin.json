@@ -1,0 +1,23 @@
+{
+  "manifest_version": 1,
+  "id": "online_bibles",
+  "name": "Online Bibles",
+  "version": "1.0.0",
+  "publisher": "OpenSanctuary",
+  "description": "Download Bible translations (ChurchApps, Bolls.life, public GitHub repositories) and look up passages online, into your Bible library.",
+  "web": { "entry": "index.html", "sandbox": true },
+  "permissions": [
+    { "id": "ui.panel", "reason": "Appears as a panel in the console" },
+    {
+      "id": "network.outbound",
+      "hosts": ["bolls.life", "api.churchapps.org", "bible-api.com", "api.github.com", "raw.githubusercontent.com"],
+      "reason": "The server fetches Bible catalogs, whole translations and single passages from these hosts on the plugin's behalf, and from no others"
+    },
+    {
+      "id": "library.write",
+      "categories": ["scriptures"],
+      "reason": "Adds the downloaded chapters to your Bible library. Downloading a translation again replaces its chapters, so this can also replace chapters of a translation you already have"
+    },
+    { "id": "commands.send", "commands": ["AddToSchedule"], "optional": true, "reason": "Adds a looked-up passage to the schedule" }
+  ]
+}

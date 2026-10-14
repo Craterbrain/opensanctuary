@@ -54,7 +54,7 @@ pub(crate) fn apply_default_theme_if_unset(item: &mut crate::core::models::Sched
 pub(super) async fn post_command(
     State(app): State<AppState>,
     headers: HeaderMap,
-    Json(mut value): Json<serde_json::Value>,
+    Json(value): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     // Paired remote-control clients (see /remote, paired via the Pairing
     // menu's QR code) must present a valid, non-revoked device token here.

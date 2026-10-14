@@ -166,9 +166,6 @@ export const api = {
   },
 
   bibles: {
-    onlineCatalog: () => api.get<any>('/api/bibles/online/catalog'),
-    downloadOnline: (data: { translation: string; provider: string; source_key?: string | null }) =>
-      api.post<any>('/api/bibles/online/download', data),
   },
 
   network: {

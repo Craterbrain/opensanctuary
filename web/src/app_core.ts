@@ -90,7 +90,6 @@ interface UiCallbacks {
   openImportModal: (initialMode?: string) => void;
   openSlideEditor: (type?: string) => void;
   promptNewSectionHeader: (insertIndex: any) => void;
-  renderOnlineBibleCatalog: (items: any) => void;
   setImportMode: (mode: string) => void;
   switchToPairingTab: () => void;
   switchToAdbProvisionTab: () => void;
@@ -117,8 +116,7 @@ export let currentTab = 'songs';
 export let selectedLibraryItem: any = null;
 export let currentEditorType = 'song';
 export let editingItemId: string | null = null;
-export let onlineBibleCatalog: any[] = [];
-export let activeImportMode = 'api';
+export let activeImportMode = 'ytdlp';
 export let activeLiveViewMode = 'matrix'; // 'matrix' or 'list'
 export let expandedScheduleIndex: number | null = 0; // Only ONE schedule item expanded at a time, or null if all collapsed
 
@@ -512,31 +510,18 @@ export function resetImportModal() {
   // exposed *function* always closes over app_ui.ts's real, live variable,
   // so call that instead of touching the stale snapshot directly.
   uiCallbacks.stopYtdlpPolling?.();
-  const searchEl = document.getElementById('api-bible-search-input') as HTMLInputElement | null;
-  if (searchEl) searchEl.value = '';
   const fileEl = document.getElementById('file-freeshow-fsb') as HTMLInputElement | null;
   if (fileEl) fileEl.value = '';
-  uiCallbacks.setImportMode?.('api');
-  if (onlineBibleCatalog.length > 0) {
-    uiCallbacks.renderOnlineBibleCatalog?.(onlineBibleCatalog);
-  }
+  uiCallbacks.setImportMode?.('ytdlp');
 }
 
 export function handleImportBack() {
-  // 1. If currently on Local Files, GitHub, or yt-dlp tab, switch back to Online API tab
-  if (activeImportMode === 'local' || activeImportMode === 'ytdlp' || activeImportMode === 'github') {
-    uiCallbacks.setImportMode?.('api');
+  // 1. If currently on Local Files, switch back to the first tab (Online Video)
+  if (activeImportMode === 'local') {
+    uiCallbacks.setImportMode?.('ytdlp');
     return;
   }
-  // 2. If there's an active search query in api-bible-search-input, clear it and show full catalog
-  const searchInput = document.getElementById('api-bible-search-input') as HTMLInputElement | null;
-  if (searchInput && searchInput.value.trim().length > 0) {
-    searchInput.value = '';
-    uiCallbacks.renderOnlineBibleCatalog?.(onlineBibleCatalog);
-    searchInput.focus();
-    return;
-  }
-  // 3. If already at top level, close and reset the modal
+  // 2. If already at top level, close and reset the modal
   closeModal(importModal);
 }
 
@@ -3851,7 +3836,6 @@ export function setEditingItemId(v: typeof editingItemId) { editingItemId = v; }
 export function setExpandedScheduleIndex(v: typeof expandedScheduleIndex) { expandedScheduleIndex = v; }
 export function setIsDualBibleMode(v: typeof isDualBibleMode) { isDualBibleMode = v; }
 export function resetLastRenderedScheduleKey() { lastRenderedScheduleKey = ''; }
-export function setOnlineBibleCatalog(v: typeof onlineBibleCatalog) { onlineBibleCatalog = v; }
 
 // Schedule Auto-Save (Every 2 minutes)
 setInterval(() => {

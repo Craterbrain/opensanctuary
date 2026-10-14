@@ -1,4 +1,3 @@
-pub mod bible_providers;
 pub mod db;
 pub mod ewsx;
 pub mod freeshow_import;
@@ -14,10 +13,9 @@ pub mod transcode;
 pub mod ytdlp_import;
 pub mod keyring;
 
-pub use bible_providers::{BibleCatalogEntry, BibleProvider, BibleProviderRegistry, GitHubRepoBibleProvider, GitHubRepoCatalogRequest};
 pub use db::{CcliUsageRow, Database, InstalledBibleInfo, PairedDevice};
 pub use ewsx::EwsxManager;
-pub use freeshow_import::{find_book_meta, find_book_meta_exact, parse_scripture_reference, BibleBookMeta, FreeShowImporter, OnlineBibleCatalogItem, ParsedScriptureRef, BIBLE_BOOKS_META, KNOWN_BIBLE_VERSIONS};
+pub use freeshow_import::{find_book_meta, find_book_meta_exact, parse_scripture_reference, BibleBookMeta, FreeShowImporter, ParsedScriptureRef, BIBLE_BOOKS_META, KNOWN_BIBLE_VERSIONS};
 pub use freeshow_show_import::FreeShowShowImporter;
 pub use keyring::KeyringService;
 pub use media_search_providers::{MediaSearchProvider, MediaSearchRegistry, MediaSearchResult, PexelsProvider, PixabayProvider};

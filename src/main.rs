@@ -172,7 +172,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (tx, _rx) = tokio::sync::broadcast::channel(512);
 
-    let bible_providers = os_next::storage::BibleProviderRegistry::new_default();
     let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     // Only created when a native window will actually be launched (below); stays
@@ -318,7 +317,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         data_dir: resolved_paths.data_dir(),
         skip_first_time_setup: args.skip_first_time_setup,
         plugin_manager: plugin_manager.clone(),
-        bible_providers,
         media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         display_manager: display_manager.clone(),

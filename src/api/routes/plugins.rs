@@ -399,6 +399,96 @@ pub(super) async fn plugin_add_song(
     Ok(Json(serde_json::json!({ "success": true, "id": song.id, "song": song })))
 }
 
+#[derive(Deserialize)]
+pub(super) struct PluginScripturesReq {
+    items: Vec<serde_json::Value>,
+}
+
+/// Most chapters, and verses per chapter, a plugin may add in one call (a whole Bible is sent in
+/// batches); a verse's text is capped too.
+const MAX_SCRIPTURE_ITEMS: usize = 500;
+const MAX_VERSES_PER_ITEM: usize = 400;
+const MAX_VERSE_TEXT: usize = 4000;
+
+/// POST /api/plugin-host/scriptures -- adds Bible chapters to the library for a plugin granted
+/// `library.write` on `scriptures`. Ids are derived here from (book, chapter, verses, version) --
+/// the same way the built-in importer did -- so downloading a translation again replaces its chapters
+/// instead of duplicating them. NOTE: that also means a plugin with this grant can replace chapters
+/// of any installed translation whose version name it uses; the grant's reason says so.
+pub(super) async fn plugin_add_scriptures(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PluginScripturesReq>,
+) -> Result<impl IntoResponse, ApiErr> {
+    let caller = plugin_caller(&app, &headers).await?;
+    if !caller.scopes.writes("scriptures") {
+        return Err(err(StatusCode::FORBIDDEN, "this plugin wasn't granted write access to scriptures"));
+    }
+    if req.items.is_empty() || req.items.len() > MAX_SCRIPTURE_ITEMS {
+        return Err(err(StatusCode::BAD_REQUEST, &format!("send 1-{MAX_SCRIPTURE_ITEMS} chapters per call")));
+    }
+    let mut items: Vec<crate::core::models::ScriptureItem> = Vec::with_capacity(req.items.len());
+    for raw in req.items {
+        let mut raw = raw;
+        if let Some(obj) = raw.as_object_mut() {
+            // Everything derived from the content is the host's to fill in.
+            for (k, v) in [("id", ""), ("reference", "")] {
+                obj.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+            }
+            for k in ["verse_start", "verse_end"] {
+                obj.entry(k.to_string()).or_insert(serde_json::Value::from(0));
+            }
+        }
+        let mut item: crate::core::models::ScriptureItem =
+            serde_json::from_value(raw).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("not a chapter: {e}")))?;
+        let version = item.version.trim().to_uppercase();
+        let book = item.book.trim().to_string();
+        if book.is_empty() || book.len() > 100 || version.is_empty() || version.len() > 40 {
+            return Err(err(StatusCode::BAD_REQUEST, "a chapter needs a book (<=100 chars) and a version (<=40 chars)"));
+        }
+        if item.chapter == 0 || item.chapter > 1000 {
+            return Err(err(StatusCode::BAD_REQUEST, "chapter number out of range"));
+        }
+        if item.verses.is_empty()
+            || item.verses.len() > MAX_VERSES_PER_ITEM
+            || item.verses.iter().any(|v| v.verse_number == 0 || v.verse_number > 1000 || v.text.len() > MAX_VERSE_TEXT)
+        {
+            return Err(err(StatusCode::BAD_REQUEST, "a chapter needs 1-400 verses of up to 4000 characters"));
+        }
+        item.verses.sort_by_key(|v| v.verse_number);
+        item.verse_start = item.verses.first().map(|v| v.verse_number).unwrap_or(1);
+        item.verse_end = item.verses.last().map(|v| v.verse_number).unwrap_or(item.verse_start);
+        item.book = book;
+        item.version = version;
+        item.theme_name = None;
+        item.reference = format!("{} {}", item.book, item.chapter);
+        item.id = format!(
+            "scrip_{}",
+            uuid::Uuid::new_v5(
+                &uuid::Uuid::NAMESPACE_OID,
+                format!("{}:{}:{}-{}:{}", item.book, item.chapter, item.verse_start, item.verse_end, item.version).as_bytes()
+            )
+        );
+        items.push(item);
+    }
+    let count = items.len();
+    let ids: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
+    let verses: usize = items.iter().map(|i| i.verses.len()).sum();
+    let versions: std::collections::BTreeSet<String> = items.iter().map(|i| i.version.clone()).collect();
+    let db = app.db.clone();
+    tokio::task::spawn_blocking(move || db.insert_scriptures_batch(&items))
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("task failed: {e}")))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {e}")))?;
+    app.db.add_plugin_audit(
+        &caller.plugin_id,
+        &format!("plugin:{}", caller.plugin_id),
+        "scriptures_added",
+        &serde_json::json!({ "chapters": count, "verses": verses, "versions": versions }).to_string(),
+    );
+    Ok(Json(serde_json::json!({ "success": true, "chapters": count, "verses": verses, "ids": ids })))
+}
+
 /// True when `file_name` (e.g. `hello_world.js`) is an approved, unchanged web plugin.
 /// The file is re-hashed on every request, so editing it after approval stops it being
 /// served until it is reviewed again.
@@ -559,4 +649,5 @@ pub(super) fn router() -> Router<AppState> {
         .route("/plugin-frame/:id/*path", get(serve_plugin_frame))
         .route("/api/plugin-host/fetch", post(plugin_fetch))
         .route("/api/plugin-host/songs", post(plugin_add_song))
+        .route("/api/plugin-host/scriptures", post(plugin_add_scriptures))
 }

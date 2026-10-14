@@ -62,7 +62,6 @@ pub struct AppState {
     pub skip_first_time_setup: bool,
     pub tx: broadcast::Sender<String>,
     pub plugin_manager: Arc<crate::core::plugins::PluginManager>,
-    pub bible_providers: crate::storage::BibleProviderRegistry,
     pub media_search: Arc<crate::storage::MediaSearchRegistry>,
     /// The `Schedule::schedule_version` last included (non-null) in a broadcast over `tx`.
     /// Lets `broadcast_snapshot` skip re-serializing/re-sending the full schedule to every
@@ -519,7 +518,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
         while let Ok(Some(Ok(msg))) = tokio::time::timeout(WS_IDLE_TIMEOUT, receiver.next()).await {
             if let Message::Text(text) = msg {
                 // Intercept raw JSON commands
-                if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
                     let safe_text = redact_ws_envelope(&value);
                     // Every command arrives in an envelope that carries its own credential, since
                     // a raw WebSocket text frame has no header to put one in:

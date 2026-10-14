@@ -15,6 +15,7 @@
  *   keyring.get|set|delete        keyring.own (the plugin's own namespace)
  *   net.fetch { url }             network.outbound: the *server* fetches it, only from granted hosts
  *   library.addSong { song }      library.write on "songs"; refreshes the library list
+ *   library.addScriptures { items } library.write on "scriptures": Bible chapters; refreshes the Bibles
  *   ui.resize { height }          ui.panel
  *   log { message }
  * console -> plugin: `{ type: 'os.response', id, ok, result|error }`
@@ -140,6 +141,18 @@ async function handle(r: Running, method: string, params: any): Promise<unknown>
       window.dispatchEvent(new CustomEvent('os-library-changed', { detail: { category: 'songs', id: body.id } }));
       return { id: body.id, song: body.song };
     }
+    case 'library.addScriptures': {
+      need('library.write');
+      const res = await withToken(r, (t) => fetch('/api/plugin-host/scriptures', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-plugin-token': t },
+        body: JSON.stringify({ items: params?.items }),
+      }));
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `couldn't add the chapters (${res.status})`);
+      window.dispatchEvent(new CustomEvent('os-library-changed', { detail: { category: 'scriptures' } }));
+      return { chapters: body.chapters, verses: body.verses, ids: body.ids };
+    }
     case 'ui.resize': {
       need('ui.panel');
       const h = Math.max(40, Math.min(600, Number(params?.height) || 0));
@@ -231,9 +244,32 @@ export function startSandboxedPlugin(plugin: PluginInfo): void {
     frame.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden';
     document.body.appendChild(frame);
   }
-  frame.addEventListener('load', () => {
+  // Register the frame's window *now*, not on its 'load' event: a plugin's script runs while the page is
+  // still loading and sends its first request straight away, which would arrive before 'load' and be
+  // ignored as coming from an unknown window. (The WindowProxy stays the same across the navigation.)
+  const register = () => {
     const w = frame.contentWindow;
     if (w) running.set(w, { plugin, frame, granted, commands: grantedCommands(plugin), token: null });
+  };
+  register();
+  frame.addEventListener('load', () => {
+    if (frame.contentWindow && !running.has(frame.contentWindow)) register();
     if (granted.has('show.observe')) ensureStateSocket();
   });
+  if (granted.has('show.observe')) ensureStateSocket();
+}
+
+export function isSandboxedPluginRunning(id: string): boolean {
+  for (const r of running.values()) if (r.plugin.id === id) return true;
+  return !!document.querySelector(`iframe[data-plugin-id="${CSS.escape(id)}"]`);
+}
+
+/** Removes a sandboxed plugin's frame (and dock card) -- on revoke/deny, without needing a reload. */
+export function stopSandboxedPlugin(id: string): void {
+  for (const [win, r] of Array.from(running.entries())) {
+    if (r.plugin.id === id) running.delete(win);
+  }
+  const frame = document.querySelector(`iframe[data-plugin-id="${CSS.escape(id)}"]`);
+  const card = frame?.closest('.plugin-dock-card');
+  (card ?? frame)?.remove();
 }
