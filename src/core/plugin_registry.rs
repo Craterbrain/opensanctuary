@@ -1,24 +1,23 @@
-//! Finds plugins on disk, records what it saw in `plugin_grants`, and decides which
-//! native libraries are allowed to load (docs/PLUGIN_PERMISSIONS.md).
+//! Finds plugins on disk (`web/plugins/`) and records what it saw in `plugin_grants`
+//! (docs/PLUGIN_PERMISSIONS.md).
 //!
-//! A plugin is loaded/served only while it is `approved` *and* what is on disk still
+//! A plugin is served/started only while it is `approved` *and* what is on disk still
 //! hashes to what the operator reviewed; any change drops it to `changed` until it is
 //! re-reviewed.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::core::plugin_permissions::{
-    artifact_digest, platform_key, sha256_file, sha256_hex, PermissionRequest, PermissionSet,
+    artifact_digest, sha256_file, sha256_hex, PermissionRequest, PermissionSet,
     PluginManifest,
 };
-use crate::core::plugins::ApprovedNative;
 use crate::storage::db::{ObservedPlugin, PluginGrantRow};
 use crate::storage::Database;
 
 #[derive(Debug, Clone)]
 pub struct Discovered {
     pub id: String,
-    /// `native`, `web` or `sandbox`.
+    /// `web` (a console script) or `sandbox`.
     pub kind: &'static str,
     pub name: String,
     pub version: Option<String>,
@@ -29,19 +28,6 @@ pub struct Discovered {
     pub signer: Option<String>,
     pub requested: Vec<PermissionRequest>,
     pub error: Option<String>,
-    /// Native library to load, when this build's platform has one.
-    pub library: Option<PathBuf>,
-}
-
-#[cfg(unix)]
-fn group_or_world_writable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).map(|m| m.permissions().mode() & 0o022 != 0).unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn group_or_world_writable(_path: &Path) -> bool {
-    false
 }
 
 /// Checks the detached signature next to a manifest, if there is one. `Ok(None)` = unsigned.
@@ -73,84 +59,7 @@ fn failed(id: String, kind: &'static str, source: &Path, msg: String) -> Discove
         signer: None,
         requested: Vec::new(),
         error: Some(msg),
-        library: None,
     }
-}
-
-fn discover_native_dir(dir: &Path, host_version: &str) -> Option<Discovered> {
-    let dir_name = dir.file_name()?.to_str()?.to_string();
-    let manifest_path = dir.join("plugin.json");
-    let bytes = match std::fs::read(&manifest_path) {
-        Ok(b) => b,
-        Err(_) => return None, // not a plugin directory
-    };
-    let manifest_sha = sha256_hex(&bytes);
-    let manifest = match PluginManifest::parse(&bytes).and_then(|m| m.validate(host_version).map(|_| m)) {
-        Ok(m) => m,
-        Err(e) => {
-            let mut d = failed(dir_name, "native", dir, e.to_string());
-            d.manifest_sha256 = Some(manifest_sha);
-            return Some(d);
-        }
-    };
-    let signer = match verify_signer(&bytes, &manifest, &dir.join("plugin.json.minisig")) {
-        Ok(s) => s,
-        Err(e) => {
-            let mut d = failed(dir_name, "native", dir, e);
-            d.manifest_sha256 = Some(manifest_sha);
-            return Some(d);
-        }
-    };
-    let mut d = Discovered {
-        id: manifest.id.clone(),
-        kind: "native",
-        name: manifest.name.clone(),
-        version: Some(manifest.version.clone()).filter(|v| !v.is_empty()),
-        source_path: dir.to_string_lossy().to_string(),
-        manifest_sha256: Some(manifest_sha),
-        digest: String::new(),
-        signer,
-        requested: manifest.permissions.clone(),
-        error: None,
-        library: None,
-    };
-    let fail = |mut d: Discovered, msg: String| {
-        d.digest = sha256_hex(format!("{}{}", d.manifest_sha256.clone().unwrap_or_default(), msg).as_bytes());
-        d.error = Some(msg);
-        d
-    };
-    if manifest.id != dir_name {
-        return Some(fail(d, format!("plugin id '{}' must match its directory name '{}'", manifest.id, dir_name)));
-    }
-    let Some(backend) = manifest.backend.as_ref() else {
-        return Some(fail(d, "this plugin has no native library; web plugins are installed in the application's plugins folder".to_string()));
-    };
-    let key = platform_key();
-    let Some(entry) = backend.libraries.get(&key) else {
-        return Some(fail(d, format!("no library declared for this platform ({key})")));
-    };
-    let lib_path = dir.join(&entry.path);
-    // Symlinks could point the pinned path somewhere else after approval.
-    match std::fs::symlink_metadata(&lib_path) {
-        Ok(m) if m.is_file() => {}
-        _ => return Some(fail(d, format!("library {} is missing or not a regular file", entry.path))),
-    }
-    if group_or_world_writable(dir) || group_or_world_writable(&lib_path) {
-        return Some(fail(d, "plugin files must not be group- or world-writable".to_string()));
-    }
-    let actual = match sha256_file(&lib_path) {
-        Ok(h) => h,
-        Err(e) => return Some(fail(d, format!("could not read {}: {e}", entry.path))),
-    };
-    if !actual.eq_ignore_ascii_case(&entry.sha256) {
-        return Some(fail(d, format!("{} does not match the sha256 in plugin.json", entry.path)));
-    }
-    // The manifest is part of what was reviewed: editing it after approval (to widen a permission's
-    // list, say) must show up as a change, not just editing the library.
-    let manifest_hash = d.manifest_sha256.clone().unwrap_or_default();
-    d.digest = artifact_digest(&[(entry.path.clone(), actual), ("plugin.json".to_string(), manifest_hash)]);
-    d.library = Some(lib_path);
-    Some(d)
 }
 
 fn discover_web(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
@@ -209,7 +118,6 @@ fn discover_web(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
                         signer: signer.clone(),
                         requested: m.permissions.clone(),
                         error: problem,
-                        library: None,
                     });
                 }
             }
@@ -278,7 +186,6 @@ fn discover_sandbox(dir: &Path, host_version: &str, icons_dir: Option<&Path>) ->
         signer: None,
         requested: manifest.permissions.clone(),
         error: None,
-        library: None,
     };
     let fail = |mut d: Discovered, msg: String| {
         d.digest = sha256_hex(format!("{manifest_sha}{msg}").as_bytes());
@@ -313,26 +220,9 @@ fn discover_sandbox(dir: &Path, host_version: &str, icons_dir: Option<&Path>) ->
     }
 }
 
-/// Scans the native plugin directory and the web plugins folder.
-pub fn discover(plugin_dir: &Path, web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
+/// Scans the web plugins folder.
+pub fn discover(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
     let mut out = Vec::new();
-    if !plugin_dir.exists() {
-        let _ = std::fs::create_dir_all(plugin_dir);
-    }
-    if let Ok(entries) = std::fs::read_dir(plugin_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(d) = discover_native_dir(&path, host_version) {
-                    out.push(d);
-                }
-            } else if path.is_file() && matches!(path.extension().and_then(|e| e.to_str()), Some("so" | "dll" | "dylib")) {
-                // A bare library with no manifest used to load as an ABI 1 plugin. That is gone:
-                // a native plugin is a folder with a plugin.json that pins its library.
-                tracing::warn!("ignoring {path:?}: native plugins need a folder with a plugin.json; bare libraries are no longer loaded");
-            }
-        }
-    }
     out.extend(discover_web(web_plugins_dir, host_version));
     // A duplicate id is ambiguous; neither copy may run.
     let mut counts = std::collections::HashMap::new();
@@ -353,8 +243,8 @@ fn requested_json(d: &Discovered) -> String {
 
 /// Records the scan in the database. Anything new is `pending` until the operator approves it.
 pub fn sync(db: &Database, discovered: &[Discovered]) {
-    // Rows for the removed pre-manifest kinds would otherwise sit in the list forever.
-    let _ = db.purge_legacy_plugins();
+    // Rows for the removed kinds (native libraries, pre-manifest files) would otherwise sit in the list forever.
+    let _ = db.purge_removed_plugin_kinds();
     for d in discovered {
         let existing = db.get_plugin_grant(&d.id).ok().flatten();
         let observed = ObservedPlugin {
@@ -386,19 +276,6 @@ pub fn parse_granted(row: &PluginGrantRow) -> PermissionSet {
     PermissionSet(serde_json::from_str::<Vec<PermissionRequest>>(&row.granted_json).unwrap_or_default())
 }
 
-/// Native libraries that may load right now: approved, unchanged on disk, valid.
-pub fn approved_natives(db: &Database, discovered: &[Discovered]) -> Vec<ApprovedNative> {
-    discovered
-        .iter()
-        .filter(|d| d.error.is_none())
-        .filter_map(|d| {
-            let lib = d.library.clone()?;
-            let row = db.get_plugin_grant(&d.id).ok().flatten()?;
-            (row.effective_state() == "active").then(|| ApprovedNative { id: d.id.clone(), library: lib, grants: parse_granted(&row) })
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,84 +284,79 @@ mod tests {
         Database::new(dir.join("t.db").to_str().unwrap()).unwrap()
     }
 
-    /// A native plugin folder (plugin.json pinning lib/x.so) under `plugins`.
-    fn write_native_plugin(plugins: &Path, lib_bytes: &[u8]) -> PathBuf {
-        let dir = plugins.join("org.example.thing");
-        std::fs::create_dir_all(dir.join("lib")).unwrap();
-        std::fs::write(dir.join("lib/x.so"), lib_bytes).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-            std::fs::set_permissions(dir.join("lib/x.so"), std::fs::Permissions::from_mode(0o644)).unwrap();
-        }
-        let manifest = serde_json::json!({
-            "manifest_version": 1, "id": "org.example.thing", "name": "Thing", "version": "1.0.0",
-            "backend": {"abi": 2, "libraries": { platform_key(): {"path": "lib/x.so", "sha256": sha256_hex(lib_bytes)}}},
-            "permissions": [{"id": "show.observe"}]
-        });
-        std::fs::write(dir.join("plugin.json"), manifest.to_string()).unwrap();
+    /// A sandboxed plugin folder `<id>` under `plugins` with the given entry page.
+    fn write_sandbox_plugin(plugins: &Path, id: &str, page: &str) -> std::path::PathBuf {
+        let dir = plugins.join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.html"), page).unwrap();
+        std::fs::write(
+            dir.join("plugin.json"),
+            serde_json::json!({
+                "manifest_version": 1, "id": id, "name": "Thing", "version": "1.0.0",
+                "web": {"entry": "index.html", "sandbox": true},
+                "permissions": [{"id": "show.observe"}]
+            }).to_string(),
+        ).unwrap();
         dir
     }
 
     #[test]
-    fn bare_libraries_and_scripts_are_ignored_and_old_rows_are_purged() {
+    fn removed_plugin_forms_are_ignored_or_refused_and_old_rows_are_purged() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins = tmp.path().join("plugins");
         let web = tmp.path().join("web_plugins");
-        std::fs::create_dir_all(&plugins).unwrap();
         std::fs::create_dir_all(&web).unwrap();
-        // The pre-manifest forms: a loose library and a loose script, neither with a manifest.
-        std::fs::write(plugins.join("Old Plugin.so"), b"not really a library").unwrap();
+        // A bare script with no manifest is not a plugin.
         std::fs::write(web.join("demo.js"), b"export default {}").unwrap();
-        let found = discover(&plugins, &web, "0.2.0");
-        assert!(found.is_empty(), "{:?}", found.iter().map(|d| &d.id).collect::<Vec<_>>());
+        // A manifest that asks for a native library is refused with an explanation, not loaded.
+        let dir = web.join("native_try");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("plugin.json"), serde_json::json!({
+            "manifest_version": 1, "id": "native_try", "name": "N",
+            "backend": {"abi": 2, "libraries": {}}, "permissions": [{"id": "show.observe"}]
+        }).to_string()).unwrap();
+        let found = discover(&web, "0.2.0");
+        assert!(found.iter().all(|d| d.id != "demo"), "a bare script isn't a plugin");
+        let n = found.iter().find(|d| d.id == "native_try").unwrap();
+        assert!(n.error.as_deref().unwrap_or("").contains("native"), "{:?}", n.error);
 
-        // A row recorded by an older version for such a file is dropped; real plugins are not.
+        // Rows an older version recorded for the removed kinds are dropped; real plugins are not.
         let db = temp_db(tmp.path());
-        for (id, kind) in [("legacy.old_plugin", "legacy-native"), ("demo", "legacy-web")] {
+        for (id, kind) in [("legacy.old_plugin", "legacy-native"), ("demo", "legacy-web"), ("org.example.observer", "native")] {
             let observed = ObservedPlugin {
                 plugin_id: id, kind, name: id, version: None, source_path: "x", manifest_sha256: None, digest: "d",
                 signer: None, requested_json: "[]", error: None,
             };
             db.upsert_observed_plugin(&observed).unwrap();
         }
-        write_native_plugin(&plugins, b"binary");
-        sync(&db, &discover(&plugins, &web, "0.2.0"));
-        assert!(db.get_plugin_grant("legacy.old_plugin").unwrap().is_none());
-        assert!(db.get_plugin_grant("demo").unwrap().is_none());
-        assert_eq!(db.get_plugin_grant("org.example.thing").unwrap().unwrap().effective_state(), "pending");
+        write_sandbox_plugin(&web, "kept", "<html></html>");
+        sync(&db, &discover(&web, "0.2.0"));
+        for gone in ["legacy.old_plugin", "demo", "org.example.observer"] {
+            assert!(db.get_plugin_grant(gone).unwrap().is_none(), "{gone}");
+        }
+        assert_eq!(db.get_plugin_grant("kept").unwrap().unwrap().effective_state(), "pending");
     }
 
     #[test]
-    fn nothing_is_approved_automatically_and_a_changed_binary_stops_loading_until_reapproved() {
+    fn nothing_is_approved_automatically_and_a_changed_plugin_stops_until_reapproved() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins = tmp.path().join("plugins");
-        let web = tmp.path().join("web");
+        let web = tmp.path().join("web_plugins");
         let db = temp_db(tmp.path());
-        let dir = write_native_plugin(&plugins, b"v1");
-        let first = discover(&plugins, &web, "0.2.0");
+        let dir = write_sandbox_plugin(&web, "thing", "<html>v1</html>");
+        let first = discover(&web, "0.2.0");
         sync(&db, &first);
-        let row = db.get_plugin_grant("org.example.thing").unwrap().unwrap();
-        assert_eq!(row.effective_state(), "pending", "new plugins always wait for the operator");
-        assert!(approved_natives(&db, &first).is_empty());
+        assert_eq!(db.get_plugin_grant("thing").unwrap().unwrap().effective_state(), "pending", "new plugins always wait for the operator");
 
-        // Approve what was seen: it may load.
-        let d = first.iter().find(|d| d.id == "org.example.thing").unwrap();
-        db.set_plugin_decision("org.example.thing", "approved", &requested_json(d), d.manifest_sha256.as_deref(), Some(&d.digest), None, "test").unwrap();
-        assert_eq!(db.get_plugin_grant("org.example.thing").unwrap().unwrap().effective_state(), "active");
-        assert_eq!(approved_natives(&db, &first).len(), 1);
+        // Approve what was seen.
+        let d = first.iter().find(|d| d.id == "thing").unwrap();
+        db.set_plugin_decision("thing", "approved", &requested_json(d), d.manifest_sha256.as_deref(), Some(&d.digest), None, "test").unwrap();
+        assert_eq!(db.get_plugin_grant("thing").unwrap().unwrap().effective_state(), "active");
 
-        // Swap the binary (and its pinned hash): a different digest, so it is `changed` and not loaded.
-        let manifest = std::fs::read_to_string(dir.join("plugin.json")).unwrap().replace(&sha256_hex(b"v1"), &sha256_hex(b"v2 -- swapped"));
-        std::fs::write(dir.join("lib/x.so"), b"v2 -- swapped").unwrap();
-        std::fs::write(dir.join("plugin.json"), manifest).unwrap();
-        let after = discover(&plugins, &web, "0.2.0");
-        sync(&db, &after);
-        assert_eq!(db.get_plugin_grant("org.example.thing").unwrap().unwrap().effective_state(), "changed");
-        assert!(approved_natives(&db, &after).is_empty());
+        // Change a file: a different digest, so it is `changed` and stops until it is reviewed again.
+        std::fs::write(dir.join("index.html"), "<html>v2 -- swapped</html>").unwrap();
+        sync(&db, &discover(&web, "0.2.0"));
+        assert_eq!(db.get_plugin_grant("thing").unwrap().unwrap().effective_state(), "changed");
         let audit = db.list_plugin_audit(50).unwrap();
-        assert!(audit.iter().any(|a| a.plugin_id == "org.example.thing" && a.action == "changed"));
+        assert!(audit.iter().any(|a| a.plugin_id == "thing" && a.action == "changed"));
     }
 
     #[test]
@@ -507,56 +379,12 @@ mod tests {
             ).unwrap();
         };
         write("refresh");
-        let found = discover(&tmp.path().join("plugins"), &web.join("plugins"), "0.2.0");
+        let found = discover(&web.join("plugins"), "0.2.0");
         assert!(found.iter().find(|d| d.id == "tb").unwrap().error.is_none());
         write("not-an-icon");
-        let found = discover(&tmp.path().join("plugins"), &web.join("plugins"), "0.2.0");
+        let found = discover(&web.join("plugins"), "0.2.0");
         let err = found.iter().find(|d| d.id == "tb").unwrap().error.clone().unwrap_or_default();
         assert!(err.contains("isn't in the app's icon set"), "{err}");
-    }
-
-    #[test]
-    fn a_native_manifest_must_declare_abi_2() {
-        let tmp = tempfile::tempdir().unwrap();
-        let plugins = tmp.path().join("plugins");
-        let dir = write_native_plugin(&plugins, b"binary");
-        let manifest = std::fs::read_to_string(dir.join("plugin.json")).unwrap().replace("\"abi\":2", "\"abi\":1");
-        std::fs::write(dir.join("plugin.json"), manifest).unwrap();
-        let found = discover(&plugins, &tmp.path().join("web"), "0.2.0");
-        let d = found.iter().find(|d| d.id == "org.example.thing").unwrap();
-        assert!(d.error.as_deref().unwrap_or("").contains("abi"), "{:?}", d.error);
-    }
-
-    #[test]
-    fn manifest_plugin_must_match_its_pinned_library() {
-        let tmp = tempfile::tempdir().unwrap();
-        let plugins = tmp.path().join("plugins");
-        let dir = plugins.join("org.example.good");
-        std::fs::create_dir_all(dir.join("lib")).unwrap();
-        std::fs::write(dir.join("lib/x.so"), b"binary").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-            std::fs::set_permissions(dir.join("lib/x.so"), std::fs::Permissions::from_mode(0o644)).unwrap();
-        }
-        let manifest = |sha: &str| {
-            serde_json::json!({
-                "manifest_version": 1, "id": "org.example.good", "name": "Good", "version": "1.0.0",
-                "backend": {"abi": 2, "libraries": { platform_key(): {"path": "lib/x.so", "sha256": sha}}},
-                "permissions": [{"id": "show.observe"}]
-            })
-            .to_string()
-        };
-        std::fs::write(dir.join("plugin.json"), manifest(&sha256_hex(b"binary"))).unwrap();
-        let found = discover(&plugins, &tmp.path().join("web"), "0.2.0");
-        let d = found.iter().find(|d| d.id == "org.example.good").unwrap();
-        assert!(d.error.is_none(), "{:?}", d.error);
-        assert!(d.library.is_some());
-
-        std::fs::write(dir.join("plugin.json"), manifest(&sha256_hex(b"something else"))).unwrap();
-        let found = discover(&plugins, &tmp.path().join("web"), "0.2.0");
-        assert!(found.iter().find(|d| d.id == "org.example.good").unwrap().error.is_some());
     }
 
     fn write_signed_web_plugin(web: &Path, manifest_edit: impl Fn(String) -> String) -> String {
@@ -581,14 +409,14 @@ mod tests {
         let web = tmp.path().join("web_plugins");
         std::fs::create_dir_all(&web).unwrap();
         let pk = write_signed_web_plugin(&web, |m| m);
-        let found = discover(&tmp.path().join("plugins"), &web, "0.2.0");
+        let found = discover(&web, "0.2.0");
         let d = found.iter().find(|d| d.id == "signed_demo").unwrap();
         assert!(d.error.is_none(), "{:?}", d.error);
         assert_eq!(d.signer.as_deref(), Some(pk.as_str()));
 
         // Tamper with the manifest after signing: it must not degrade to "unsigned".
         write_signed_web_plugin(&web, |m| m.replace("keyring.own", "ui.dom"));
-        let found = discover(&tmp.path().join("plugins"), &web, "0.2.0");
+        let found = discover(&web, "0.2.0");
         let d = found.iter().find(|d| d.id == "signed_demo").unwrap();
         assert!(d.error.as_deref().unwrap_or("").contains("signature"), "{:?}", d.error);
     }
@@ -605,7 +433,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(web.join("p.plugin.json.minisig"), "untrusted comment: x\nAAAA\n").unwrap();
-        let found = discover(&tmp.path().join("plugins"), &web, "0.2.0");
+        let found = discover(&web, "0.2.0");
         assert!(found.iter().find(|d| d.id == "p").unwrap().error.is_some());
     }
 }

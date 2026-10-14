@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::api::ws::AppState;
 use crate::core::models::{MediaItem, Presentation, ScriptureItem, Song, Theme};
 
-use super::common::{merge_with_plugin_resources, require_host_token, SearchQuery};
+use super::common::{require_host_token, SearchQuery};
 
 pub(super) async fn get_songs(
     State(app): State<AppState>,
@@ -22,7 +22,7 @@ pub(super) async fn get_songs(
     } else {
         app.db.get_songs().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     };
-    Ok(Json(merge_with_plugin_resources(&app, "songs", songs, query.q.as_deref())))
+    Ok(Json(songs))
 }
 
 pub(super) async fn create_song(
@@ -56,7 +56,7 @@ pub(super) async fn get_scriptures(
     } else {
         app.db.get_scriptures().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     };
-    Ok(Json(merge_with_plugin_resources(&app, "scriptures", scriptures, query.q.as_deref())))
+    Ok(Json(scriptures))
 }
 
 pub(super) async fn create_scripture(
@@ -101,7 +101,7 @@ pub(super) async fn get_media(State(app): State<AppState>) -> Result<impl IntoRe
         .await;
     }
     let media = app.db.get_media().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(merge_with_plugin_resources(&app, "media", media, None)))
+    Ok(Json(media))
 }
 
 pub(super) async fn create_media(
@@ -124,7 +124,7 @@ pub(super) async fn delete_media(
 
 pub(super) async fn get_themes(State(app): State<AppState>) -> Result<impl IntoResponse, StatusCode> {
     let themes = app.db.get_themes().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(merge_with_plugin_resources(&app, "themes", themes, None)))
+    Ok(Json(themes))
 }
 
 pub(super) async fn create_theme(
@@ -185,7 +185,7 @@ pub(super) async fn delete_slide_template(
 
 pub(super) async fn get_presentations(State(app): State<AppState>) -> Result<impl IntoResponse, StatusCode> {
     let presentations = app.db.get_presentations().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(merge_with_plugin_resources(&app, "presentations", presentations, None)))
+    Ok(Json(presentations))
 }
 
 pub(super) async fn create_presentation(

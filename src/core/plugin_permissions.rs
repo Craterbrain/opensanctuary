@@ -1,18 +1,14 @@
 //! Plugin manifests and the permission model. See docs/PLUGIN_PERMISSIONS.md.
 //!
-//! Honest scope: for a *native* plugin (an in-process library) the host can only
-//! enforce the surface it mediates -- which hooks it calls and what it returns. The
-//! code itself runs with the server's full privileges, so approving a native plugin
-//! is a trust decision, and `native.code` is always listed as such.
+//! Plugins are sandboxed web pages (every permission here is enforced by the host at the
+//! bridge, the frame's CSP or a scoped token) or, less safely, console scripts that run in the
+//! console page itself (`ui.dom`, Critical). There are no native (in-process library) plugins.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Component, Path};
 
 pub const MANIFEST_VERSION: u32 = 1;
-
-/// Safety-critical commands no plugin may veto, matched on the parsed variant name.
-pub const SAFETY_CRITICAL_COMMANDS: [&str; 4] = ["ToggleBlackout", "ToggleClearText", "ToggleLogo", "SetAlert"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
@@ -26,25 +22,15 @@ pub enum Tier {
 /// `(id, base tier, enforcement)`; `enforcement` is shown in the console so the operator
 /// can tell what the host actually polices.
 const KNOWN: &[(&str, Tier, &str)] = &[
-    ("native.code", Tier::Critical, "informational"),
     ("ui.dom", Tier::Critical, "consent-only"),
     ("show.observe", Tier::Low, "enforced"),
-    ("library.read", Tier::Low, "enforced"),
-    ("resources.provide", Tier::Medium, "enforced"),
     ("library.write", Tier::High, "enforced"),
     ("commands.send", Tier::Medium, "enforced"),
-    ("commands.intercept", Tier::High, "enforced"),
-    ("commands.modify", Tier::Critical, "enforced"),
     ("keyring.own", Tier::Medium, "enforced"),
     ("keyring.service", Tier::Critical, "enforced"),
     ("settings.read", Tier::Medium, "reserved"),
     ("settings.write", Tier::High, "reserved"),
     ("network.outbound", Tier::Medium, "enforced"),
-    ("network.listen", Tier::High, "consent-only"),
-    ("filesystem.plugin_data", Tier::Low, "enforced"),
-    ("filesystem.read", Tier::High, "consent-only"),
-    ("filesystem.write", Tier::Critical, "consent-only"),
-    ("process.spawn", Tier::Critical, "consent-only"),
     ("process.run", Tier::Critical, "enforced"),
     ("ui.panel", Tier::Medium, "enforced"),
     ("ui.toolbar", Tier::Medium, "enforced"),
@@ -104,17 +90,11 @@ impl PermissionRequest {
         base
     }
 
-    /// What the host actually polices for this permission, by plugin type. A native library
-    /// shares the server's address space, so only the hooks the host mediates are enforced; a
-    /// same-realm console script shares the page. A sandboxed page is enforced end to end.
+    /// What the host actually polices for this permission, by plugin type. A same-realm console
+    /// script shares the page; a sandboxed page is enforced end to end.
     pub fn enforcement_for(&self, kind: &str) -> &'static str {
         let base = KNOWN.iter().find(|(id, _, _)| *id == self.id).map(|(_, _, e)| *e).unwrap_or("unknown");
         match kind {
-            "native" => match self.id.as_str() {
-                "show.observe" | "commands.intercept" | "resources.provide" | "keyring.service" | "commands.modify" => "enforced",
-                "native.code" => "informational",
-                _ => "consent-only",
-            },
             "web" => match self.id.as_str() {
                 "keyring.own" | "commands.send" => "enforced",
                 "ui.dom" => "consent-only",
@@ -134,20 +114,8 @@ impl PermissionSet {
         Self(Vec::new())
     }
 
-    /// Everything the `OsPlugin` hooks can do -- granted to plugins registered programmatically
-    /// in-process (host code and tests). Anything loaded from disk goes through the grant flow.
-    pub fn in_process() -> Self {
-        Self(in_process_requests())
-    }
-
     pub fn has(&self, id: &str) -> bool {
         self.0.iter().any(|p| p.id == id)
-    }
-
-    pub fn reads(&self, category: &str) -> bool {
-        self.0
-            .iter()
-            .any(|p| p.id == "library.read" && p.categories.iter().any(|c| c == "*" || c == category))
     }
 
     pub fn writes(&self, category: &str) -> bool {
@@ -159,12 +127,6 @@ impl PermissionSet {
     /// The granted outbound hosts (`network.outbound`), across every entry.
     pub fn outbound_hosts(&self) -> Vec<String> {
         self.0.iter().filter(|p| p.id == "network.outbound").flat_map(|p| p.hosts.clone()).collect()
-    }
-
-    pub fn provides(&self, category: &str) -> bool {
-        self.0
-            .iter()
-            .any(|p| p.id == "resources.provide" && p.categories.iter().any(|c| c == "*" || c == category))
     }
 
     /// Keeps only what `grant` also allows, narrowing parameter lists. A token's scopes are
@@ -187,7 +149,7 @@ impl PermissionSet {
             let Some(have) = grant.0.iter().find(|g| g.id == want.id) else { continue };
             let mut p = want.clone();
             match want.id.as_str() {
-                "commands.send" | "process.run" | "commands.modify" => {
+                "commands.send" | "process.run" => {
                     p.commands = narrow(&want.commands, &have.commands);
                     if p.commands.is_empty() {
                         continue;
@@ -208,7 +170,7 @@ impl PermissionSet {
                         continue;
                     }
                 }
-                "resources.provide" | "library.read" | "library.write" => {
+                "library.write" => {
                     p.categories = narrow(&want.categories, &have.categories);
                     if p.categories.is_empty() {
                         continue;
@@ -230,13 +192,6 @@ impl PermissionSet {
             .max()
     }
 
-    /// Whether this grant lets a plugin rewrite commands of this variant (`commands.modify`). The
-    /// list is explicit (no wildcard) and never covers emergency or never-modifiable commands.
-    pub fn modifies(&self, variant: &str) -> bool {
-        self.0.iter().any(|p| p.id == "commands.modify" && p.commands.iter().any(|c| c == variant))
-            && crate::core::commands::modifiable_variants().contains(&variant)
-    }
-
     /// Whether `process.run` covers the manifest command `id`.
     pub fn runs(&self, id: &str) -> bool {
         self.0.iter().any(|p| p.id == "process.run" && p.commands.iter().any(|c| c == "*" || c == id))
@@ -253,11 +208,9 @@ impl PermissionSet {
 /// `keys` or `none`.
 pub fn scope_kind(id: &str) -> &'static str {
     match id {
-        "library.read" | "library.write" | "resources.provide" => "categories",
-        "commands.send" | "process.run" | "commands.modify" => "commands",
+        "library.write" => "categories",
+        "commands.send" | "process.run" => "commands",
         "network.outbound" => "hosts",
-        "filesystem.read" | "filesystem.write" => "paths",
-        "network.listen" => "ports",
         "settings.read" | "settings.write" => "keys",
         "keyring.service" => "services",
         _ => "none",
@@ -320,50 +273,12 @@ pub fn catalog_json() -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// What `commands.modify` may list: explicit command names that carry data, never `*`, an emergency
-/// control or something in `NEVER_MODIFIABLE`.
-pub fn check_modify_commands(commands: &[String]) -> Result<(), String> {
-    use crate::core::commands::{modifiable_variants, NEVER_MODIFIABLE, SHOW_COMMAND_VARIANTS, UNIT_COMMANDS};
-    if commands.is_empty() || commands.len() > 32 {
-        return Err("'commands.modify' needs a list of 1 to 32 command names".to_string());
-    }
-    let allowed = modifiable_variants();
-    for c in commands {
-        if c == "*" {
-            return Err("'commands.modify' can't use '*': list the commands it may change".to_string());
-        }
-        if SAFETY_CRITICAL_COMMANDS.contains(&c.as_str()) {
-            return Err(format!("'commands.modify' can never change '{c}': emergency controls are off limits"));
-        }
-        if NEVER_MODIFIABLE.contains(&c.as_str()) {
-            return Err(format!("'commands.modify' can never change '{c}'"));
-        }
-        if UNIT_COMMANDS.contains(&c.as_str()) {
-            return Err(format!("'{c}' has nothing to rewrite (it carries no data)"));
-        }
-        if !SHOW_COMMAND_VARIANTS.contains(&c.as_str()) {
-            return Err(format!("'{c}' isn't a known command"));
-        }
-        if !allowed.contains(&c.as_str()) {
-            return Err(format!("'commands.modify' can't change '{c}'"));
-        }
-    }
-    let mut seen = std::collections::HashSet::new();
-    if !commands.iter().all(|c| seen.insert(c)) {
-        return Err("'commands.modify' lists a command twice".to_string());
-    }
-    Ok(())
-}
-
 /// Checks a permission the *operator* is granting by hand (the Advanced override on the review
 /// screen), which may differ from anything the plugin asked for: a known id, one that makes sense
 /// for this kind of plugin, and well-formed scope lists. `kind` is the plugin's kind.
 pub fn validate_grant(p: &PermissionRequest, kind: &str) -> Result<(), String> {
     if !KNOWN.iter().any(|(id, _, _)| *id == p.id) {
         return Err(format!("unknown permission '{}'", p.id));
-    }
-    if p.id == "native.code" && kind != "native" {
-        return Err("'native.code' only applies to a native plugin".to_string());
     }
     if p.id == "ui.dom" && kind != "web" {
         return Err("'ui.dom' only applies to a console script (a sandboxed page has no console access to grant)".to_string());
@@ -387,16 +302,10 @@ pub fn validate_grant(p: &PermissionRequest, kind: &str) -> Result<(), String> {
     if let Some((name, _)) = used.iter().find(|(name, set)| *set && *name != kind_of_scope) {
         return Err(format!("'{}' doesn't take a {name} list", p.id));
     }
-    if matches!(p.id.as_str(), "library.read" | "library.write" | "resources.provide") {
+    if p.id == "library.write" {
         if let Some(c) = p.categories.iter().find(|c| *c != "*" && !RESOURCE_CATEGORIES.contains(&c.as_str())) {
             return Err(format!("'{}': unknown category '{c}'", p.id));
         }
-    }
-    if p.id == "commands.modify" {
-        if kind != "native" {
-            return Err("'commands.modify' only applies to a native plugin".to_string());
-        }
-        check_modify_commands(&p.commands)?;
     }
     if p.id == "keyring.service" {
         if kind == "web" {
@@ -418,31 +327,6 @@ pub fn validate_grant(p: &PermissionRequest, kind: &str) -> Result<(), String> {
         return Err(format!("'{}': '{h}' isn't a valid host (use example.com, *.example.com, optionally :port)", p.id));
     }
     Ok(())
-}
-
-/// Everything the `OsPlugin` hooks can do.
-pub fn in_process_requests() -> Vec<PermissionRequest> {
-    vec![
-        PermissionRequest::simple("native.code"),
-        PermissionRequest::simple("show.observe"),
-        PermissionRequest::simple("commands.intercept"),
-        PermissionRequest::with_categories("resources.provide", &["*"]),
-    ]
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LibraryEntry {
-    pub path: String,
-    pub sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct BackendSection {
-    #[serde(default)]
-    pub abi: u32,
-    /// Keyed by `"{os}-{arch}"`, e.g. `linux-x86_64`, `windows-x86_64`, `macos-aarch64`.
-    #[serde(default)]
-    pub libraries: std::collections::BTreeMap<String, LibraryEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -692,8 +576,10 @@ pub struct PluginManifest {
     /// semver requirement against the running OS-Next version, e.g. ">=0.2.0, <0.3.0".
     #[serde(default)]
     pub host_api: String,
+    /// Native libraries are no longer supported; a manifest that has this section is refused with
+    /// an explanation (kept as a field so it is recognised rather than silently ignored).
     #[serde(default)]
-    pub backend: Option<BackendSection>,
+    pub backend: Option<serde_json::Value>,
     #[serde(default)]
     pub web: Option<WebSection>,
     #[serde(default)]
@@ -779,21 +665,11 @@ impl PluginManifest {
                 )));
             }
         }
-        if self.backend.is_none() && self.web.is_none() {
-            return bad("a plugin needs a backend and/or a web section".to_string());
+        if self.backend.is_some() {
+            return bad("native plugins are no longer supported: a plugin is a sandboxed web page (see docs/PLUGINS.md)".to_string());
         }
-        if let Some(b) = &self.backend {
-            if b.abi != 2 {
-                return bad("backend.abi must be 2 (the original ABI 1 is no longer supported; rebuild the plugin against this version)".to_string());
-            }
-            for (platform, lib) in &b.libraries {
-                if !relative_path_is_contained(&lib.path) {
-                    return bad(format!("library path for {platform} escapes the plugin directory: {}", lib.path));
-                }
-                if lib.sha256.len() != 64 || !lib.sha256.bytes().all(|c| c.is_ascii_hexdigit()) {
-                    return bad(format!("library {platform} needs a 64-hex-digit sha256"));
-                }
-            }
+        if self.web.is_none() {
+            return bad("a plugin needs a web section".to_string());
         }
         if let Some(w) = &self.web {
             let e = w.entry.as_str();
@@ -803,9 +679,6 @@ impl PluginManifest {
                 }
                 if self.permissions.iter().any(|p| p.id == "ui.dom") {
                     return bad("a sandboxed plugin can't request ui.dom; that is what the sandbox replaces".to_string());
-                }
-                if self.backend.is_some() {
-                    return bad("a sandboxed web plugin can't also ship a native library".to_string());
                 }
             } else if e.is_empty() || e.contains('/') || e.contains('\\') || !e.ends_with(".js") {
                 return bad("web.entry must be a plain .js file name".to_string());
@@ -820,7 +693,7 @@ impl PluginManifest {
             if !seen.insert(p.id.clone()) {
                 return bad(format!("permission '{}' is listed twice", p.id));
             }
-            if p.id == "resources.provide" || p.id == "library.read" || p.id == "library.write" {
+            if p.id == "library.write" {
                 if p.categories.is_empty() {
                     return bad(format!("'{}' needs a categories list", p.id));
                 }
@@ -829,7 +702,7 @@ impl PluginManifest {
                 }
             }
             if p.id == "keyring.service" {
-                if self.web.as_ref().is_some_and(|w| !w.sandbox) && self.backend.is_none() {
+                if self.web.as_ref().is_some_and(|w| !w.sandbox) {
                     return bad("'keyring.service' isn't available to a console script (it already has console access)".to_string());
                 }
                 if p.services.is_empty() || p.services.len() > 4 {
@@ -847,12 +720,6 @@ impl PluginManifest {
                 }
             } else if p.access.is_some() || !p.services.is_empty() {
                 return bad(format!("'{}' doesn't take services or an access mode", p.id));
-            }
-            if p.id == "commands.modify" {
-                if self.backend.is_none() {
-                    return bad("'commands.modify' is for native plugins only: a page in a browser tab can't sit in the command path".to_string());
-                }
-                check_modify_commands(&p.commands).map_err(ManifestError::Invalid)?;
             }
             if p.id == "commands.send" && p.commands.is_empty() {
                 return bad("'commands.send' needs a commands list".to_string());
@@ -994,11 +861,6 @@ impl PluginManifest {
     }
 }
 
-/// The `"{os}-{arch}"` key this build looks up in `backend.libraries`.
-pub fn platform_key() -> String {
-    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
-}
-
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let d = Sha256::digest(bytes);
     d.iter().map(|b| format!("{:02x}", b)).collect()
@@ -1046,16 +908,6 @@ fn variant_of_value(v: &serde_json::Value) -> Option<String> {
     }
 }
 
-/// True for the emergency commands. Decided on the parsed variant; only when the text
-/// can't be parsed at all does it fall back to the old substring match, so an
-/// unparseable payload can never turn a real emergency command into a vetoable one.
-pub fn is_safety_critical(text: &str) -> bool {
-    match command_variant(text) {
-        Some(v) => SAFETY_CRITICAL_COMMANDS.contains(&v.as_str()),
-        None => SAFETY_CRITICAL_COMMANDS.iter().any(|c| text.contains(c)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1069,11 +921,11 @@ mod tests {
     const GOOD: &str = r#"{
         "manifest_version": 1, "id": "org.example.dmx", "name": "DMX", "version": "1.0.0",
         "host_api": ">=0.1.0, <1.0.0",
-        "backend": {"abi": 2, "libraries": {"linux-x86_64": {"path": "lib/x.so", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}}},
+        "web": {"entry": "index.html", "sandbox": true},
         "permissions": [
             {"id": "show.observe", "reason": "follow blackout"},
             {"id": "commands.send", "commands": ["NextSlide"], "optional": true},
-            {"id": "resources.provide", "categories": ["songs"]}
+            {"id": "library.write", "categories": ["songs"]}
         ]
     }"#;
 
@@ -1088,11 +940,10 @@ mod tests {
     fn rejects_bad_ids_unknown_permissions_and_escaping_paths() {
         assert!(manifest(&GOOD.replace("org.example.dmx", "Bad ID!")).is_err());
         assert!(manifest(&GOOD.replace("show.observe", "show.everything")).is_err());
-        assert!(manifest(&GOOD.replace("lib/x.so", "../x.so")).is_err());
-        assert!(manifest(&GOOD.replace("lib/x.so", "/etc/x.so")).is_err());
-        assert!(manifest(&GOOD.replace("0000000000000000000000000000000000000000000000000000000000000000", "abc")).is_err());
+        assert!(manifest(&GOOD.replace("index.html", "../index.html")).is_err());
+        assert!(manifest(&GOOD.replace("index.html", "/etc/index.html")).is_err());
         // Duplicate permission ids and missing parameters.
-        assert!(manifest(&GOOD.replace(r#"{"id": "show.observe", "reason": "follow blackout"}"#, r#"{"id": "resources.provide", "categories": ["media"]}"#)).is_err());
+        assert!(manifest(&GOOD.replace(r#"{"id": "show.observe", "reason": "follow blackout"}"#, r#"{"id": "library.write", "categories": ["media"]}"#)).is_err());
         assert!(manifest(&GOOD.replace(r#""categories": ["songs"]"#, r#""categories": []"#)).is_err());
         assert!(manifest(&GOOD.replace(r#""commands": ["NextSlide"]"#, r#""commands": []"#)).is_err());
     }
@@ -1219,42 +1070,21 @@ mod tests {
     }
 
     #[test]
-    fn commands_modify_is_explicit_native_only_and_never_for_emergency_commands() {
-        let native = |perm: &str| format!(
-            r#"{{"manifest_version":1,"id":"org.example.mod","name":"M","backend":{{"abi":2,"libraries":{{"linux-x86_64":{{"path":"lib/x.so","sha256":"{}"}}}}}},"permissions":[{perm}]}}"#,
-            "0".repeat(64)
-        );
-        assert!(manifest(&native(r#"{"id":"commands.modify","commands":["AddToSchedule","SetItemTheme"]}"#)).is_ok());
-        assert_eq!(PermissionRequest::simple("commands.modify").tier(), Tier::Critical);
-        for (why, bad) in [
-            ("no list", r#"{"id":"commands.modify"}"#),
-            ("an empty list", r#"{"id":"commands.modify","commands":[]}"#),
-            ("a wildcard", r#"{"id":"commands.modify","commands":["*"]}"#),
-            ("blackout", r#"{"id":"commands.modify","commands":["ToggleBlackout"]}"#),
-            ("an alert", r#"{"id":"commands.modify","commands":["SetAlert"]}"#),
-            ("clear text", r#"{"id":"commands.modify","commands":["ToggleClearText"]}"#),
-            ("logo", r#"{"id":"commands.modify","commands":["ToggleLogo"]}"#),
-            ("a web stream", r#"{"id":"commands.modify","commands":["SetWebStream"]}"#),
-            ("replacing the schedule", r#"{"id":"commands.modify","commands":["LoadSchedule"]}"#),
-            ("a new schedule", r#"{"id":"commands.modify","commands":["NewSchedule"]}"#),
-            ("history", r#"{"id":"commands.modify","commands":["Undo"]}"#),
-            ("a command with nothing to rewrite", r#"{"id":"commands.modify","commands":["NextSlide"]}"#),
-            ("an unknown command", r#"{"id":"commands.modify","commands":["Nope"]}"#),
-            ("a duplicate", r#"{"id":"commands.modify","commands":["GoLive","GoLive"]}"#),
-        ] {
-            assert!(manifest(&native(bad)).is_err(), "{why}");
+    fn native_plugins_and_their_permissions_no_longer_exist() {
+        // A manifest that ships a library is refused with an explanation, even next to a valid web section.
+        let native = r#"{"manifest_version":1,"id":"org.example.native","name":"N","backend":{"abi":2,"libraries":{}},"permissions":[{"id":"show.observe"}]}"#;
+        let err = manifest(native).unwrap_err().to_string();
+        assert!(err.contains("native plugins are no longer supported"), "{err}");
+        let both = GOOD.replace(r#""web": {"entry": "index.html", "sandbox": true},"#, r#""web": {"entry": "index.html", "sandbox": true}, "backend": {"abi": 2},"#);
+        assert!(manifest(&both).is_err());
+        // A plugin needs a web section at all.
+        assert!(manifest(r#"{"manifest_version":1,"id":"nothing","name":"N","permissions":[]}"#).is_err());
+        // The permissions only a native library could hold are unknown now.
+        for id in ["native.code", "commands.intercept", "commands.modify", "resources.provide", "library.read", "filesystem.plugin_data", "filesystem.read", "filesystem.write", "network.listen", "process.spawn"] {
+            let m = GOOD.replace(r#"{"id": "show.observe", "reason": "follow blackout"}"#, &format!(r#"{{"id": "{id}"}}"#));
+            assert!(manifest(&m).is_err(), "{id} must not be accepted");
+            assert!(validate_grant(&PermissionRequest::simple(id), "sandbox").is_err(), "{id} must not be grantable by hand either");
         }
-        // A page in a browser tab can't sit in the command path: sandboxed and console-script plugins are refused.
-        let sandboxed = r#"{"manifest_version":1,"id":"sb","name":"S","web":{"entry":"index.html","sandbox":true},"permissions":[{"id":"commands.modify","commands":["GoLive"]}]}"#;
-        assert!(manifest(sandboxed).is_err());
-        let script = r#"{"manifest_version":1,"id":"sc","name":"S","web":{"entry":"sc.js"},"permissions":[{"id":"commands.modify","commands":["GoLive"]}]}"#;
-        assert!(manifest(script).is_err());
-        // The grant only ever covers what was listed, and a token-style narrowing never widens it.
-        let set = PermissionSet(vec![PermissionRequest { id: "commands.modify".into(), commands: vec!["GoLive".into()], ..Default::default() }]);
-        assert!(set.modifies("GoLive") && !set.modifies("AddToSchedule") && !set.modifies("SetAlert"));
-        // Even if a grant somehow listed an emergency command, it would not count.
-        let sneaky = PermissionSet(vec![PermissionRequest { id: "commands.modify".into(), commands: vec!["ToggleBlackout".into(), "*".into()], ..Default::default() }]);
-        assert!(!sneaky.modifies("ToggleBlackout") && !sneaky.modifies("GoLive"));
     }
 
     #[test]
@@ -1279,14 +1109,13 @@ mod tests {
     fn permission_set_checks() {
         let set = PermissionSet(vec![
             PermissionRequest { id: "commands.send".into(), commands: vec!["NextSlide".into()], ..Default::default() },
-            PermissionRequest::with_categories("resources.provide", &["songs"]),
+            PermissionRequest::with_categories("library.write", &["songs"]),
         ]);
         assert!(set.allows_command("NextSlide"));
         assert!(!set.allows_command("NewSchedule"));
-        assert!(set.provides("songs"));
-        assert!(!set.provides("themes"));
+        assert!(set.writes("songs"));
+        assert!(!set.writes("themes"));
         assert!(!set.has("show.observe"));
-        assert!(PermissionSet::in_process().provides("themes"));
         let wild = PermissionSet(vec![PermissionRequest { id: "commands.send".into(), commands: vec!["*".into()], ..Default::default() }]);
         assert_eq!(wild.0[0].tier(), Tier::High);
         assert!(wild.allows_command("Anything"));
@@ -1318,16 +1147,5 @@ mod tests {
         assert_eq!(command_variant(r#"{"GoLive":{"item_index":1}}"#).as_deref(), Some("GoLive"));
         assert_eq!(command_variant(r#"{"cmd":{"SetAlert":{"text":"x"}},"device_token":"t"}"#).as_deref(), Some("SetAlert"));
         assert_eq!(command_variant("{not json"), None);
-    }
-
-    #[test]
-    fn safety_critical_is_decided_on_the_variant_not_a_substring() {
-        assert!(is_safety_critical(r#""ToggleBlackout""#));
-        assert!(is_safety_critical("ToggleClearText"));
-        assert!(is_safety_critical(r#"{"SetAlert":{"text":"fire"}}"#));
-        // A song that merely *mentions* an emergency command is an ordinary command.
-        assert!(!is_safety_critical(r#"{"AddToSchedule":{"title":"SetAlert ToggleBlackout"}}"#));
-        // Unparseable text keeps the old, conservative behaviour.
-        assert!(is_safety_critical("{broken ToggleLogo"));
     }
 }

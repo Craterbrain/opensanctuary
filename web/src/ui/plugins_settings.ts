@@ -45,10 +45,6 @@ function paramsText(p: PluginPermissionInfo): string {
   return parts.join(' · ');
 }
 
-function isNative(p: PluginInfo): boolean {
-  return p.kind === 'native';
-}
-
 
 type ScopeKey = 'categories' | 'commands' | 'hosts' | 'paths' | 'ports' | 'keys' | 'services';
 
@@ -138,7 +134,7 @@ function buildAdvanced(plugin: PluginInfo, onChange: (on: boolean) => void): { r
     panel.appendChild(el('div', 'settings-hint', 'Other permissions it did not ask for (check to grant):'));
     const extras = el('div', 'plugin-permissions');
     for (const c of extra) {
-      const unusable = (c.id === 'native.code' && plugin.kind !== 'native') || (c.id === 'ui.dom' && plugin.kind !== 'web');
+      const unusable = c.id === 'ui.dom' && plugin.kind !== 'web'; // a sandboxed page has no console access to grant
       if (unusable) continue;
       addRow(extras, c.id, c.tier, c.enforcement, c.scope, undefined, false);
     }
@@ -196,7 +192,7 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   head.appendChild(el('strong', 'plugin-name', plugin.name));
   if (plugin.version) head.appendChild(el('span', 'plugin-version', ` v${plugin.version}`));
   head.appendChild(el('span', `os-badge plugin-state plugin-state--${plugin.state}`, STATE_LABEL[plugin.state] ?? plugin.state));
-  head.appendChild(el('span', 'os-badge os-badge--neutral', isNative(plugin) ? 'Backend library' : plugin.kind === 'sandbox' ? 'Sandboxed page' : 'Console script'));
+  head.appendChild(el('span', 'os-badge os-badge--neutral', plugin.kind === 'sandbox' ? 'Sandboxed page' : 'Console script'));
   if (plugin.overridden) head.appendChild(el('span', 'os-badge plugin-state plugin-state--changed', 'Permissions overridden'));
   card.appendChild(head);
   card.appendChild(el('div', 'settings-hint', `id: ${plugin.id} · digest ${plugin.digest.slice(0, 12)}… · ${plugin.signed ? `signed (publisher key ${plugin.signer_id})` : 'unsigned'}`));
@@ -214,12 +210,10 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
     card.appendChild(el('div', 'settings-hint',
       'Runs in an isolated frame with no access to this console. It can only do what is checked below, and can reach the network only at the hosts listed (if any).'));
   }
-  const critical = plugin.requested.some(p => p.id === 'native.code' || p.id === 'ui.dom');
+  const critical = plugin.requested.some(p => p.id === 'ui.dom');
   if (critical && plugin.state !== 'active') {
     card.appendChild(el('div', 'plugin-warning',
-      isNative(plugin)
-        ? 'This is native code that runs with full access to this computer. The list below is what the plugin says it will do — OpenSanctuary can only enforce part of it.'
-        : 'This script runs inside the console page itself, with the same access as you. The list below is what it says it will do.'));
+      'This script runs inside the console page itself, with the same access as you. The list below is what it says it will do.'));
   }
 
   const checks: Array<{ id: string; box: HTMLInputElement }> = [];
@@ -279,26 +273,6 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
     }
     line.appendChild(document.createTextNode('. Plugin buttons are marked with a puzzle badge and always sit in the Plugins group.'));
     card.appendChild(line);
-  }
-
-  // commands.modify: rewriting commands is as powerful as it sounds, so say so in plain words.
-  const modifyPerm = (plugin.state === 'active' ? plugin.granted : plugin.requested).find((p) => p.id === 'commands.modify');
-  if (modifyPerm) {
-    card.appendChild(el('div', 'plugin-error',
-      `Can change these commands before they run, including ones you send from this console: ${(modifyPerm.commands ?? []).join(', ')}. ` +
-      'It can change what appears on screen. Emergency controls (Blackout, Clear, Logo, Alert) are never changed, and a change can never turn a command into a different kind of command.'));
-    if (plugin.modify?.runs_after.length) {
-      card.appendChild(el('div', 'settings-hint', `Runs after: ${plugin.modify.runs_after.join(', ')} (changes are applied in plugin-id order).`));
-    }
-    if (plugin.state === 'active' && plugin.modify) {
-      if (plugin.modify.tripped) {
-        card.appendChild(el('div', 'plugin-warning', 'Switched off until OpenSanctuary restarts: it was too slow or kept failing while changing commands. Commands run as normal.'));
-      } else if (plugin.modify.active) {
-        card.appendChild(el('div', 'settings-hint', `Changed ${plugin.modify.changed} command${plugin.modify.changed === 1 ? '' : 's'} since OpenSanctuary started.`));
-      } else {
-        card.appendChild(el('div', 'settings-hint', 'Not changing commands yet: this takes effect after OpenSanctuary restarts (or the plugin has no modifier).'));
-      }
-    }
   }
 
   // Shared keyring: say plainly what it can reach, who else can, and whether it could send it somewhere.
@@ -374,9 +348,6 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
     const revoke = el('button', 'btn btn-secondary', 'Revoke');
     revoke.addEventListener('click', () => void act(() => api.plugins.revoke(plugin.id), `${plugin.name} revoked`));
     actions.appendChild(revoke);
-    if (plugin.restart_required) {
-      actions.appendChild(el('span', 'settings-hint', 'Takes effect after OpenSanctuary restarts.'));
-    }
   }
   if (advanced && plugin.state !== 'incompatible' && !plugin.error) {
     const apply = el('button', 'btn btn-danger', 'Apply override');

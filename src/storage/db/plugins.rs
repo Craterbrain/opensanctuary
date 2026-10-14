@@ -108,11 +108,11 @@ pub struct ObservedPlugin<'a> {
 }
 
 impl Database {
-    /// Drops rows for the removed pre-manifest plugin kinds (`legacy-native`, `legacy-web`). The
-    /// audit log is history, so it keeps its entries.
-    pub fn purge_legacy_plugins(&self) -> Result<usize> {
+    /// Drops rows for plugin kinds that no longer exist (`native`, `legacy-native`, `legacy-web`).
+    /// The audit log is history, so it keeps its entries.
+    pub fn purge_removed_plugin_kinds(&self) -> Result<usize> {
         let conn = self.conn();
-        Ok(conn.execute("DELETE FROM plugin_grants WHERE kind IN ('legacy-native', 'legacy-web')", [])?)
+        Ok(conn.execute("DELETE FROM plugin_grants WHERE kind IN ('native', 'legacy-native', 'legacy-web')", [])?)
     }
 
     pub fn get_plugin_grant(&self, plugin_id: &str) -> Result<Option<PluginGrantRow>> {

@@ -4,43 +4,13 @@ use axum::response::IntoResponse;
 use axum::{Json, Router};
 use axum::extract::ConnectInfo;
 use std::net::SocketAddr;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::api::ws::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {
     pub q: Option<String>,
-}
-
-/// Merges database-backed resource rows with whatever plugins contribute for the
-/// same Resource Library `category` (see `OsPlugin::provide_resources`). When a
-/// search `query` is active, plugin-contributed items are filtered by a simple
-/// case-insensitive substring match over their serialized JSON — plugins return
-/// plain `serde_json::Value`s of arbitrary shape, so this is the one filter that
-/// works uniformly across all of them, mirroring the crude-but-effective substring
-/// matching `PluginManager::check_command` already uses for the same reason.
-pub(super) fn merge_with_plugin_resources<T: Serialize>(
-    app: &AppState,
-    category: &str,
-    items: Vec<T>,
-    query: Option<&str>,
-) -> Vec<serde_json::Value> {
-    let mut combined: Vec<serde_json::Value> = items
-        .into_iter()
-        .filter_map(|item| serde_json::to_value(item).ok())
-        .collect();
-    let mut plugin_items = app.plugin_manager.collect_resources(category);
-    if let Some(q) = query.filter(|q| !q.trim().is_empty()) {
-        let q_lower = q.to_lowercase();
-        plugin_items.retain(|item| {
-            serde_json::to_string(item)
-                .map(|s| s.to_lowercase().contains(&q_lower))
-                .unwrap_or(false)
-        });
-    }
-    combined.extend(plugin_items);
-    combined
 }
 
 /// Shared gate for console-only management actions (minting pairing/remote
