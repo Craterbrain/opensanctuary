@@ -73,7 +73,7 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 | `commands.intercept` | — | High | **E** | n/a | `on_command` veto. The safety-critical set still always passes. |
 | `commands.modify` | — | Critical | reserved, not offered in v1 | | |
 | `keyring.own` | — | Medium | **E** (host API) | **E** | The `OpenSanctuary:Plugin:<id>` namespace only. |
-| `keyring.service` | `services[]` (e.g. `OpenSanctuary:Pexels`) | Critical | reserved; `OpenSanctuary:System` is never grantable | | |
+| `keyring.service` | `services[]` (`OpenSanctuary:Shared:<name>`), `access` (`read`\|`write`) | Critical | **E** (sandboxed web, native host API) | | Shared keyring namespaces; owner rules in PLUGINS.md. Only the `Shared:` prefix is grantable, never System, another plugin's namespace or a host service. |
 | `settings.read` | `keys[]` | Medium | **E** (host API) | **E** | |
 | `settings.write` | `keys[]` | High | **E** | **E** | Never `csp_mode`, `frame_mode`, `cors_mode` or TLS settings. |
 | `network.outbound` | `hosts[]` | Medium | consent-only | **E** (iframe CSP) | |

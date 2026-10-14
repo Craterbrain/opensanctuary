@@ -7137,3 +7137,151 @@ async fn test_advanced_permission_override() {
     let v = json(r).await;
     assert_eq!(v["overridden"], false);
 }
+
+/// `keyring.service`: two sandboxed plugins share a keyring namespace under the host's rules.
+#[tokio::test]
+async fn test_shared_keyring_namespaces_between_plugins() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("shared.db").to_str().unwrap()).unwrap();
+    let web_dir = tmp.path().join("web");
+    const S: &str = "OpenSanctuary:Shared:kp-test-pexels";
+    let write_plugin = |id: &str, perms: serde_json::Value| {
+        let dir = web_dir.join("plugins").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.html"), "<html></html>").unwrap();
+        std::fs::write(
+            dir.join("plugin.json"),
+            serde_json::json!({ "manifest_version": 1, "id": id, "name": id, "web": { "entry": "index.html", "sandbox": true }, "permissions": perms }).to_string(),
+        ).unwrap();
+    };
+    write_plugin("kp_a", serde_json::json!([{ "id": "keyring.service", "services": [S], "access": "write" }, { "id": "network.outbound", "hosts": ["example.com"] }]));
+    write_plugin("kp_b", serde_json::json!([{ "id": "keyring.service", "services": [S], "access": "read" }, { "id": "keyring.own" }]));
+    // Bad shapes are errors on the plugin, not silently narrowed.
+    write_plugin("kp_bad1", serde_json::json!([{ "id": "keyring.service", "services": ["OpenSanctuary:System"], "access": "read" }]));
+    write_plugin("kp_bad2", serde_json::json!([{ "id": "keyring.service", "services": ["OpenSanctuary:Plugin:kp_a"] }]));
+    write_plugin("kp_bad3", serde_json::json!([{ "id": "keyring.service", "services": ["OpenSanctuary:Shared:Upper"] }]));
+    write_plugin("kp_bad4", serde_json::json!([{ "id": "keyring.service", "services": [S], "access": "root" }]));
+    write_plugin("kp_bad5", serde_json::json!([{ "id": "keyring.service" }]));
+    write_plugin("kp_bad6", serde_json::json!([{ "id": "keyring.own", "services": [S] }]));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"), data_dir: tmp.path().to_path_buf(),
+        host_session_token: "kp_host".to_string(), server_port: addr.port(), ..base_app_state(db.clone())
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+    let host = "kp_host";
+    let json = |r: reqwest::Response| async move { r.json::<serde_json::Value>().await.unwrap() };
+    let _ = os_next::storage::KeyringService::delete_secret(S, "api_key");
+
+    let list = json(c.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap()).await;
+    let find = |id: &str| list.as_array().unwrap().iter().find(|p| p["id"] == id).cloned().unwrap_or_else(|| panic!("{id} missing"));
+    for bad in ["kp_bad1", "kp_bad2", "kp_bad3", "kp_bad4", "kp_bad5", "kp_bad6"] {
+        assert!(find(bad)["error"].is_string(), "{bad} must be refused: {}", find(bad));
+    }
+    assert!(find("kp_a")["error"].is_null() && find("kp_b")["error"].is_null());
+    assert_eq!(find("kp_a")["requested"][0]["tier"], "critical");
+    // The review screen says who else shares the namespace.
+    assert_eq!(find("kp_a")["shared_with"][0]["plugins"][0]["id"], "kp_b");
+    assert_eq!(find("kp_b")["shared_with"][0]["plugins"][0]["access"], "write");
+
+    let approve = |id: &'static str, granted: serde_json::Value| {
+        let (c, base, list) = (c.clone(), base.clone(), list.clone());
+        async move {
+            let digest = list.as_array().unwrap().iter().find(|p| p["id"] == id).unwrap()["digest"].clone();
+            c.post(format!("{base}/api/plugins/{id}/approve")).header("x-host-token", "kp_host").json(&serde_json::json!({ "digest": digest, "granted": granted })).send().await.unwrap()
+        }
+    };
+    assert_eq!(approve("kp_a", serde_json::json!(["keyring.service", "network.outbound"])).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(approve("kp_b", serde_json::json!(["keyring.service", "keyring.own"])).await.status(), reqwest::StatusCode::OK);
+    let mint = |id: &'static str, scopes: serde_json::Value| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugins/{id}/token")).header("x-host-token", "kp_host").json(&serde_json::json!({ "scopes": scopes })).send().await.unwrap() }
+    };
+    // A token can't carry more than the grant: another service, or write where only read was granted.
+    assert_eq!(mint("kp_a", serde_json::json!([{ "id": "keyring.service", "services": ["OpenSanctuary:Shared:other"], "access": "read" }])).await.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(mint("kp_b", serde_json::json!([{ "id": "keyring.service", "services": [S], "access": "write" }])).await.status(), reqwest::StatusCode::FORBIDDEN, "read can't be widened to write");
+    assert_eq!(mint("kp_a", serde_json::json!([{ "id": "keyring.service", "services": [S, "OpenSanctuary:Shared:other"], "access": "write" }])).await.status(), reqwest::StatusCode::FORBIDDEN, "no extra service");
+    assert_eq!(mint("kp_a", serde_json::json!([{ "id": "keyring.own" }])).await.status(), reqwest::StatusCode::FORBIDDEN, "kp_a never got keyring.own");
+    let tok_a = json(mint("kp_a", serde_json::json!([{ "id": "keyring.service", "services": [S], "access": "write" }])).await).await["token"].as_str().unwrap().to_string();
+    let tok_b = json(mint("kp_b", serde_json::json!([{ "id": "keyring.service", "services": [S], "access": "read" }, { "id": "keyring.own" }])).await).await["token"].as_str().unwrap().to_string();
+
+    let call = |op: &'static str, token: Option<String>, service: &str, account: &str, secret: Option<&str>| {
+        let (c, base, service, account) = (c.clone(), base.clone(), service.to_string(), account.to_string());
+        let secret = secret.map(|s| s.to_string());
+        async move {
+            let mut body = serde_json::json!({ "service": service, "account": account });
+            if let Some(s) = secret { body["secret"] = s.into(); }
+            let mut r = c.post(format!("{base}/api/keyring/{op}")).json(&body);
+            r = match token { Some(t) => r.header("x-plugin-token", t), None => r.header("x-host-token", "kp_host") };
+            let res = r.send().await.unwrap();
+            (res.status(), res.json::<serde_json::Value>().await.unwrap_or_default())
+        }
+    };
+    let ok = reqwest::StatusCode::OK;
+    let forbidden = reqwest::StatusCode::FORBIDDEN;
+
+    // A writes; the row is tagged as a shared row owned by A. B (read) sees it but can't change or delete it.
+    assert_eq!(call("set", Some(tok_a.clone()), S, "api_key", Some("pexels-secret-1")).await.0, ok);
+    assert_eq!(db.get_keyring_owner(S, "api_key").unwrap().as_deref(), Some("shared:plugin:kp_a"));
+    let (st, v) = call("get", Some(tok_b.clone()), S, "api_key", None).await;
+    assert_eq!((st, v["secret"].as_str()), (ok, Some("pexels-secret-1")));
+    assert_eq!(call("has", Some(tok_b.clone()), S, "api_key", None).await.1["exists"], true);
+    assert_eq!(call("set", Some(tok_b.clone()), S, "api_key", Some("swap")).await.0, forbidden, "read access can't set");
+    assert_eq!(call("delete", Some(tok_b.clone()), S, "api_key", None).await.0, forbidden);
+
+    // The console can read and replace any shared row; the row becomes the console's and A can no longer overwrite it.
+    assert_eq!(call("set", None, S, "api_key", Some("console-value")).await.0, ok);
+    assert_eq!(db.get_keyring_owner(S, "api_key").unwrap().as_deref(), Some("shared:host"));
+    assert_eq!(call("set", Some(tok_a.clone()), S, "api_key", Some("grab")).await.0, forbidden, "a plugin can't take over a console-owned row");
+    assert_eq!(call("get", Some(tok_b.clone()), S, "api_key", None).await.1["secret"], "console-value");
+    assert_eq!(call("delete", Some(tok_a.clone()), S, "api_key", None).await.0, forbidden);
+
+    // A row that exists under a shared-looking name but wasn't created through this feature is invisible.
+    os_next::storage::KeyringService::set_secret(S, "legacy", "old-secret").unwrap();
+    db.record_keyring_owner(S, "legacy", "host").unwrap();
+    assert_eq!(call("get", Some(tok_b.clone()), S, "legacy", None).await.1["secret"], serde_json::Value::Null);
+    assert_eq!(call("has", Some(tok_b.clone()), S, "legacy", None).await.1["exists"], false);
+    assert_eq!(call("get", Some(tok_b.clone()), S, "never-stored", None).await.1["secret"], serde_json::Value::Null);
+
+    // Nothing outside the shared area through the shared grant: not another plugin's namespace, not the host's services,
+    // not the System namespace -- and A's token has no keyring.own, so not even its own.
+    for service in ["OpenSanctuary:Plugin:kp_b", "OpenSanctuary:Plugin:kp_a", "OpenSanctuary:CCLI", "OpenSanctuary:Shared:other", "OpenSanctuary:System"] {
+        assert_eq!(call("set", Some(tok_a.clone()), service, "x", Some("v")).await.0, forbidden, "{service}");
+        assert_ne!(call("get", Some(tok_a.clone()), service, "x", None).await.1["secret"], serde_json::json!("v"), "{service}");
+    }
+    // kp_b has keyring.own too: its own namespace works as before, and doesn't leak to kp_a.
+    assert_eq!(call("set", Some(tok_b.clone()), "OpenSanctuary:Plugin:kp_b", "own", Some("mine")).await.0, ok);
+    assert_eq!(call("get", Some(tok_b.clone()), "OpenSanctuary:Plugin:kp_b", "own", None).await.1["secret"], "mine");
+    assert_eq!(call("get", Some(tok_a.clone()), "OpenSanctuary:Plugin:kp_b", "own", None).await.0, forbidden);
+    // The System namespace is blocked by prefix and in any case, even for the console.
+    for service in ["OpenSanctuary:System", "opensanctuary:system", "OpenSanctuary:SystemTls", "OpenSanctuary:system:x"] {
+        assert_eq!(call("get", None, service, "x", None).await.0, forbidden, "{service}");
+    }
+
+    // The console lists shared entries (never values); a plugin can't.
+    let listing = c.get(format!("{base}/api/keyring/shared")).header("x-host-token", host).send().await.unwrap();
+    let text = listing.text().await.unwrap();
+    assert!(text.contains("api_key") && text.contains("shared:host") && !text.contains("console-value") && !text.contains("old-secret"), "{text}");
+    assert_eq!(c.get(format!("{base}/api/keyring/shared")).send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(c.get(format!("{base}/api/keyring/shared")).header("x-plugin-token", &tok_a).send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // The audit trail records first use and refusals, never the secret.
+    let audit = json(c.get(format!("{base}/api/plugins/audit")).header("x-host-token", host).send().await.unwrap()).await.to_string();
+    assert!(audit.contains("keyring_shared_access") && audit.contains("denied_call") && !audit.contains("pexels-secret-1") && !audit.contains("console-value"), "{audit}");
+
+    // A's own write can be deleted by A (its own row), and revoking kills the token at once.
+    assert_eq!(call("set", Some(tok_a.clone()), S, "mine", Some("a-secret")).await.0, ok);
+    assert_eq!(call("delete", Some(tok_a.clone()), S, "mine", None).await.0, ok);
+    assert_eq!(c.post(format!("{base}/api/plugins/kp_a/revoke")).header("x-host-token", host).send().await.unwrap().status(), ok);
+    assert_eq!(call("get", Some(tok_a.clone()), S, "api_key", None).await.0, reqwest::StatusCode::UNAUTHORIZED);
+
+    // Cleanup of real keyring entries this test created.
+    for (svc, acct) in [(S, "api_key"), (S, "legacy"), (S, "mine"), ("OpenSanctuary:Plugin:kp_b", "own")] {
+        let _ = os_next::storage::KeyringService::delete_secret(svc, acct);
+    }
+}

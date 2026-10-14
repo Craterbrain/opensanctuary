@@ -61,6 +61,14 @@ pub trait PluginHost: Send + Sync {
     fn data_dir(&self) -> Result<PathBuf, PluginError>;
     /// `level`: 0 error, 1 warn, 2 info, 3 debug.
     fn log(&self, level: u8, msg: &str);
+    // --- appended in a later release: never reorder or insert above this line ---
+    /// `keyring.service`: reads a secret from a shared namespace (`OpenSanctuary:Shared:<name>`) the
+    /// plugin was granted. `None` when there is none or the plugin may not see it.
+    fn keyring_shared_get(&self, service: &str, account: &str) -> Result<Option<String>, PluginError>;
+    /// `keyring.service` with `write` access: stores a secret there, as this plugin's own entry.
+    fn keyring_shared_set(&self, service: &str, account: &str, secret: &str) -> Result<(), PluginError>;
+    /// `keyring.service` with `write` access: deletes an entry this plugin created.
+    fn keyring_shared_delete(&self, service: &str, account: &str) -> Result<bool, PluginError>;
 }
 
 /// A plugin's live grant state. Shared (`Arc`) so a revoke from the console takes effect
@@ -73,6 +81,13 @@ pub struct GrantCell {
 impl GrantCell {
     pub fn new(perms: PermissionSet) -> Self {
         Self { enabled: std::sync::atomic::AtomicBool::new(true), perms: std::sync::RwLock::new(perms) }
+    }
+
+    /// Runs `f` on the current grant, or returns `None` once the plugin has been revoked.
+    pub fn with<R>(&self, f: impl FnOnce(&PermissionSet) -> R) -> Option<R> {
+        self.enabled
+            .load(std::sync::atomic::Ordering::Acquire)
+            .then(|| f(&self.perms.read().unwrap_or_else(|e| e.into_inner())))
     }
 
     pub fn allows(&self, check: impl FnOnce(&PermissionSet) -> bool) -> bool {

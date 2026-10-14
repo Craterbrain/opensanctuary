@@ -6145,5 +6145,8 @@ video {
 }
 .os-notif-btn:hover { color: var(--os-text-primary); background: var(--os-hover); }
 .os-notif-ico, .os-notif-level { display: inline-flex; align-items: center; }
+.plugin-shared-secrets { margin-top: 12px; }
+.plugin-shared-secret { display: flex; align-items: center; gap: 8px; margin: 4px 0; flex-wrap: wrap; }
+.plugin-advanced-access { margin: 4px 0 0 26px; }
 /* The `hidden` attribute must win over .btn's display (Approve / Apply override swap places) */
 .plugin-actions [hidden] { display: none !important; }

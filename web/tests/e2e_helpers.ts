@@ -21,7 +21,7 @@
 import { expect } from "bun:test";
 import { spawn, type Subprocess } from "bun";
 import { resolve, join } from "path";
-import { mkdtempSync, rmSync, mkdirSync } from "fs";
+import { mkdtempSync, rmSync, mkdirSync, readdirSync, symlinkSync, cpSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 
 export interface SpawnedTestServer {
@@ -43,6 +43,8 @@ export async function spawnTestServer(opts: {
   port: number;
   tempPrefix?: string;
   extraArgs?: string[];
+  /** Serve this web folder instead of the repo's `web/` (e.g. one with extra test plugins; see `webDirWithPlugins`). */
+  webDir?: string;
   /** Extra environment for the server process (on top of this process's own). */
   env?: Record<string, string>;
   readyPath?: string;
@@ -60,7 +62,7 @@ export async function spawnTestServer(opts: {
       "--skip-first-time-setup",
       "--port", opts.port.toString(),
       "--db-path", dbPath,
-      "--web-dir", resolve(import.meta.dir, "../"),
+      "--web-dir", opts.webDir ?? resolve(import.meta.dir, "../"),
       ...(opts.extraArgs ?? []),
     ],
     {
@@ -217,4 +219,24 @@ export function pluginBridge(frameOf: () => import("playwright").Frame | undefin
     window.addEventListener("message", (ev) => { if (ev.data?.type === "os.response" && ev.data.id === id) resolve(ev.data); });
     parent.postMessage({ type: "os.request", id, method: m, params: p }, "*");
   }), [method, params] as [string, any]);
+}
+
+/**
+ * A temporary web folder that serves everything the real one does (symlinked) but has its own
+ * `plugins/` directory: a copy of the bundled plugins plus `extra` (plugin id -> files). For tests
+ * that need plugins the repo doesn't ship, without writing into the repo.
+ */
+export function webDirWithPlugins(extra: Record<string, Record<string, string>>): string {
+  const real = resolve(import.meta.dir, "../");
+  const dir = mkdtempSync(join(tmpdir(), "os-next-web-"));
+  for (const name of readdirSync(real)) {
+    if (name === "plugins" || name === "node_modules" || name === "tests") continue;
+    symlinkSync(join(real, name), join(dir, name));
+  }
+  cpSync(join(real, "plugins"), join(dir, "plugins"), { recursive: true });
+  for (const [id, files] of Object.entries(extra)) {
+    mkdirSync(join(dir, "plugins", id), { recursive: true });
+    for (const [file, text] of Object.entries(files)) writeFileSync(join(dir, "plugins", id, file), text);
+  }
+  return dir;
 }

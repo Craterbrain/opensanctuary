@@ -35,6 +35,7 @@ const KNOWN: &[(&str, Tier, &str)] = &[
     ("commands.send", Tier::Medium, "enforced"),
     ("commands.intercept", Tier::High, "enforced"),
     ("keyring.own", Tier::Medium, "enforced"),
+    ("keyring.service", Tier::Critical, "enforced"),
     ("settings.read", Tier::Medium, "reserved"),
     ("settings.write", Tier::High, "reserved"),
     ("network.outbound", Tier::Medium, "enforced"),
@@ -70,6 +71,12 @@ pub struct PermissionRequest {
     pub paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<u16>,
+    /// `keyring.service`: shared keyring namespaces (`OpenSanctuary:Shared:<name>`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<String>,
+    /// `keyring.service`: `read` (the default) or `write` (read plus managing its own entries there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// The operator may decline an optional permission and still approve the plugin.
@@ -103,7 +110,7 @@ impl PermissionRequest {
         let base = KNOWN.iter().find(|(id, _, _)| *id == self.id).map(|(_, _, e)| *e).unwrap_or("unknown");
         match kind {
             "native" => match self.id.as_str() {
-                "show.observe" | "commands.intercept" | "resources.provide" => "enforced",
+                "show.observe" | "commands.intercept" | "resources.provide" | "keyring.service" => "enforced",
                 "native.code" => "informational",
                 _ => "consent-only",
             },
@@ -185,6 +192,15 @@ impl PermissionSet {
                         continue;
                     }
                 }
+                "keyring.service" => {
+                    // Never wider than the grant: only services the grant lists, and no more access than it gives.
+                    p.services = want.services.iter().filter(|s| have.services.contains(s)).cloned().collect();
+                    if p.services.is_empty() {
+                        continue;
+                    }
+                    let both_write = Access::parse(want.access.as_deref()) == Some(Access::Write) && Access::parse(have.access.as_deref()) == Some(Access::Write);
+                    p.access = Some(if both_write { "write" } else { "read" }.to_string());
+                }
                 "network.outbound" => {
                     p.hosts = narrow(&want.hosts, &have.hosts);
                     if p.hosts.is_empty() {
@@ -202,6 +218,15 @@ impl PermissionSet {
             out.push(p);
         }
         PermissionSet(out)
+    }
+
+    /// How this set lets a plugin use the shared keyring namespace `service`, if at all.
+    pub fn shared_access(&self, service: &str) -> Option<Access> {
+        self.0
+            .iter()
+            .filter(|p| p.id == "keyring.service" && p.services.iter().any(|s| s == service))
+            .filter_map(|p| Access::parse(p.access.as_deref()))
+            .max()
     }
 
     /// Whether `process.run` covers the manifest command `id`.
@@ -226,7 +251,41 @@ pub fn scope_kind(id: &str) -> &'static str {
         "filesystem.read" | "filesystem.write" => "paths",
         "network.listen" => "ports",
         "settings.read" | "settings.write" => "keys",
+        "keyring.service" => "services",
         _ => "none",
+    }
+}
+
+/// The prefix of the keyring namespaces plugins may share. Nothing outside it is ever grantable:
+/// not `OpenSanctuary:System*` (the TLS key), not any plugin's `OpenSanctuary:Plugin:*` namespace
+/// (that is `keyring.own`), not the host's own services (CCLI, CloudSync, ...).
+pub const SHARED_SERVICE_PREFIX: &str = "OpenSanctuary:Shared:";
+
+/// `OpenSanctuary:Shared:<name>`, the name 1 to 48 of lowercase letters, digits, `.`, `_`, `-`,
+/// starting with a letter or digit. Exact: no trimming, no case folding (Windows compares target
+/// names case-insensitively, so anything else could collide with another namespace).
+pub fn valid_shared_service(s: &str) -> bool {
+    let Some(name) = s.strip_prefix(SHARED_SERVICE_PREFIX) else { return false };
+    let b = name.as_bytes();
+    (1..=48).contains(&b.len())
+        && (b[0].is_ascii_lowercase() || b[0].is_ascii_digit())
+        && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'_' | b'-'))
+}
+
+/// What a `keyring.service` grant lets a plugin do in a shared namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Access {
+    Read,
+    Write,
+}
+
+impl Access {
+    pub fn parse(s: Option<&str>) -> Option<Self> {
+        match s {
+            None | Some("read") => Some(Self::Read),
+            Some("write") => Some(Self::Write),
+            _ => None,
+        }
     }
 }
 
@@ -267,7 +326,7 @@ pub fn validate_grant(p: &PermissionRequest, kind: &str) -> Result<(), String> {
         return Err("'ui.dom' only applies to a console script (a sandboxed page has no console access to grant)".to_string());
     }
     let plain = |s: &str| !s.is_empty() && s.len() <= 255 && !s.chars().any(|c| c.is_control());
-    for list in [&p.categories, &p.commands, &p.keys, &p.hosts, &p.paths] {
+    for list in [&p.categories, &p.commands, &p.keys, &p.hosts, &p.paths, &p.services] {
         if list.len() > 64 || !list.iter().all(|e| plain(e)) {
             return Err(format!("'{}': a scope list is too long or has an empty or invalid entry", p.id));
         }
@@ -280,6 +339,7 @@ pub fn validate_grant(p: &PermissionRequest, kind: &str) -> Result<(), String> {
     let used = [
         ("categories", !p.categories.is_empty()), ("commands", !p.commands.is_empty()), ("hosts", !p.hosts.is_empty()),
         ("paths", !p.paths.is_empty()), ("ports", !p.ports.is_empty()), ("keys", !p.keys.is_empty()),
+        ("services", !p.services.is_empty()),
     ];
     if let Some((name, _)) = used.iter().find(|(name, set)| *set && *name != kind_of_scope) {
         return Err(format!("'{}' doesn't take a {name} list", p.id));
@@ -288,6 +348,22 @@ pub fn validate_grant(p: &PermissionRequest, kind: &str) -> Result<(), String> {
         if let Some(c) = p.categories.iter().find(|c| *c != "*" && !RESOURCE_CATEGORIES.contains(&c.as_str())) {
             return Err(format!("'{}': unknown category '{c}'", p.id));
         }
+    }
+    if p.id == "keyring.service" {
+        if kind == "web" {
+            return Err("'keyring.service' isn't available to a console script (it already has console access)".to_string());
+        }
+        if p.services.is_empty() || p.services.len() > 4 {
+            return Err("'keyring.service' needs 1 to 4 services".to_string());
+        }
+        if let Some(s) = p.services.iter().find(|s| !valid_shared_service(s)) {
+            return Err(format!("'{s}' isn't a shareable keyring namespace (it must look like {SHARED_SERVICE_PREFIX}name)"));
+        }
+        if Access::parse(p.access.as_deref()).is_none() {
+            return Err("'keyring.service' access must be \"read\" or \"write\"".to_string());
+        }
+    } else if p.access.is_some() {
+        return Err(format!("'{}' doesn't take an access mode", p.id));
     }
     if let Some(h) = p.hosts.iter().find(|h| !valid_host_entry(h)) {
         return Err(format!("'{}': '{h}' isn't a valid host (use example.com, *.example.com, optionally :port)", p.id));
@@ -641,6 +717,26 @@ impl PluginManifest {
                     return bad(format!("'{}': unknown category '{c}'", p.id));
                 }
             }
+            if p.id == "keyring.service" {
+                if self.web.as_ref().is_some_and(|w| !w.sandbox) && self.backend.is_none() {
+                    return bad("'keyring.service' isn't available to a console script (it already has console access)".to_string());
+                }
+                if p.services.is_empty() || p.services.len() > 4 {
+                    return bad("'keyring.service' needs 1 to 4 services".to_string());
+                }
+                if let Some(svc) = p.services.iter().find(|x| !valid_shared_service(x)) {
+                    return bad(format!("'{svc}' isn't a shareable keyring namespace (it must look like {SHARED_SERVICE_PREFIX}name)"));
+                }
+                let mut uniq = std::collections::HashSet::new();
+                if !p.services.iter().all(|x| uniq.insert(x)) {
+                    return bad("'keyring.service' lists a service twice".to_string());
+                }
+                if Access::parse(p.access.as_deref()).is_none() {
+                    return bad("'keyring.service' access must be \"read\" or \"write\"".to_string());
+                }
+            } else if p.access.is_some() || !p.services.is_empty() {
+                return bad(format!("'{}' doesn't take services or an access mode", p.id));
+            }
             if p.id == "commands.send" && p.commands.is_empty() {
                 return bad("'commands.send' needs a commands list".to_string());
             }
@@ -872,6 +968,70 @@ mod tests {
         assert!(manifest(&sandboxed("").replace("index.html", "../index.html")).is_err());
         assert!(manifest(&sandboxed("").replace("index.html", "main.js")).is_err());
         assert!(manifest(&sandboxed("").replace("index.html", "ui/index.html")).is_ok());
+    }
+
+    #[test]
+    fn only_lowercase_shared_namespaces_are_shareable() {
+        for ok in ["OpenSanctuary:Shared:pexels", "OpenSanctuary:Shared:a", "OpenSanctuary:Shared:0.x_y-z", &format!("OpenSanctuary:Shared:{}", "a".repeat(48))] {
+            assert!(valid_shared_service(ok), "{ok}");
+        }
+        for bad in [
+            "OpenSanctuary:System", "OpenSanctuary:Plugin:x", "OpenSanctuary:CCLI", "OpenSanctuary:Provider:pexels", "OpenSanctuary:Shared:",
+            "opensanctuary:shared:pexels", "OpenSanctuary:shared:pexels", "OpenSanctuary:Shared:Pexels", "OpenSanctuary:Shared:a:b",
+            "OpenSanctuary:Shared:.hidden", "OpenSanctuary:Shared:-x", " OpenSanctuary:Shared:pexels", "OpenSanctuary:Shared:pexels ",
+            "OpenSanctuary:Shared:..", "OpenSanctuary:Shared:\u{e9}", &format!("OpenSanctuary:Shared:{}", "a".repeat(49)),
+        ] {
+            assert!(!valid_shared_service(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_shared_keyring_token_can_never_be_wider_than_the_grant() {
+        let svc = |services: &[&str], access: &str| PermissionSet(vec![PermissionRequest {
+            id: "keyring.service".into(), services: services.iter().map(|s| s.to_string()).collect(), access: Some(access.into()), ..Default::default()
+        }]);
+        let a = "OpenSanctuary:Shared:a";
+        let b = "OpenSanctuary:Shared:b";
+        let grant = svc(&[a], "read");
+        // Asking for another service drops it (and the call as a whole is then refused, since narrowing changed it).
+        assert_eq!(svc(&[a, b], "read").narrowed_by(&grant), svc(&[a], "read"));
+        assert!(svc(&[b], "read").narrowed_by(&grant).0.is_empty());
+        // Write is never granted by a read grant, and read never becomes write.
+        assert_eq!(svc(&[a], "write").narrowed_by(&grant), svc(&[a], "read"));
+        assert_eq!(svc(&[a], "read").narrowed_by(&svc(&[a], "write")), svc(&[a], "read"));
+        assert_eq!(svc(&[a], "write").narrowed_by(&svc(&[a], "write")), svc(&[a], "write"));
+        // The grant decides access: shared_access reads exactly what was granted.
+        assert_eq!(svc(&[a], "write").shared_access(a), Some(Access::Write));
+        assert_eq!(svc(&[a], "read").shared_access(a), Some(Access::Read));
+        assert_eq!(svc(&[a], "read").shared_access(b), None);
+        assert_eq!(PermissionSet::empty().shared_access(a), None);
+        // Nothing granted at all: nothing carried.
+        assert!(svc(&[a], "read").narrowed_by(&PermissionSet::empty()).0.is_empty());
+    }
+
+    #[test]
+    fn keyring_service_manifest_rules() {
+        let sandboxed = |perm: &str| format!(
+            r#"{{"manifest_version":1,"id":"ks","name":"K","web":{{"entry":"index.html","sandbox":true}},"permissions":[{perm}]}}"#
+        );
+        let s = r#""OpenSanctuary:Shared:pexels""#;
+        assert!(manifest(&sandboxed(&format!(r#"{{"id":"keyring.service","services":[{s}],"access":"write"}}"#))).is_ok());
+        assert!(manifest(&sandboxed(&format!(r#"{{"id":"keyring.service","services":[{s}]}}"#))).is_ok(), "read is the default");
+        for bad in [
+            r#"{"id":"keyring.service"}"#.to_string(),
+            r#"{"id":"keyring.service","services":[]}"#.to_string(),
+            format!(r#"{{"id":"keyring.service","services":[{s},{s}]}}"#),
+            format!(r#"{{"id":"keyring.service","services":[{s}],"access":"admin"}}"#),
+            r#"{"id":"keyring.service","services":["OpenSanctuary:System"]}"#.to_string(),
+            r#"{"id":"keyring.service","services":["OpenSanctuary:Shared:a","OpenSanctuary:Shared:b","OpenSanctuary:Shared:c","OpenSanctuary:Shared:d","OpenSanctuary:Shared:e"]}"#.to_string(),
+            format!(r#"{{"id":"keyring.own","services":[{s}]}}"#),
+            format!(r#"{{"id":"show.observe","access":"write"}}"#),
+        ] {
+            assert!(manifest(&sandboxed(&bad)).is_err(), "{bad}");
+        }
+        // A same-realm console script already has console authority: not offered.
+        let script = format!(r#"{{"manifest_version":1,"id":"ks","name":"K","web":{{"entry":"ks.js"}},"permissions":[{{"id":"keyring.service","services":[{s}]}}]}}"#);
+        assert!(manifest(&script).is_err());
     }
 
     #[test]

@@ -5,11 +5,14 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::api::error::AppError;
+use crate::api::keyring_policy::{self, Op, Verdict};
 use crate::api::ws::AppState;
+use crate::core::plugin_permissions::PermissionSet;
 
 pub(super) enum KeyringCaller {
     Host,
-    Plugin(String),
+    /// The plugin's id and what its token carries (already narrowed to its live grant).
+    Plugin { id: String, scopes: PermissionSet },
 }
 
 pub(super) async fn authenticate_keyring_caller(
@@ -19,8 +22,8 @@ pub(super) async fn authenticate_keyring_caller(
     if let Some(token_header) = headers.get("x-plugin-token") {
         if let Ok(token_str) = token_header.to_str() {
             if let Some(caller) = app.resolve_plugin_caller(token_str).await {
-                if caller.scopes.has("keyring.own") {
-                    return Ok(KeyringCaller::Plugin(caller.plugin_id));
+                if caller.scopes.has("keyring.own") || caller.scopes.has("keyring.service") {
+                    return Ok(KeyringCaller::Plugin { id: caller.plugin_id, scopes: caller.scopes });
                 }
             }
         }
@@ -140,21 +143,46 @@ pub(super) async fn keyring_set(
 
     reject_system_namespace(&req.service)?;
     let caller = authenticate_keyring_caller(&headers, &app).await?;
+    let svc = req.service.trim();
+    let acct = req.account.trim();
     let owner_tag = match &caller {
+        KeyringCaller::Host if keyring_policy::in_shared_area(svc) => {
+            // The console manages every shared row, including ones a plugin created.
+            keyring_policy::HOST_OWNER_TAG.to_string()
+        }
         KeyringCaller::Host => "host".to_string(),
-        KeyringCaller::Plugin(name) => {
-            let expected_service = format!("OpenSanctuary:Plugin:{}", name);
-            if req.service.trim() != expected_service {
-                return Err(AppError::Forbidden(format!("Plugins can only create secrets in their own namespace ('{}')", expected_service)));
+        KeyringCaller::Plugin { id, scopes } => {
+            let own_service = format!("OpenSanctuary:Plugin:{}", id);
+            if svc == own_service {
+                if !scopes.has("keyring.own") {
+                    return Err(AppError::Forbidden("This plugin wasn't granted its own keyring namespace".to_string()));
+                }
+                format!("plugin:{}", id)
+            } else if keyring_policy::in_shared_area(svc) {
+                match keyring_policy::check(&app.db, id, scopes, Op::Set, svc, acct) {
+                    Verdict::Allow { owner } => {
+                        keyring_policy::audit_once(&app.db, id, svc, acct, Op::Set, false);
+                        owner
+                    }
+                    Verdict::Deny(why) => {
+                        keyring_policy::audit_once(&app.db, id, svc, acct, Op::Set, true);
+                        return Err(AppError::Forbidden(why));
+                    }
+                    Verdict::NotFound => return Err(AppError::Forbidden("not allowed".to_string())),
+                }
+            } else {
+                return Err(AppError::Forbidden(format!("Plugins can only create secrets in their own namespace ('{}') or a shared one they were granted", own_service)));
             }
-            format!("plugin:{}", name)
         }
     };
 
-    // Check if an existing credential belongs to a different owner
-    if let Ok(Some(existing_owner)) = app.db.get_keyring_owner(req.service.trim(), req.account.trim()) {
-        if existing_owner != owner_tag {
-            return Err(AppError::Forbidden(format!("Permission denied. Secret is owned by '{}'", existing_owner)));
+    // Check if an existing credential belongs to a different owner (shared rows were decided above).
+    let shared_row = keyring_policy::in_shared_area(svc);
+    if !shared_row {
+        if let Ok(Some(existing_owner)) = app.db.get_keyring_owner(svc, acct) {
+            if existing_owner != owner_tag {
+                return Err(AppError::Forbidden(format!("Permission denied. Secret is owned by '{}'", existing_owner)));
+            }
         }
     }
 
@@ -180,15 +208,29 @@ pub(super) async fn keyring_get(
 
     reject_system_namespace(&req.service)?;
     let caller = authenticate_keyring_caller(&headers, &app).await?;
-    if let KeyringCaller::Plugin(name) = &caller {
-        let expected_service = format!("OpenSanctuary:Plugin:{}", name);
-        if req.service.trim() != expected_service {
-            return Err(AppError::Forbidden("Plugins can only view secrets in their own namespace".to_string()));
-        }
-        let required_owner = format!("plugin:{}", name);
-        let owner = app.db.get_keyring_owner(req.service.trim(), req.account.trim()).unwrap_or(None);
-        if owner.as_deref() != Some(&required_owner) {
-            return Err(AppError::Forbidden("Plugins can only view secrets they created".to_string()));
+    if let KeyringCaller::Plugin { id, scopes } = &caller {
+        let svc = req.service.trim();
+        let acct = req.account.trim();
+        let own_service = format!("OpenSanctuary:Plugin:{}", id);
+        if svc == own_service {
+            if !scopes.has("keyring.own") {
+                return Err(AppError::Forbidden("This plugin wasn't granted its own keyring namespace".to_string()));
+            }
+            let required_owner = format!("plugin:{}", id);
+            let owner = app.db.get_keyring_owner(svc, acct).unwrap_or(None);
+            if owner.as_deref() != Some(&required_owner) {
+                return Err(AppError::Forbidden("Plugins can only view secrets they created".to_string()));
+            }
+        } else if keyring_policy::in_shared_area(svc) {
+            match keyring_policy::check(&app.db, id, scopes, Op::Get, svc, acct) {
+                Verdict::Allow { .. } => keyring_policy::audit_once(&app.db, id, svc, acct, Op::Get, false),
+                _ => {
+                    keyring_policy::audit_once(&app.db, id, svc, acct, Op::Get, true);
+                    return Ok(Json(serde_json::json!({ "success": true, "secret": serde_json::Value::Null })));
+                }
+            }
+        } else {
+            return Err(AppError::Forbidden("Plugins can only view secrets in their own namespace or a shared one they were granted".to_string()));
         }
     }
 
@@ -209,15 +251,26 @@ pub(super) async fn keyring_has(
 
     reject_system_namespace(&req.service)?;
     let caller = authenticate_keyring_caller(&headers, &app).await?;
-    if let KeyringCaller::Plugin(name) = &caller {
-        let expected_service = format!("OpenSanctuary:Plugin:{}", name);
-        if req.service.trim() != expected_service {
-            return Ok(Json(serde_json::json!({ "success": true, "exists": false })));
-        }
-        let required_owner = format!("plugin:{}", name);
-        let owner = app.db.get_keyring_owner(req.service.trim(), req.account.trim()).unwrap_or(None);
-        if owner.as_deref() != Some(&required_owner) {
-            return Ok(Json(serde_json::json!({ "success": true, "exists": false })));
+    if let KeyringCaller::Plugin { id, scopes } = &caller {
+        let svc = req.service.trim();
+        let acct = req.account.trim();
+        let not_found = || Ok(Json(serde_json::json!({ "success": true, "exists": false })));
+        let own_service = format!("OpenSanctuary:Plugin:{}", id);
+        if svc == own_service {
+            if !scopes.has("keyring.own") {
+                return not_found();
+            }
+            let required_owner = format!("plugin:{}", id);
+            let owner = app.db.get_keyring_owner(svc, acct).unwrap_or(None);
+            if owner.as_deref() != Some(&required_owner) {
+                return not_found();
+            }
+        } else if keyring_policy::in_shared_area(svc) {
+            if !matches!(keyring_policy::check(&app.db, id, scopes, Op::Has, svc, acct), Verdict::Allow { .. }) {
+                return not_found();
+            }
+        } else {
+            return not_found();
         }
     }
 
@@ -238,15 +291,30 @@ pub(super) async fn keyring_delete(
 
     reject_system_namespace(&req.service)?;
     let caller = authenticate_keyring_caller(&headers, &app).await?;
-    if let KeyringCaller::Plugin(name) = &caller {
-        let expected_service = format!("OpenSanctuary:Plugin:{}", name);
-        if req.service.trim() != expected_service {
-            return Err(AppError::Forbidden("Plugins can only delete secrets in their own namespace".to_string()));
-        }
-        let required_owner = format!("plugin:{}", name);
-        let owner = app.db.get_keyring_owner(req.service.trim(), req.account.trim()).unwrap_or(None);
-        if owner.as_deref() != Some(&required_owner) {
-            return Err(AppError::Forbidden("Plugins can only delete secrets they created".to_string()));
+    if let KeyringCaller::Plugin { id, scopes } = &caller {
+        let svc = req.service.trim();
+        let acct = req.account.trim();
+        let own_service = format!("OpenSanctuary:Plugin:{}", id);
+        if svc == own_service {
+            if !scopes.has("keyring.own") {
+                return Err(AppError::Forbidden("This plugin wasn't granted its own keyring namespace".to_string()));
+            }
+            let required_owner = format!("plugin:{}", id);
+            let owner = app.db.get_keyring_owner(svc, acct).unwrap_or(None);
+            if owner.as_deref() != Some(&required_owner) {
+                return Err(AppError::Forbidden("Plugins can only delete secrets they created".to_string()));
+            }
+        } else if keyring_policy::in_shared_area(svc) {
+            match keyring_policy::check(&app.db, id, scopes, Op::Delete, svc, acct) {
+                Verdict::Allow { .. } => keyring_policy::audit_once(&app.db, id, svc, acct, Op::Delete, false),
+                Verdict::NotFound => return Err(AppError::Forbidden("not allowed".to_string())),
+                Verdict::Deny(m) => {
+                    keyring_policy::audit_once(&app.db, id, svc, acct, Op::Delete, true);
+                    return Err(AppError::Forbidden(m));
+                }
+            }
+        } else {
+            return Err(AppError::Forbidden("Plugins can only delete secrets in their own namespace or a shared one they were granted".to_string()));
         }
     }
 
@@ -260,9 +328,22 @@ pub(super) async fn keyring_delete(
     Ok(Json(serde_json::json!({ "success": true, "deleted": deleted })))
 }
 
+/// GET /api/keyring/shared -- which shared-namespace entries exist and who owns them. Console only;
+/// it never returns a secret's value.
+pub(super) async fn keyring_shared_list(State(app): State<AppState>, headers: HeaderMap) -> Result<impl IntoResponse, AppError> {
+    if !matches!(authenticate_keyring_caller(&headers, &app).await?, KeyringCaller::Host) {
+        return Err(AppError::Forbidden("Only the console can list shared secrets".to_string()));
+    }
+    let entries = app.db.list_shared_keyring_entries().map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(Json(serde_json::json!({
+        "entries": entries.into_iter().map(|(service, account, owner)| serde_json::json!({ "service": service, "account": account, "owner": owner })).collect::<Vec<_>>(),
+    })))
+}
+
 pub(super) fn router() -> Router<AppState> {
-    use axum::routing::post;
+    use axum::routing::{get, post};
     Router::new()
+        .route("/api/keyring/shared", get(keyring_shared_list))
         .route("/api/keyring/set", post(keyring_set))
         .route("/api/keyring/get", post(keyring_get))
         .route("/api/keyring/has", post(keyring_has))
@@ -273,7 +354,8 @@ pub(super) fn router() -> Router<AppState> {
 /// `OpenSanctuary:System` holds the TLS private key; it is managed only by
 /// the server itself, never through this HTTP surface.
 fn reject_system_namespace(service: &str) -> Result<(), AppError> {
-    if service.trim().eq_ignore_ascii_case("OpenSanctuary:System") {
+    // Anything starting with the System prefix, in any case (not just the exact name): the TLS key's namespace.
+    if service.trim().to_ascii_lowercase().starts_with("opensanctuary:system") {
         return Err(AppError::Forbidden("The system keyring namespace is not accessible over HTTP".to_string()));
     }
     Ok(())
