@@ -3935,7 +3935,6 @@ async fn test_freeshow_import_http_route() {
     let asset_graph = Arc::new(AssetGraph::new(&web_dir));
     let (tx, _rx) = tokio::sync::broadcast::channel(512);
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let app_state = os_next::api::ws::AppState {
         tx,
@@ -3947,7 +3946,6 @@ async fn test_freeshow_import_http_route() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -4122,7 +4120,6 @@ async fn test_app_state_plugin_token_lifecycle() {
 
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let app = os_next::api::ws::AppState {
         engine,
@@ -4134,7 +4131,6 @@ async fn test_app_state_plugin_token_lifecycle() {
         skip_first_time_setup: true,
         tx,
         plugin_manager,
-        media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -4180,7 +4176,6 @@ async fn test_network_api_routes_and_conflict_detection() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -4196,7 +4191,6 @@ async fn test_network_api_routes_and_conflict_detection() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -4307,7 +4301,6 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -4323,7 +4316,6 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -4437,7 +4429,6 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -4452,7 +4443,6 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -4737,7 +4727,6 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -4754,7 +4743,6 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -4833,7 +4821,6 @@ async fn test_command_endpoint_requires_host_token_for_unpaired_callers() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -4849,7 +4836,6 @@ async fn test_command_endpoint_requires_host_token_for_unpaired_callers() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -4987,7 +4973,6 @@ async fn test_library_mutation_and_admin_routes_require_host_token() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -5006,7 +4991,6 @@ async fn test_library_mutation_and_admin_routes_require_host_token() {
         data_dir: test_dir.path().to_path_buf(),
         skip_first_time_setup: true,
         plugin_manager,
-        media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -5118,7 +5102,6 @@ async fn test_tv_provision_start_and_progress_against_unreachable_device() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -5134,7 +5117,6 @@ async fn test_tv_provision_start_and_progress_against_unreachable_device() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -5199,7 +5181,6 @@ async fn test_update_check_and_status_routes_against_real_test_repo() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -5215,7 +5196,6 @@ async fn test_update_check_and_status_routes_against_real_test_repo() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -5290,7 +5270,6 @@ async fn test_only_one_console_connected_at_a_time() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -5306,7 +5285,6 @@ async fn test_only_one_console_connected_at_a_time() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -5395,7 +5373,6 @@ async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let asset_graph = Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media")));
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     // 1. Generate TLS certificate
     let interfaces = os_next::network::NetworkInterfaceInfo::discover_all();
@@ -5423,7 +5400,6 @@ async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -5533,7 +5509,6 @@ async fn test_security_headers_and_cors_policies() {
     let asset_graph = Arc::new(AssetGraph::new(temp_dir.path().join("assets")));
     let (tx, _) = tokio::sync::broadcast::channel(100);
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let http_addr = http_listener.local_addr().unwrap();
@@ -5548,7 +5523,6 @@ async fn test_security_headers_and_cors_policies() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -5727,7 +5701,6 @@ async fn spawn_test_app(host_session_token: &str) -> String {
     let asset_graph = Arc::new(AssetGraph::new(&web_dir));
     let (tx, _rx) = tokio::sync::broadcast::channel(512);
     let plugin_manager = Arc::new(os_next::core::plugins::PluginManager::new());
-    let media_search = Arc::new(os_next::storage::MediaSearchRegistry::new_default());
 
     let app_state = os_next::api::ws::AppState {
         tx,
@@ -5739,7 +5712,6 @@ async fn spawn_test_app(host_session_token: &str) -> String {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager,
-        media_search,
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -5864,7 +5836,6 @@ async fn test_console_credential_survives_restart_and_is_revocable() {
             data_dir: std::path::PathBuf::from("."),
             skip_first_time_setup: true,
             plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-            media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
             last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
             display_manager: None,
@@ -6057,7 +6028,6 @@ async fn test_plugin_grant_routes_and_web_plugin_serving() {
         data_dir: std::path::PathBuf::from("."),
         skip_first_time_setup: true,
         plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -6189,7 +6159,6 @@ async fn test_scoped_plugin_tokens_for_commands_and_keyring() {
         web_dir: web_dir.clone(), media_dir: test_dir.path().join("media"),
         data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
         plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -6352,7 +6321,6 @@ async fn test_real_cdylib_plugin_abi2_end_to_end() {
         web_dir: std::path::PathBuf::from("web"), media_dir: tmp.path().join("media"),
         data_dir: data_dir.clone(), skip_first_time_setup: true,
         plugin_manager: Arc::new(PluginManager::new()),
-        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -6447,7 +6415,6 @@ async fn test_sandboxed_plugin_frame_serving_and_csp() {
         web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
         data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
         plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -6554,7 +6521,6 @@ async fn test_rest_ws_and_plugin_commands_share_one_pipeline() {
         web_dir: std::path::PathBuf::from("web"), media_dir: tmp.path().join("media"),
         data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
         plugin_manager: Arc::new(pm),
-        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -6652,7 +6618,6 @@ async fn test_plugin_host_fetch_and_add_song_for_the_genius_plugin() {
         web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
         data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
         plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -6711,7 +6676,7 @@ async fn test_plugin_host_fetch_and_add_song_for_the_genius_plugin() {
         assert_eq!(r.status(), reqwest::StatusCode::FORBIDDEN, "{url}");
     }
     // A granted *name* that resolves to a loopback address is still refused (DNS can't be a way in).
-    let err = os_next::api::plugin_net::fetch(&["localhost:9".to_string()], "https://localhost:9/").await.err().unwrap();
+    let err = os_next::api::plugin_net::fetch(&["localhost:9".to_string()], "https://localhost:9/", &[]).await.err().unwrap();
     assert!(err.contains("public address"), "{err}");
 
     // Adding a song: the plugin's JSON shape is accepted; the host mints the id; limits apply.
@@ -6784,7 +6749,6 @@ async fn test_online_bibles_plugin_host_api_adds_chapters() {
         web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
         data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
         plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -6932,7 +6896,6 @@ echo "{\"id\":\"abc123\",\"title\":\"Fake Title\",\"duration\":12.5,\"thumbnail\
         web_dir: web_dir.clone(), media_dir: media_dir.clone(),
         data_dir: data_dir.clone(), skip_first_time_setup: true,
         plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -7102,7 +7065,6 @@ async fn test_notification_bus_plugin_posts_and_console_reads() {
         web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
         data_dir: tmp.path().to_path_buf(), skip_first_time_setup: true,
         plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
-        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
         last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
         display_manager: None,
@@ -7191,4 +7153,113 @@ async fn test_notification_bus_plugin_posts_and_console_reads() {
 
     assert_eq!(c.post(format!("{base}/api/plugins/ytdlp/revoke")).header("x-host-token", host).send().await.unwrap().status(), reqwest::StatusCode::OK);
     assert_eq!(post(serde_json::json!({ "title": "late" })).await.status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_stock_media_plugin_host_api_limits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("stock.db").to_str().unwrap()).unwrap();
+    let web_dir = tmp.path().join("web");
+    let dest = web_dir.join("plugins/stock_media");
+    std::fs::create_dir_all(&dest).unwrap();
+    for entry in std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/plugins/stock_media")).unwrap().flatten() {
+        std::fs::copy(entry.path(), dest.join(entry.file_name())).unwrap();
+    }
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        tx, engine, db: db.clone(),
+        asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
+        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
+        data_dir: tmp.path().to_path_buf(), skip_first_time_setup: true,
+        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        notifications: Arc::new(os_next::api::notifications::NotificationBus::new()),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "st_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+    let host = "st_host";
+    let json = |r: reqwest::Response| async move { r.json::<serde_json::Value>().await.unwrap() };
+
+    // The built-in providers and their routes are gone.
+    for path in ["/api/media/online/search?q=sun", "/api/media/online/import"] {
+        let r = c.get(format!("{base}{path}")).header("x-host-token", host).send().await.unwrap();
+        assert!(r.status() == reqwest::StatusCode::NOT_FOUND || r.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED, "{path}: {}", r.status());
+    }
+
+    // What it asks for: its own two APIs and their image hosts, its own keys, media writes.
+    let list = json(c.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap()).await;
+    let p = list.as_array().unwrap().iter().find(|p| p["id"] == "stock_media").unwrap().clone();
+    assert_eq!((p["kind"].as_str(), p["state"].as_str(), p["error"].is_null()), (Some("sandbox"), Some("pending"), true), "{p}");
+    let ids: Vec<&str> = p["requested"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["ui.panel", "network.outbound", "keyring.own", "library.write", "notifications.post"]);
+    let hosts: Vec<&str> = p["requested"][1]["hosts"].as_array().unwrap().iter().map(|h| h.as_str().unwrap()).collect();
+    assert_eq!(hosts, ["api.pexels.com", "images.pexels.com", "pixabay.com", "cdn.pixabay.com"]);
+    assert_eq!(p["requested"][3]["categories"], serde_json::json!(["media"]));
+
+    let r = c.post(format!("{base}/api/plugins/stock_media/approve")).header("x-host-token", host)
+        .json(&serde_json::json!({ "digest": p["digest"], "granted": ["ui.panel", "network.outbound", "keyring.own", "library.write"] })).send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+
+    // The frame may show pictures from exactly those hosts (and nowhere else), and connect to them.
+    let r = c.get(format!("{base}/plugin-frame/stock_media/index.html")).header("x-host-token", host).send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let csp = r.headers().get("content-security-policy").unwrap().to_str().unwrap().to_string();
+    assert!(csp.contains("img-src 'self' data: blob: https://api.pexels.com https://images.pexels.com https://pixabay.com https://cdn.pixabay.com;"), "{csp}");
+    assert!(csp.contains("sandbox allow-scripts") && !csp.contains("evil"), "{csp}");
+
+    let token = json(c.post(format!("{base}/api/plugins/stock_media/token")).header("x-host-token", host)
+        .json(&serde_json::json!({ "scopes": [
+            { "id": "network.outbound", "hosts": ["api.pexels.com", "images.pexels.com", "pixabay.com", "cdn.pixabay.com"] },
+            { "id": "library.write", "categories": ["media"] }, { "id": "keyring.own" } ] })).send().await.unwrap()).await["token"].as_str().unwrap().to_string();
+    let media_url = |body: serde_json::Value, token: Option<String>| {
+        let (c, base) = (c.clone(), base.clone());
+        async move {
+            let mut req = c.post(format!("{base}/api/plugin-host/media-url")).json(&body);
+            if let Some(t) = token { req = req.header("x-plugin-token", t); }
+            req.send().await.unwrap()
+        }
+    };
+    let fetch = |body: serde_json::Value| {
+        let (c, base, token) = (c.clone(), base.clone(), token.clone());
+        async move { c.post(format!("{base}/api/plugin-host/fetch")).header("x-plugin-token", token).json(&body).send().await.unwrap() }
+    };
+
+    // Downloads need a token, a title, and a granted https host: nothing is requested otherwise.
+    assert_eq!(media_url(serde_json::json!({ "url": "https://images.pexels.com/a.jpg", "title": "x" }), None).await.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(media_url(serde_json::json!({ "url": "https://images.pexels.com/a.jpg", "title": "  " }), Some(token.clone())).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    for url in ["https://example.com/a.jpg", "http://images.pexels.com/a.jpg", "https://images.pexels.com.evil.test/a.jpg", "https://127.0.0.1/a.jpg", "https://user@images.pexels.com/a.jpg", "file:///etc/passwd"] {
+        let r = media_url(serde_json::json!({ "url": url, "title": "x" }), Some(token.clone())).await;
+        assert_eq!(r.status(), reqwest::StatusCode::FORBIDDEN, "{url}");
+    }
+    assert!(db.get_media().unwrap().is_empty(), "nothing was added");
+
+    // A plugin may send its key in Authorization, but not headers that steer the request.
+    for h in [serde_json::json!({ "Host": "evil.test" }), serde_json::json!({ "Cookie": "a=b" }), serde_json::json!({ "X-Forwarded-For": "1.2.3.4" })] {
+        let r = fetch(serde_json::json!({ "url": "https://api.pexels.com/v1/search?query=x", "headers": h })).await;
+        assert_eq!(r.status(), reqwest::StatusCode::BAD_REQUEST, "{h}");
+    }
+    // A refused fetch is audited without the query string (a Pixabay key rides in it).
+    let r = fetch(serde_json::json!({ "url": "https://example.com/api?key=SECRETKEY123" })).await;
+    assert_eq!(r.status(), reqwest::StatusCode::FORBIDDEN);
+    let audit = json(c.get(format!("{base}/api/plugins/audit")).header("x-host-token", host).send().await.unwrap()).await.to_string();
+    assert!(audit.contains("https://example.com/api") && !audit.contains("SECRETKEY123"), "{audit}");
+
+    // A plugin without a media grant can't use the route at all.
+    let narrow = json(c.post(format!("{base}/api/plugins/stock_media/token")).header("x-host-token", host)
+        .json(&serde_json::json!({ "scopes": [{ "id": "keyring.own" }] })).send().await.unwrap()).await["token"].as_str().unwrap().to_string();
+    assert_eq!(media_url(serde_json::json!({ "url": "https://images.pexels.com/a.jpg", "title": "x" }), Some(narrow)).await.status(), reqwest::StatusCode::FORBIDDEN);
 }

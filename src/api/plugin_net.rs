@@ -105,8 +105,39 @@ async fn resolve_public(host: &str, port: u16) -> Result<SocketAddr, String> {
         .ok_or_else(|| format!("{host} doesn't resolve to a public address"))
 }
 
-/// GET `url` on behalf of a plugin allowed to reach `allowed` hosts.
-pub async fn fetch(allowed: &[String], url: &str) -> Result<Fetched, String> {
+/// Request headers a plugin may add: enough for an API key and a content preference, nothing that
+/// could change where or how the request is routed (no Host, Cookie, Proxy-*, ...).
+const ALLOWED_HEADERS: [&str; 3] = ["authorization", "accept", "accept-language"];
+
+/// Validates a plugin's header map into `(name, value)` pairs.
+pub fn clean_headers(headers: &serde_json::Map<String, serde_json::Value>) -> Result<Vec<(String, String)>, String> {
+    if headers.len() > 4 {
+        return Err("too many headers".to_string());
+    }
+    let mut out = Vec::new();
+    for (name, value) in headers {
+        let lower = name.to_ascii_lowercase();
+        if !ALLOWED_HEADERS.contains(&lower.as_str()) {
+            return Err(format!("the '{name}' header can't be set (allowed: {})", ALLOWED_HEADERS.join(", ")));
+        }
+        let v = value.as_str().ok_or("header values must be strings")?;
+        if v.len() > 2048 || v.chars().any(|c| c.is_control()) {
+            return Err(format!("bad value for the '{name}' header"));
+        }
+        out.push((lower, v.to_string()));
+    }
+    Ok(out)
+}
+
+pub struct FetchedBytes {
+    pub status: u16,
+    pub content_type: String,
+    pub body: Vec<u8>,
+    pub final_url: String,
+}
+
+/// GET `url` on behalf of a plugin allowed to reach `allowed` hosts, reading at most `max_bytes`.
+pub async fn fetch_bytes(allowed: &[String], url: &str, headers: &[(String, String)], max_bytes: usize) -> Result<FetchedBytes, String> {
     let mut current = reqwest::Url::parse(url.trim()).map_err(|e| format!("bad URL: {e}"))?;
     for _ in 0..=MAX_REDIRECTS {
         let (host, port) = check_url(allowed, &current)?;
@@ -122,7 +153,11 @@ pub async fn fetch(allowed: &[String], url: &str) -> Result<Fetched, String> {
             .resolve(&host, addr) // connect to exactly the address that was just checked
             .build()
             .map_err(|e| e.to_string())?;
-        let mut resp = client.get(current.clone()).send().await.map_err(|e| format!("request failed: {e}"))?;
+        let mut req = client.get(current.clone());
+        for (k, v) in headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        let mut resp = req.send().await.map_err(|e| format!("request failed: {}", e.without_url()))?;
         if resp.status().is_redirection() {
             let next = resp
                 .headers()
@@ -140,16 +175,25 @@ pub async fn fetch(allowed: &[String], url: &str) -> Result<Fetched, String> {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
+        if resp.content_length().is_some_and(|n| n > max_bytes as u64) {
+            return Err("response is too large".to_string());
+        }
         let mut body: Vec<u8> = Vec::new();
-        while let Some(chunk) = resp.chunk().await.map_err(|e| format!("read failed: {e}"))? {
-            if body.len() + chunk.len() > MAX_BODY_BYTES {
+        while let Some(chunk) = resp.chunk().await.map_err(|e| format!("read failed: {}", e.without_url()))? {
+            if body.len() + chunk.len() > max_bytes {
                 return Err("response is too large".to_string());
             }
             body.extend_from_slice(&chunk);
         }
-        return Ok(Fetched { status, content_type, body: String::from_utf8_lossy(&body).into_owned(), final_url: current.to_string() });
+        return Ok(FetchedBytes { status, content_type, body, final_url: current.to_string() });
     }
     Err("too many redirects".to_string())
+}
+
+/// GET `url` as text (lossy UTF-8) on behalf of a plugin allowed to reach `allowed` hosts.
+pub async fn fetch(allowed: &[String], url: &str, headers: &[(String, String)]) -> Result<Fetched, String> {
+    let f = fetch_bytes(allowed, url, headers, MAX_BODY_BYTES).await?;
+    Ok(Fetched { status: f.status, content_type: f.content_type, body: String::from_utf8_lossy(&f.body).into_owned(), final_url: f.final_url })
 }
 
 #[cfg(test)]
@@ -189,6 +233,21 @@ mod tests {
         assert!(check_url(&w, &url("https://www.genius.com/")).is_ok());
         assert!(check_url(&w, &url("https://genius.com/")).is_err());
         assert!(check_url(&[], &url("https://genius.com/")).is_err());
+    }
+
+    #[test]
+    fn plugins_may_only_set_a_few_headers() {
+        let ok = serde_json::json!({ "Authorization": "key123", "Accept": "application/json" });
+        assert_eq!(clean_headers(ok.as_object().unwrap()).unwrap().len(), 2);
+        for bad in [
+            serde_json::json!({ "Host": "evil.test" }),
+            serde_json::json!({ "Cookie": "a=b" }),
+            serde_json::json!({ "X-Forwarded-For": "1.2.3.4" }),
+            serde_json::json!({ "Authorization": "a\r\nHost: x" }),
+            serde_json::json!({ "Authorization": 5 }),
+        ] {
+            assert!(clean_headers(bad.as_object().unwrap()).is_err(), "{bad}");
+        }
     }
 
     #[test]

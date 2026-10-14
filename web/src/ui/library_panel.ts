@@ -2,8 +2,7 @@
  * OpenSanctuary / OS-Next Library / Resource Panel Controller
  * Extracted from app_core.ts (ongoing modularization pass) — browsing, searching,
  * and adding songs/scriptures/media/presentations/themes to the schedule: the
- * Bible translation selector, online image search (Pexels/
- * Pixabay), and the table/grid catalog renderers.
+ * Bible translation selector and the table/grid catalog renderers.
  *
  * Cross-cutting state (currentTab, selectedLibraryItem, activeBibleVersion,
  * secondaryBibleVersion, isDualBibleMode, installedBibles) is still owned by
@@ -493,8 +492,7 @@ export function renderCategoryTree(tabName: string) {
       { id: 'videos', label: '🎥 Videos & Motion Loops' },
       { id: 'images', label: '🖼️ Images & Stills' },
       { id: 'audio', label: '🎵 Audio Tracks' },
-      { id: 'feeds', label: '📡 Live Camera Feeds' },
-      { id: 'online-images', label: '🌐 Online Images (Pexels/Pixabay)' }
+      { id: 'feeds', label: '📡 Live Camera Feeds' }
     ];
   } else if (tabName === 'presentations') {
     nodes = [
@@ -520,11 +518,6 @@ export function renderCategoryTree(tabName: string) {
       showLibrarySource(null);
       document.querySelectorAll('.category-node').forEach(c => c.classList.remove('active'));
       nodeEl.classList.add('active');
-      if (n.id === 'online-images' && activeResourceViewMode !== 'grid') {
-        activeResourceViewMode = 'grid';
-        document.getElementById('btn-resource-view-grid')?.classList.add('active');
-        document.getElementById('btn-resource-view-table')?.classList.remove('active');
-      }
       filterAndRenderCatalog();
     });
     categoryTreeContainer.appendChild(nodeEl);
@@ -642,157 +635,7 @@ if (btnToggleDualBible) {
 
 // As-You-Type Query Engine & Filtering Logic
 
-// ============================================================================
-// ONLINE IMAGE SEARCH (Pexels / Pixabay) — Media tab "Online Images" category
-// ============================================================================
-/**
- * Called from app_ui.ts's search-box Enter handler. Must be a function (not a
- * bare variable read) — app_core.ts and app_ui.ts are separate ES modules;
- * cross-file *variable* reads like `ctx!.getCurrentTab()`/`activeCategory` silently
- * resolve to a stale globalThis snapshot taken once at initial load (see the
- * `try { (globalThis as any).x = x } catch {}` exposals below), never the
- * live value. Calling into a function defined here works correctly because
- * the function body closes over the real, live module-scoped variables.
- * Returns true if this was an online-images search (caller should stop).
- */
-export function tryHandleOnlineImagesEnter(): boolean {
-  if (!ctx) return false;
-  if (ctx.getCurrentTab() === 'media' && activeCategory === 'online-images') {
-    const q = resourceSearchInput ? resourceSearchInput.value.trim() : '';
-    if (q) searchOnlineImages(q);
-    return true;
-  }
-  return false;
-}
-
-export async function searchOnlineImages(query: string) {
-  if (!ctx) return;
-  const lp = ctx;
-  // Triggered only by pressing Enter (see app_ui.ts's keydown handler) — these
-  // hit paid/rate-limited external APIs, so there's no per-keystroke debounce
-  // needed here.
-  if (catalogTable) catalogTable.style.display = 'none';
-  if (catalogGrid) {
-    catalogGrid.style.display = 'grid';
-    catalogGrid.innerHTML = `
-      <div class="list-message grid-span-all">🌐 Searching Pexels &amp; Pixabay for "${lp.escapeHtml(query)}"...</div>`;
-  }
-
-  try {
-    const res = await fetch(`/api/media/online/search?q=${encodeURIComponent(query)}`);
-    if (res.ok) {
-      const data = await res.json();
-      const results = (data && data.results) || [];
-      if (results.length === 0) {
-        if (catalogGrid) {
-          catalogGrid.innerHTML = `
-            <div class="ui-empty-state ui-empty-state--compact grid-span-all">
-              <div class="empty-state-title">No online images found for "${lp.escapeHtml(query)}".</div>
-              <div class="empty-state-desc">Check that a Pexels and/or Pixabay API key is configured in Options, and try another keyword.</div>
-            </div>`;
-        }
-      } else {
-        renderOnlineImageHits(results);
-      }
-    } else {
-      if (catalogGrid) catalogGrid.innerHTML = `<div class="list-message list-message--error grid-span-all">Error searching online images: ${lp.escapeHtml(res.statusText)}</div>`;
-    }
-  } catch (e) {
-    if (catalogGrid) catalogGrid.innerHTML = `<div class="list-message list-message--error grid-span-all">Network error: ${lp.escapeHtml(e instanceof Error ? e.message : String(e))}</div>`;
-  }
-}
-
-export function renderOnlineImageHits(results: any[]) {
-  if (!ctx) return;
-  const lp = ctx;
-  if (catalogItemCountEl) catalogItemCountEl.textContent = `${results.length} online images`;
-  if (!catalogGrid) return;
-  catalogGrid.innerHTML = '';
-
-  results.forEach((hit, idx) => {
-    const card = document.createElement('div');
-    card.className = `catalog-grid-card ${idx === 0 ? 'selected' : ''}`;
-    card.dataset.id = hit.id;
-    card.tabIndex = 0;
-
-    const providerLabel = (hit.provider || '').toUpperCase();
-    const cardLabel = hit.tags || hit.photographer || providerLabel;
-    card.innerHTML = `
-      <div class="grid-card-thumb" style="background-image: url('${escapeCssUrl(hit.thumbnail_url)}'); background-size: cover; background-position: center;">
-        <span class="os-thumb-badge">${lp.escapeHtml(providerLabel)}</span>
-      </div>
-      <div class="grid-card-title" title="${lp.escapeHtml(cardLabel)}">${lp.escapeHtml(cardLabel)}</div>
-    `;
-
-    card.addEventListener('click', () => {
-      document.querySelectorAll('.catalog-grid-card').forEach(c => c.classList.remove('selected'));
-      card.classList.add('selected');
-      renderOnlineImagePreview(hit);
-    });
-
-    card.addEventListener('dblclick', () => {
-      importOnlineImage(hit);
-    });
-
-    catalogGrid.appendChild(card);
-  });
-
-  if (results.length > 0) renderOnlineImagePreview(results[0]);
-}
-
-export function renderOnlineImagePreview(hit: any) {
-  if (!resourcePreviewMonitor) return;
-  if (!ctx) return;
-  const attribution = hit.photographer
-    ? `Photo by ${ctx.escapeHtml(hit.photographer)} on ${ctx.escapeHtml((hit.provider || '').charAt(0).toUpperCase() + (hit.provider || '').slice(1))}`
-    : ctx.escapeHtml(hit.provider || '');
-  const tagsHtml = hit.tags
-    ? `<div class="asset-preview-card-meta">🏷️ ${ctx.escapeHtml(hit.tags)}</div>`
-    : '';
-
-  resourcePreviewMonitor.innerHTML = `
-    <div class="asset-preview-content asset-preview-photo" style="background-image: url('${escapeCssUrl(hit.thumbnail_url)}');">
-      <div class="asset-preview-photo-caption">
-        ${tagsHtml}
-        <div class="asset-preview-card-desc">${attribution}</div>
-        <button class="btn btn-primary" id="btn-preview-import-online-image">
-          📥 Add to Media Library
-        </button>
-      </div>
-    </div>
-  `;
-
-  const btn = document.getElementById('btn-preview-import-online-image');
-  if (btn) btn.addEventListener('click', () => importOnlineImage(hit));
-}
-
-export async function importOnlineImage(hit: any) {
-  if (!ctx) return;
-  const lp = ctx;
-  try {
-    lp.showToast(`Downloading image from ${hit.provider}...`, 'info');
-    const res = await fetch('/api/media/online/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ result: hit })
-    });
-    if (res.ok) {
-      const mediaItem = await res.json();
-      lp.showToast(`✓ Added "${mediaItem.name}" to your Media library!`, 'success');
-      if (lp.getCurrentTab() === 'media') {
-        try {
-          const listRes = await fetch('/api/media');
-          if (listRes.ok) activeLibraryItems = await listRes.json();
-        } catch (_) {}
-      }
-    } else {
-      const err = await res.text();
-      lp.showToast(`Could not import image: ${err}`, 'error');
-    }
-  } catch (e) {
-    lp.showToast(`Import error: ${e instanceof Error ? e.message : String(e)}`, 'error');
-  }
-}
+// As-You-Type Query Engine & Filtering Logic
 
 export function filterAndRenderCatalog() {
   if (!ctx) return;
@@ -803,31 +646,6 @@ export function filterAndRenderCatalog() {
 
   const mode = currentSearchModes[lp.getCurrentTab()] || 'all';
   let matchedOnlineReference = null;
-
-  if (lp.getCurrentTab() === 'media' && activeCategory === 'online-images') {
-    if (!query) {
-      if (catalogItemCountEl) catalogItemCountEl.textContent = 'Online Image Search';
-      if (catalogGrid) { catalogGrid.style.display = 'grid'; catalogGrid.innerHTML = `
-        <div class="ui-empty-state grid-span-all">
-          <div class="empty-state-icon">🌐</div>
-          <div class="empty-state-title">Online Images (Pexels &amp; Pixabay)</div>
-          <div class="empty-state-desc">
-            Type a keyword above (e.g. "sunrise", "worship", "cross") and press <strong>Enter</strong> to search free stock photos. Click a thumbnail to preview, double-click to add it to your Media library.
-          </div>
-        </div>`; }
-      if (catalogTable) catalogTable.style.display = 'none';
-      if (resourcePreviewMonitor) {
-        resourcePreviewMonitor.innerHTML = '<div class="asset-preview-empty">Search Pexels/Pixabay for images</div>';
-      }
-      return;
-    }
-    // Typing alone doesn't search this category (it hits paid/rate-limited
-    // external APIs) — only Enter (wired in app_ui.ts's keydown handler) does.
-    // Leave whatever's already on screen (a prior search, or the hint above)
-    // untouched until the user submits.
-    return;
-    return;
-  }
 
   if (!query) {
     if (lp.getCurrentTab() === 'scriptures') {

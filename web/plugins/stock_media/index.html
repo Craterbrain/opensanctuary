@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Stock Images</title>
+  <link rel="stylesheet" href="__os/theme.css">
+  <style>
+    html, body { height: 100%; }
+    body { display: flex; flex-direction: column; padding: var(--os-space-6); gap: var(--os-space-4); }
+    .page-head h4 { margin-bottom: var(--os-space-2); }
+    .page-head p { margin: 0; font-size: var(--os-fs-sm); }
+    .sources { display: flex; gap: var(--os-space-6); font-size: var(--os-fs-sm); color: var(--os-text-secondary); }
+    .sources label { display: inline-flex; align-items: center; gap: var(--os-space-2); }
+    #grid { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; gap: var(--os-space-4);
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); align-content: start; }
+    .card { position: relative; border: 1px solid var(--os-border); border-radius: var(--os-radius-md); overflow: hidden;
+            background: var(--os-bg-sunken); cursor: pointer; }
+    .card:hover, .card.busy { border-color: var(--os-accent, var(--os-border-strong)); }
+    .card img.photo { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; background: var(--os-bg-panel); }
+    .card .cap { padding: var(--os-space-2) var(--os-space-3); font-size: var(--os-fs-xs); color: var(--os-text-tertiary);
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .card .badge { position: absolute; top: var(--os-space-2); left: var(--os-space-2); }
+    .card button { position: absolute; right: var(--os-space-2); top: var(--os-space-2); opacity: 0; }
+    .card:hover button, .card:focus-within button { opacity: 1; }
+    .card.added::after { content: "Added"; position: absolute; inset: auto var(--os-space-2) 28px auto; padding: 1px 6px;
+                         font-size: var(--os-fs-xs); border-radius: var(--os-radius-sm); background: var(--os-success-text); color: #fff; }
+    details { flex: 0 0 auto; font-size: var(--os-fs-sm); }
+    details summary { cursor: pointer; color: var(--os-text-secondary); }
+    .key-row { display: flex; align-items: center; gap: var(--os-space-3); margin-top: var(--os-space-3); }
+    .key-row .name { flex: 0 0 64px; }
+    .key-row input { flex: 1; min-width: 0; }
+    .hint { margin: var(--os-space-3) 0 0; color: var(--os-text-tertiary); font-size: var(--os-fs-xs); }
+  </style>
+</head>
+<body>
+  <div class="page-head">
+    <h4>🌐 Free Stock Photos (Pexels &amp; Pixabay)</h4>
+    <p>Search a keyword (e.g. “sunrise”, “worship”, “cross”). Click a photo to add it to your Media Library as a background.</p>
+  </div>
+  <!-- No <form>: a sandboxed frame can't submit one (and doesn't need to). -->
+  <div class="form-row" id="search-form">
+    <input id="q" type="search" placeholder="Search free stock photos…" autocomplete="off">
+    <button id="search-btn" class="btn btn-primary" type="button">Search</button>
+  </div>
+  <div class="sources">
+    <label><input type="checkbox" id="use-pexels" checked> Pexels</label>
+    <label><input type="checkbox" id="use-pixabay" checked> Pixabay</label>
+  </div>
+  <div id="status" class="status"></div>
+  <div id="grid"></div>
+  <details id="keys">
+    <summary>API keys</summary>
+    <div class="key-row"><span class="name">Pexels</span><input id="key-pexels" type="password" placeholder="Paste your Pexels API key" autocomplete="off"><button class="btn btn-sm" id="save-pexels" type="button">Save</button><button class="btn btn-sm" id="clear-pexels" type="button">Remove</button></div>
+    <div class="key-row"><span class="name">Pixabay</span><input id="key-pixabay" type="password" placeholder="Paste your Pixabay API key" autocomplete="off"><button class="btn btn-sm" id="save-pixabay" type="button">Save</button><button class="btn btn-sm" id="clear-pixabay" type="button">Remove</button></div>
+    <p class="hint">Both are free: get a Pexels key at pexels.com/api and a Pixabay key at pixabay.com/api/docs. Keys are stored in your computer's secure storage and are only sent to the site they belong to.</p>
+  </details>
+  <script src="__os/icons.js"></script>
+  <script src="__os/sdk.js"></script>
+  <script src="stock.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

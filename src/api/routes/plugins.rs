@@ -360,6 +360,9 @@ pub(super) async fn plugin_caller(app: &AppState, headers: &HeaderMap) -> Result
 #[derive(Deserialize)]
 pub(super) struct PluginFetchReq {
     url: String,
+    /// `Authorization` / `Accept` / `Accept-Language` only (see `plugin_net::clean_headers`).
+    #[serde(default)]
+    headers: serde_json::Map<String, serde_json::Value>,
 }
 
 /// POST /api/plugin-host/fetch -- the host fetches a URL for a plugin granted `network.outbound`,
@@ -375,7 +378,8 @@ pub(super) async fn plugin_fetch(
     if hosts.is_empty() {
         return Err(err(StatusCode::FORBIDDEN, "this plugin wasn't granted network access"));
     }
-    match crate::api::plugin_net::fetch(&hosts, &req.url).await {
+    let extra = crate::api::plugin_net::clean_headers(&req.headers).map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+    match crate::api::plugin_net::fetch(&hosts, &req.url, &extra).await {
         Ok(f) => Ok(Json(serde_json::json!({
             "success": true, "status": f.status, "content_type": f.content_type, "body": f.body, "url": f.final_url,
         }))),
@@ -384,7 +388,8 @@ pub(super) async fn plugin_fetch(
                 &caller.plugin_id,
                 &format!("plugin:{}", caller.plugin_id),
                 "denied_call",
-                &serde_json::json!({ "fetch": req.url.chars().take(200).collect::<String>(), "reason": e }).to_string(),
+                // Without the query string: an API key can ride in it (Pixabay's does).
+                &serde_json::json!({ "fetch": req.url.split(['?', '#']).next().unwrap_or("").chars().take(200).collect::<String>(), "reason": e }).to_string(),
             );
             Err(err(StatusCode::FORBIDDEN, &e))
         }
@@ -722,6 +727,64 @@ pub(super) async fn tool_update(State(app): State<AppState>, headers: HeaderMap,
 }
 
 #[derive(Deserialize)]
+pub(super) struct AddMediaUrlReq {
+    url: String,
+    title: String,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+const MAX_MEDIA_URL_BYTES: usize = 64 * 1024 * 1024;
+
+/// POST /api/plugin-host/media-url -- downloads a picture or video from a host the plugin was
+/// granted (`network.outbound`) into the Media library (`library.write` on `media`). The file type
+/// comes from the downloaded bytes, never from the URL or the server's say-so, and the name on disk
+/// is the host's, so a plugin can't plant a page or script under `/media`.
+pub(super) async fn plugin_add_media_url(State(app): State<AppState>, headers: HeaderMap, Json(req): Json<AddMediaUrlReq>) -> Result<impl IntoResponse, ApiErr> {
+    let caller = plugin_caller(&app, &headers).await?;
+    if !caller.scopes.writes("media") {
+        return Err(err(StatusCode::FORBIDDEN, "this plugin wasn't granted write access to media"));
+    }
+    let hosts = caller.scopes.outbound_hosts();
+    if hosts.is_empty() {
+        return Err(err(StatusCode::FORBIDDEN, "this plugin wasn't granted network access"));
+    }
+    let title: String = req.title.trim().chars().filter(|c| !c.is_control()).take(300).collect();
+    if title.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "a title is required"));
+    }
+    let f = crate::api::plugin_net::fetch_bytes(&hosts, &req.url, &[], MAX_MEDIA_URL_BYTES)
+        .await
+        .map_err(|e| err(StatusCode::FORBIDDEN, &e))?;
+    if !(200..300).contains(&f.status) {
+        return Err(err(StatusCode::BAD_GATEWAY, &format!("the download failed ({})", f.status)));
+    }
+    let Some(ext) = crate::storage::media_sniff::sniff_media_ext(&f.body) else {
+        return Err(err(StatusCode::BAD_REQUEST, "the download isn't a supported image or video"));
+    };
+    let is_video = VIDEO_EXTS.contains(&ext);
+    let (sub, media_type) = if is_video { ("videos", crate::core::models::MediaType::Video) } else { ("images", crate::core::models::MediaType::Image) };
+    let dir = app.media_dir.join(sub);
+    let prefix: String = caller.plugin_id.chars().filter(|c| c.is_ascii_alphanumeric()).take(24).collect();
+    let file_name = crate::storage::media_sniff::write_sniffed_media(&dir, &prefix, &f.body)
+        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "couldn't save the file"))?;
+    let clean_id: String = req.id.as_deref().unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).take(64).collect();
+    let mut item = crate::core::models::MediaItem::new(&title, &format!("/media/{sub}/{file_name}"), media_type);
+    item.id = if clean_id.is_empty() { format!("plugin_{}_{}", caller.plugin_id, uuid::Uuid::new_v4().simple()) } else { format!("plugin_{}_{}_{}", caller.plugin_id, clean_id, uuid::Uuid::new_v4().simple()) };
+    if let Err(e) = app.db.insert_media(&item) {
+        let _ = std::fs::remove_file(dir.join(&file_name)); // no orphaned file
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {e}")));
+    }
+    app.db.add_plugin_audit(
+        &caller.plugin_id,
+        &format!("plugin:{}", caller.plugin_id),
+        "media_added",
+        &serde_json::json!({ "id": item.id, "title": title, "file": file_name, "from": f.final_url.chars().take(200).collect::<String>() }).to_string(),
+    );
+    Ok(Json(serde_json::json!({ "success": true, "id": item.id, "item": item })))
+}
+
+#[derive(Deserialize)]
 pub(super) struct AddMediaReq {
     job: String,
     /// A plain file name in the job's folder.
@@ -922,8 +985,17 @@ fn frame_csp(row: &PluginGrantRow) -> String {
         }
     }
     let connect = if sources.is_empty() { "'none'".to_string() } else { sources.join(" ") };
+    // Pictures may load from the same hosts the plugin may already talk to (a stock-photo plugin's
+    // thumbnails); that adds no reach beyond connect-src.
+    let img = granted
+        .0
+        .iter()
+        .filter(|p| p.id == "network.outbound")
+        .flat_map(|p| p.hosts.iter().filter(|h| csp_host_ok(h)).map(|h| format!("https://{h}")))
+        .collect::<Vec<_>>()
+        .join(" ");
     format!(
-        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
+        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: {img}; \
          font-src 'self' data:; media-src 'self' blob:; connect-src {connect}; base-uri 'none'; form-action 'none'; \
          frame-ancestors 'self'; sandbox allow-scripts"
     )
@@ -1035,6 +1107,7 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/plugin-host/songs", post(plugin_add_song))
         .route("/api/plugin-host/scriptures", post(plugin_add_scriptures))
         .route("/api/plugin-host/media", post(plugin_add_media))
+        .route("/api/plugin-host/media-url", post(plugin_add_media_url))
         .route("/api/plugin-host/process/start", post(process_start))
         .route("/api/plugin-host/process/poll", post(process_poll))
         .route("/api/plugin-host/process/cancel", post(process_cancel))

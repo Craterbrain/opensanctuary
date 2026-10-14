@@ -126,6 +126,22 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   own code posts with `post_host`), routes in `src/api/routes/notifications.rs`; the console
   polls `GET /api/notifications?after=<id>` every 2 seconds (`&wait=<s>` makes the host hold the
   request until something new arrives, for a client that wants it). Native plugins don't have this call yet.
+- **Stock Images is a plugin.** Searching Pexels and Pixabay (the Media library's "Online Images")
+  is `web/plugins/stock_media/`, one plugin for both sites: a sandboxed page in the Media library
+  sidebar with a search box, a source toggle per site, a thumbnail grid and an "API keys" section.
+  You use your own free key from each site; the plugin keeps them in its own keyring namespace
+  (`keyring.own`), so they are no longer Options settings and the old built-in search and import
+  routes are gone (keys entered there before are not carried over: paste them into the plugin once).
+  It asks for the two search APIs and their image hosts (`api.pexels.com`, `images.pexels.com`,
+  `pixabay.com`, `cdn.pixabay.com`), `library.write` on media, and optionally `notifications.post`.
+  Three host features exist for it, available to any plugin with the matching grant:
+  `net.fetch` takes optional `headers` (only `Authorization`, `Accept`, `Accept-Language`; Pexels
+  wants its key in `Authorization`); `library.addMediaUrl { url, title, id? }` has the *host*
+  download a picture or video from a granted host (https, public addresses, 64 MB cap) into the
+  Media library, with the file type taken from the downloaded bytes and the name chosen by the
+  host; and a plugin frame's `img-src` allows `https://` pictures from the hosts it was granted
+  for `network.outbound` (nothing new beyond what `connect-src` already allowed), so thumbnails
+  load. A refused fetch is audited without its query string, because Pixabay puts the key there.
 - **Video Downloader is a plugin.** Downloading with yt-dlp (YouTube and 1000+ other sites, optional
   browser cookies, SponsorBlock, audio-only) is `web/plugins/ytdlp/`: a sandboxed page in the Media
   library sidebar and in the video picker, built on `process.run` above. The old built-in downloader,

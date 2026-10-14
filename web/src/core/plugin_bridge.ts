@@ -13,7 +13,8 @@
  *   getState                      show.observe
  *   sendCommand { command }       commands.send (only the granted command names)
  *   keyring.get|set|delete        keyring.own (the plugin's own namespace)
- *   net.fetch { url }             network.outbound: the *server* fetches it, only from granted hosts
+ *   net.fetch { url, headers? }   network.outbound: the *server* fetches it, only from granted hosts (headers: Authorization,
+ *                                 Accept, Accept-Language)
  *   library.addSong { song }      library.write on "songs"; refreshes the library list
  *   library.addScriptures { items } library.write on "scriptures": Bible chapters; refreshes the Bibles
  *   process.start|poll|cancel|release   process.run: run one of the plugin's manifest-declared commands
@@ -173,7 +174,7 @@ async function handle(r: Running, method: string, params: any): Promise<unknown>
       const res = await withToken(r, (t) => fetch('/api/plugin-host/fetch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-plugin-token': t },
-        body: JSON.stringify({ url: String(params?.url ?? '') }),
+        body: JSON.stringify({ url: String(params?.url ?? ''), headers: params?.headers && typeof params.headers === 'object' ? params.headers : undefined }),
       }));
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body?.error || `fetch refused (${res.status})`);
@@ -220,6 +221,19 @@ async function handle(r: Running, method: string, params: any): Promise<unknown>
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body?.error || `${method} failed (${res.status})`);
       return body;
+    }
+    case 'library.addMediaUrl': {
+      need('library.write');
+      need('network.outbound');
+      const res = await withToken(r, (t) => fetch('/api/plugin-host/media-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-plugin-token': t },
+        body: JSON.stringify({ url: String(params?.url ?? ''), title: String(params?.title ?? ''), id: params?.id === undefined ? undefined : String(params.id) }),
+      }));
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `couldn't add the media (${res.status})`);
+      window.dispatchEvent(new CustomEvent('os-library-changed', { detail: { category: 'media', id: body.id } }));
+      return { id: body.id, item: body.item };
     }
     case 'library.addMedia': {
       need('library.write');

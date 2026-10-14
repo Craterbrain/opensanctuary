@@ -3259,7 +3259,6 @@ dependencies = [
 name = "os-next"
 version = "0.2.0"
 dependencies = [
- "async-trait",
  "axum",
  "axum-server",
  "base64",
