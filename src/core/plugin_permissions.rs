@@ -124,6 +124,45 @@ impl PermissionSet {
             .any(|p| p.id == "resources.provide" && p.categories.iter().any(|c| c == "*" || c == category))
     }
 
+    /// Keeps only what `grant` also allows, narrowing parameter lists. A token's scopes are
+    /// intersected with the plugin's *current* grant on every use, so shrinking or revoking the
+    /// grant takes effect on tokens already in circulation.
+    pub fn narrowed_by(&self, grant: &PermissionSet) -> PermissionSet {
+        fn narrow(wanted: &[String], allowed: &[String]) -> Vec<String> {
+            let allowed_all = allowed.iter().any(|a| a == "*");
+            let wanted_all = wanted.iter().any(|w| w == "*");
+            if allowed_all {
+                wanted.to_vec()
+            } else if wanted_all {
+                allowed.to_vec()
+            } else {
+                wanted.iter().filter(|w| allowed.contains(w)).cloned().collect()
+            }
+        }
+        let mut out = Vec::new();
+        for want in &self.0 {
+            let Some(have) = grant.0.iter().find(|g| g.id == want.id) else { continue };
+            let mut p = want.clone();
+            match want.id.as_str() {
+                "commands.send" => {
+                    p.commands = narrow(&want.commands, &have.commands);
+                    if p.commands.is_empty() {
+                        continue;
+                    }
+                }
+                "resources.provide" | "library.read" | "library.write" => {
+                    p.categories = narrow(&want.categories, &have.categories);
+                    if p.categories.is_empty() {
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+            out.push(p);
+        }
+        PermissionSet(out)
+    }
+
     pub fn allows_command(&self, variant: &str) -> bool {
         self.0
             .iter()
@@ -173,6 +212,11 @@ pub struct PluginManifest {
     pub publisher: String,
     #[serde(default)]
     pub description: String,
+    /// The publisher's minisign public key (base64). Only meaningful together with a detached
+    /// `plugin.json.minisig` over the manifest bytes; the manifest pins every artifact hash, so
+    /// that one signature covers the binaries too. Pinned on first approval (trust on first use).
+    #[serde(default)]
+    pub publisher_key: Option<String>,
     /// semver requirement against the running OS-Next version, e.g. ">=0.2.0, <0.3.0".
     #[serde(default)]
     pub host_api: String,
@@ -438,6 +482,25 @@ mod tests {
         let wild = PermissionSet(vec![PermissionRequest { id: "commands.send".into(), commands: vec!["*".into()], ..Default::default() }]);
         assert_eq!(wild.0[0].tier(), Tier::High);
         assert!(wild.allows_command("Anything"));
+    }
+
+    #[test]
+    fn narrowing_never_widens_and_follows_the_live_grant() {
+        let cmds = |c: &[&str]| PermissionRequest { id: "commands.send".into(), commands: c.iter().map(|s| s.to_string()).collect(), ..Default::default() };
+        let grant = PermissionSet(vec![cmds(&["NextSlide", "PrevSlide"]), PermissionRequest::simple("keyring.own")]);
+        // Asking for more than granted is cut down to the intersection...
+        let tok = PermissionSet(vec![cmds(&["NextSlide", "NewSchedule"]), PermissionRequest::simple("keyring.own"), PermissionRequest::simple("show.observe")]);
+        let eff = tok.narrowed_by(&grant);
+        assert!(eff.allows_command("NextSlide"));
+        assert!(!eff.allows_command("NewSchedule"));
+        assert!(!eff.has("show.observe"), "an ungranted permission is dropped");
+        assert!(eff.has("keyring.own"));
+        // ...a wildcard token under a narrow grant gets only the grant...
+        let wild = PermissionSet(vec![cmds(&["*"])]).narrowed_by(&grant);
+        assert!(wild.allows_command("PrevSlide") && !wild.allows_command("GoLive"));
+        // ...and a shrunk or revoked grant shrinks the token with it.
+        assert!(!tok.narrowed_by(&PermissionSet::empty()).has("keyring.own"));
+        assert!(!PermissionSet(vec![cmds(&["Zzz"])]).narrowed_by(&grant).has("commands.send"));
     }
 
     #[test]

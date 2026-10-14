@@ -31,6 +31,8 @@ pub struct Discovered {
     pub source_path: String,
     pub manifest_sha256: Option<String>,
     pub digest: String,
+    /// The publisher key whose signature over `plugin.json` verified (None = unsigned).
+    pub signer: Option<String>,
     pub requested: Vec<PermissionRequest>,
     pub error: Option<String>,
     /// Native library to load, when this build's platform has one.
@@ -57,6 +59,23 @@ fn group_or_world_writable(_path: &Path) -> bool {
     false
 }
 
+/// Checks the detached signature next to a manifest, if there is one. `Ok(None)` = unsigned.
+/// A signature that is present but doesn't verify (or has no `publisher_key` to check against)
+/// is an error: it must never silently degrade to "unsigned".
+fn verify_signer(manifest_bytes: &[u8], manifest: &PluginManifest, sig_path: &Path) -> Result<Option<String>, String> {
+    let sig_text = match std::fs::read_to_string(sig_path) {
+        Ok(t) => t,
+        Err(_) => return Ok(None),
+    };
+    let key = manifest
+        .publisher_key
+        .as_deref()
+        .ok_or_else(|| "plugin.json.minisig is present but plugin.json has no publisher_key".to_string())?;
+    crate::network::updater::verify_signature(manifest_bytes, &sig_text, key)
+        .map_err(|e| format!("plugin.json signature: {e}"))?;
+    Ok(Some(key.to_string()))
+}
+
 fn failed(id: String, kind: &'static str, source: &Path, msg: String) -> Discovered {
     Discovered {
         name: id.clone(),
@@ -66,6 +85,7 @@ fn failed(id: String, kind: &'static str, source: &Path, msg: String) -> Discove
         source_path: source.to_string_lossy().to_string(),
         manifest_sha256: None,
         digest: sha256_hex(msg.as_bytes()),
+        signer: None,
         requested: Vec::new(),
         error: Some(msg),
         library: None,
@@ -88,6 +108,14 @@ fn discover_native_dir(dir: &Path, host_version: &str) -> Option<Discovered> {
             return Some(d);
         }
     };
+    let signer = match verify_signer(&bytes, &manifest, &dir.join("plugin.json.minisig")) {
+        Ok(s) => s,
+        Err(e) => {
+            let mut d = failed(dir_name, "native", dir, e);
+            d.manifest_sha256 = Some(manifest_sha);
+            return Some(d);
+        }
+    };
     let mut d = Discovered {
         id: manifest.id.clone(),
         kind: "native",
@@ -96,6 +124,7 @@ fn discover_native_dir(dir: &Path, host_version: &str) -> Option<Discovered> {
         source_path: dir.to_string_lossy().to_string(),
         manifest_sha256: Some(manifest_sha),
         digest: String::new(),
+        signer,
         requested: manifest.permissions.clone(),
         error: None,
         library: None,
@@ -160,7 +189,13 @@ fn discover_web(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
                     out.push(d);
                 }
                 Ok(m) => {
-                    let problem = if m.id != stem {
+                    let (signer, sig_problem) = match verify_signer(&bytes, &m, &web_plugins_dir.join(format!("{stem}.plugin.json.minisig"))) {
+                        Ok(s) => (s, None),
+                        Err(e) => (None, Some(e)),
+                    };
+                    let problem = if let Some(e) = sig_problem {
+                        Some(e)
+                    } else if m.id != stem {
                         Some(format!("plugin id '{}' must match the file name '{}'", m.id, stem))
                     } else if m.web.as_ref().map(|w| w.entry.as_str()) != Some(file_name.as_str()) {
                         Some(format!("web.entry must be '{file_name}'"))
@@ -175,6 +210,7 @@ fn discover_web(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
                         source_path: path.to_string_lossy().to_string(),
                         manifest_sha256: Some(manifest_sha),
                         digest: artifact_digest(&[(file_name.clone(), file_sha)]),
+                        signer: signer.clone(),
                         requested: m.permissions.clone(),
                         error: problem,
                         library: None,
@@ -192,6 +228,7 @@ fn discover_web(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
                 source_path: path.to_string_lossy().to_string(),
                 manifest_sha256: None,
                 digest: artifact_digest(&[(file_name, file_sha)]),
+                signer: None,
                 requested: LEGACY_WEB_REQUESTS.iter().map(|id| PermissionRequest::simple(id)).collect(),
                 error: None,
                 library: None,
@@ -228,6 +265,7 @@ pub fn discover(plugin_dir: &Path, web_plugins_dir: &Path, host_version: &str) -
                             source_path: path.to_string_lossy().to_string(),
                             manifest_sha256: None,
                             digest: artifact_digest(&[(file_name, sha)]),
+                            signer: None,
                             requested: legacy_requests(),
                             error: None,
                             library: Some(path),
@@ -279,6 +317,7 @@ pub fn sync(db: &Database, discovered: &[Discovered]) {
             source_path: &d.source_path,
             manifest_sha256: d.manifest_sha256.as_deref(),
             digest: &d.digest,
+            signer: d.signer.as_deref(),
             requested_json: &requested_json(d),
             error: d.error.as_deref(),
         };
@@ -416,5 +455,55 @@ mod tests {
         sync(&db, &found);
         // Never grandfathered: it runs in the console's page.
         assert_eq!(db.get_plugin_grant("demo").unwrap().unwrap().effective_state(), "pending");
+    }
+
+    fn write_signed_web_plugin(web: &Path, manifest_edit: impl Fn(String) -> String) -> String {
+        let kp = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let pk = kp.pk.to_base64();
+        let manifest = serde_json::json!({
+            "manifest_version": 1, "id": "signed_demo", "name": "Signed", "publisher_key": pk,
+            "web": {"entry": "signed_demo.js"}, "permissions": [{"id": "keyring.own"}]
+        })
+        .to_string();
+        std::fs::write(web.join("signed_demo.js"), b"export default {}").unwrap();
+        let sig = minisign::sign(None, &kp.sk, manifest.as_bytes(), None, None).unwrap().into_string();
+        std::fs::write(web.join("signed_demo.plugin.json.minisig"), sig).unwrap();
+        // Written after signing, so an edit makes the signature stale.
+        std::fs::write(web.join("signed_demo.plugin.json"), manifest_edit(manifest)).unwrap();
+        pk
+    }
+
+    #[test]
+    fn a_valid_signature_is_recorded_and_a_stale_one_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let web = tmp.path().join("web_plugins");
+        std::fs::create_dir_all(&web).unwrap();
+        let pk = write_signed_web_plugin(&web, |m| m);
+        let found = discover(&tmp.path().join("plugins"), &web, "0.2.0");
+        let d = found.iter().find(|d| d.id == "signed_demo").unwrap();
+        assert!(d.error.is_none(), "{:?}", d.error);
+        assert_eq!(d.signer.as_deref(), Some(pk.as_str()));
+
+        // Tamper with the manifest after signing: it must not degrade to "unsigned".
+        write_signed_web_plugin(&web, |m| m.replace("keyring.own", "ui.dom"));
+        let found = discover(&tmp.path().join("plugins"), &web, "0.2.0");
+        let d = found.iter().find(|d| d.id == "signed_demo").unwrap();
+        assert!(d.error.as_deref().unwrap_or("").contains("signature"), "{:?}", d.error);
+    }
+
+    #[test]
+    fn a_signature_without_a_publisher_key_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let web = tmp.path().join("web_plugins");
+        std::fs::create_dir_all(&web).unwrap();
+        std::fs::write(web.join("p.js"), b"x").unwrap();
+        std::fs::write(
+            web.join("p.plugin.json"),
+            r#"{"manifest_version":1,"id":"p","name":"P","web":{"entry":"p.js"},"permissions":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(web.join("p.plugin.json.minisig"), "untrusted comment: x\nAAAA\n").unwrap();
+        let found = discover(&tmp.path().join("plugins"), &web, "0.2.0");
+        assert!(found.iter().find(|d| d.id == "p").unwrap().error.is_some());
     }
 }

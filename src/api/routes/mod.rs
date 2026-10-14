@@ -5,7 +5,7 @@ mod keyring;
 mod library;
 mod network;
 mod pairing;
-mod plugins;
+pub(crate) mod plugins;
 mod pattern_cache;
 mod reports;
 mod schedule;

@@ -444,6 +444,9 @@ export interface PluginInfo {
   state: 'pending' | 'active' | 'changed' | 'denied' | 'revoked' | 'incompatible';
   error: string | null;
   digest: string;
+  signed: boolean;
+  signer_id: string | null;
+  signer_changed: boolean;
   approved_digest: string | null;
   requested: PluginPermissionInfo[];
   granted: PluginPermissionInfo[];

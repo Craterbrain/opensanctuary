@@ -4824,7 +4824,7 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
     let row = db.get_plugin_grant("hello_world").unwrap().unwrap();
     db.set_plugin_decision(
         "hello_world", "approved", r#"[{"id":"keyring.own"}]"#,
-        row.observed_manifest_sha256.as_deref(), Some(&row.observed_digest), "test",
+        row.observed_manifest_sha256.as_deref(), Some(&row.observed_digest), None, "test",
     ).unwrap();
     let real_resp = client.post(format!("http://{}/api/keyring/plugin/token", addr))
         .header("x-host-token", "test_host_session_plugin")
@@ -6197,4 +6197,126 @@ async fn test_plugin_grant_routes_and_web_plugin_serving() {
     let resp = client.post(format!("{base}/api/plugins/demo_gate/revoke")).header("x-host-token", host).send().await.unwrap();
     assert_eq!(resp.json::<serde_json::Value>().await.unwrap()["state"], "revoked");
     assert_eq!(served("/plugins/demo_gate.js").await, reqwest::StatusCode::NOT_FOUND);
+}
+
+/// Scoped plugin tokens: minted only by a console for an approved plugin, limited to what it was
+/// granted, checked against the live grant on every use, usable for commands and its keyring
+/// only within scope, and dead the moment the plugin is revoked.
+#[tokio::test]
+async fn test_scoped_plugin_tokens_for_commands_and_keyring() {
+    let test_dir = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(test_dir.path().join("scoped.db").to_str().unwrap()).unwrap();
+    let web_dir = test_dir.path().join("web");
+    std::fs::create_dir_all(web_dir.join("plugins")).unwrap();
+    std::fs::write(web_dir.join("plugins/scoped_demo.js"), b"export default {}").unwrap();
+    std::fs::write(
+        web_dir.join("plugins/scoped_demo.plugin.json"),
+        serde_json::json!({
+            "manifest_version": 1, "id": "scoped_demo", "name": "Scoped", "web": {"entry": "scoped_demo.js"},
+            "permissions": [
+                {"id": "keyring.own"},
+                {"id": "commands.send", "commands": ["NextSlide", "PrevSlide"], "optional": true}
+            ]
+        }).to_string(),
+    ).unwrap();
+
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        tx, engine, db: db.clone(),
+        asset_graph: Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media"))),
+        web_dir: web_dir.clone(), media_dir: test_dir.path().join("media"),
+        data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
+        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
+        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
+        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "scoped_host".to_string(), server_port: addr.port(),
+        https_port: None, https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{}", addr);
+    let c = reqwest::Client::new();
+    let host = "scoped_host";
+
+    let json = |r: reqwest::Response| async move { r.json::<serde_json::Value>().await.unwrap() };
+    let list = json(c.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap()).await;
+    let digest = list.as_array().unwrap().iter().find(|p| p["id"] == "scoped_demo").unwrap()["digest"].as_str().unwrap().to_string();
+
+    // Not approved yet: no token.
+    let mint = |body: serde_json::Value, token: &'static str| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugins/scoped_demo/token")).header("x-host-token", token).json(&body).send().await.unwrap() }
+    };
+    assert_eq!(mint(serde_json::json!({}), host).await.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // Approved with keyring.own only (the command permission is optional and declined).
+    let resp = c.post(format!("{base}/api/plugins/scoped_demo/approve")).header("x-host-token", host)
+        .json(&serde_json::json!({ "digest": digest, "granted": ["keyring.own"] })).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+    // Only a console can mint; a plugin token can't mint more.
+    assert_eq!(mint(serde_json::json!({}), "nope").await.status(), reqwest::StatusCode::UNAUTHORIZED);
+    // Asking for commands that weren't granted fails outright.
+    let cmd_scope = serde_json::json!({ "scopes": [{ "id": "commands.send", "commands": ["NextSlide"] }] });
+    assert_eq!(mint(cmd_scope.clone(), host).await.status(), reqwest::StatusCode::FORBIDDEN);
+    // A permission that can't ride a token is a 400.
+    assert_eq!(mint(serde_json::json!({ "scopes": [{ "id": "ui.dom" }] }), host).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    // The default token (keyring.own) works for the keyring but can't send commands.
+    let body = json(mint(serde_json::json!({}), host).await).await;
+    let kr_token = body["token"].as_str().unwrap().to_string();
+    let set = c.post(format!("{base}/api/keyring/set")).header("x-plugin-token", &kr_token)
+        .json(&serde_json::json!({ "service": "OpenSanctuary:Plugin:scoped_demo", "account": "a", "secret": "s" })).send().await.unwrap();
+    assert!(set.status().is_success() || set.status().is_server_error(), "keyring may be unavailable in CI, but must not be an auth error: {}", set.status());
+    assert_ne!(set.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let r = json(c.post(format!("{base}/api/command")).header("x-plugin-token", &kr_token).json(&serde_json::json!("NextSlide")).send().await.unwrap()).await;
+    assert_eq!(r["success"], false, "a keyring-only token must not send commands");
+
+    // Re-approve with the command permission, narrowed to NextSlide/PrevSlide.
+    let resp = c.post(format!("{base}/api/plugins/scoped_demo/approve")).header("x-host-token", host)
+        .json(&serde_json::json!({ "digest": digest, "granted": ["keyring.own", "commands.send"] })).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body = json(mint(cmd_scope, host).await).await;
+    let cmd_token = body["token"].as_str().unwrap().to_string();
+
+    // In scope: the command runs, with no console lock and no host token.
+    let r = json(c.post(format!("{base}/api/command")).header("x-plugin-token", &cmd_token).json(&serde_json::json!("NextSlide")).send().await.unwrap()).await;
+    assert_eq!(r["success"], true, "{r}");
+    // Out of scope (granted to the plugin? no -- and not on the token): refused, and audited once.
+    for _ in 0..3 {
+        let r = json(c.post(format!("{base}/api/command")).header("x-plugin-token", &cmd_token).json(&serde_json::json!({ "NewSchedule": null })).send().await.unwrap()).await;
+        assert_eq!(r["success"], false);
+    }
+    let audit = json(c.get(format!("{base}/api/plugins/audit")).header("x-host-token", host).send().await.unwrap()).await;
+    let denied_new_schedule = audit.as_array().unwrap().iter()
+        .filter(|a| a["action"] == "denied_call" && a["detail_json"].as_str().unwrap_or("").contains("NewSchedule"))
+        .count();
+    assert_eq!(denied_new_schedule, 1, "repeated denials of the same command are coalesced");
+
+    // A token narrows with the live grant: shrink the grant and the token loses the command.
+    let resp = c.post(format!("{base}/api/plugins/scoped_demo/approve")).header("x-host-token", host)
+        .json(&serde_json::json!({ "digest": digest, "granted": ["keyring.own"] })).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let r = json(c.post(format!("{base}/api/command")).header("x-plugin-token", &cmd_token).json(&serde_json::json!("NextSlide")).send().await.unwrap()).await;
+    assert_eq!(r["success"], false, "shrinking the grant must shrink tokens already issued");
+
+    // Revoke kills every token at once.
+    c.post(format!("{base}/api/plugins/scoped_demo/revoke")).header("x-host-token", host).send().await.unwrap();
+    let r = json(c.post(format!("{base}/api/command")).header("x-plugin-token", &kr_token).json(&serde_json::json!("NextSlide")).send().await.unwrap()).await;
+    assert_eq!(r["success"], false);
+    let set = c.post(format!("{base}/api/keyring/get")).header("x-plugin-token", &kr_token)
+        .json(&serde_json::json!({ "service": "OpenSanctuary:Plugin:scoped_demo", "account": "a" })).send().await.unwrap();
+    assert_eq!(set.status(), reqwest::StatusCode::UNAUTHORIZED);
 }

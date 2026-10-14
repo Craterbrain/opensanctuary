@@ -448,6 +448,8 @@ impl Database {
                 source_path TEXT NOT NULL,
                 observed_manifest_sha256 TEXT,
                 observed_digest TEXT NOT NULL,
+                observed_signer TEXT,
+                approved_signer TEXT,
                 requested_json TEXT NOT NULL DEFAULT '[]',
                 error TEXT,
                 approved_manifest_sha256 TEXT,
@@ -470,6 +472,10 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_plugin_audit_plugin ON plugin_audit(plugin_id, ts_ms);",
         )?;
+
+        // Signer pinning columns for plugin grants (added after the table first shipped)
+        let _ = conn.execute("ALTER TABLE plugin_grants ADD COLUMN observed_signer TEXT", []);
+        let _ = conn.execute("ALTER TABLE plugin_grants ADD COLUMN approved_signer TEXT", []);
 
         // Ensure loop_playback exists on older databases
         let _ = conn.execute("ALTER TABLE media ADD COLUMN loop_playback INTEGER DEFAULT 0", []);

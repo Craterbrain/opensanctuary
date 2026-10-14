@@ -67,7 +67,23 @@ pub(super) async fn post_command(
     // docs/CLIENT_PAIRING.md "Console (host) authentication" / "Remote
     // console access") — only the real operator console ever obtains the
     // host token, and the session id enforces "one console at a time."
-    if let Some(token_header) = headers.get("x-device-token") {
+    if let Some(plugin_token) = headers.get("x-plugin-token") {
+        // An approved plugin sending a command it was granted (`commands.send`); it goes on
+        // through the same plugin-veto and execution path below, without the console lock.
+        let token = plugin_token.to_str().unwrap_or("").trim().to_string();
+        match crate::api::routes::plugins::authorize_plugin_command(&app, &token, &value).await {
+            Ok(plugin_id) => tracing::info!("REST command from plugin '{}'", plugin_id),
+            Err(reason) => {
+                tracing::warn!("REST command rejected: {}", reason);
+                return Json(CommandResponse {
+                    success: false,
+                    state: app.engine.snapshot(),
+                    events: vec![],
+                    error: Some(reason),
+                });
+            }
+        }
+    } else if let Some(token_header) = headers.get("x-device-token") {
         let token = token_header.to_str().unwrap_or("").trim();
         match app.db.get_paired_device_by_token(token) {
             Ok(Some(dev)) if dev.can_control_show() => {

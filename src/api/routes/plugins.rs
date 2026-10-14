@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::api::ws::AppState;
 use crate::core::plugin_permissions::{PermissionRequest, PermissionSet};
-use crate::core::plugin_registry::{discover, sync, Discovered};
+use crate::core::plugin_registry::{discover, parse_granted, sync, Discovered};
 use crate::storage::db::PluginGrantRow;
 
 use super::common::require_host_token;
@@ -31,6 +31,11 @@ pub(super) fn rescan(app: &AppState) -> Vec<Discovered> {
     );
     sync(&app.db, &found);
     found
+}
+
+/// Short, stable id for a publisher key, for display.
+fn signer_id(key: &str) -> String {
+    crate::core::plugin_permissions::sha256_hex(key.as_bytes())[..16].to_string()
 }
 
 fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
@@ -53,6 +58,10 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         "status": row.status,
         "error": row.error,
         "digest": row.observed_digest,
+        "signed": row.observed_signer.is_some(),
+        "signer_id": row.observed_signer.as_deref().map(signer_id),
+        // Approved before under a different publisher key, or it used to be signed and now isn't.
+        "signer_changed": row.approved_signer.is_some() && row.approved_signer != row.observed_signer,
         "approved_digest": row.approved_digest,
         "requested": requested.iter().map(describe).collect::<Vec<_>>(),
         "granted": granted.iter().map(describe).collect::<Vec<_>>(),
@@ -152,7 +161,7 @@ pub(super) async fn approve_plugin(
     let granted_json = serde_json::to_string(&granted).unwrap_or_else(|_| "[]".to_string());
     let actor = actor_of(&headers, &app);
     app.db
-        .set_plugin_decision(&id, "approved", &granted_json, row.observed_manifest_sha256.as_deref(), Some(&row.observed_digest), &actor)
+        .set_plugin_decision(&id, "approved", &granted_json, row.observed_manifest_sha256.as_deref(), Some(&row.observed_digest), row.observed_signer.as_deref(), &actor)
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
     app.db.add_plugin_audit(
         &id,
@@ -178,11 +187,12 @@ async fn decide(
     }
     let actor = actor_of(&headers, &app);
     app.db
-        .set_plugin_decision(&id, status, "[]", None, None, &actor)
+        .set_plugin_decision(&id, status, "[]", None, None, None, &actor)
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
     app.db.add_plugin_audit(&id, &actor, if status == "denied" { "denied" } else { "revoked" }, "{}");
     // Immediate for everything the host mediates (hooks, resources).
     app.plugin_manager.revoke(&id);
+    app.revoke_plugin_tokens(&id).await;
     let fresh = app.db.get_plugin_grant(&id).ok().flatten().ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
     Ok(Json(view(&app, &fresh)))
 }
@@ -209,6 +219,92 @@ pub(super) async fn plugin_audit(
     require_host_token(&headers, &app)?;
     let rows = app.db.list_plugin_audit(q.limit.unwrap_or(200)).map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
     Ok(Json(rows))
+}
+
+#[derive(Deserialize, Default)]
+pub(super) struct TokenReq {
+    /// What the token may do; defaults to the plugin's own keyring if that was granted.
+    #[serde(default)]
+    scopes: Option<Vec<PermissionRequest>>,
+}
+
+/// Permissions a token can carry at all.
+const TOKEN_SCOPES: [&str; 2] = ["keyring.own", "commands.send"];
+
+/// POST /api/plugins/:id/token -- the console mints a token for an approved plugin, limited to
+/// (a subset of) what it was granted. The token is checked against the live grant on every use.
+pub(super) async fn mint_plugin_token(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    body: Option<Json<TokenReq>>,
+) -> Result<impl IntoResponse, ApiErr> {
+    require_host_token(&headers, &app)?;
+    let row = app
+        .db
+        .get_plugin_grant(&id)
+        .ok()
+        .flatten()
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "no such plugin"))?;
+    if row.effective_state() != "active" {
+        return Err(err(StatusCode::FORBIDDEN, "this plugin isn't approved"));
+    }
+    let granted = parse_granted(&row);
+    let wanted = match body.and_then(|Json(b)| b.scopes) {
+        Some(s) => PermissionSet(s),
+        None => PermissionSet(vec![PermissionRequest::simple("keyring.own")]).narrowed_by(&granted),
+    };
+    if wanted.0.is_empty() {
+        return Err(err(StatusCode::FORBIDDEN, "nothing to issue a token for"));
+    }
+    if let Some(p) = wanted.0.iter().find(|p| !TOKEN_SCOPES.contains(&p.id.as_str())) {
+        return Err(err(StatusCode::BAD_REQUEST, &format!("'{}' can't be carried by a token", p.id)));
+    }
+    // Every requested scope must be (at least partly) inside the grant; ask for more than was
+    // granted and the call fails rather than silently issuing less.
+    let effective = wanted.narrowed_by(&granted);
+    if effective != wanted {
+        return Err(err(StatusCode::FORBIDDEN, "the plugin wasn't granted everything the token asks for"));
+    }
+    let token = app.issue_plugin_token_scoped(&id, effective.clone()).await;
+    app.db.add_plugin_audit(
+        &id,
+        &actor_of(&headers, &app),
+        "token_issued",
+        &serde_json::json!({ "scopes": effective.0.iter().map(|p| &p.id).collect::<Vec<_>>() }).to_string(),
+    );
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "token": token,
+        "scopes": effective.0,
+        "service": format!("OpenSanctuary:Plugin:{id}"),
+    })))
+}
+
+/// Plugin command denials are logged once per (plugin, command) per run, so a misbehaving
+/// plugin can't flood the audit table.
+static DENIED_SEEN: std::sync::Mutex<Option<std::collections::HashSet<(String, String)>>> = std::sync::Mutex::new(None);
+
+/// Authorizes a command sent with a plugin token (`x-plugin-token` over REST, `plugin_token` in a
+/// WebSocket envelope). Returns the plugin id; the caller then runs the command through the same
+/// plugin-veto and execution path as any other. Plugin commands don't take the console lock.
+pub(crate) async fn authorize_plugin_command(app: &AppState, token: &str, cmd: &serde_json::Value) -> Result<String, String> {
+    let variant = crate::core::plugin_permissions::command_variant(&cmd.to_string()).unwrap_or_default();
+    let Some(caller) = app.resolve_plugin_caller(token).await else {
+        return Err("invalid, expired or revoked plugin token".to_string());
+    };
+    if !caller.scopes.allows_command(&variant) {
+        let first = {
+            let mut guard = DENIED_SEEN.lock().unwrap_or_else(|e| e.into_inner());
+            let set = guard.get_or_insert_with(Default::default);
+            set.len() < 1000 && set.insert((caller.plugin_id.clone(), variant.clone()))
+        };
+        if first {
+            app.db.add_plugin_audit(&caller.plugin_id, &format!("plugin:{}", caller.plugin_id), "denied_call", &serde_json::json!({ "command": variant }).to_string());
+        }
+        return Err(format!("this plugin may not send '{variant}'"));
+    }
+    Ok(caller.plugin_id)
 }
 
 /// True when `file_name` (e.g. `hello_world.js`) is an approved, unchanged web plugin.
@@ -238,4 +334,5 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/plugins/:id/approve", post(approve_plugin))
         .route("/api/plugins/:id/deny", post(deny_plugin))
         .route("/api/plugins/:id/revoke", post(revoke_plugin))
+        .route("/api/plugins/:id/token", post(mint_plugin_token))
 }

@@ -7,8 +7,23 @@ use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast;
 use crate::core::commands::ShowCommand;
+use crate::core::plugin_permissions::{PermissionRequest, PermissionSet};
 use crate::core::engine::{ShowEngine, StateSnapshot};
 use crate::core::models::ToScheduleItem;
+
+/// What a plugin token carries (see `AppState::issue_plugin_token_scoped`).
+#[derive(Clone)]
+pub struct PluginTokenInfo {
+    pub plugin_id: String,
+    pub scopes: PermissionSet,
+    pub expires_at: i64,
+}
+
+/// A resolved plugin credential: who, and what it may do right now.
+pub struct PluginCaller {
+    pub plugin_id: String,
+    pub scopes: PermissionSet,
+}
 
 /// "One console at a time" lock state. `ws_conns` counts live WebSocket
 /// connections that presented this `session_id`, so a console that reconnects
@@ -59,8 +74,8 @@ pub struct AppState {
     /// nowhere to open a display output. API handlers report `available: false` in that case.
     pub display_manager: Option<Arc<crate::webview::DisplayManagerHandle>>,
     /// Active plugin authorization tokens: token -> plugin_name
-    /// token -> (plugin id, expiry unix seconds). Tokens expire and are capped per plugin.
-    pub plugin_tokens: Arc<tokio::sync::RwLock<std::collections::HashMap<String, (String, i64)>>>,
+    /// token -> info. Tokens expire, are capped per plugin and carry scopes.
+    pub plugin_tokens: Arc<tokio::sync::RwLock<std::collections::HashMap<String, PluginTokenInfo>>>,
     /// Secret host session token for host console authorization
     pub host_session_token: String,
     /// Active listening server port (cleartext HTTP AV plane, default 8080)
@@ -163,24 +178,29 @@ impl AppState {
         }
     }
 
-    /// Issues a unique, scoped capability token for a plugin. Tokens expire after
-    /// `PLUGIN_TOKEN_TTL_SECS`, and a plugin holds at most `PLUGIN_TOKENS_PER_PLUGIN` at once
-    /// (the oldest is dropped), so the map can't grow without bound.
+    /// Issues a capability token for a plugin with the default scope (its own keyring).
     pub async fn issue_plugin_token(&self, plugin_name: &str) -> String {
+        self.issue_plugin_token_scoped(plugin_name, PermissionSet(vec![PermissionRequest::simple("keyring.own")])).await
+    }
+
+    /// Issues a token carrying `scopes`. Tokens expire after `PLUGIN_TOKEN_TTL_SECS`, and a
+    /// plugin holds at most `PLUGIN_TOKENS_PER_PLUGIN` at once (the oldest is dropped), so the
+    /// map can't grow without bound.
+    pub async fn issue_plugin_token_scoped(&self, plugin_name: &str, scopes: PermissionSet) -> String {
         let token = format!("plg_{}", uuid::Uuid::new_v4().simple());
         let now = chrono::Utc::now().timestamp();
         let plugin = plugin_name.trim().to_string();
         let mut tokens = self.plugin_tokens.write().await;
-        tokens.retain(|_, (_, exp)| *exp > now);
+        tokens.retain(|_, t| t.expires_at > now);
         let mut mine: Vec<(String, i64)> =
-            tokens.iter().filter(|(_, (p, _))| *p == plugin).map(|(t, (_, exp))| (t.clone(), *exp)).collect();
+            tokens.iter().filter(|(_, t)| t.plugin_id == plugin).map(|(k, t)| (k.clone(), t.expires_at)).collect();
         if mine.len() >= PLUGIN_TOKENS_PER_PLUGIN {
             mine.sort_by_key(|(_, exp)| *exp);
             for (t, _) in mine.iter().take(mine.len() + 1 - PLUGIN_TOKENS_PER_PLUGIN) {
                 tokens.remove(t);
             }
         }
-        tokens.insert(token.clone(), (plugin, now + PLUGIN_TOKEN_TTL_SECS));
+        tokens.insert(token.clone(), PluginTokenInfo { plugin_id: plugin, scopes, expires_at: now + PLUGIN_TOKEN_TTL_SECS });
         token
     }
 
@@ -188,7 +208,30 @@ impl AppState {
     pub async fn resolve_plugin_token(&self, token: &str) -> Option<String> {
         let now = chrono::Utc::now().timestamp();
         let tokens = self.plugin_tokens.read().await;
-        tokens.get(token.trim()).filter(|(_, exp)| *exp > now).map(|(p, _)| p.clone())
+        tokens.get(token.trim()).filter(|t| t.expires_at > now).map(|t| t.plugin_id.clone())
+    }
+
+    /// Resolves a token to the plugin and what it may do *right now*: the token's scopes
+    /// narrowed by the plugin's current grant, and nothing at all unless the plugin is still
+    /// approved and unchanged.
+    pub async fn resolve_plugin_caller(&self, token: &str) -> Option<PluginCaller> {
+        let now = chrono::Utc::now().timestamp();
+        let (plugin_id, scopes) = {
+            let tokens = self.plugin_tokens.read().await;
+            let t = tokens.get(token.trim()).filter(|t| t.expires_at > now)?;
+            (t.plugin_id.clone(), t.scopes.clone())
+        };
+        let row = self.db.get_plugin_grant(&plugin_id).ok().flatten()?;
+        if row.effective_state() != "active" {
+            return None;
+        }
+        let granted = crate::core::plugin_registry::parse_granted(&row);
+        Some(PluginCaller { plugin_id, scopes: scopes.narrowed_by(&granted) })
+    }
+
+    /// Drops every token a plugin holds (called when it is denied or revoked).
+    pub async fn revoke_plugin_tokens(&self, plugin_name: &str) {
+        self.plugin_tokens.write().await.retain(|_, t| t.plugin_id != plugin_name);
     }
 
     /// Creates an ephemeral pairing session with TTL (in seconds, default 300)
@@ -398,7 +441,7 @@ static WS_CONNECTIONS: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore
 fn redact_ws_envelope(value: &serde_json::Value) -> String {
     let mut v = value.clone();
     if let Some(obj) = v.as_object_mut() {
-        for k in ["host_token", "device_token", "console_session_id"] {
+        for k in ["host_token", "device_token", "plugin_token", "console_session_id"] {
             obj.remove(k);
         }
     }
@@ -508,6 +551,18 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                                 continue;
                             }
                         }
+                    } else if let Some(pt) = value.get("plugin_token") {
+                        // An approved plugin sending a command it was granted (`commands.send`).
+                        let token = pt.as_str().unwrap_or("").trim().to_string();
+                        let inner = value.get("cmd").cloned().unwrap_or(serde_json::Value::Null);
+                        match crate::api::routes::plugins::authorize_plugin_command(&app, &token, &inner).await {
+                            Ok(plugin_id) => tracing::info!("WebSocket command from plugin '{}'", plugin_id),
+                            Err(reason) => {
+                                tracing::warn!("WebSocket command rejected: {}", reason);
+                                continue;
+                            }
+                        }
+                        value = inner;
                     } else {
                         let token = value.get("host_token").and_then(|v| v.as_str()).unwrap_or("");
                         if !app.is_console_credential(token) {

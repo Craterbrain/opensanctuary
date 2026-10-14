@@ -18,8 +18,10 @@ pub(super) async fn authenticate_keyring_caller(
 ) -> Result<KeyringCaller, AppError> {
     if let Some(token_header) = headers.get("x-plugin-token") {
         if let Ok(token_str) = token_header.to_str() {
-            if let Some(plugin_name) = app.resolve_plugin_token(token_str).await {
-                return Ok(KeyringCaller::Plugin(plugin_name));
+            if let Some(caller) = app.resolve_plugin_caller(token_str).await {
+                if caller.scopes.has("keyring.own") {
+                    return Ok(KeyringCaller::Plugin(caller.plugin_id));
+                }
             }
         }
         return Err(AppError::Unauthorized("Invalid or expired plugin token".to_string()));

@@ -57,7 +57,10 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   head.appendChild(el('span', `os-badge plugin-state plugin-state--${plugin.state}`, STATE_LABEL[plugin.state] ?? plugin.state));
   head.appendChild(el('span', 'os-badge os-badge--neutral', isNative(plugin) ? 'Backend library' : 'Console script'));
   card.appendChild(head);
-  card.appendChild(el('div', 'settings-hint', `id: ${plugin.id} · digest ${plugin.digest.slice(0, 12)}…`));
+  card.appendChild(el('div', 'settings-hint', `id: ${plugin.id} · digest ${plugin.digest.slice(0, 12)}… · ${plugin.signed ? `signed (publisher key ${plugin.signer_id})` : 'unsigned'}`));
+  if (plugin.signer_changed) {
+    card.appendChild(el('div', 'plugin-warning', 'The publisher signature is different from the one you approved before (or it used to be signed and now isn\'t). Check that this update is from who you expect.'));
+  }
 
   if (plugin.error) {
     card.appendChild(el('div', 'plugin-error', `Can't be approved: ${plugin.error}`));

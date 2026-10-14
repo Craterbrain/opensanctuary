@@ -15,6 +15,8 @@ pub struct PluginGrantRow {
     pub source_path: String,
     pub observed_manifest_sha256: Option<String>,
     pub observed_digest: String,
+    pub observed_signer: Option<String>,
+    pub approved_signer: Option<String>,
     pub requested_json: String,
     pub error: Option<String>,
     pub approved_manifest_sha256: Option<String>,
@@ -64,7 +66,7 @@ pub struct PluginAuditRow {
 }
 
 const GRANT_COLS: &str = "plugin_id, kind, name, version, source_path, observed_manifest_sha256, observed_digest, \
-     requested_json, error, approved_manifest_sha256, approved_digest, status, granted_json, decided_at, decided_by, \
+     observed_signer, approved_signer, requested_json, error, approved_manifest_sha256, approved_digest, status, granted_json, decided_at, decided_by, \
      first_seen, last_seen";
 
 fn grant_from_row(row: &rusqlite::Row<'_>) -> Result<PluginGrantRow> {
@@ -76,16 +78,18 @@ fn grant_from_row(row: &rusqlite::Row<'_>) -> Result<PluginGrantRow> {
         source_path: row.get(4)?,
         observed_manifest_sha256: row.get(5)?,
         observed_digest: row.get(6)?,
-        requested_json: row.get(7)?,
-        error: row.get(8)?,
-        approved_manifest_sha256: row.get(9)?,
-        approved_digest: row.get(10)?,
-        status: row.get(11)?,
-        granted_json: row.get(12)?,
-        decided_at: row.get(13)?,
-        decided_by: row.get(14)?,
-        first_seen: row.get(15)?,
-        last_seen: row.get(16)?,
+        observed_signer: row.get(7)?,
+        approved_signer: row.get(8)?,
+        requested_json: row.get(9)?,
+        error: row.get(10)?,
+        approved_manifest_sha256: row.get(11)?,
+        approved_digest: row.get(12)?,
+        status: row.get(13)?,
+        granted_json: row.get(14)?,
+        decided_at: row.get(15)?,
+        decided_by: row.get(16)?,
+        first_seen: row.get(17)?,
+        last_seen: row.get(18)?,
     })
 }
 
@@ -98,6 +102,7 @@ pub struct ObservedPlugin<'a> {
     pub source_path: &'a str,
     pub manifest_sha256: Option<&'a str>,
     pub digest: &'a str,
+    pub signer: Option<&'a str>,
     pub requested_json: &'a str,
     pub error: Option<&'a str>,
 }
@@ -134,13 +139,14 @@ impl Database {
         conn.execute(
             "INSERT INTO plugin_grants (plugin_id, kind, name, version, source_path, observed_manifest_sha256, \
                  observed_digest, requested_json, error, approved_manifest_sha256, approved_digest, status, \
-                 granted_json, decided_at, decided_by, first_seen, last_seen)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)
+                 granted_json, decided_at, decided_by, first_seen, last_seen, observed_signer, approved_signer)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16, ?17, ?18)
              ON CONFLICT(plugin_id) DO UPDATE SET
                  kind = excluded.kind, name = excluded.name, version = excluded.version,
                  source_path = excluded.source_path,
                  observed_manifest_sha256 = excluded.observed_manifest_sha256,
                  observed_digest = excluded.observed_digest,
+                 observed_signer = excluded.observed_signer,
                  requested_json = excluded.requested_json,
                  error = excluded.error,
                  last_seen = excluded.last_seen",
@@ -161,6 +167,8 @@ impl Database {
                 if approved { Some(now) } else { None },
                 if approved { Some("system:grandfathered") } else { None },
                 now,
+                o.signer,
+                if approved { o.signer.map(|s| s.to_string()) } else { None },
             ],
         )?;
         Ok(())
@@ -175,6 +183,7 @@ impl Database {
         granted_json: &str,
         pin_manifest_sha256: Option<&str>,
         pin_digest: Option<&str>,
+        pin_signer: Option<&str>,
         decided_by: &str,
     ) -> Result<bool> {
         let now = chrono::Utc::now().timestamp_millis();
@@ -182,8 +191,8 @@ impl Database {
         let changed = if status == "approved" {
             conn.execute(
                 "UPDATE plugin_grants SET status = ?2, granted_json = ?3, approved_manifest_sha256 = ?4, \
-                     approved_digest = ?5, decided_at = ?6, decided_by = ?7 WHERE plugin_id = ?1",
-                params![plugin_id, status, granted_json, pin_manifest_sha256, pin_digest, now, decided_by],
+                     approved_digest = ?5, decided_at = ?6, decided_by = ?7, approved_signer = ?8 WHERE plugin_id = ?1",
+                params![plugin_id, status, granted_json, pin_manifest_sha256, pin_digest, now, decided_by, pin_signer],
             )?
         } else {
             conn.execute(
