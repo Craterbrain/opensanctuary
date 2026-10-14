@@ -6,10 +6,9 @@ use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast;
-use crate::core::commands::ShowCommand;
+use crate::api::command_pipeline::{authenticate_command, run_command_pipeline, CommandAuthError, CommandCredential, CommandOrigin};
 use crate::core::plugin_permissions::{PermissionRequest, PermissionSet};
 use crate::core::engine::{ShowEngine, StateSnapshot};
-use crate::core::models::ToScheduleItem;
 
 /// What a plugin token carries (see `AppState::issue_plugin_token_scoped`).
 #[derive(Clone)]
@@ -522,154 +521,61 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                 // Intercept raw JSON commands
                 if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) {
                     let safe_text = redact_ws_envelope(&value);
-                    // Paired remote-control clients (see /remote) wrap every command as
-                    // {"cmd": <ShowCommand>, "device_token": "..."} so it can be checked
-                    // against a real device token before executing — the raw WS text
-                    // frame has no header to carry a credential in otherwise. A message
-                    // with no `device_token` field is instead required to carry a
-                    // `host_token` matching this server's `host_session_token` (see
-                    // docs/CLIENT_PAIRING.md "Console (host) authentication") — the same
-                    // in-message-envelope pattern, just for the operator console's own
-                    // commands instead of a paired device's. Only the real console ever
-                    // obtains that token (native injection or a loopback-only fetch), so
-                    // this is what actually closes the "any LAN caller could drive the
-                    // show" gap that used to exist here.
-                    if let Some(token_val) = value.get("device_token") {
-                        let token = token_val.as_str().unwrap_or("").trim().to_string();
-                        match app.db.get_paired_device_by_token(&token) {
-                            Ok(Some(dev)) if dev.can_control_show() => {
-                                let _ = app.db.touch_paired_device(&dev.id);
-                                let inner = value.get("cmd").cloned().unwrap_or(serde_json::Value::Null);
-                                value = inner;
-                            }
-                            Ok(Some(_)) => {
-                                tracing::warn!("WebSocket command rejected: paired display tokens cannot send show commands");
-                                continue;
-                            }
-                            _ => {
-                                tracing::warn!("WebSocket command rejected: invalid/unknown device token");
-                                continue;
-                            }
-                        }
-                    } else if let Some(pt) = value.get("plugin_token") {
-                        // An approved plugin sending a command it was granted (`commands.send`).
-                        let token = pt.as_str().unwrap_or("").trim().to_string();
-                        let inner = value.get("cmd").cloned().unwrap_or(serde_json::Value::Null);
-                        match crate::api::routes::plugins::authorize_plugin_command(&app, &token, &inner).await {
-                            Ok(plugin_id) => tracing::info!("WebSocket command from plugin '{}'", plugin_id),
-                            Err(reason) => {
-                                tracing::warn!("WebSocket command rejected: {}", reason);
-                                continue;
-                            }
-                        }
-                        value = inner;
+                    // Every command arrives in an envelope that carries its own credential, since
+                    // a raw WebSocket text frame has no header to put one in:
+                    //   {"cmd": <ShowCommand>, "plugin_token": "..."}    an approved plugin
+                    //   {"cmd": <ShowCommand>, "device_token": "..."}    a paired remote (/remote)
+                    //   {"cmd": <ShowCommand>, "host_token": "...", "console_session_id": "..."}
+                    //                                                    the operator console
+                    // (docs/CLIENT_PAIRING.md "Console (host) authentication"). Only the real
+                    // console ever obtains the host token (native injection, a loopback-only
+                    // fetch, or a persistent console credential), which is what closes the
+                    // "any LAN caller could drive the show" gap. The same checks and the same
+                    // execution path as REST: see `command_pipeline`.
+                    let str_field = |name: &str| value.get(name).and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let plugin_token = str_field("plugin_token");
+                    let device_token = str_field("device_token");
+                    let host_token = str_field("host_token").unwrap_or_default();
+                    let session_id = str_field("console_session_id").unwrap_or_default();
+                    let credential = if let Some(t) = plugin_token.as_deref() {
+                        CommandCredential::Plugin { token: t }
+                    } else if let Some(t) = device_token.as_deref() {
+                        CommandCredential::Device { token: t }
                     } else {
-                        let token = value.get("host_token").and_then(|v| v.as_str()).unwrap_or("");
-                        if !app.is_console_credential(token) {
-                            tracing::warn!("WebSocket command rejected: missing/invalid host token");
+                        CommandCredential::Host { token: &host_token, session_id: &session_id }
+                    };
+                    let cmd_value = value.get("cmd").cloned().unwrap_or(serde_json::Value::Null);
+
+                    let origin = match authenticate_command(&app, &credential, &cmd_value).await {
+                        Ok(o) => o,
+                        Err(e) => {
+                            tracing::warn!("WebSocket command rejected: {}", e.log_line());
+                            if e == CommandAuthError::ConsoleLocked {
+                                // A distinct, visible rejection rather than a silent drop, so the
+                                // second console can say "another console is connected".
+                                let _ = direct_tx.send(serde_json::json!({
+                                    "error": "console_locked",
+                                    "message": "Another console is already connected. Only one console can control the show at a time.",
+                                }).to_string());
+                            }
                             continue;
                         }
-                        // "One console at a time, first one connected wins"
-                        // (docs/CLIENT_PAIRING.md) -- console_session_id is a
-                        // random id the frontend generates once per page
-                        // load, so this connection's own reconnects/HTTP
-                        // fallback keep working while a genuinely different
-                        // console gets a clear, distinct rejection instead
-                        // of a silent drop.
-                        let session_id = value.get("console_session_id").and_then(|v| v.as_str()).unwrap_or("").trim();
-                        if session_id.is_empty() {
-                            tracing::warn!("WebSocket command rejected: missing console_session_id");
-                            continue;
-                        }
-                        if app.try_claim_console(session_id).is_err() {
-                            tracing::warn!("WebSocket command rejected: another console is already connected");
-                            let _ = direct_tx.send(serde_json::json!({
-                                "error": "console_locked",
-                                "message": "Another console is already connected. Only one console can control the show at a time.",
-                            }).to_string());
-                            continue;
-                        }
-                        if console_lock.session_id.as_deref() != Some(session_id) {
+                    };
+                    // `console_session_id` is a random id the frontend generates once per page
+                    // load, so this connection's own reconnects/HTTP fallback keep working. Tie
+                    // the lock to this socket so it is released when the socket goes.
+                    if let CommandOrigin::Console { session_id } = &origin {
+                        if console_lock.session_id.as_deref() != Some(session_id.as_str()) {
                             if let Some(old) = console_lock.session_id.take() {
                                 app.release_console_if_held(&old);
                             }
                             app.attach_console_ws(session_id);
-                            console_lock.session_id = Some(session_id.to_string());
-                        }
-                        let inner = value.get("cmd").cloned().unwrap_or(serde_json::Value::Null);
-                        value = inner;
-                    }
-
-                    // Check for frontend AddToSchedule shorthand
-                    if let Some(add_cmd) = value.get("AddToSchedule") {
-                        if add_cmd.get("item_type").is_some() && add_cmd.get("item_id").is_some() {
-                            let item_type = add_cmd["item_type"].as_str().unwrap_or("");
-                            let item_id = add_cmd["item_id"].as_str().unwrap_or("");
-                            
-                            let sched_item = match item_type {
-                                "song" => app.db.get_song_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                                "scripture" => app.db.get_scripture_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                                "media" => app.db.get_media_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                                "presentation" => app.db.get_presentation_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                                _ => None,
-                            };
-                            
-                            if let Some(mut item) = sched_item {
-                                crate::api::routes::apply_default_theme_if_unset(&mut item, &app.db);
-                                if let Ok(item_val) = serde_json::to_value(item) {
-                                    let mut new_cmd = serde_json::Map::new();
-                                    new_cmd.insert("AddToSchedule".to_string(), item_val);
-                                    value = serde_json::Value::Object(new_cmd);
-                                }
-                            }
+                            console_lock.session_id = Some(session_id.clone());
                         }
                     }
 
-                    // Check for frontend StageItem preview shorthand — a Library
-                    // Preview click staging an item that isn't in the schedule yet.
-                    if let Some(stage_cmd) = value.get("StageItem") {
-                        if stage_cmd.get("item_type").is_some() && stage_cmd.get("item_id").is_some() {
-                            let item_type = stage_cmd["item_type"].as_str().unwrap_or("");
-                            let item_id = stage_cmd["item_id"].as_str().unwrap_or("");
-
-                            let sched_item = match item_type {
-                                "song" => app.db.get_song_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                                "scripture" => app.db.get_scripture_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                                "media" => app.db.get_media_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                                "presentation" => app.db.get_presentation_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                                _ => None,
-                            };
-
-                            if let Some(item) = sched_item {
-                                if let Ok(item_val) = serde_json::to_value(item) {
-                                    let mut new_cmd = serde_json::Map::new();
-                                    new_cmd.insert("StageItemDirect".to_string(), item_val);
-                                    value = serde_json::Value::Object(new_cmd);
-                                }
-                            }
-                        }
-                    }
-
-                    // Plugins see the same text whichever door a command came through: the
-                    // bare command after shorthand expansion (what `/api/command` hands
-                    // them), never the credential-bearing envelope.
-                    let plugin_text = serde_json::to_string(&value).unwrap_or_default();
-                    if !app.plugin_manager.check_command(&plugin_text) {
-                        tracing::warn!("WebSocket command blocked by plugin: {}", plugin_text);
-                        continue;
-                    }
-
-                    match serde_json::from_value::<ShowCommand>(value) {
-                        Err(e) => {
-                            tracing::warn!("WebSocket command failed to parse, dropped: {} (raw: {})", e, safe_text);
-                        }
-                        Ok(cmd) => {
-                            let events = app.engine.execute_command(cmd);
-                            for env in &events {
-                                let _ = app.db.save_event(env);
-                            }
-                            broadcast_snapshot(&app);
-                        }
+                    if let Err(e) = run_command_pipeline(&app, cmd_value, &origin) {
+                        tracing::debug!("WebSocket command dropped: {:?} (raw: {})", e, safe_text);
                     }
                 }
             }

@@ -1,3 +1,4 @@
+pub mod command_pipeline;
 pub mod error;
 pub mod plugin_host;
 pub mod routes;

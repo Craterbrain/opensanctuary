@@ -6563,3 +6563,111 @@ async fn test_sandboxed_plugin_frame_serving_and_csp() {
     assert_eq!(get("/plugin-frame/sbx_demo/index.html").await.status(), reqwest::StatusCode::NOT_FOUND);
     assert_eq!(get("/plugin-frame/sbx_demo/ui/app.js").await.status(), reqwest::StatusCode::NOT_FOUND);
 }
+
+/// REST and WebSocket run commands through one pipeline: the same plugin veto on the same bare
+/// command text, the same shorthand expansion, the same credential rules (including that a paired
+/// display can't send), and a plugin's queued command takes that path too.
+#[tokio::test]
+async fn test_rest_ws_and_plugin_commands_share_one_pipeline() {
+    use futures_util::{SinkExt, StreamExt};
+    use os_next::core::plugins::{OsPlugin, PluginManager};
+    use std::sync::Mutex;
+
+    struct Recorder(Arc<Mutex<Vec<String>>>, bool);
+    impl OsPlugin for Recorder {
+        fn name(&self) -> &'static str { "recorder" }
+        fn on_state_change(&self, _s: &os_next::core::models::ShowState) {}
+        fn on_command(&self, cmd: &str) -> bool {
+            self.0.lock().unwrap().push(cmd.to_string());
+            !self.1
+        }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("pipe.db").to_str().unwrap()).unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut pm = PluginManager::new();
+    pm.register_plugin(Box::new(Recorder(seen.clone(), false)));
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        tx, engine: engine.clone(), db: db.clone(),
+        asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
+        web_dir: std::path::PathBuf::from("web"), media_dir: tmp.path().join("media"),
+        data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
+        plugin_manager: Arc::new(pm),
+        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
+        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "pipe_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let app_for_direct = app_state.clone();
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+
+    db.upsert_paired_device(&os_next::storage::PairedDevice { id: "tv".into(), name: "TV".into(), platform: "android-tv".into(), paired_at: 0, last_seen: 0, token: "tv_tok".into() }).unwrap();
+    db.upsert_paired_device(&os_next::storage::PairedDevice { id: "rem".into(), name: "R".into(), platform: "mobile-remote".into(), paired_at: 0, last_seen: 0, token: "rem_tok".into() }).unwrap();
+
+    let blackout = || engine.snapshot().state.is_blackout;
+    let rest = |headers: Vec<(&'static str, &'static str)>, body: serde_json::Value| {
+        let (c, base) = (c.clone(), base.clone());
+        async move {
+            let mut r = c.post(format!("{base}/api/command"));
+            for (k, v) in headers { r = r.header(k, v); }
+            r.json(&body).send().await.unwrap().json::<serde_json::Value>().await.unwrap()
+        }
+    };
+    let console = vec![("x-host-token", "pipe_host"), ("x-console-session-id", "s1")];
+
+    // Credential rules, REST: a paired display can't send; a remote and the console can.
+    let r = rest(vec![("x-device-token", "tv_tok")], serde_json::json!("ToggleBlackout")).await;
+    assert_eq!((r["success"].as_bool(), r["error"].as_str()), (Some(false), Some("display_token_cannot_control")));
+    assert!(!blackout());
+    assert_eq!(rest(vec![("x-device-token", "nope")], serde_json::json!("ToggleBlackout")).await["success"], false);
+    assert_eq!(rest(vec![("x-device-token", "rem_tok")], serde_json::json!("ToggleBlackout")).await["success"], true);
+    assert!(blackout());
+    assert_eq!(rest(vec![("x-host-token", "pipe_host")], serde_json::json!("ToggleBlackout")).await["error"], "Missing x-console-session-id");
+    assert_eq!(rest(console.clone(), serde_json::json!("ToggleBlackout")).await["success"], true);
+    assert!(!blackout());
+    // A second console is locked out with its own reason.
+    assert_eq!(rest(vec![("x-host-token", "pipe_host"), ("x-console-session-id", "s2")], serde_json::json!("ToggleBlackout")).await["error"], "console_locked");
+
+    // The same command over WebSocket takes the same path (and the same plugin text).
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await.unwrap();
+    let _ = ws.next().await;
+    ws.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({ "cmd": "ToggleBlackout", "device_token": "rem_tok" }).to_string())).await.unwrap();
+    ws.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({ "cmd": "ToggleBlackout", "device_token": "tv_tok" }).to_string())).await.unwrap(); // display: ignored
+    for _ in 0..40 { if blackout() { break; } tokio::time::sleep(std::time::Duration::from_millis(25)).await; }
+    assert!(blackout(), "a paired remote's WS command ran");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(blackout(), "the display's WS command must not have toggled it back");
+
+    // Emergency commands are never shown to plugins for a veto; ordinary ones are, and every door
+    // hands them the identical bare text: REST, WebSocket and a plugin's own queued command.
+    assert!(seen.lock().unwrap().is_empty(), "ToggleBlackout can't be vetoed, so plugins aren't asked");
+    rest(console.clone(), serde_json::json!("NextSlide")).await;
+    ws.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({ "cmd": "NextSlide", "device_token": "rem_tok" }).to_string())).await.unwrap();
+    let origin = os_next::api::command_pipeline::CommandOrigin::Plugin { id: "recorder".into() };
+    os_next::api::command_pipeline::run_command_pipeline(&app_for_direct, serde_json::json!("NextSlide"), &origin).unwrap();
+    for _ in 0..40 { if seen.lock().unwrap().len() >= 3 { break; } tokio::time::sleep(std::time::Duration::from_millis(25)).await; }
+    let log = seen.lock().unwrap().clone();
+    assert_eq!(log, vec!["\"NextSlide\"".to_string(); 3], "REST, WS and the plugin path all hand plugins the same text");
+    // And an unparseable payload is a rejection, not a crash.
+    assert!(os_next::api::command_pipeline::run_command_pipeline(&app_for_direct, serde_json::json!({"Nope": 1}), &origin).is_err());
+}

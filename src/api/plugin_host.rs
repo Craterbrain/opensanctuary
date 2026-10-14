@@ -182,16 +182,12 @@ pub async fn drain_plugin_commands(mut rx: tokio::sync::mpsc::Receiver<QueuedPlu
             tracing::warn!("dropped queued '{}' from plugin '{}': no longer granted", msg.variant, msg.plugin_id);
             continue;
         }
-        let text = serde_json::to_string(&msg.cmd).unwrap_or_default();
-        if !app.plugin_manager.check_command(&text) {
-            tracing::warn!("command '{}' from plugin '{}' vetoed", msg.variant, msg.plugin_id);
-            continue;
-        }
         tracing::info!("running '{}' from plugin '{}'", msg.variant, msg.plugin_id);
-        let events = app.engine.execute_command(msg.cmd);
-        for env in &events {
-            let _ = app.db.save_event(env);
+        // Same path as REST and WebSocket: other plugins' veto still applies.
+        let origin = crate::api::command_pipeline::CommandOrigin::Plugin { id: msg.plugin_id.clone() };
+        let value = serde_json::to_value(&msg.cmd).unwrap_or(serde_json::Value::Null);
+        if crate::api::command_pipeline::run_command_pipeline(app, value, &origin).is_err() {
+            tracing::warn!("command '{}' from plugin '{}' was not run", msg.variant, msg.plugin_id);
         }
-        crate::api::ws::broadcast_snapshot(app);
     }
 }
