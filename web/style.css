@@ -6145,3 +6145,5 @@ video {
 }
 .os-notif-btn:hover { color: var(--os-text-primary); background: var(--os-hover); }
 .os-notif-ico, .os-notif-level { display: inline-flex; align-items: center; }
+/* The `hidden` attribute must win over .btn's display (Approve / Apply override swap places) */
+.plugin-actions [hidden] { display: none !important; }

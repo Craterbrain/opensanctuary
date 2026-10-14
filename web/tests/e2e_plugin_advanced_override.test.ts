@@ -31,6 +31,8 @@ describe("E2E Live Test: Settings > Plugins Advanced override", () => {
 
     // Hidden until asked for; opening it shows the warning before anything else.
     expect(await card.locator(".plugin-advanced-panel").isVisible()).toBe(false);
+    expect(await card.locator("button:has-text('Apply override')").isVisible()).toBe(false);
+    expect(await card.locator("button:has-text('Approve')").first().isVisible()).toBe(true);
     await card.locator(".plugin-advanced-toggle input").check();
     const panel = card.locator(".plugin-advanced-panel");
     await panel.waitFor({ state: "visible", timeout: 5000 });
@@ -55,7 +57,7 @@ describe("E2E Live Test: Settings > Plugins Advanced override", () => {
     await panel.locator('.plugin-advanced-row:has-text("show.observe") input[type=checkbox]').first().check();
 
     // The plain Approve button is replaced; the override can't be applied without acknowledging.
-    expect(await card.locator("button:has-text('Approve')").first().isVisible()).toBe(true);
+    expect(await card.locator("button:has-text('Approve')").first().isVisible()).toBe(false);
     const apply = card.locator("button:has-text('Apply override')");
     expect(await apply.isVisible()).toBe(true);
     await apply.click();
