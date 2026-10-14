@@ -4,6 +4,9 @@
 //   OS.call(method, params)  -> Promise   a bridge request (see docs/PLUGIN_PERMISSIONS.md)
 //   OS.on(event, callback)                events the console pushes, e.g. 'state' (needs show.observe)
 //   OS.slot                               where the page is shown: 'dock', 'import-tab', 'library-source'
+//   OS.notify(title, message, opts)       post to the console's notification center (needs notifications.post)
+//                                         opts: level 'info'|'success'|'warning'|'error', key (replaces an earlier
+//                                         one with the same key), sticky (warning/error stay until dismissed)
 //   OS.resizeToContent()                  for a 'dock' page: fit the panel's height to the content
 //   OS.icon(name)                         HTML for one of the console's icons (themed like the console's)
 //   OS.iconify(root)                      swap emoji / {icon:name} tokens under root for those icons
@@ -127,6 +130,10 @@
     slot: params.get('slot') || 'dock',
     icon: icon,
     iconify: iconify,
+    notify: function (title, message, opts) {
+      opts = opts || {};
+      return call('notify', { title: title, message: message, level: opts.level, key: opts.key, sticky: opts.sticky });
+    },
     resizeToContent: function () {
       var h = Math.ceil(document.documentElement.getBoundingClientRect().height);
       return call('ui.resize', { height: h }).catch(function () {});

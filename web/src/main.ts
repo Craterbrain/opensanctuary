@@ -8,6 +8,7 @@ import { keyring } from "./core/keyring.ts";
 import { resolveHostSessionToken } from "./core/host_session.ts";
 import { startSandboxedPlugin, stopSandboxedPlugin, isSandboxedPluginRunning } from "./core/plugin_bridge.ts";
 import { startEmojiIcons } from "./core/emoji_icons.ts";
+import { initNotificationBell, startNotificationFeed } from "./ui/notification_center.ts";
 
 // 0. Swap emoji for the themed SVG icons (static markup now, rendered content as it appears)
 startEmojiIcons();
@@ -49,6 +50,9 @@ clock.synchronize(5).then(async () => {
     (async () => {
         try {
             await resolveHostSessionToken();
+            // Notifications from the app and plugins (console pages only; others get a 403 and stop)
+            const bell = document.getElementById("btn-notifications");
+            if (bell) { initNotificationBell(bell); void startNotificationFeed(); }
             const res = await fetch("/api/plugins?kind=web&active=1");
             if (!res.ok) return; // no console credential on this page (live/stage/remote)
             const list = await res.json();

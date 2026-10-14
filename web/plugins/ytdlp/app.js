@@ -143,8 +143,10 @@
       }
       setProgress(100);
       setStatus(msg, 'ok');
+      OS.notify('Download finished', title, { level: 'success' }).catch(function () {});
     } catch (e) {
       setStatus('Failed: ' + e.message, 'error');
+      OS.notify('Download failed', e.message, { level: 'error', sticky: true }).catch(function () {});
     } finally {
       running = null;
       setBusy(false);

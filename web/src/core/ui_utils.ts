@@ -7,12 +7,28 @@ import { escapeHtml } from './presentation_helpers';
 
 export type ToastType = 'info' | 'success' | 'warning' | 'error';
 
+export interface ToastOptions {
+  /** Bold first line (a notification's title). */
+  title?: string;
+  /** Who it came from, shown small above the text ("Video Downloader"). */
+  source?: string;
+  /** Don't record this toast in the notification history (it already is). */
+  skipHistory?: boolean;
+}
+
+/** The notification center registers here so every toast, from anywhere, lands in its history. */
+let toastObserver: ((message: string, type: ToastType) => void) | null = null;
+export function setToastObserver(fn: ((message: string, type: ToastType) => void) | null): void {
+  toastObserver = fn;
+}
+
 /**
  * Displays an animated toast notification in the bottom-right of the viewport.
  * Dynamically mounts or reuses #os-toast-container.
  */
-export function showToast(message: string, type: ToastType = 'info', duration: number = 3500): HTMLElement | null {
+export function showToast(message: string, type: ToastType = 'info', duration: number = 3500, opts: ToastOptions = {}): HTMLElement | null {
   if (typeof document === 'undefined' || !document.body) return null;
+  if (!opts.skipHistory) { try { toastObserver?.(message, type); } catch { /* history is best effort */ } }
 
   let container = document.getElementById('os-toast-container');
   if (!container) {
@@ -32,9 +48,11 @@ export function showToast(message: string, type: ToastType = 'info', duration: n
   };
   const icon = iconMap[type] || 'ℹ️';
 
+  const source = opts.source ? `<span class="os-toast-source">${escapeHtml(opts.source)}</span>` : '';
+  const title = opts.title ? `<strong class="os-toast-title">${escapeHtml(opts.title)}</strong>` : '';
   toast.innerHTML = `
     <span class="os-toast-icon">${icon}</span>
-    <span class="os-toast-msg">${escapeHtml(message)}</span>
+    <span class="os-toast-msg">${source}${title}${escapeHtml(message)}</span>
     <button class="os-toast-close" title="Dismiss">{icon:close}</button>
   `;
 

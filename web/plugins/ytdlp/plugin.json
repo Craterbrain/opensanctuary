@@ -14,7 +14,7 @@
       {
         "slot": "library-source",
         "tab": "media",
-        "label": "📥 Download Video (yt-dlp)"
+        "label": "\ud83d\udce5 Download Video (yt-dlp)"
       },
       {
         "slot": "video-picker"
@@ -48,6 +48,11 @@
       ],
       "optional": true,
       "reason": "\"Download & Go Live\" adds the video to the schedule and goes live"
+    },
+    {
+      "id": "notifications.post",
+      "optional": true,
+      "reason": "Tells you when a download finishes or fails, even if you've left this panel"
     }
   ],
   "tools": [

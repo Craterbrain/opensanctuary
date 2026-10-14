@@ -46,6 +46,7 @@ const KNOWN: &[(&str, Tier, &str)] = &[
     ("process.run", Tier::Critical, "enforced"),
     ("ui.panel", Tier::Medium, "enforced"),
     ("ui.toolbar", Tier::Medium, "reserved"),
+    ("notifications.post", Tier::Low, "enforced"),
 ];
 
 /// Navigation-only commands: a `commands.send` limited to these stays Medium.
