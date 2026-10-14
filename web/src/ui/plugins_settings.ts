@@ -40,6 +40,7 @@ function paramsText(p: PluginPermissionInfo): string {
   if (p.hosts?.length) parts.push(p.hosts.join(', '));
   if (p.paths?.length) parts.push(p.paths.join(', '));
   if (p.ports?.length) parts.push(p.ports.join(', '));
+  if (p.services?.length) parts.push(`${p.services.join(', ')} (${p.access ?? 'read'})`);
   return parts.join(' · ');
 }
 
@@ -48,7 +49,7 @@ function isNative(p: PluginInfo): boolean {
 }
 
 
-type ScopeKey = 'categories' | 'commands' | 'hosts' | 'paths' | 'ports' | 'keys';
+type ScopeKey = 'categories' | 'commands' | 'hosts' | 'paths' | 'ports' | 'keys' | 'services';
 
 function scopeValues(p: PluginPermissionInfo | undefined, scope: string): string {
   if (!p || scope === 'none') return '';
@@ -69,7 +70,7 @@ function buildAdvanced(plugin: PluginInfo, onChange: (on: boolean) => void): { r
   panel.hidden = true;
   root.appendChild(panel);
 
-  const rows: Array<{ id: string; scope: ScopeKey | 'none'; box: HTMLInputElement; input: HTMLInputElement | null }> = [];
+  const rows: Array<{ id: string; scope: ScopeKey | 'none'; box: HTMLInputElement; input: HTMLInputElement | null; access: HTMLSelectElement | null }> = [];
   let ack: HTMLInputElement | null = null;
   let built = false;
 
@@ -93,9 +94,21 @@ function buildAdvanced(plugin: PluginInfo, onChange: (on: boolean) => void): { r
       input.setAttribute('aria-label', `${id} ${scope}`);
       row.appendChild(input);
     }
+    let access: HTMLSelectElement | null = null;
+    if (id === 'keyring.service') {
+      access = el('select', 'plugin-advanced-access');
+      for (const a of ['read', 'write']) {
+        const o = el('option', undefined, a === 'read' ? 'read only' : 'read and write its own entries');
+        o.value = a;
+        access.appendChild(o);
+      }
+      access.value = current?.access ?? 'read';
+      access.setAttribute('aria-label', 'keyring.service access');
+      row.appendChild(access);
+    }
     if (note) row.appendChild(el('div', 'plugin-permission-reason', note));
     container.appendChild(row);
-    rows.push({ id, scope: scope as ScopeKey | 'none', box, input });
+    rows.push({ id, scope: scope as ScopeKey | 'none', box, input, access });
   };
 
   const build = async () => {
@@ -166,6 +179,7 @@ function buildAdvanced(plugin: PluginInfo, onChange: (on: boolean) => void): { r
           (g as any)[r.scope] = items;
         }
       }
+      if (r.access) g.access = r.access.value as 'read' | 'write';
       out.push(g);
     }
     return out;
@@ -247,6 +261,27 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   if (plugin.placements?.length) {
     const where = plugin.placements.map((p) => p.slot === 'library-source' ? `the ${p.tab} library ("${p.label}")` : p.slot === 'video-picker' ? 'the video background picker' : 'a floating panel').join(', ');
     card.appendChild(el('div', 'settings-hint', `Appears in: ${where}.`));
+  }
+
+  // Shared keyring: say plainly what it can reach, who else can, and whether it could send it somewhere.
+  const sharedPerms = (plugin.state === 'active' ? plugin.granted : plugin.requested).filter((p) => p.id === 'keyring.service');
+  const reach = (plugin.state === 'active' ? plugin.granted : plugin.requested).filter((p) => p.id === 'network.outbound').flatMap((p) => p.hosts ?? []);
+  for (const p of sharedPerms) {
+    for (const svc of p.services ?? []) {
+      const name = svc.replace('OpenSanctuary:Shared:', '');
+      const write = p.access === 'write';
+      card.appendChild(el('div', 'plugin-warning',
+        `Can read secrets stored in the shared keyring area "${name}" (${svc})${write ? ', and store its own secrets there for other plugins to read' : ''}.`));
+      const others = plugin.shared_with?.find((s) => s.service === svc)?.plugins ?? [];
+      if (others.length) {
+        card.appendChild(el('div', 'settings-hint', `Shared with: ${others.map((o) => `${o.name} (${o.access}${o.state === 'active' ? '' : ', not approved yet'})`).join(', ')}.`));
+      }
+      if (reach.length) {
+        const risky = others.some((o) => o.access === 'write');
+        card.appendChild(el('div', risky ? 'plugin-error' : 'plugin-warning',
+          `It can also reach ${reach.join(', ')}. A shared secret could be sent there${risky ? ', and another plugin can change what is stored' : ''}.`));
+      }
+    }
   }
 
   if (plugin.overridden && plugin.override_diff) {
@@ -332,6 +367,35 @@ function renderAudit(entries: PluginAuditEntry[]): HTMLElement {
   return wrap;
 }
 
+/** The shared keyring entries (names and owners only, never values), with a delete for each: the operator's way to clean up. */
+async function renderSharedSecrets(content: HTMLElement, refresh: () => void): Promise<void> {
+  try {
+    const entries = await api.plugins.sharedSecrets();
+    if (!entries.length) return;
+    const wrap = el('details', 'plugin-shared-secrets');
+    wrap.appendChild(el('summary', undefined, `Shared secrets (${entries.length})`));
+    wrap.appendChild(el('div', 'settings-hint', 'Secrets plugins keep in shared keyring areas. Values are never shown here.'));
+    for (const e of entries) {
+      const row = el('div', 'plugin-shared-secret');
+      row.appendChild(el('span', 'plugin-permission-id', `${e.service} / ${e.account}`));
+      row.appendChild(el('span', 'settings-hint', ` owner: ${e.owner}`));
+      const del = el('button', 'btn btn-secondary btn-sm', 'Delete');
+      del.addEventListener('click', async () => {
+        try {
+          await api.plugins.deleteSharedSecret(e.service, e.account);
+          showToast('Deleted the shared secret');
+          refresh();
+        } catch (err: any) {
+          showToast(`Couldn't delete it: ${err?.message ?? err}`);
+        }
+      });
+      row.appendChild(del);
+      wrap.appendChild(row);
+    }
+    content.appendChild(wrap);
+  } catch { /* not a console page, or the list isn't available: nothing to show */ }
+}
+
 export function renderPluginsSettings(content: HTMLElement) {
   content.innerHTML = '';
   content.classList.add('network-panel');
@@ -349,6 +413,7 @@ export function renderPluginsSettings(content: HTMLElement) {
         content.appendChild(el('div', 'settings-empty', 'No plugins installed.'));
       }
       for (const p of plugins) content.appendChild(renderPlugin(p, refresh));
+      void renderSharedSecrets(content, refresh);
       content.appendChild(renderAudit(audit));
     })
     .catch((e) => {

@@ -63,6 +63,20 @@ impl AppPluginHost {
     }
 }
 
+impl AppPluginHost {
+    /// Applies the shared-keyring policy (the same one the HTTP routes use) for one operation.
+    fn shared_verdict(&self, op: crate::api::keyring_policy::Op, service: &str, account: &str) -> Result<crate::api::keyring_policy::Verdict, PluginError> {
+        use crate::api::keyring_policy::{audit_once, check, Verdict};
+        let app = self.app()?;
+        let verdict = self
+            .grants
+            .with(|g| check(&app.db, &self.plugin_id, g, op, service, account))
+            .ok_or_else(|| PluginError("this plugin has been revoked".to_string()))?;
+        audit_once(&app.db, &self.plugin_id, service, account, op, !matches!(verdict, Verdict::Allow { .. }));
+        Ok(verdict)
+    }
+}
+
 impl PluginHost for AppPluginHost {
     fn plugin_id(&self) -> &str {
         &self.plugin_id
@@ -160,6 +174,45 @@ impl PluginHost for AppPluginHost {
         let dir = self.app()?.data_dir.join("plugin-data").join(&self.plugin_id);
         std::fs::create_dir_all(&dir).map_err(|e| PluginError(format!("can't create {dir:?}: {e}")))?;
         Ok(dir)
+    }
+
+    fn keyring_shared_get(&self, service: &str, account: &str) -> Result<Option<String>, PluginError> {
+        use crate::api::keyring_policy::{Op, Verdict};
+        match self.shared_verdict(Op::Get, service, account)? {
+            Verdict::Allow { .. } => crate::storage::KeyringService::get_secret(service, account).map_err(PluginError),
+            Verdict::NotFound => Ok(None),
+            Verdict::Deny(m) => Err(PluginError(m)),
+        }
+    }
+
+    fn keyring_shared_set(&self, service: &str, account: &str, secret: &str) -> Result<(), PluginError> {
+        use crate::api::keyring_policy::{Op, Verdict};
+        if account.trim().is_empty() {
+            return Err(PluginError("account must not be empty".to_string()));
+        }
+        match self.shared_verdict(Op::Set, service, account)? {
+            Verdict::Allow { owner } => {
+                crate::storage::KeyringService::set_secret(service, account, secret).map_err(PluginError)?;
+                let _ = self.app()?.db.record_keyring_owner(service, account, &owner);
+                Ok(())
+            }
+            Verdict::Deny(m) => Err(PluginError(m)),
+            Verdict::NotFound => Err(PluginError("not allowed".to_string())),
+        }
+    }
+
+    fn keyring_shared_delete(&self, service: &str, account: &str) -> Result<bool, PluginError> {
+        use crate::api::keyring_policy::{Op, Verdict};
+        match self.shared_verdict(Op::Delete, service, account)? {
+            Verdict::Allow { .. } => {
+                let app = self.app()?;
+                let deleted = crate::storage::KeyringService::delete_secret(service, account).map_err(PluginError)?;
+                let _ = app.db.delete_keyring_metadata(service, account);
+                Ok(deleted)
+            }
+            Verdict::Deny(m) => Err(PluginError(m)),
+            Verdict::NotFound => Err(PluginError("not allowed".to_string())),
+        }
     }
 
     fn log(&self, level: u8, msg: &str) {

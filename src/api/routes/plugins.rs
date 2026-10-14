@@ -92,7 +92,25 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
     let overridden = state == "active"
         && (non_empty("added") || non_empty("changed") || requested.iter().filter(|r| !r.optional).any(|r| !granted.iter().any(|g| g.id == r.id)));
     let override_diff = overridden.then(|| diff.clone());
+    // Other plugins that share a keyring namespace this one asks for or holds, so the operator sees who else can read it.
+    let shared_with = {
+        let mine: Vec<&PermissionRequest> = (if state == "active" { &granted } else { &requested }).iter().filter(|p| p.id == "keyring.service").collect();
+        let others = app.db.list_plugin_grants().unwrap_or_default();
+        let mut out = Vec::new();
+        for svc in mine.iter().flat_map(|p| p.services.iter()) {
+            let mut plugins = Vec::new();
+            for o in others.iter().filter(|o| o.plugin_id != row.plugin_id) {
+                let theirs: Vec<PermissionRequest> = serde_json::from_str(if o.effective_state() == "active" { &o.granted_json } else { &o.requested_json }).unwrap_or_default();
+                if let Some(p) = theirs.iter().find(|p| p.id == "keyring.service" && p.services.contains(svc)) {
+                    plugins.push(serde_json::json!({ "id": o.plugin_id, "name": o.name, "access": p.access.clone().unwrap_or_else(|| "read".to_string()), "state": o.effective_state() }));
+                }
+            }
+            out.push(serde_json::json!({ "service": svc, "plugins": plugins }));
+        }
+        out
+    };
     serde_json::json!({
+        "shared_with": shared_with,
         "overridden": overridden,
         "override_diff": override_diff,
         "commands": commands,
@@ -330,7 +348,7 @@ pub(super) struct TokenReq {
 }
 
 /// Permissions a token can carry at all.
-const TOKEN_SCOPES: [&str; 6] = ["keyring.own", "commands.send", "network.outbound", "library.write", "process.run", "notifications.post"];
+const TOKEN_SCOPES: [&str; 7] = ["keyring.own", "keyring.service", "commands.send", "network.outbound", "library.write", "process.run", "notifications.post"];
 
 /// POST /api/plugins/:id/token -- the console mints a token for an approved plugin, limited to
 /// (a subset of) what it was granted. The token is checked against the live grant on every use.

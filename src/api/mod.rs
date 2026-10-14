@@ -1,5 +1,6 @@
 pub mod command_pipeline;
 pub mod error;
+pub mod keyring_policy;
 pub mod notifications;
 pub mod plugin_host;
 pub mod plugin_net;

@@ -126,6 +126,24 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   scoped tokens, command and library checks. The card then shows a "Permissions overridden" badge
   and what differs (extra, withheld, re-scoped), the audit log records the same, and approving
   again without the override clears it. Only the console can do this, like any approval.
+- **Sharing a keyring namespace: `keyring.service`.** A plugin normally sees only its own secrets
+  (`keyring.own`). Two plugins that need the same one (say a Pexels key) can share a namespace
+  instead: both request `keyring.service` with `services: ["OpenSanctuary:Shared:<name>"]` (1 to 4,
+  lowercase letters, digits, `.`, `_`, `-`, exact; nothing else is ever grantable, so the System
+  namespace, any plugin's own namespace and the app's own services stay out of reach) and
+  `access: "read"` (the default) or `"write"`. It is Critical tier, for sandboxed and native plugins
+  (not console scripts, which already have console access). The review screen says which shared area
+  a plugin can read, who else shares it, and warns when the plugin can also reach the network. The
+  rules: a plugin can only read rows tagged as shared (`shared:plugin:<id>` or `shared:host`), so a
+  secret that happened to be stored under a shared-looking name before this existed is never exposed;
+  with write access it can only create, replace or delete its *own* rows, so a co-sharer can't swap
+  another's key; the console can manage every shared row (Settings > Plugins > Shared secrets lists
+  them, never the values, with a Delete for each). In a sandboxed plugin:
+  `OS.call('keyring.get', { service: 'OpenSanctuary:Shared:pexels', account: 'api_key' })`
+  (`keyring.set` / `keyring.delete` likewise; with no `service` it is the plugin's own namespace and
+  needs `keyring.own`). A native plugin uses `keyring_shared_get/set/delete` on its host handle. Both
+  go through one policy (`src/api/keyring_policy.rs`). The first use and each refusal are audited
+  (never the secret), and the check always uses the plugin's live grant, so a revoke stops it at once.
 - **Notifications: `notifications.post`.** The console has one notification center (the bell in
   the ribbon, with an unread badge) that collects everything: its own toasts, notices from the host
   (for example a finished tool update) and notifications from plugins. A sandboxed plugin granted

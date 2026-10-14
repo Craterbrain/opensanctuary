@@ -114,6 +114,7 @@ pub(crate) fn needs_host_token(method: &axum::http::Method, path: &str) -> bool 
         path,
         "/api/network/interfaces"
             | "/api/notifications"
+            | "/api/keyring/shared"
             | "/api/network/check-port"
             | "/api/network/check-hostname"
             | "/api/schedule/export"

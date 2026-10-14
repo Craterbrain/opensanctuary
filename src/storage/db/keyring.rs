@@ -34,6 +34,16 @@ impl Database {
         }
     }
 
+    /// The shared-namespace entries on record: `(service, account, owner)`, never the secrets.
+    pub fn list_shared_keyring_entries(&self) -> Result<Vec<(String, String, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT service, account, owner FROM keyring_metadata WHERE service LIKE 'OpenSanctuary:Shared:%' ORDER BY service, account",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect()
+    }
+
     /// Removes ownership metadata when a secret is deleted.
     pub fn delete_keyring_metadata(&self, service: &str, account: &str) -> Result<bool> {
         let conn = self.conn();
