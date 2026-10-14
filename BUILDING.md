@@ -69,42 +69,39 @@ and we don't have redistribution rights. Two options:
 `songs/public_domain.db` (public-domain hymns) *is* included and loads by
 default.
 
-## Online media import (yt-dlp + ffmpeg)
+## Video tools (ffmpeg + yt-dlp)
 
-Neither of these is needed to build or run the app — only to use the Media
-tab's "import from URL" feature (`src/storage/ytdlp_import.rs`). How they're
-obtained differs by platform:
+Neither is needed to build or run the app. `ffmpeg`/`ffprobe` convert imported H.264 video to
+VP9 for native playback; `yt-dlp` is used only by the **Video Downloader** plugin
+(`web/plugins/ytdlp/`, turned on in Settings → Plugins). How they're obtained differs by
+platform:
 
-- **Windows installer/portable build**: both are handled automatically, no
-  manual install needed.
-  - `ffmpeg`/`ffprobe` are bundled directly into the installer/portable zip
-    (`packaging/build-windows-installer.sh`'s "Bundled ffmpeg/ffprobe"
-    step) — an LGPLv3 static build from
-    [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), pinned to
-    a specific dated release, not gyan.dev's builds (those are GPLv3).
-    Resolved at runtime by `src/storage/paths.rs`'s
-    `resolve_ffmpeg_command()`/`resolve_ffprobe_command()`.
-  - `yt-dlp` is **not** bundled — it ships new releases far more often than
-    this app does (sites keep breaking extraction), so a frozen copy would
-    go stale within weeks to months. Instead,
-    `src/network/ytdlp_updater.rs` fetches and GPG-verifies the current
-    release itself, on startup and every 12h after, into a self-managed
-    copy under the data directory. See that module's doc comment for the
-    full verification story (pinned public key, `SHA2-256SUMS`/`.sig`).
+- **Windows installer/portable build**: `ffmpeg`/`ffprobe` are bundled directly into the
+  installer/portable zip (`packaging/build-windows-installer.sh`'s "Bundled ffmpeg/ffprobe"
+  step) — an LGPLv3 static build from
+  [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), pinned to a specific dated
+  release, not gyan.dev's builds (those are GPLv3). Resolved at runtime by
+  `src/storage/paths.rs`'s `resolve_ffmpeg_command()`/`resolve_ffprobe_command()`.
+- **`yt-dlp` is never bundled** on any platform: it ships new releases far more often than this
+  app does (sites keep breaking extraction), so a frozen copy would go stale within weeks. The
+  Video Downloader plugin declares where to get it (the official GitHub release, the per-OS
+  asset, the checksums file, a detached GPG signature and the pinned public key
+  `web/plugins/ytdlp/yt-dlp-key.asc`), and the host (`src/api/plugin_tools.rs`) installs and
+  updates it into `<data dir>/tools/` on request, verifying signature then checksum first. A
+  `yt-dlp` already on your `PATH` is used as-is and never replaced. See `docs/PLUGINS.md`.
 - **Linux `.deb`**: both are listed as `Recommends` in `Cargo.toml`'s
-  `[package.metadata.deb]` — `apt install ./opensanctuary.deb` pulls them
-  in from the distro's own repos automatically.
-- **Linux generic tarball / building from source / macOS**: install them
-  yourself —
+  `[package.metadata.deb]`, so `apt install ./opensanctuary.deb` pulls them in from the distro's
+  own repos.
+- **Linux generic tarball / building from source / macOS**: install `ffmpeg` yourself (and
+  `yt-dlp` if you'd rather not let the plugin manage its own copy) —
   - Debian/Ubuntu: `sudo apt install ffmpeg yt-dlp`
   - Arch/CachyOS: `sudo pacman -S ffmpeg yt-dlp`
   - Fedora: `sudo dnf install ffmpeg yt-dlp`
-  - The distro packages above all include libvpx (VP9) and libopus encoder
-    support; a minimal custom ffmpeg build might not.
+  - The distro packages above include libvpx (VP9) and libopus encoder support; a minimal
+    custom ffmpeg build might not.
 
-Missing either degrades silently in all cases: imports still work (minus
-the URL-download step if `yt-dlp` is absent), and H.264 video just stays
-H.264 (larger file, but still plays fine) if `ffmpeg`/`ffprobe` are absent.
+Missing `ffmpeg`/`ffprobe` degrades silently: H.264 video just stays H.264 (larger file, but still
+plays fine). Without `yt-dlp` the Video Downloader installs its own copy the first time you use it.
 
 ## Tests
 
