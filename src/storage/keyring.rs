@@ -57,26 +57,6 @@ impl KeyringService {
     pub fn plugin_service(plugin_name: &str) -> String {
         format!("OpenSanctuary:Plugin:{}", plugin_name.trim())
     }
-
-    /// Computes a standard service namespace for a media or external provider.
-    pub fn provider_service(provider_name: &str) -> String {
-        format!("OpenSanctuary:Provider:{}", provider_name.trim())
-    }
-
-    /// Retrieves a secret stored under a plugin's vault.
-    pub fn get_plugin_secret(plugin_name: &str, account: &str) -> Result<Option<String>, String> {
-        Self::get_secret(&Self::plugin_service(plugin_name), account)
-    }
-
-    /// Sets a secret stored under a plugin's vault.
-    pub fn set_plugin_secret(plugin_name: &str, account: &str, secret: &str) -> Result<(), String> {
-        Self::set_secret(&Self::plugin_service(plugin_name), account, secret)
-    }
-
-    /// Deletes a secret stored under a plugin's vault.
-    pub fn delete_plugin_secret(plugin_name: &str, account: &str) -> Result<bool, String> {
-        Self::delete_secret(&Self::plugin_service(plugin_name), account)
-    }
 }
 
 #[cfg(test)]

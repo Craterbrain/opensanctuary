@@ -99,8 +99,6 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
 
   describe('Standard Service Identifiers', () => {
     test('defines expected standard service namespaces', () => {
-      expect(KEYRING_SERVICES.PEXELS).toBe('OpenSanctuary:Pexels');
-      expect(KEYRING_SERVICES.PIXABAY).toBe('OpenSanctuary:Pixabay');
       expect(KEYRING_SERVICES.CCLI).toBe('OpenSanctuary:CCLI');
       expect(KEYRING_SERVICES.CLOUD_SYNC).toBe('OpenSanctuary:CloudSync');
       expect(KEYRING_SERVICES.GENERAL).toBe('OpenSanctuary:General');
@@ -154,32 +152,32 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
   describe('API Key Specialized Helpers', () => {
     test('stores and retrieves API keys under standard api_key account', async () => {
       const pexelsKey = 'px_live_998877665544332211';
-      await client.setApiKey(KEYRING_SERVICES.PEXELS, pexelsKey);
+      await client.setApiKey(KEYRING_SERVICES.GENERAL, pexelsKey);
 
-      expect(await client.hasApiKey(KEYRING_SERVICES.PEXELS)).toBe(true);
-      expect(await client.getApiKey(KEYRING_SERVICES.PEXELS)).toBe(pexelsKey);
+      expect(await client.hasApiKey(KEYRING_SERVICES.GENERAL)).toBe(true);
+      expect(await client.getApiKey(KEYRING_SERVICES.GENERAL)).toBe(pexelsKey);
 
       // Verify that the underlying key in store is keyed under account 'api_key'
-      const raw = await client.getSecret(KEYRING_SERVICES.PEXELS, 'api_key');
+      const raw = await client.getSecret(KEYRING_SERVICES.GENERAL, 'api_key');
       expect(raw).toBe(pexelsKey);
 
       // Delete API key
-      const deleted = await client.deleteApiKey(KEYRING_SERVICES.PEXELS);
+      const deleted = await client.deleteApiKey(KEYRING_SERVICES.GENERAL);
       expect(deleted).toBe(true);
-      expect(await client.hasApiKey(KEYRING_SERVICES.PEXELS)).toBe(false);
-      expect(await client.getApiKey(KEYRING_SERVICES.PEXELS)).toBeNull();
+      expect(await client.hasApiKey(KEYRING_SERVICES.GENERAL)).toBe(false);
+      expect(await client.getApiKey(KEYRING_SERVICES.GENERAL)).toBeNull();
     });
 
     test('handles multiple API keys independently across different services', async () => {
-      await client.setApiKey(KEYRING_SERVICES.PEXELS, 'key_pexels');
-      await client.setApiKey(KEYRING_SERVICES.PIXABAY, 'key_pixabay');
+      await client.setApiKey(KEYRING_SERVICES.GENERAL, 'key_pexels');
+      await client.setApiKey(KEYRING_SERVICES.CLOUD_SYNC, 'key_pixabay');
 
-      expect(await client.getApiKey(KEYRING_SERVICES.PEXELS)).toBe('key_pexels');
-      expect(await client.getApiKey(KEYRING_SERVICES.PIXABAY)).toBe('key_pixabay');
+      expect(await client.getApiKey(KEYRING_SERVICES.GENERAL)).toBe('key_pexels');
+      expect(await client.getApiKey(KEYRING_SERVICES.CLOUD_SYNC)).toBe('key_pixabay');
 
-      await client.deleteApiKey(KEYRING_SERVICES.PEXELS);
-      expect(await client.getApiKey(KEYRING_SERVICES.PEXELS)).toBeNull();
-      expect(await client.getApiKey(KEYRING_SERVICES.PIXABAY)).toBe('key_pixabay');
+      await client.deleteApiKey(KEYRING_SERVICES.GENERAL);
+      expect(await client.getApiKey(KEYRING_SERVICES.GENERAL)).toBeNull();
+      expect(await client.getApiKey(KEYRING_SERVICES.CLOUD_SYNC)).toBe('key_pixabay');
     });
   });
 
@@ -458,20 +456,20 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
 
     test('plugin cannot view host secrets (e.g. Pexels API Key or Admin credentials)', async () => {
       // Host saves host-level credential
-      await client.setApiKey(KEYRING_SERVICES.PEXELS, 'official_pexels_host_key_999');
+      await client.setApiKey(KEYRING_SERVICES.GENERAL, 'official_pexels_host_key_999');
 
       const tokenPlugin = await client.acquirePluginToken('untrusted_plugin');
 
       // Plugin attempts to read host Pexels key
       const attempt = await client.getSecret(
-        KEYRING_SERVICES.PEXELS,
+        KEYRING_SERVICES.GENERAL,
         'api_key',
         { 'X-Plugin-Token': tokenPlugin }
       );
       expect(attempt).toBeNull();
 
       const existsCheck = await client.hasSecret(
-        KEYRING_SERVICES.PEXELS,
+        KEYRING_SERVICES.GENERAL,
         'api_key',
         { 'X-Plugin-Token': tokenPlugin }
       );
@@ -502,20 +500,20 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
     });
 
     test('plugin cannot overwrite host secrets', async () => {
-      await client.setApiKey(KEYRING_SERVICES.PIXABAY, 'valid_host_pixabay_key');
+      await client.setApiKey(KEYRING_SERVICES.CLOUD_SYNC, 'valid_host_pixabay_key');
 
       const tokenPlugin = await client.acquirePluginToken('rogue_plugin');
 
       expect(
         client.setSecret(
-          KEYRING_SERVICES.PIXABAY,
+          KEYRING_SERVICES.CLOUD_SYNC,
           'api_key',
           'overwritten_by_plugin',
           { 'X-Plugin-Token': tokenPlugin }
         )
       ).rejects.toThrow('cannot access namespace');
 
-      expect(await client.getApiKey(KEYRING_SERVICES.PIXABAY)).toBe('valid_host_pixabay_key');
+      expect(await client.getApiKey(KEYRING_SERVICES.CLOUD_SYNC)).toBe('valid_host_pixabay_key');
     });
 
     test('rejects invalid or forged plugin tokens with 401 Unauthorized', async () => {

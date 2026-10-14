@@ -8,7 +8,7 @@ Earlier iterations of the application resolved paths relative to the current wor
 - `--db-path` defaulted to `./library.db`
 - `--web-dir` defaulted to `./web`
 - `--bibles-dir` and `--songs-dir` defaulted to `<db_path's parent>/bibles` and `.../songs`
-- Downloaded/searched media (Pexels/Pixabay results, user backgrounds) were written directly into `<web_dir>/media/{images,videos}`
+- Downloaded media (online backgrounds, user backgrounds) were written directly into `<web_dir>/media/{images,videos}`
 
 While functional for portable zip distributions where the binary and assets reside together in an unpackaged folder, this model breaks in standard installed desktop environments (such as `.deb` packages or Windows installer setups):
 1. **Read-Only Program Content**: Machine-wide installations place binaries and static assets under protected directories (e.g. `/usr/share/opensanctuary/web` or `Program Files`), which regular users cannot write to.
@@ -64,7 +64,7 @@ Static web UI assets are resolved independently in `paths::resolve_web_dir()`:
 ## Media Cache Decoupling
 
 The media cache is completely decoupled from the static web UI assets:
-- **Writable Location**: User-downloaded backgrounds (Pexels, Pixabay, imported PPTX/FreeShow assets) and cached video loops are saved to `<data dir>/media/{images,videos}`.
+- **Writable Location**: User-downloaded backgrounds (stock photos added by the Stock Images plugin, imported PPTX/FreeShow assets) and cached video loops are saved to `<data dir>/media/{images,videos}`.
 - **Asset Graph**: `AssetGraph::new(&media_dir)` operates against this data directory.
 - **HTTP Routing**: Axum routes serve the media directory directly at `/media` via `ServeDir::new(media_dir)`.
 

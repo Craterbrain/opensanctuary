@@ -254,7 +254,6 @@ pub(super) async fn import_pptx(
 
 #[derive(Deserialize, Default)]
 pub struct FreeShowShowImportReq {
-    pub file_name: Option<String>,
     pub file_data_base64: String,
 }
 

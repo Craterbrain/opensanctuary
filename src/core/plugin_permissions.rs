@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 
 pub const MANIFEST_VERSION: u32 = 1;
 
@@ -738,10 +738,6 @@ pub fn is_safety_critical(text: &str) -> bool {
         Some(v) => SAFETY_CRITICAL_COMMANDS.contains(&v.as_str()),
         None => SAFETY_CRITICAL_COMMANDS.iter().any(|c| text.contains(c)),
     }
-}
-
-pub fn contained_join(base: &Path, rel: &str) -> Option<PathBuf> {
-    relative_path_is_contained(rel).then(|| base.join(rel))
 }
 
 #[cfg(test)]

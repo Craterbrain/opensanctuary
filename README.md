@@ -46,8 +46,8 @@ The operator console (library, schedule, preview and live panes) and the slide b
 - A slide editor with text styling, backgrounds, image/video elements,
   autofit text, and themes.
 - Blackout, clear-text, and logo-override controls for the live output.
-- Video/audio playback with loop control, and online media search
-  (Pexels/Pixabay) for backgrounds.
+- Video/audio playback with loop control. Online stock photos (Pexels/Pixabay)
+  for backgrounds come from a bundled plugin you approve in Settings > Plugins.
 
 **Displays & remote control**
 - **Live Output** (front-of-house) and **Stage Foldback** (confidence
