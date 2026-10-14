@@ -315,19 +315,6 @@ export const api = {
     },
   },
 
-  // Background self-updater for the Media tab's "import from URL" tool
-  // (src/network/ytdlp_updater.rs). Read-only polling -- never triggers a
-  // check itself, just reads whatever the server's own 12h background task
-  // last found.
-  ytdlpUpdater: {
-    status: async () => {
-      await resolveHostSessionToken();
-      return api.get<{
-        status: { updated: boolean; error: boolean; version?: string | null; message: string } | null;
-      }>('/api/ytdlp-updater/status', { headers: hostTokenHeader() });
-    },
-  },
-
   // Minting new trust (session/remote tokens) and exposing an existing
   // listing/secret (getDevices, which returns device tokens) is console-only
   // server-side now. These calls attach the host token when this page can
@@ -458,6 +445,9 @@ export interface PluginInfo {
   decided_by: string | null;
   loaded: boolean;
   restart_required: boolean;
+  placements?: Array<{ slot: string; label?: string; tab?: string }>;
+  commands?: Array<{ id: string; tool: string; line: string; params: Array<{ name: string; type: string; values: string[]; optional: boolean }> }>;
+  tools?: Array<{ id: string; github: string; assets: Record<string, string>; checksums: string; signature: string; system_command: string | null; key_sha256: string }>;
 }
 
 export interface PluginAuditEntry {

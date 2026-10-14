@@ -3,18 +3,17 @@
 <head>
   <meta charset="utf-8">
   <title>Sandboxed Demo Panel</title>
-  <style>
-    body { margin: 0; padding: 10px; font: 13px system-ui, sans-serif; color: #e8e8ec; background: transparent; }
-    #status { margin-bottom: 8px; }
-    button { margin-right: 6px; padding: 4px 10px; }
-    #result { margin-top: 8px; opacity: 0.7; min-height: 1.2em; }
-  </style>
+  <link rel="stylesheet" href="__os/theme.css">
 </head>
 <body>
-  <div id="status">Waiting for the console…</div>
-  <button id="prev" type="button">◀ Previous</button>
-  <button id="next" type="button">Next ▶</button>
-  <div id="result"></div>
+  <div id="status" class="status">Waiting for the console…</div>
+  <div class="form-row">
+    <button id="prev" class="btn" type="button">◀ Previous</button>
+    <button id="next" class="btn btn-primary" type="button">Next ▶</button>
+  </div>
+  <div id="result" class="hint"></div>
+  <script src="__os/icons.js"></script>
+  <script src="__os/sdk.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

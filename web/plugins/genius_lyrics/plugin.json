@@ -5,11 +5,47 @@
   "version": "1.0.0",
   "publisher": "OpenSanctuary",
   "description": "Search Genius for Christian and worship song lyrics and import them into your song library as formatted slides.",
-  "web": { "entry": "index.html", "sandbox": true },
+  "web": {
+    "entry": "index.html",
+    "sandbox": true
+  },
   "permissions": [
-    { "id": "ui.panel", "reason": "Appears as a panel in the console" },
-    { "id": "network.outbound", "hosts": ["genius.com", "www.genius.com"], "reason": "Searches Genius and downloads the lyrics page for a song you pick (the server makes these requests, only to these hosts)" },
-    { "id": "library.write", "categories": ["songs"], "reason": "Adds the imported song to your song library" },
-    { "id": "commands.send", "commands": ["AddToSchedule", "GoLive"], "optional": true, "reason": "Adds the imported song to the schedule, and goes live for \"Import & Go Live\"" }
-  ]
+    {
+      "id": "ui.panel",
+      "reason": "Appears as a panel in the console"
+    },
+    {
+      "id": "network.outbound",
+      "hosts": [
+        "genius.com",
+        "www.genius.com"
+      ],
+      "reason": "Searches Genius and downloads the lyrics page for a song you pick (the server makes these requests, only to these hosts)"
+    },
+    {
+      "id": "library.write",
+      "categories": [
+        "songs"
+      ],
+      "reason": "Adds the imported song to your song library"
+    },
+    {
+      "id": "commands.send",
+      "commands": [
+        "AddToSchedule",
+        "GoLive"
+      ],
+      "optional": true,
+      "reason": "Adds the imported song to the schedule, and goes live for \"Import & Go Live\""
+    }
+  ],
+  "ui": {
+    "placements": [
+      {
+        "slot": "library-source",
+        "tab": "songs",
+        "label": "✨ Genius Christian Lyrics"
+      }
+    ]
+  }
 }

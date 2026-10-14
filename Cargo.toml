@@ -184,7 +184,8 @@ minisign-verify = "0.3.0"
 # Pure-Rust GPG *verification only* (no `gpg` binary needed -- matters on
 # Windows, where it isn't preinstalled the way it often is on Linux/macOS).
 # yt-dlp signs its releases with GPG, not minisign, so this is the GPG
-# analogue of minisign-verify above for src/network/ytdlp_updater.rs.
+# analogue of minisign-verify above for src/api/plugin_tools.rs (the host-managed
+# tools a plugin declares, e.g. the Video Downloader's yt-dlp).
 gpgrv = "0.5"
 open = { version = "5.4.4", optional = true }
 sha2 = "0.11.0"

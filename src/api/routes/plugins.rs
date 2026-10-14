@@ -38,6 +38,10 @@ fn signer_id(key: &str) -> String {
     crate::core::plugin_permissions::sha256_hex(key.as_bytes())[..16].to_string()
 }
 
+fn read_manifest(row: &PluginGrantRow) -> Option<crate::core::plugin_permissions::PluginManifest> {
+    std::fs::read(std::path::Path::new(&row.source_path).join("plugin.json")).ok().and_then(|b| crate::core::plugin_permissions::PluginManifest::parse(&b).ok())
+}
+
 fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
     let requested: Vec<PermissionRequest> = serde_json::from_str(&row.requested_json).unwrap_or_default();
     let granted: Vec<PermissionRequest> = serde_json::from_str(&row.granted_json).unwrap_or_default();
@@ -55,7 +59,36 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         .flatten()
         .and_then(|b| crate::core::plugin_permissions::PluginManifest::parse(&b).ok())
         .and_then(|m| m.web.map(|w| w.entry));
+    // What a sandboxed plugin can run, exactly as the operator must read it at review.
+    let (commands, tools) = match (row.kind == "sandbox").then(|| read_manifest(row)).flatten() {
+        Some(m) => (
+            m.commands
+                .iter()
+                .map(|c| serde_json::json!({
+                    "id": c.id, "tool": c.tool, "line": c.display(),
+                    "params": c.params.iter().map(|(k, p)| serde_json::json!({
+                        "name": k, "type": p.kind, "values": p.values, "optional": p.optional,
+                    })).collect::<Vec<_>>(),
+                }))
+                .collect::<Vec<_>>(),
+            m.tools
+                .iter()
+                .map(|t| {
+                    let key = std::fs::read(std::path::Path::new(&row.source_path).join(&t.signature.key_file)).unwrap_or_default();
+                    serde_json::json!({
+                        "id": t.id, "github": t.github, "assets": t.assets, "checksums": t.checksums,
+                        "signature": t.signature.asset, "system_command": t.system_command,
+                        "key_sha256": crate::core::plugin_permissions::sha256_hex(&key),
+                    })
+                })
+                .collect::<Vec<_>>(),
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
     serde_json::json!({
+        "commands": commands,
+        "tools": tools,
+        "placements": read_manifest(row).and_then(|m| m.ui).map(|u| u.placements).unwrap_or_default(),
         "entry": entry,
         "id": row.plugin_id,
         "kind": row.kind,
@@ -237,7 +270,7 @@ pub(super) struct TokenReq {
 }
 
 /// Permissions a token can carry at all.
-const TOKEN_SCOPES: [&str; 4] = ["keyring.own", "commands.send", "network.outbound", "library.write"];
+const TOKEN_SCOPES: [&str; 5] = ["keyring.own", "commands.send", "network.outbound", "library.write", "process.run"];
 
 /// POST /api/plugins/:id/token -- the console mints a token for an approved plugin, limited to
 /// (a subset of) what it was granted. The token is checked against the live grant on every use.
@@ -489,6 +522,301 @@ pub(super) async fn plugin_add_scriptures(
     Ok(Json(serde_json::json!({ "success": true, "chapters": count, "verses": verses, "ids": ids })))
 }
 
+// ---- tools, processes and media for plugins granted `process.run` -----------------------------------
+
+use crate::core::plugin_permissions::{CommandSpec, PluginManifest, ToolSpec};
+
+/// The plugin's manifest, but only while the plugin is approved *and* both its folder and its
+/// manifest still match what the operator reviewed (the template that runs must be the template
+/// that was read).
+async fn active_manifest(app: &AppState, plugin_id: &str) -> Result<(PluginGrantRow, PluginManifest), ApiErr> {
+    let row = app
+        .db
+        .get_plugin_grant(plugin_id)
+        .ok()
+        .flatten()
+        .filter(|r| r.kind == "sandbox" && r.effective_state() == "active")
+        .ok_or_else(|| err(StatusCode::FORBIDDEN, "this plugin isn't approved"))?;
+    let dir = app.web_dir.join("plugins").join(plugin_id);
+    let (id, dir2) = (plugin_id.to_string(), dir.clone());
+    let approved = row.approved_digest.clone().unwrap_or_default();
+    let folder_ok = tokio::task::spawn_blocking(move || current_folder_digest(&id, &dir2).is_some_and(|d| d == approved))
+        .await
+        .unwrap_or(false);
+    if !folder_ok {
+        return Err(err(StatusCode::CONFLICT, "the plugin changed since it was approved"));
+    }
+    let bytes = std::fs::read(dir.join("plugin.json")).map_err(|_| err(StatusCode::CONFLICT, "the plugin's manifest is missing"))?;
+    if Some(crate::core::plugin_permissions::sha256_hex(&bytes)) != row.approved_manifest_sha256 {
+        return Err(err(StatusCode::CONFLICT, "the plugin's manifest changed since it was approved"));
+    }
+    let manifest = PluginManifest::parse(&bytes).map_err(|e| err(StatusCode::CONFLICT, &e.to_string()))?;
+    Ok((row, manifest))
+}
+
+fn tools_dir(app: &AppState) -> std::path::PathBuf {
+    app.data_dir.join("tools")
+}
+
+fn find_command<'a>(manifest: &'a PluginManifest, id: &str) -> Result<&'a CommandSpec, ApiErr> {
+    manifest.commands.iter().find(|c| c.id == id).ok_or_else(|| err(StatusCode::NOT_FOUND, "no such command"))
+}
+
+fn find_tool<'a>(manifest: &'a PluginManifest, id: &str) -> Result<&'a ToolSpec, ApiErr> {
+    manifest.tools.iter().find(|t| t.id == id).ok_or_else(|| err(StatusCode::NOT_FOUND, "no such tool"))
+}
+
+/// Needs any `process.run` grant at all (tools are the commands' programs).
+async fn runner_caller(app: &AppState, headers: &HeaderMap) -> Result<crate::api::ws::PluginCaller, ApiErr> {
+    let caller = plugin_caller(app, headers).await?;
+    if !caller.scopes.0.iter().any(|p| p.id == "process.run") {
+        return Err(err(StatusCode::FORBIDDEN, "this plugin wasn't granted permission to run commands"));
+    }
+    Ok(caller)
+}
+
+#[derive(Deserialize)]
+pub(super) struct ProcessStartReq {
+    command: String,
+    #[serde(default)]
+    params: serde_json::Map<String, serde_json::Value>,
+}
+
+/// POST /api/plugin-host/process/start
+pub(super) async fn process_start(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ProcessStartReq>,
+) -> Result<impl IntoResponse, ApiErr> {
+    let caller = runner_caller(&app, &headers).await?;
+    if !caller.scopes.runs(&req.command) {
+        return Err(err(StatusCode::FORBIDDEN, &format!("this plugin wasn't granted '{}'", req.command)));
+    }
+    let (_row, manifest) = active_manifest(&app, &caller.plugin_id).await?;
+    let spec = find_command(&manifest, &req.command)?.clone();
+    let tool = find_tool(&manifest, &spec.tool)?;
+    let program = crate::api::plugin_tools::resolve_command(&tools_dir(&app), &caller.plugin_id, tool)
+        .ok_or_else(|| err(StatusCode::CONFLICT, "the tool isn't installed yet; update it first"))?;
+    let ffmpeg = crate::storage::paths::resolve_ffmpeg_command();
+    let ffmpeg_dir = ffmpeg.parent().filter(|p| !p.as_os_str().is_empty()).map(|p| p.to_path_buf());
+    let params = req.params;
+    let job = crate::api::plugin_process::start(&app.data_dir, &caller.plugin_id, &spec.id, program, |out| {
+        crate::api::plugin_process::expand(&spec, &params, out, ffmpeg_dir.as_deref())
+    })
+    .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+    app.db.add_plugin_audit(
+        &caller.plugin_id,
+        &format!("plugin:{}", caller.plugin_id),
+        "process_started",
+        &serde_json::json!({ "command": spec.id, "job": job.id }).to_string(),
+    );
+    Ok(Json(serde_json::json!({ "success": true, "job": job.id })))
+}
+
+#[derive(Deserialize)]
+pub(super) struct ProcessJobReq {
+    job: String,
+    #[serde(default)]
+    since: usize,
+}
+
+fn owned_job(caller: &crate::api::ws::PluginCaller, job: &str) -> Result<std::sync::Arc<crate::api::plugin_process::Job>, ApiErr> {
+    crate::api::plugin_process::job_for(&caller.plugin_id, job).ok_or_else(|| err(StatusCode::NOT_FOUND, "no such job"))
+}
+
+/// POST /api/plugin-host/process/poll
+pub(super) async fn process_poll(State(app): State<AppState>, headers: HeaderMap, Json(req): Json<ProcessJobReq>) -> Result<impl IntoResponse, ApiErr> {
+    let caller = runner_caller(&app, &headers).await?;
+    let job = owned_job(&caller, &req.job)?;
+    let mut v = crate::api::plugin_process::poll(&job, req.since);
+    v["success"] = serde_json::Value::Bool(true);
+    Ok(Json(v))
+}
+
+/// POST /api/plugin-host/process/cancel
+pub(super) async fn process_cancel(State(app): State<AppState>, headers: HeaderMap, Json(req): Json<ProcessJobReq>) -> Result<impl IntoResponse, ApiErr> {
+    let caller = runner_caller(&app, &headers).await?;
+    crate::api::plugin_process::cancel(&*owned_job(&caller, &req.job)?);
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// POST /api/plugin-host/process/release -- forget a job and delete its folder.
+pub(super) async fn process_release(State(app): State<AppState>, headers: HeaderMap, Json(req): Json<ProcessJobReq>) -> Result<impl IntoResponse, ApiErr> {
+    let caller = runner_caller(&app, &headers).await?;
+    Ok(Json(serde_json::json!({ "success": crate::api::plugin_process::release(&caller.plugin_id, &req.job) })))
+}
+
+#[derive(Deserialize)]
+pub(super) struct ToolReq {
+    tool: String,
+}
+
+type UpdateKey = (String, String);
+fn tool_updates() -> &'static std::sync::Mutex<std::collections::HashMap<UpdateKey, (bool, Option<crate::api::plugin_tools::UpdateOutcome>)>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<UpdateKey, (bool, Option<crate::api::plugin_tools::UpdateOutcome>)>>> =
+        std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+async fn tool_report(app: &AppState, plugin_id: &str, tool: &ToolSpec) -> serde_json::Value {
+    let st = crate::api::plugin_tools::status(&tools_dir(app), plugin_id, tool).await;
+    let (updating, last) = tool_updates()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&(plugin_id.to_string(), tool.id.clone()))
+        .cloned()
+        .unwrap_or((false, None));
+    serde_json::json!({ "success": true, "installed": st.installed, "source": st.source, "version": st.version, "updating": updating, "last_update": last })
+}
+
+/// POST /api/plugin-host/tool/status
+pub(super) async fn tool_status(State(app): State<AppState>, headers: HeaderMap, Json(req): Json<ToolReq>) -> Result<impl IntoResponse, ApiErr> {
+    let caller = runner_caller(&app, &headers).await?;
+    let (_row, manifest) = active_manifest(&app, &caller.plugin_id).await?;
+    let tool = find_tool(&manifest, &req.tool)?;
+    Ok(Json(tool_report(&app, &caller.plugin_id, tool).await))
+}
+
+/// POST /api/plugin-host/tool/update -- installs or updates the tool in the background (a release is
+/// tens of megabytes); poll `tool/status` for `updating` and `last_update`.
+pub(super) async fn tool_update(State(app): State<AppState>, headers: HeaderMap, Json(req): Json<ToolReq>) -> Result<impl IntoResponse, ApiErr> {
+    let caller = runner_caller(&app, &headers).await?;
+    let (row, manifest) = active_manifest(&app, &caller.plugin_id).await?;
+    let tool = find_tool(&manifest, &req.tool)?.clone();
+    let key_path = std::path::Path::new(&row.source_path).join(&tool.signature.key_file);
+    let key = std::fs::read_to_string(&key_path).map_err(|_| err(StatusCode::CONFLICT, "the tool's signing key is missing from the plugin"))?;
+    let key_id = (caller.plugin_id.clone(), tool.id.clone());
+    let already_running = {
+        let mut m = tool_updates().lock().unwrap_or_else(|e| e.into_inner());
+        let entry = m.entry(key_id.clone()).or_insert((false, None));
+        let was = entry.0;
+        entry.0 = true;
+        was
+    };
+    if already_running {
+        return Ok(Json(tool_report(&app, &caller.plugin_id, &tool).await));
+    }
+    let (tools, plugin_id, db) = (tools_dir(&app), caller.plugin_id.clone(), app.db.clone());
+    let tool2 = tool.clone();
+    tokio::spawn(async move {
+        let outcome = crate::api::plugin_tools::check_and_update(&tools, &plugin_id, &tool2, &key).await;
+        if outcome.updated || outcome.error {
+            db.add_plugin_audit(
+                &plugin_id,
+                &format!("plugin:{plugin_id}"),
+                if outcome.error { "tool_update_failed" } else { "tool_updated" },
+                &serde_json::json!({ "tool": tool2.id, "version": outcome.version, "message": outcome.message }).to_string(),
+            );
+        }
+        tool_updates().lock().unwrap_or_else(|e| e.into_inner()).insert(key_id, (false, Some(outcome)));
+    });
+    Ok(Json(tool_report(&app, &caller.plugin_id, &tool).await))
+}
+
+#[derive(Deserialize)]
+pub(super) struct AddMediaReq {
+    job: String,
+    /// A plain file name in the job's folder.
+    file: String,
+    /// `video` or `audio`.
+    media_type: String,
+    title: String,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    duration: Option<f64>,
+    #[serde(default)]
+    thumbnail: Option<String>,
+}
+
+const VIDEO_EXTS: [&str; 6] = ["mp4", "webm", "mkv", "mov", "m4v", "avi"];
+const AUDIO_EXTS: [&str; 7] = ["mp3", "m4a", "opus", "ogg", "wav", "flac", "aac"];
+
+/// POST /api/plugin-host/media -- moves a finished file out of one of the plugin's own job folders
+/// into the media library and registers it. Needs `library.write` on `media`.
+pub(super) async fn plugin_add_media(State(app): State<AppState>, headers: HeaderMap, Json(req): Json<AddMediaReq>) -> Result<impl IntoResponse, ApiErr> {
+    let caller = plugin_caller(&app, &headers).await?;
+    if !caller.scopes.writes("media") {
+        return Err(err(StatusCode::FORBIDDEN, "this plugin wasn't granted write access to media"));
+    }
+    let job = owned_job(&caller, &req.job)?;
+    if job.state.lock().unwrap_or_else(|e| e.into_inner()).status == "running" {
+        return Err(err(StatusCode::CONFLICT, "the job is still running"));
+    }
+    let (sub, exts, media_type) = match req.media_type.as_str() {
+        "video" => ("videos", &VIDEO_EXTS[..], crate::core::models::MediaType::Video),
+        "audio" => ("audio", &AUDIO_EXTS[..], crate::core::models::MediaType::Audio),
+        _ => return Err(err(StatusCode::BAD_REQUEST, "media_type must be 'video' or 'audio'")),
+    };
+    let name = req.file.as_str();
+    if name.is_empty() || name.len() > 255 || name.contains(['/', '\\']) || name.starts_with('.') || name.chars().any(|c| c.is_control()) {
+        return Err(err(StatusCode::BAD_REQUEST, "file must be a plain file name from the job's folder"));
+    }
+    let ext = std::path::Path::new(name).extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).unwrap_or_default();
+    if !exts.contains(&ext.as_str()) {
+        return Err(err(StatusCode::BAD_REQUEST, &format!("a {} file must be one of: {}", req.media_type, exts.join(", "))));
+    }
+    let src = job.output_dir.join(name);
+    match std::fs::symlink_metadata(&src) {
+        Ok(m) if m.is_file() => {}
+        _ => return Err(err(StatusCode::NOT_FOUND, "no such file in the job's folder")),
+    }
+    let title: String = req.title.trim().chars().filter(|c| !c.is_control()).take(300).collect();
+    if title.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "a title is required"));
+    }
+
+    let dest_dir = app.media_dir.join(sub);
+    std::fs::create_dir_all(&dest_dir).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("can't create the media folder: {e}")))?;
+    let stem = std::path::Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or("media").to_string();
+    let mut dest = dest_dir.join(name);
+    let mut n = 2;
+    while dest.exists() {
+        dest = dest_dir.join(format!("{stem} ({n}).{ext}"));
+        n += 1;
+    }
+    if std::fs::rename(&src, &dest).is_err() {
+        // Different filesystems: copy, then remove the original.
+        std::fs::copy(&src, &dest).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("couldn't move the file: {e}")))?;
+        let _ = std::fs::remove_file(&src);
+    }
+    let file_name = dest.file_name().and_then(|f| f.to_str()).unwrap_or(name).to_string();
+
+    let clean_id: String = req.id.as_deref().unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).take(64).collect();
+    let id = if clean_id.is_empty() { format!("plugin_{}_{}", caller.plugin_id, uuid::Uuid::new_v4().simple()) } else { format!("plugin_{}_{}", caller.plugin_id, clean_id) };
+    let mut item = crate::core::models::MediaItem::new(&title, &format!("/media/{sub}/{file_name}"), media_type);
+    item.id = id;
+    item.duration_seconds = req.duration.filter(|d| d.is_finite() && *d > 0.0 && *d < 1.0e6);
+    item.thumbnail_path = req.thumbnail.filter(|t| t.len() <= 2048 && (t.starts_with("https://") || t.starts_with("http://")));
+    app.db.insert_media(&item).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {e}")))?;
+    app.db.add_plugin_audit(
+        &caller.plugin_id,
+        &format!("plugin:{}", caller.plugin_id),
+        "media_added",
+        &serde_json::json!({ "id": item.id, "title": title, "file": file_name }).to_string(),
+    );
+
+    // H.264 -> VP9 for native playback, in the background (the same convenience the media folder
+    // scan gives files dropped in by hand); the item's path is updated when it finishes.
+    if req.media_type == "video" {
+        let (db, disk_path, mut for_update) = (app.db.clone(), dest.clone(), item.clone());
+        tokio::spawn(async move {
+            if crate::storage::transcode::needs_transcode(&disk_path).await {
+                match crate::storage::transcode::transcode_h264_to_vp9(&disk_path, |_| {}).await {
+                    Ok(new_path) => {
+                        if let Some(f) = new_path.file_name().and_then(|f| f.to_str()) {
+                            for_update.file_path = format!("/media/videos/{f}");
+                            let _ = db.insert_media(&for_update);
+                        }
+                    }
+                    Err(e) => tracing::warn!("transcode skipped for {:?}: {}", disk_path, e),
+                }
+            }
+        });
+    }
+    Ok(Json(serde_json::json!({ "success": true, "id": item.id, "item": item })))
+}
+
 /// True when `file_name` (e.g. `hello_world.js`) is an approved, unchanged web plugin.
 /// The file is re-hashed on every request, so editing it after approval stops it being
 /// served until it is reviewed again.
@@ -535,7 +863,7 @@ fn folder_signature(dir: &std::path::Path) -> u64 {
     h.finish()
 }
 
-fn current_folder_digest(id: &str, dir: &std::path::Path) -> Option<String> {
+pub(super) fn current_folder_digest(id: &str, dir: &std::path::Path) -> Option<String> {
     let sig = folder_signature(dir);
     {
         let guard = FRAME_DIGESTS.lock().unwrap_or_else(|e| e.into_inner());
@@ -576,6 +904,44 @@ fn csp_host_ok(h: &str) -> bool {
         && (!h.contains('*') || h.starts_with("*."))
 }
 
+/// The CSP every frame response carries: nothing but the hosts the plugin was granted, and a sandbox.
+fn frame_csp(row: &PluginGrantRow) -> String {
+    let granted = parse_granted(row);
+    let mut sources: Vec<String> = Vec::new();
+    for p in granted.0.iter().filter(|p| p.id == "network.outbound") {
+        for h in p.hosts.iter().filter(|h| csp_host_ok(h)) {
+            sources.push(format!("https://{h} wss://{h} http://{h} ws://{h}"));
+        }
+    }
+    let connect = if sources.is_empty() { "'none'".to_string() } else { sources.join(" ") };
+    format!(
+        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
+         font-src 'self' data:; media-src 'self' blob:; connect-src {connect}; base-uri 'none'; form-action 'none'; \
+         frame-ancestors 'self'; sandbox allow-scripts"
+    )
+}
+
+/// `icons/<set>/<name>.svg` with a plain set and icon name (letters, digits, dashes) -> (set, name).
+fn icon_path(shared: &str) -> Option<(&str, &str)> {
+    let rest = shared.strip_prefix("icons/")?;
+    let (set, file) = rest.split_once('/')?;
+    let name = file.strip_suffix(".svg")?;
+    let plain = |s: &str| !s.is_empty() && s.len() <= 40 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    (plain(set) && plain(name)).then_some((set, name))
+}
+
+/// A script defining `window.__OS_EMOJI` (glyph -> icon name, for the glyphs that have an icon).
+fn icons_script(map_path: &std::path::Path) -> String {
+    let entries: Vec<serde_json::Value> = std::fs::read(map_path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let mut map = serde_json::Map::new();
+    for e in entries {
+        if let (Some(g), Some(i)) = (e.get("glyph").and_then(|v| v.as_str()), e.get("icon").and_then(|v| v.as_str())) {
+            map.insert(g.replace('\u{fe0f}', ""), serde_json::Value::String(i.to_string()));
+        }
+    }
+    format!("window.__OS_EMOJI = {};\n", serde_json::Value::Object(map))
+}
+
 /// GET /plugin-frame/:id/*path -- serves a sandboxed plugin's files, but only while the plugin is
 /// approved and the folder still hashes to what was reviewed. Every response carries a CSP that
 /// forbids everything except what the plugin was granted (`network.outbound` hosts), and a
@@ -597,6 +963,9 @@ pub(super) async fn serve_plugin_frame(
         return not_found();
     }
     let dir = app.web_dir.join("plugins").join(&id);
+    // The console's shared plugin SDK and theme stylesheet are part of the app, not of the plugin:
+    // served under `__os/` to any plugin that passes the checks below.
+    let shared = rel.strip_prefix("__os/").map(|n| n.to_string());
     let (app2, id2, dir2) = (app.clone(), id.clone(), dir.clone());
     let approved = row.approved_digest.clone().unwrap_or_default();
     let ok = tokio::task::spawn_blocking(move || {
@@ -608,33 +977,40 @@ pub(super) async fn serve_plugin_frame(
     if !ok {
         return not_found();
     }
-    let file = dir.join(&rel);
+    // `__os/icons.js`: the console's emoji -> icon map, as a script (a frame can't fetch JSON).
+    if shared.as_deref() == Some("icons.js") {
+        let body = icons_script(&app.web_dir.join("icons").join("emoji-map.json"));
+        return axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/javascript; charset=utf-8")
+            .header(header::CONTENT_SECURITY_POLICY, frame_csp(&row))
+            .header(header::CACHE_CONTROL, "no-store")
+            .body(axum::body::Body::from(body))
+            .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "couldn't build the response").into_response());
+    }
+    let file = match &shared {
+        Some(name) if matches!(name.as_str(), "sdk.js" | "theme.css") => app.web_dir.join("plugins").join("_shared").join(name),
+        // `__os/icons/<set>/<name>.svg`: the console's own icons (one folder per theme), plain names only.
+        Some(name) => match icon_path(name) {
+            Some((set, icon)) => app.web_dir.join("icons").join(set).join(format!("{icon}.svg")),
+            None => return not_found(),
+        },
+        None => dir.join(&rel),
+    };
     match std::fs::symlink_metadata(&file) {
         Ok(m) if m.is_file() => {}
         _ => return not_found(),
     }
     let Ok(bytes) = std::fs::read(&file) else { return not_found() };
 
-    let granted = parse_granted(&row);
-    let mut sources: Vec<String> = Vec::new();
-    for p in granted.0.iter().filter(|p| p.id == "network.outbound") {
-        for h in p.hosts.iter().filter(|h| csp_host_ok(h)) {
-            sources.push(format!("https://{h} wss://{h} http://{h} ws://{h}"));
-        }
-    }
-    let connect = if sources.is_empty() { "'none'".to_string() } else { sources.join(" ") };
-    let csp = format!(
-        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
-         font-src 'self' data:; media-src 'self' blob:; connect-src {connect}; base-uri 'none'; form-action 'none'; \
-         frame-ancestors 'self'; sandbox allow-scripts"
-    );
+    let csp = frame_csp(&row);
     axum::response::Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type_for(&rel))
         .header(header::CONTENT_SECURITY_POLICY, csp)
         .header(header::CACHE_CONTROL, "no-store")
         .body(axum::body::Body::from(bytes))
-        .unwrap_or_else(|_| not_found())
+        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "couldn't build the response").into_response())
 }
 
 pub(super) fn router() -> Router<AppState> {
@@ -650,4 +1026,11 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/plugin-host/fetch", post(plugin_fetch))
         .route("/api/plugin-host/songs", post(plugin_add_song))
         .route("/api/plugin-host/scriptures", post(plugin_add_scriptures))
+        .route("/api/plugin-host/media", post(plugin_add_media))
+        .route("/api/plugin-host/process/start", post(process_start))
+        .route("/api/plugin-host/process/poll", post(process_poll))
+        .route("/api/plugin-host/process/cancel", post(process_cancel))
+        .route("/api/plugin-host/process/release", post(process_release))
+        .route("/api/plugin-host/tool/status", post(tool_status))
+        .route("/api/plugin-host/tool/update", post(tool_update))
 }

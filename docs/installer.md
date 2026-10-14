@@ -188,20 +188,17 @@ section has the full picture across all platforms):
   `src/storage/paths.rs`'s `resolve_ffmpeg_command()`/
   `resolve_ffprobe_command()` (bundled copy next to the exe, falling back
   to `PATH` otherwise — the Linux case, unchanged).
-- **yt-dlp is fetched and kept current by the app itself, not bundled** —
-  `src/network/ytdlp_updater.rs` downloads the latest release from
-  `yt-dlp/yt-dlp` on startup and every 12h after, verifying it with GPG
-  (yt-dlp signs `SHA2-256SUMS` with RSA-4096, not minisign) against a
-  public key pinned in the binary rather than fetched live from yt-dlp's
-  own repo at check time — fetching the key from the same place as the
-  payload would let a compromised yt-dlp GitHub account swap both
-  together. Installed into a self-managed copy under the data directory
-  (`ResolvedPaths::tools_dir()`); an existing system-installed `yt-dlp` on
-  `PATH` is left alone rather than shadowed. Bundling a frozen copy instead
-  wasn't viable: yt-dlp ships new releases far more often than this app
-  does, specifically because sites keep changing and breaking extraction,
-  so a copy frozen at install time would likely stop working against real
-  sites within weeks to months.
+- **yt-dlp is fetched and kept current by the app itself, not bundled** — now by the
+  **Video Downloader plugin** (`web/plugins/ytdlp/`) through the host's managed-tool service
+  (`src/api/plugin_tools.rs`): it downloads the latest release from `yt-dlp/yt-dlp`, verifies the
+  GPG signature of `SHA2-256SUMS` (yt-dlp signs with RSA-4096, not minisign) against a public key
+  shipped *inside the plugin folder* (so the approval's digest pins it; fetching the key from the
+  same place as the payload would let a compromised yt-dlp GitHub account swap both together), and
+  checks the asset's SHA-256 against the signed sums. It is installed under the data directory
+  (`<data>/tools/plugins/ytdlp/`); an existing system-installed `yt-dlp` on `PATH` is left alone
+  rather than shadowed. The plugin looks for a newer release whenever its panel opens. Bundling a
+  frozen copy instead wasn't viable: yt-dlp ships new releases far more often than this app does,
+  because sites keep changing and breaking extraction.
 
 **Verified for real**: ran the actual cross-compiled Windows binary under
 Wine, both cold (nothing in the videos folder or tools directory yet) and

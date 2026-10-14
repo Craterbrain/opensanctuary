@@ -5,7 +5,7 @@
  * (#media-image-picker-modal). Integrates:
  * 1. Video Library: Grid of video files with search, durations, and preview
  * 2. From URL: Direct video file path or web stream URL with live preview
- * 3. yt-dlp Downloader: Inline YouTube/web clip downloader with live progress polling
+ * 3. Online video: the Video Downloader plugin's page (see src/core/plugin_bridge.ts)
  */
 
 import { isVideoBackground } from '../core/presentation_helpers.ts';
@@ -35,7 +35,6 @@ let selectedVideoPath: string | null = null;
 let selectedVideoName: string | null = null;
 let onSelectSlideCallback: ((filePath: string, cssBg: string, name: string, isVideo: boolean, isLooping: boolean) => void) | null = null;
 let onSelectAllCallback: ((filePath: string, cssBg: string, name: string, isVideo: boolean, isLooping: boolean) => void) | null = null;
-let ytdlpPollingInterval: any = null;
 
 /** Switches between the three sub-views inside the Videos tab. */
 export function setVideoSubtab(tab: 'library' | 'url' | 'ytdl') {
@@ -122,153 +121,15 @@ export function initVideoPicker(context: VideoPickerContext) {
   if (btnUrlPreview) btnUrlPreview.addEventListener('click', handleUrlUpdate);
   if (urlInput) urlInput.addEventListener('change', handleUrlUpdate);
 
-  // 4. yt-dlp Online Video Downloader
-  const ytdlUrlInput = document.getElementById('video-ytdl-url-input') as HTMLInputElement | null;
-  const btnYtdlPaste = document.getElementById('btn-video-ytdl-paste');
-  const btnYtdlStart = document.getElementById('btn-video-ytdl-start') as HTMLButtonElement | null;
-  const ytdlProgressContainer = document.getElementById('video-ytdl-progress-container');
-  const ytdlProgressFill = document.getElementById('video-ytdl-progress-fill');
-  const ytdlStatus = document.getElementById('video-ytdl-status');
-  const ytdlBrowserSelect = document.getElementById('video-ytdl-browser') as HTMLSelectElement | null;
-  const ytdlSponsorblock = document.getElementById('video-ytdl-sponsorblock') as HTMLInputElement | null;
-
-  if (btnYtdlPaste && ytdlUrlInput) {
-    btnYtdlPaste.addEventListener('click', async () => {
-      try {
-        const text = await readClipboard();
-        if (text) {
-          ytdlUrlInput.value = text.trim();
-        }
-      } catch (_) {}
-    });
-  }
-
-  if (btnYtdlStart) {
-    btnYtdlStart.addEventListener('click', async () => {
-      const url = (ytdlUrlInput?.value || '').trim();
-      if (!url) {
-        if (ytdlStatus) {
-          ytdlStatus.innerHTML = '<span style="color: var(--os-danger-text);">⚠️ Please enter or paste a video URL.</span>';
-        }
-        if (ytdlUrlInput) ytdlUrlInput.focus();
-        return;
-      }
-
-      const browser = ytdlBrowserSelect ? ytdlBrowserSelect.value : 'auto';
-      const sponsorblock = ytdlSponsorblock ? ytdlSponsorblock.checked : true;
-
-      if (ytdlProgressContainer) ytdlProgressContainer.style.display = 'block';
-      if (ytdlProgressFill) ytdlProgressFill.style.width = '0%';
-      if (btnYtdlStart) btnYtdlStart.disabled = true;
-
-      if (ytdlStatus) {
-        ytdlStatus.innerHTML = '<span style="color: var(--os-accent-text);">⏳ Initializing download with yt-dlp...</span>';
-      }
-
-      try {
-        const res = await fetch('/api/media/ytdlp/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            url,
-            browser,
-            sponsorblock_remove_all: sponsorblock,
-            audio_only: false
-          })
-        });
-
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(errText || 'Download failed to initialize');
-        }
-
-        const initProgress = await res.json();
-        const taskId = initProgress.task_id;
-
-        if (ytdlpPollingInterval) clearInterval(ytdlpPollingInterval);
-        let failCount = 0;
-
-        ytdlpPollingInterval = setInterval(async () => {
-          try {
-            const progRes = await fetch(`/api/media/ytdlp/progress/${encodeURIComponent(taskId)}`);
-            if (!progRes.ok) {
-              failCount++;
-              if (failCount >= 5) {
-                clearInterval(ytdlpPollingInterval);
-                ytdlpPollingInterval = null;
-                if (btnYtdlStart) btnYtdlStart.disabled = false;
-                if (ytdlStatus) ytdlStatus.innerHTML = '<span style="color: var(--os-danger-text);">❌ Download progress connection lost.</span>';
-              }
-              return;
-            }
-
-            failCount = 0;
-            const progress = await progRes.json();
-            const pct = Math.min(Math.max(progress.percent || 0, 0), 100);
-
-            if (ytdlProgressFill) ytdlProgressFill.style.width = `${pct}%`;
-
-            const speed = progress.speed ? ` • ${progress.speed}` : '';
-            const eta = progress.eta ? ` • ETA ${progress.eta}` : '';
-
-            if (ytdlStatus) {
-              ytdlStatus.innerHTML = `
-                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
-                  <span style="color: var(--os-accent-text);">${currentContext!.escapeHtml(progress.status || 'Downloading...')}${currentContext!.escapeHtml(speed)}${currentContext!.escapeHtml(eta)}</span>
-                  <span style="font-weight: 700; color: var(--os-success-text);">${pct.toFixed(1)}%</span>
-                </div>`;
-            }
-
-            if (progress.is_complete) {
-              clearInterval(ytdlpPollingInterval);
-              ytdlpPollingInterval = null;
-              if (btnYtdlStart) btnYtdlStart.disabled = false;
-
-              if (progress.error) {
-                if (ytdlStatus) {
-                  ytdlStatus.innerHTML = `<span style="color: var(--os-danger-text);">❌ Download failed: ${currentContext!.escapeHtml(progress.error)}</span>`;
-                }
-              } else {
-                const item = progress.media_item;
-                const title = item ? item.name : 'Downloaded Video';
-                if (ytdlProgressFill) ytdlProgressFill.style.width = '100%';
-                if (ytdlStatus) {
-                  ytdlStatus.innerHTML = `<span style="color: var(--os-success-text); font-weight: 600;">✓ Successfully downloaded "${currentContext!.escapeHtml(title)}"!</span>`;
-                }
-                if (ytdlUrlInput) ytdlUrlInput.value = '';
-
-                // Refresh video list from server
-                await fetchAvailableVideos();
-
-                // Select newly downloaded item
-                if (item && item.file_path) {
-                  selectedVideoPath = item.file_path;
-                  selectedVideoName = item.name;
-                }
-
-                // Switch back to Library subtab to show newly added video
-                setTimeout(() => {
-                  setVideoSubtab('library');
-                  renderVideoLibraryGrid();
-                }, 600);
-              }
-            }
-          } catch (pollErr) {
-            console.warn('yt-dlp poll error:', pollErr);
-          }
-        }, 400);
-      } catch (err: any) {
-        if (ytdlpPollingInterval) {
-          clearInterval(ytdlpPollingInterval);
-          ytdlpPollingInterval = null;
-        }
-        if (btnYtdlStart) btnYtdlStart.disabled = false;
-        if (ytdlStatus) {
-          ytdlStatus.innerHTML = `<span style="color: var(--os-danger-text);">❌ Error: ${currentContext!.escapeHtml(err.message)}</span>`;
-        }
-      }
-    });
-  }
+  // 4. Online video download: the Video Downloader plugin puts its page in #plugin-picker-pane;
+  //    until it is turned on, the pane shows a pointer to Settings > Plugins.
+  document.getElementById('btn-picker-enable-ytdlp')?.addEventListener('click', () => {
+    window.dispatchEvent(new CustomEvent('os-open-plugins-settings'));
+  });
+  // A finished download lands in the library: pick it up without reopening the dialog.
+  window.addEventListener('os-library-changed', (ev) => {
+    if ((ev as CustomEvent).detail?.category === 'media') void fetchAvailableVideos().then(() => renderVideoLibraryGrid());
+  });
 
   // 5. Apply Buttons
   const btnApplySlide = document.getElementById('btn-apply-video-slide');

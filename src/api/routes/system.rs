@@ -220,22 +220,6 @@ pub(super) async fn get_update_status(
     Ok(Json(serde_json::json!({ "status": status })))
 }
 
-/// GET /api/ytdlp-updater/status
-///
-/// Returns the cached result of the last yt-dlp self-update check
-/// (`AppState::ytdlp_update_status`, populated by the background task in
-/// `main.rs` -- see `src/network/ytdlp_updater.rs`) -- never makes a
-/// network call itself, so this is safe to poll. `null` until the first
-/// check completes.
-pub(super) async fn get_ytdlp_updater_status(
-    State(app): State<AppState>,
-    headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    require_host_token(&headers, &app)?;
-    let status = app.ytdlp_update_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    Ok(Json(serde_json::json!({ "status": status })))
-}
-
 /// POST /api/updates/check
 ///
 /// Forces a real, right-now check against `crate::network::updater::RELEASES_REPO`
@@ -344,5 +328,4 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/updates/status", get(get_update_status))
         .route("/api/updates/check", post(post_update_check))
         .route("/api/updates/download-and-install", post(post_update_download_and_install))
-        .route("/api/ytdlp-updater/status", get(get_ytdlp_updater_status))
 }

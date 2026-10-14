@@ -691,65 +691,11 @@
         </div>
         <div class="modal-body modal-body--stack">
           <div class="import-mode-tabs os-tabs" role="tablist">
-            <button class="import-tab-btn active" id="tab-btn-ytdlp" data-mode="ytdlp" role="tab">🎥 Online Video (yt-dlp)</button>
-            <button class="import-tab-btn" id="tab-btn-local" data-mode="local" role="tab">📁 Local Files &amp; OpenLP</button>
+            
+            <button class="import-tab-btn active" id="tab-btn-local" data-mode="local" role="tab">📁 Local Files &amp; OpenLP</button>
           </div>
 
-          <!-- TAB 2: yt-dlp Online Video Import with Browser Cookies & SponsorBlock -->
-          <div class="import-tab-content import-pane import-pane--scroll active" id="import-view-ytdlp" style="display: flex;">
-            <div class="store-card">
-              <h4>🎥 Import Online Video via yt-dlp</h4>
-              <p>Download and import high-definition videos or audio tracks directly from YouTube and 1000+ supported video platforms into your Media Library.</p>
-
-              <div class="store-card-form">
-                <div class="form-field">
-                  <label class="form-label" for="ytdlp-url-input">Video URL / Link</label>
-                  <div class="form-row">
-                    <input type="text" class="search-input" id="ytdlp-url-input" placeholder="https://www.youtube.com/watch?v=... or any video link">
-                    <button class="btn" id="btn-ytdlp-paste" type="button" title="Paste URL from Clipboard">📋 Paste</button>
-                  </div>
-                </div>
-
-                <div class="form-field">
-                  <label class="form-label" for="ytdlp-browser-select">🍪 Browser Cookies (for restricted/authenticated videos)</label>
-                  <select class="search-input" id="ytdlp-browser-select">
-                    <option value="auto">Auto-Detect (Chrome / Firefox / Brave / Edge)</option>
-                    <option value="chrome">Google Chrome</option>
-                    <option value="firefox">Mozilla Firefox</option>
-                    <option value="brave">Brave Browser</option>
-                    <option value="edge">Microsoft Edge</option>
-                    <option value="chromium">Chromium</option>
-                    <option value="opera">Opera</option>
-                    <option value="vivaldi">Vivaldi</option>
-                    <option value="none">None (No Cookies)</option>
-                  </select>
-                </div>
-
-                <label class="form-check form-check--boxed" for="ytdlp-audio-only-checkbox">
-                  <input type="checkbox" id="ytdlp-audio-only-checkbox">
-                  <span>🎵 <strong>Audio Only</strong> (Extract high-quality MP3 worship track instead of video)</span>
-                </label>
-
-                <label class="form-check form-check--boxed" for="ytdlp-sponsorblock-checkbox">
-                  <input type="checkbox" id="ytdlp-sponsorblock-checkbox" checked>
-                  <span>✂️ <strong>SponsorBlock: Remove All</strong> (removes sponsors, intros, outros, promotions, and filler)</span>
-                </label>
-
-                <div class="form-row form-row--actions">
-                  <button class="btn btn-primary" id="btn-ytdlp-start-download">📥 Download & Import to Library</button>
-                  <button class="btn" id="btn-ytdlp-download-and-live">▶ Download & Go Live</button>
-                </div>
-
-                <div class="progress-bar-container os-progress" id="ytdlp-progress-container" style="display: none;">
-                  <div id="ytdlp-progress-fill" class="os-progress-fill" style="width: 0%;"></div>
-                </div>
-
-                <div id="ytdlp-download-status" class="status-line"></div>
-              </div>
-            </div>
-          </div>
-
-          <div class="import-tab-content import-pane import-pane--scroll" id="import-view-local" style="display: none;">
+          <div class="import-tab-content import-pane import-pane--scroll active" id="import-view-local" style="display: flex;">
             <div class="store-card">
               <h4>📁 EasyWorship Services & Presentations</h4>
               <p>Load an EasyWorship service (<code>.ewsx</code>, <code>.ews</code>) or presentation (<code>.ewpx</code>), or an OpenLP service (<code>.osz</code>, <code>.osj</code>), with drag-and-drop and a Replace/Append choice:</p>
@@ -1006,7 +952,7 @@
             <div class="store-card">
               <h4>🎬 Motion Background Packs</h4>
               <p>Download dynamic 4K/HD church loop packs & sermon stills.</p>
-              <button class="btn" disabled title="Not yet implemented — use the Import dialog's Online Video tab for royalty-free clips in the meantime.">Coming Soon</button>
+              <button class="btn" disabled title="Not yet implemented — turn on the Video Downloader plugin (Settings → Plugins) to fetch clips in the meantime.">Coming Soon</button>
             </div>
             <div class="store-card">
               <h4>📖 Online Bibles</h4>
@@ -1540,38 +1486,15 @@
               </div>
             </div>
 
-            <!-- Subtab 3: yt-dlp Online Video Downloader -->
-            <div id="video-subview-ytdl" class="picker-pane picker-pane--scroll" style="display: none;">
-              <div class="store-card store-card-form">
-                <h4>📥 Download Online Video (YouTube, Vimeo, Web Clips)</h4>
-                <div class="form-row">
-                  <input type="text" class="search-input" id="video-ytdl-url-input" placeholder="https://www.youtube.com/watch?v=... or any video link">
-                  <button class="btn" id="btn-video-ytdl-paste" type="button" title="Paste URL">📋 Paste</button>
+            <!-- Subtab 3: online video download (the Video Downloader plugin's page goes in here) -->
+            <div id="video-subview-ytdl" class="picker-pane" style="display: none;">
+              <div class="plugin-picker-pane" id="plugin-picker-pane">
+                <div class="list-message" id="plugin-picker-hint">
+                  <p>Downloading online video is a plugin. Turn on the Video Downloader to fetch YouTube and other clips right here.</p>
+                  <button class="btn btn-primary" id="btn-picker-enable-ytdlp" type="button">Open Settings → Plugins</button>
                 </div>
-                <div class="form-row form-row--wrap">
-                  <label class="form-check">
-                    <input type="checkbox" id="video-ytdl-sponsorblock" checked>
-                    Skip intros & sponsors (SponsorBlock)
-                  </label>
-                  <div class="form-row form-row--inline">
-                    <span class="form-label">Cookies:</span>
-                    <select class="search-input" id="video-ytdl-browser">
-                      <option value="auto">Auto-detect</option>
-                      <option value="chrome">Chrome</option>
-                      <option value="firefox">Firefox</option>
-                      <option value="brave">Brave</option>
-                      <option value="edge">Edge</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="form-row form-row--actions">
-                  <button class="btn btn-primary" id="btn-video-ytdl-start" type="button">⬇ Download Video</button>
-                </div>
-                <div class="progress-bar-container os-progress" id="video-ytdl-progress-container" style="display: none;">
-                  <div id="video-ytdl-progress-fill" class="os-progress-fill" style="width: 0%;"></div>
-                </div>
-                <div id="video-ytdl-status" class="status-line"></div>
               </div>
+            </div>
             </div>
           </div>
         </div>

@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Video Downloader (yt-dlp)</title>
+  <link rel="stylesheet" href="__os/theme.css">
+  <style>
+    .page-head h4 { margin-bottom: var(--os-space-2); }
+    .page-head p { margin: 0 0 var(--os-space-5); font-size: var(--os-fs-sm); }
+    .button-row { display: flex; gap: var(--os-space-4); margin-top: var(--os-space-5); }
+    .meter { display: flex; justify-content: space-between; margin-top: var(--os-space-3); font-size: var(--os-fs-xs); color: var(--os-text-tertiary); }
+    .tool-line { display: flex; align-items: center; gap: var(--os-space-4); font-size: var(--os-fs-xs); color: var(--os-text-tertiary); }
+    .tool-line .grow { flex: 1; }
+  </style>
+</head>
+<body>
+  <div class="page-head">
+    <h4>🎥 Import Online Video via yt-dlp</h4>
+    <p>Download and import high-definition videos or audio tracks directly from YouTube and 1000+ supported video platforms into your Media Library.</p>
+  </div>
+
+  <!-- No <form>: a sandboxed frame can't submit one (and doesn't need to). -->
+  <div class="card">
+    <div class="form-field">
+      <label class="form-label" for="url">Video URL / Link</label>
+      <div class="form-row">
+        <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=… or any video link" autocomplete="off">
+        <button id="paste" class="btn" type="button" title="Paste URL from clipboard">📋 Paste</button>
+      </div>
+    </div>
+
+    <div class="form-field">
+      <label class="form-label" for="browser">🍪 Browser Cookies (for restricted/authenticated videos)</label>
+      <select id="browser">
+        <option value="none">None</option>
+        <option value="auto" selected>Auto-Detect (Chrome / Firefox / Brave / Edge)</option>
+        <option value="chrome">Google Chrome</option>
+        <option value="firefox">Mozilla Firefox</option>
+        <option value="brave">Brave Browser</option>
+        <option value="edge">Microsoft Edge</option>
+        <option value="chromium">Chromium</option>
+        <option value="opera">Opera</option>
+        <option value="vivaldi">Vivaldi</option>
+        <option value="safari">Safari</option>
+      </select>
+    </div>
+
+    <label class="check-row"><input id="audio-only" type="checkbox"> 🎵 Audio only (MP3)</label>
+    <label class="check-row" style="margin-top: var(--os-space-3)"><input id="sponsorblock" type="checkbox" checked> ✂️ SponsorBlock: remove sponsor segments</label>
+
+    <div class="button-row">
+      <button id="download" class="btn btn-primary" type="button">⬇ Download to Library</button>
+      <button id="download-live" class="btn" type="button">⬇ Download &amp; Go Live</button>
+      <button id="cancel" class="btn btn-danger hidden" type="button">Cancel</button>
+    </div>
+
+    <div id="progress-wrap" class="hidden" style="margin-top: var(--os-space-5)">
+      <div class="os-progress"><span id="progress-bar"></span></div>
+      <div class="meter"><span id="speed"></span><span id="eta"></span></div>
+    </div>
+    <div id="status" class="status"></div>
+  </div>
+
+  <div class="tool-line">
+    <span id="tool-status" class="grow">Checking yt-dlp…</span>
+    <button id="tool-update" class="btn btn-sm btn-ghost" type="button">Check for updates</button>
+  </div>
+
+  <script src="__os/icons.js"></script>
+  <script src="__os/sdk.js"></script>
+  <script src="ytdlp.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

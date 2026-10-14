@@ -1680,7 +1680,7 @@ on('btn-copy-pairing-url', 'click', async () => {
 // Install via ADB (docs/CLIENT_PAIRING.md's ADB-driven sideload flow) — the
 // third tab of #remote-modal, alongside Mobile Remote / Pair TV App. Same
 // POST-to-start/GET-to-poll/`is_complete` shape as the yt-dlp background
-// import flow (see ytdlpPollingInterval in this file), not a new pattern.
+// import flow, not a new pattern.
 let adbProvisionPollingInterval: ReturnType<typeof setInterval> | null = null;
 let adbProvisionStatusChecked = false;
 
@@ -2041,82 +2041,12 @@ document.querySelectorAll<HTMLElement>('.article-nav-item').forEach(navEl => {
 // ============================================================================
 // FREESHOW-STYLE BIBLE IMPORTER MODAL
 // ============================================================================
-const tabBtnYtdlp = document.getElementById('tab-btn-ytdlp');
 const tabBtnLocal = document.getElementById('tab-btn-local');
-const importViewYtdlp = document.getElementById('import-view-ytdlp');
 const importViewLocal = document.getElementById('import-view-local');
 
 
-const ytdlpUrlInput = document.getElementById('ytdlp-url-input') as HTMLInputElement | null;
-const btnYtdlpPaste = document.getElementById('btn-ytdlp-paste') as HTMLButtonElement | null;
-const ytdlpBrowserSelect = document.getElementById('ytdlp-browser-select') as HTMLInputElement | null;
-const ytdlpAudioOnlyCheckbox = document.getElementById('ytdlp-audio-only-checkbox') as HTMLInputElement | null;
-const ytdlpSponsorblockCheckbox = document.getElementById('ytdlp-sponsorblock-checkbox') as HTMLInputElement | null;
-const btnYtdlpStartDownload = document.getElementById('btn-ytdlp-start-download') as HTMLButtonElement | null;
-const btnYtdlpDownloadAndLive = document.getElementById('btn-ytdlp-download-and-live') as HTMLButtonElement | null;
-const ytdlpDownloadStatus = document.getElementById('ytdlp-download-status');
-const ytdlpProgressContainer = document.getElementById('ytdlp-progress-container');
-const ytdlpProgressFill = document.getElementById('ytdlp-progress-fill');
 
-if (btnYtdlpPaste) {
-  btnYtdlpPaste.addEventListener('click', async () => {
-    let pastedText = '';
-
-    // 1. Try Desktop Backend Clipboard API (works directly on system clipboard)
-    try {
-      const res = await fetch('/api/system/clipboard');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.text && data.text.trim()) {
-          pastedText = data.text.trim();
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
-
-    // 2. Fallback to navigator.clipboard.readText()
-    if (!pastedText && navigator.clipboard && navigator.clipboard.readText) {
-      try {
-        const text = await navigator.clipboard.readText();
-        if (text && text.trim()) {
-          pastedText = text.trim();
-        }
-      } catch (e) {
-        // ignore
-      }
-    }
-
-    // 3. If pastedText was obtained, populate and provide visual confirmation
-    if (pastedText) {
-      if (ytdlpUrlInput) {
-        ytdlpUrlInput.value = pastedText;
-        ytdlpUrlInput.focus();
-        btnYtdlpPaste.textContent = '✓ Pasted!';
-        setTimeout(() => {
-          btnYtdlpPaste.textContent = '📋 Paste';
-        }, 1200);
-      }
-      return;
-    }
-
-    // 4. Fallback: focus input and prompt user to press Ctrl+V
-    if (ytdlpUrlInput) {
-      ytdlpUrlInput.focus();
-      ytdlpUrlInput.select();
-      if (ytdlpDownloadStatus) {
-        ytdlpDownloadStatus.innerHTML = `<span style="color: var(--os-accent-text);">📋 Please press <strong>Ctrl+V</strong> to paste your URL.</span>`;
-        setTimeout(() => {
-          if (ytdlpDownloadStatus && ytdlpDownloadStatus.textContent.includes('Ctrl+V')) {
-            ytdlpDownloadStatus.innerHTML = '';
-          }
-        }, 3000);
-      }
-    }
-  });
-}
-
-function openImportModal(initialMode = 'ytdlp') {
+function openImportModal(initialMode = 'local') {
   if (importModal) showModal(importModal);
   resetImportModal();
   if (initialMode) setImportMode(initialMode);
@@ -2124,190 +2054,15 @@ function openImportModal(initialMode = 'ytdlp') {
 
 function setImportMode(mode: string) {
   setActiveImportMode(mode);
-  if (tabBtnYtdlp) tabBtnYtdlp.classList.toggle('active', mode === 'ytdlp');
   if (tabBtnLocal) tabBtnLocal.classList.toggle('active', mode === 'local');
-  if (importViewYtdlp) importViewYtdlp.style.display = mode === 'ytdlp' ? 'flex' : 'none';
   if (importViewLocal) importViewLocal.style.display = mode === 'local' ? 'flex' : 'none';
 }
 
-if (tabBtnYtdlp) on(tabBtnYtdlp, 'click', () => setImportMode('ytdlp'));
 if (tabBtnLocal) on(tabBtnLocal, 'click', () => setImportMode('local'));
 
-let ytdlpPollingInterval: ReturnType<typeof setInterval> | null = null;
-
-function stopYtdlpPolling() {
-  if (ytdlpPollingInterval) {
-    clearInterval(ytdlpPollingInterval);
-    ytdlpPollingInterval = null;
-  }
-}
-
-async function handleYtDlpDownload(goLiveAfter = false) {
-  const url = ytdlpUrlInput ? ytdlpUrlInput.value.trim() : '';
-  if (!url) {
-    if (ytdlpDownloadStatus) {
-      ytdlpDownloadStatus.innerHTML = `<span style="color: var(--os-danger-text);">⚠️ Please enter or paste a video URL (e.g. YouTube, Vimeo, direct link).</span>`;
-    }
-    if (ytdlpUrlInput) ytdlpUrlInput.focus();
-    return;
-  }
-
-  const browser = ytdlpBrowserSelect ? ytdlpBrowserSelect.value : 'auto';
-  const isAudio = ytdlpAudioOnlyCheckbox ? ytdlpAudioOnlyCheckbox.checked : false;
-  const sponsorblock = ytdlpSponsorblockCheckbox ? ytdlpSponsorblockCheckbox.checked : true;
-
-  if (ytdlpProgressContainer) ytdlpProgressContainer.style.display = 'block';
-  if (ytdlpProgressFill) ytdlpProgressFill.style.width = '0%';
-
-  if (ytdlpDownloadStatus) {
-    ytdlpDownloadStatus.innerHTML = `
-      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--os-accent-text);">
-        <span>⏳ Initializing <strong>yt-dlp</strong> background download...</span>
-        <span style="font-weight: 700; color: var(--os-success-text);">0%</span>
-      </div>`;
-  }
-
-  if (btnYtdlpStartDownload) btnYtdlpStartDownload.disabled = true;
-  if (btnYtdlpDownloadAndLive) btnYtdlpDownloadAndLive.disabled = true;
-  if (btnYtdlpPaste) btnYtdlpPaste.disabled = true;
-
-  try {
-    const res = await fetch('/api/media/ytdlp/download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url,
-        browser,
-        sponsorblock_remove_all: sponsorblock,
-        audio_only: isAudio
-      })
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(errText || 'Download failed to initialize');
-    }
-
-    const initProgress = await res.json();
-    const taskId = initProgress.task_id;
-
-    if (ytdlpPollingInterval) clearInterval(ytdlpPollingInterval);
-    let ytdlpFailCount = 0;
-
-    ytdlpPollingInterval = setInterval(async () => {
-      try {
-        const progRes = await fetch(`/api/media/ytdlp/progress/${encodeURIComponent(taskId)}`);
-        if (!progRes.ok) {
-          ytdlpFailCount++;
-          if (ytdlpFailCount >= 5) {
-            stopYtdlpPolling();
-            if (btnYtdlpStartDownload) btnYtdlpStartDownload.disabled = false;
-            if (btnYtdlpDownloadAndLive) btnYtdlpDownloadAndLive.disabled = false;
-            if (btnYtdlpPaste) btnYtdlpPaste.disabled = false;
-            if (ytdlpDownloadStatus) {
-              ytdlpDownloadStatus.innerHTML = `<div style="color: var(--os-danger-text);">❌ Download status polling connection lost.</div>`;
-            }
-          }
-          return;
-        }
-
-        ytdlpFailCount = 0;
-        const progress = await progRes.json();
-        const pct = Math.min(Math.max(progress.percent || 0, 0), 100);
-
-        if (ytdlpProgressFill) {
-          ytdlpProgressFill.style.width = `${pct}%`;
-        }
-
-        const speedStr = progress.speed ? ` • ${progress.speed}` : '';
-        const etaStr = progress.eta ? ` • ETA ${progress.eta}` : '';
-
-        if (ytdlpDownloadStatus) {
-          ytdlpDownloadStatus.innerHTML = `
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
-              <span style="color: var(--os-accent-text);">${escapeHtml(progress.status || 'Downloading...')}${escapeHtml(speedStr)}${escapeHtml(etaStr)}</span>
-              <span style="font-weight: 700; color: var(--os-success-text); font-variant-numeric: tabular-nums;">${pct.toFixed(1)}%</span>
-            </div>`;
-        }
-
-        if (progress.is_complete) {
-          stopYtdlpPolling();
-
-          if (btnYtdlpStartDownload) btnYtdlpStartDownload.disabled = false;
-          if (btnYtdlpDownloadAndLive) btnYtdlpDownloadAndLive.disabled = false;
-          if (btnYtdlpPaste) btnYtdlpPaste.disabled = false;
-
-          if (progress.error) {
-            if (ytdlpDownloadStatus) {
-              ytdlpDownloadStatus.innerHTML = `
-                <div style="color: var(--os-danger-text);">
-                  ❌ Download failed: ${escapeHtml(progress.error)}
-                </div>`;
-            }
-          } else {
-            const mediaItem = progress.media_item;
-            const title = mediaItem ? mediaItem.name : 'Media File';
-
-            if (ytdlpProgressFill) ytdlpProgressFill.style.width = '100%';
-            if (ytdlpDownloadStatus) {
-              ytdlpDownloadStatus.innerHTML = `
-                <div style="color: #4caf50; font-weight: 600;">
-                  ✓ 100% — Successfully imported <strong>${escapeHtml(title)}</strong> into Media Library!
-                </div>`;
-            }
-
-            if (ytdlpUrlInput) ytdlpUrlInput.value = '';
-
-            // Ensure downloaded file appears in Media library
-            await loadLibraryTab('media');
-
-            // If go live requested
-            if (goLiveAfter && mediaItem && mediaItem.id) {
-              addItemToSchedule('media', mediaItem.id);
-              setTimeout(() => {
-                sendCommand({ GoLive: { item_index: null, slide_index: 0 } });
-                closeModal(importModal);
-              }, 400);
-            }
-          }
-        }
-      } catch (pollErr) {
-        console.warn('Progress poll error:', pollErr);
-      }
-    }, 350);
-  } catch (err) {
-    if (ytdlpPollingInterval) {
-      clearInterval(ytdlpPollingInterval);
-      ytdlpPollingInterval = null;
-    }
-    if (btnYtdlpStartDownload) btnYtdlpStartDownload.disabled = false;
-    if (btnYtdlpDownloadAndLive) btnYtdlpDownloadAndLive.disabled = false;
-    if (btnYtdlpPaste) btnYtdlpPaste.disabled = false;
-
-    if (ytdlpDownloadStatus) {
-      ytdlpDownloadStatus.innerHTML = `
-        <div style="color: var(--os-danger-text);">
-          ❌ Initialization error: ${escapeHtml(err instanceof Error ? err.message : String(err))}
-        </div>`;
-    }
-  }
-}
-
-if (btnYtdlpStartDownload) on(btnYtdlpStartDownload, 'click', () => handleYtDlpDownload(false));
-if (btnYtdlpDownloadAndLive) on(btnYtdlpDownloadAndLive, 'click', () => handleYtDlpDownload(true));
-if (ytdlpUrlInput) {
-  ytdlpUrlInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleYtDlpDownload(false);
-    }
-  });
-}
-
-
 on('btn-import-back', 'click', handleImportBack);
-on('btn-close-import', 'click', () => { stopYtdlpPolling(); closeModal(importModal); });
-on('btn-close-import-footer', 'click', () => { stopYtdlpPolling(); closeModal(importModal); });
+on('btn-close-import', 'click', () => closeModal(importModal));
+on('btn-close-import-footer', 'click', () => closeModal(importModal));
 
 // Something (the Store card, the first-run wizard) asked to land on Settings > Plugins.
 window.addEventListener('os-open-plugins-settings', () => {
@@ -2936,39 +2691,6 @@ function initWorkspaceResizers() {
   }
 }
 
-// Polls the background yt-dlp self-updater's last result
-// (src/network/ytdlp_updater.rs) and surfaces a toast only for the
-// noteworthy cases -- a real update or a real error -- not the routine
-// silent majority (already current, or deferring to a system install).
-// Deduped via localStorage so a page reload (or the 20-minute re-poll
-// below) doesn't re-toast the same outcome repeatedly.
-async function checkYtdlpUpdaterStatus() {
-  const STORAGE_KEY = 'os_ytdlp_updater_last_toasted';
-  try {
-    const { status } = await api.ytdlpUpdater.status();
-    if (!status || (!status.updated && !status.error)) return;
-
-    const marker = status.error ? `error:${status.message}` : `updated:${status.version}`;
-    let lastToasted: string | null = null;
-    try {
-      lastToasted = localStorage.getItem(STORAGE_KEY);
-    } catch (_) { /* private browsing / storage blocked -- just skip dedupe */ }
-    if (marker === lastToasted) return;
-
-    if (status.error) {
-      showToast(`yt-dlp updater: ${status.message}`, 'warning', 6000);
-    } else {
-      showToast(`✓ yt-dlp updated to ${status.version}`, 'success');
-    }
-    try {
-      localStorage.setItem(STORAGE_KEY, marker);
-    } catch (_) { /* best-effort dedupe only */ }
-  } catch (_) {
-    // Best-effort background notification, not a critical path -- a failed
-    // status poll shouldn't itself show an error toast.
-  }
-}
-
 // Initialize on page load
 initWebSocket();
 loadAppOptions();
@@ -2977,23 +2699,14 @@ refreshInstalledBibles();
 loadLibraryTab('songs');
 initWorkspaceResizers();
 initFirstTimeSetup();
-checkYtdlpUpdaterStatus();
-setInterval(checkYtdlpUpdaterStatus, 20 * 60 * 1000);
 maybeShowFirstTimeSetup();
 
 // Expose for inline HTML onclick handlers
 (window as any).showToast = showToast;
 
-// Not the raw `ytdlpPollingInterval` variable -- a one-time snapshot of it
-// would go stale the instant the real (module-local) interval changes, which
-// is exactly what left app_core.ts's resetImportModal() unable to actually
-// cancel the poll. Expose the function itself instead: it always closes
-// over this module's live variable.
-
 // Hands these back to app_core.ts once all are declared -- see
 // registerUiCallbacks in app_core.ts for why this isn't a static import.
 registerUiCallbacks({
-  stopYtdlpPolling,
   editExistingItem,
   openImportModal,
   openSlideEditor,

@@ -494,9 +494,9 @@ impl ResolvedPaths {
             .unwrap_or_else(|| PathBuf::from("."))
     }
 
-    /// Where `src/network/ytdlp_updater.rs` keeps its self-managed `yt-dlp`
-    /// copy (Windows has no system package manager to install/update it
-    /// via, unlike `ffmpeg`'s `.deb`/`pacman`/`dnf` `Recommends`). Under the
+    /// Where `src/api/plugin_tools.rs` keeps the command-line tools it manages for
+    /// plugins (e.g. the video downloader's `yt-dlp`; Windows has no system package
+    /// manager to install/update such tools). Under the
     /// data directory, not the install directory: this is mutable state the
     /// app writes and updates itself, not a read-only installed asset --
     /// same reasoning `media_dir`/`bibles_dir`/`songs_dir` already follow.

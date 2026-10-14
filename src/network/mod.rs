@@ -15,7 +15,6 @@ pub mod linux;
 pub mod windows;
 pub mod tls;
 pub mod updater;
-pub mod ytdlp_updater;
 
 pub mod dhcp;
 pub mod hostname;

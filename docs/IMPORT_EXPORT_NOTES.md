@@ -19,7 +19,6 @@ see "Import fidelity findings" below for what's actually built and what's still 
 | `openlp_import.rs` | OpenLP | 946 |
 | `freeshow_import.rs` / `freeshow_show_import.rs` | FreeShow | 872 / 746 |
 | `pptx_import.rs` | PowerPoint (.pptx) | 444 |
-| `ytdlp_import.rs` | yt-dlp media | 444 |
 | `ewsx.rs` | EasyWorship | 1554 |
 
 All are one-directional (pull data *in* from a format being migrated away from), except the

@@ -16,12 +16,19 @@
  *   net.fetch { url }             network.outbound: the *server* fetches it, only from granted hosts
  *   library.addSong { song }      library.write on "songs"; refreshes the library list
  *   library.addScriptures { items } library.write on "scriptures": Bible chapters; refreshes the Bibles
+ *   process.start|poll|cancel|release   process.run: run one of the plugin's manifest-declared commands
+ *   tool.status|update            process.run: the host-managed tool behind those commands
+ *   library.addMedia { job, file, ... } library.write on "media": a finished file from a job's folder
+ *   ui.pasteText                  ui.panel: the clipboard's text (for a URL box)
+ *   ui.theme                      the console's design tokens (--os-*) and icon set, so a page can look native
  *   ui.resize { height }          ui.panel
  *   log { message }
  * console -> plugin: `{ type: 'os.response', id, ok, result|error }`
  *   and, with show.observe, `{ type: 'os.event', event: 'state', data }` for each state update.
  */
 import { api, type PluginInfo } from "./api_client.ts";
+import { getCurrentIconSet } from "./icon_sets.ts";
+import { registerLibrarySource, unregisterLibrarySource } from "../ui/library_panel.ts";
 
 interface Running {
   plugin: PluginInfo;
@@ -31,11 +38,53 @@ interface Running {
   token: string | null;
 }
 
-function grantedList(p: PluginInfo, id: string, field: 'hosts' | 'categories'): string[] {
+function grantedList(p: PluginInfo, id: string, field: 'hosts' | 'categories' | 'commands'): string[] {
   return p.granted.filter(g => g.id === id).flatMap(g => (g[field] as string[] | undefined) ?? []);
 }
 
 const running = new Map<Window, Running>();
+
+/** The console's design tokens (the --os-* custom properties), as currently computed. */
+function collectThemeVars(): Record<string, string> {
+  const names = new Set<string>();
+  for (const sheet of Array.from(document.styleSheets)) {
+    let rules: CSSRuleList;
+    try { rules = sheet.cssRules; } catch { continue; } // a cross-origin sheet
+    for (const rule of Array.from(rules)) {
+      const style = (rule as CSSStyleRule).style;
+      const sel = (rule as CSSStyleRule).selectorText || '';
+      if (!style || !/(^|[\s,]):root|html|body|\[data-/.test(sel)) continue;
+      for (let i = 0; i < style.length; i++) if (style[i].startsWith('--os-')) names.add(style[i]);
+    }
+  }
+  const computed = getComputedStyle(document.documentElement);
+  const vars: Record<string, string> = {};
+  names.forEach((n) => {
+    const v = computed.getPropertyValue(n).trim();
+    if (v) vars[n] = v;
+  });
+  return vars;
+}
+
+function pushTheme(win?: Window) {
+  const vars = collectThemeVars();
+  const targets = win ? [win] : Array.from(running.keys());
+  const iconSet = getCurrentIconSet();
+  targets.forEach((w) => { try { w.postMessage({ type: 'os.theme', vars, iconSet }, '*'); } catch { /* frame gone */ } });
+}
+
+let themeObserver: MutationObserver | null = null;
+function watchTheme() {
+  if (themeObserver || typeof MutationObserver === 'undefined') return;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  themeObserver = new MutationObserver(() => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => pushTheme(), 120);
+  });
+  const opts = { attributes: true, attributeFilter: ['style', 'class', 'data-theme', 'data-icon-set'] };
+  themeObserver.observe(document.documentElement, opts);
+  themeObserver.observe(document.body, opts);
+}
 let listenerInstalled = false;
 let stateSocket: WebSocket | null = null;
 
@@ -58,6 +107,7 @@ async function mintToken(r: Running): Promise<string | null> {
   if (r.granted.has('commands.send')) scopes.push({ id: 'commands.send', commands: r.commands });
   if (r.granted.has('network.outbound')) scopes.push({ id: 'network.outbound', hosts: grantedList(r.plugin, 'network.outbound', 'hosts') });
   if (r.granted.has('library.write')) scopes.push({ id: 'library.write', categories: grantedList(r.plugin, 'library.write', 'categories') });
+  if (r.granted.has('process.run')) scopes.push({ id: 'process.run', commands: grantedList(r.plugin, 'process.run', 'commands') });
   if (!scopes.length) return null;
   try {
     return (await api.plugins.token(r.plugin.id, scopes)).token;
@@ -153,6 +203,50 @@ async function handle(r: Running, method: string, params: any): Promise<unknown>
       window.dispatchEvent(new CustomEvent('os-library-changed', { detail: { category: 'scriptures' } }));
       return { chapters: body.chapters, verses: body.verses, ids: body.ids };
     }
+    case 'process.start':
+    case 'process.poll':
+    case 'process.cancel':
+    case 'process.release':
+    case 'tool.status':
+    case 'tool.update': {
+      need('process.run');
+      const path = method.replace('.', '/');
+      const res = await withToken(r, (t) => fetch(`/api/plugin-host/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-plugin-token': t },
+        body: JSON.stringify(params ?? {}),
+      }));
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `${method} failed (${res.status})`);
+      return body;
+    }
+    case 'library.addMedia': {
+      need('library.write');
+      const res = await withToken(r, (t) => fetch('/api/plugin-host/media', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-plugin-token': t },
+        body: JSON.stringify(params ?? {}),
+      }));
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `couldn't add the media (${res.status})`);
+      window.dispatchEvent(new CustomEvent('os-library-changed', { detail: { category: 'media', id: body.id } }));
+      return { id: body.id, item: body.item };
+    }
+    case 'ui.pasteText': {
+      need('ui.panel');
+      // The console's own clipboard route first (works on the desktop app), then the browser's.
+      let text = '';
+      try {
+        const res = await fetch('/api/system/clipboard');
+        if (res.ok) text = String((await res.json())?.text ?? '');
+      } catch { /* fall through */ }
+      if (!text && navigator.clipboard?.readText) {
+        try { text = await navigator.clipboard.readText(); } catch { /* denied */ }
+      }
+      return { text: text.slice(0, 4000) };
+    }
+    case 'ui.theme':
+      return { vars: collectThemeVars(), iconSet: getCurrentIconSet() };
     case 'ui.resize': {
       need('ui.panel');
       const h = Math.max(40, Math.min(600, Number(params?.height) || 0));
@@ -222,41 +316,106 @@ function dock(): HTMLElement {
   return d;
 }
 
+function frameSrc(plugin: PluginInfo, slot: string): string {
+  const entry = plugin.entry || 'index.html';
+  return `/plugin-frame/${encodeURIComponent(plugin.id)}/${entry.split('/').map(encodeURIComponent).join('/')}?slot=${encodeURIComponent(slot)}`;
+}
+
+/** Where a plugin's page appears: what its manifest asks for, else a dock panel if it may show UI. */
+function placementsOf(plugin: PluginInfo, granted: Set<string>): Array<{ slot: string; label?: string; tab?: string }> {
+  const declared = plugin.placements ?? [];
+  if (declared.length) return declared;
+  return granted.has('ui.panel') ? [{ slot: 'dock' }] : [];
+}
+
+function libraryPane(): HTMLElement | null {
+  const content = document.querySelector('.resource-content');
+  if (!content) return null;
+  let pane = content.querySelector('.plugin-source-pane') as HTMLElement | null;
+  if (!pane) {
+    pane = document.createElement('div');
+    pane.className = 'plugin-source-pane';
+    content.appendChild(pane);
+  }
+  return pane;
+}
+
 /** Starts one approved sandboxed plugin. */
 export function startSandboxedPlugin(plugin: PluginInfo): void {
   installListener();
   const granted = new Set(plugin.granted.map(g => g.id));
-  const entry = plugin.entry || 'index.html';
-  const frame = document.createElement('iframe');
-  frame.setAttribute('sandbox', 'allow-scripts'); // deliberately NOT allow-same-origin
-  frame.setAttribute('referrerpolicy', 'no-referrer');
-  frame.dataset.pluginId = plugin.id;
-  frame.src = `/plugin-frame/${encodeURIComponent(plugin.id)}/${entry.split('/').map(encodeURIComponent).join('/')}`;
-  if (granted.has('ui.panel')) {
-    const card = document.createElement('div');
-    card.className = 'plugin-dock-card';
-    const title = document.createElement('div');
-    title.className = 'plugin-dock-title';
-    title.textContent = plugin.name;
-    card.append(title, frame);
-    dock().appendChild(card);
-  } else {
-    frame.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden';
-    document.body.appendChild(frame);
-  }
+  const placements = placementsOf(plugin, granted);
+
   // Register the frame's window *now*, not on its 'load' event: a plugin's script runs while the page is
   // still loading and sends its first request straight away, which would arrive before 'load' and be
   // ignored as coming from an unknown window. (The WindowProxy stays the same across the navigation.)
-  const register = () => {
-    const w = frame.contentWindow;
-    if (w) running.set(w, { plugin, frame, granted, commands: grantedCommands(plugin), token: null });
-  };
-  register();
-  frame.addEventListener('load', () => {
-    if (frame.contentWindow && !running.has(frame.contentWindow)) register();
+  const track = (frame: HTMLIFrameElement) => {
+    const register = () => {
+      const w = frame.contentWindow;
+      if (w) running.set(w, { plugin, frame, granted, commands: grantedCommands(plugin), token: null });
+      watchTheme();
+    };
+    register();
+    frame.addEventListener('load', () => {
+      if (frame.contentWindow && !running.has(frame.contentWindow)) register();
+      pushTheme(frame.contentWindow ?? undefined);
+    });
     if (granted.has('show.observe')) ensureStateSocket();
-  });
-  if (granted.has('show.observe')) ensureStateSocket();
+  };
+  const makeFrame = (slot: string) => {
+    const frame = document.createElement('iframe');
+    frame.setAttribute('sandbox', 'allow-scripts'); // deliberately NOT allow-same-origin
+    frame.setAttribute('referrerpolicy', 'no-referrer');
+    frame.dataset.pluginId = plugin.id;
+    frame.dataset.slot = slot;
+    frame.src = frameSrc(plugin, slot);
+    return frame;
+  };
+
+  for (const placement of placements) {
+    if (placement.slot === 'library-source') {
+      const pane = libraryPane();
+      if (!pane) continue;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'plugin-source';
+      wrapper.dataset.pluginId = plugin.id;
+      const frame = makeFrame('library-source');
+      wrapper.appendChild(frame);
+      pane.appendChild(wrapper);
+      track(frame);
+      registerLibrarySource({ id: plugin.id, tab: placement.tab || 'songs', label: placement.label || plugin.name });
+    } else if (placement.slot === 'video-picker') {
+      // The Videos tab of the background picker has a pane for it (and a hint shown until a plugin fills it).
+      const pane = document.getElementById('plugin-picker-pane');
+      if (!pane) continue;
+      document.getElementById('plugin-picker-hint')?.classList.add('hidden');
+      const wrapper = document.createElement('div');
+      wrapper.className = 'plugin-source plugin-source--picker';
+      wrapper.dataset.pluginId = plugin.id;
+      wrapper.style.display = 'flex';
+      const frame = makeFrame('video-picker');
+      wrapper.appendChild(frame);
+      pane.appendChild(wrapper);
+      track(frame);
+    } else if (placement.slot === 'dock') {
+      const frame = makeFrame('dock');
+      const card = document.createElement('div');
+      card.className = 'plugin-dock-card';
+      const title = document.createElement('div');
+      title.className = 'plugin-dock-title';
+      title.textContent = plugin.name;
+      card.append(title, frame);
+      dock().appendChild(card);
+      track(frame);
+    }
+  }
+  if (!placements.length) {
+    // No UI: a hidden frame, so the plugin can still run (it just can't show anything).
+    const frame = makeFrame('hidden');
+    frame.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden';
+    document.body.appendChild(frame);
+    track(frame);
+  }
 }
 
 export function isSandboxedPluginRunning(id: string): boolean {
@@ -264,12 +423,17 @@ export function isSandboxedPluginRunning(id: string): boolean {
   return !!document.querySelector(`iframe[data-plugin-id="${CSS.escape(id)}"]`);
 }
 
-/** Removes a sandboxed plugin's frame (and dock card) -- on revoke/deny, without needing a reload. */
+/** Removes a sandboxed plugin's frames, dock cards and library entries -- on revoke/deny, without a reload. */
 export function stopSandboxedPlugin(id: string): void {
   for (const [win, r] of Array.from(running.entries())) {
     if (r.plugin.id === id) running.delete(win);
   }
-  const frame = document.querySelector(`iframe[data-plugin-id="${CSS.escape(id)}"]`);
-  const card = frame?.closest('.plugin-dock-card');
-  (card ?? frame)?.remove();
+  document.querySelectorAll(`iframe[data-plugin-id="${CSS.escape(id)}"]`).forEach((frame) => {
+    (frame.closest('.plugin-dock-card') ?? frame.closest('.plugin-source') ?? frame).remove();
+  });
+  unregisterLibrarySource(id);
+  const pickerPane = document.getElementById('plugin-picker-pane');
+  if (pickerPane && !pickerPane.querySelector('.plugin-source')) {
+    document.getElementById('plugin-picker-hint')?.classList.remove('hidden');
+  }
 }

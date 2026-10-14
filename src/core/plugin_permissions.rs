@@ -43,6 +43,7 @@ const KNOWN: &[(&str, Tier, &str)] = &[
     ("filesystem.read", Tier::High, "consent-only"),
     ("filesystem.write", Tier::Critical, "consent-only"),
     ("process.spawn", Tier::Critical, "consent-only"),
+    ("process.run", Tier::Critical, "enforced"),
     ("ui.panel", Tier::Medium, "enforced"),
     ("ui.toolbar", Tier::Medium, "reserved"),
 ];
@@ -177,7 +178,7 @@ impl PermissionSet {
             let Some(have) = grant.0.iter().find(|g| g.id == want.id) else { continue };
             let mut p = want.clone();
             match want.id.as_str() {
-                "commands.send" => {
+                "commands.send" | "process.run" => {
                     p.commands = narrow(&want.commands, &have.commands);
                     if p.commands.is_empty() {
                         continue;
@@ -200,6 +201,11 @@ impl PermissionSet {
             out.push(p);
         }
         PermissionSet(out)
+    }
+
+    /// Whether `process.run` covers the manifest command `id`.
+    pub fn runs(&self, id: &str) -> bool {
+        self.0.iter().any(|p| p.id == "process.run" && p.commands.iter().any(|c| c == "*" || c == id))
     }
 
     pub fn allows_command(&self, variant: &str) -> bool {
@@ -245,6 +251,161 @@ pub struct WebSection {
     pub sandbox: bool,
 }
 
+/// Where a sandboxed plugin's page appears in the console.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Placement {
+    /// `dock` (a small floating panel), `library-source` (an entry in a Resource Library tab's
+    /// sidebar, shown in place of the list) or `video-picker` (the Videos tab of the background picker).
+    pub slot: String,
+    #[serde(default)]
+    pub label: String,
+    /// For `library-source`: `songs`, `scriptures`, `media`, `presentations` or `themes`.
+    #[serde(default)]
+    pub tab: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UiSection {
+    #[serde(default)]
+    pub placements: Vec<Placement>,
+}
+
+/// A command-line tool the host keeps installed and current for a plugin, from a GitHub release
+/// whose checksums file carries a detached OpenPGP signature. The signing key ships *inside the
+/// plugin folder* (so the approval's digest pins it): it is never fetched from the same place as
+/// the download.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolSpec {
+    pub id: String,
+    /// "owner/repo" whose latest release provides the tool.
+    pub github: String,
+    /// Release asset to download, per `std::env::consts::OS` ("linux", "windows", "macos").
+    pub assets: std::collections::BTreeMap<String, String>,
+    /// Release asset listing "<sha256>  <asset name>" lines (e.g. SHA2-256SUMS).
+    pub checksums: String,
+    pub signature: ToolSignature,
+    /// If set, a copy of the tool already on PATH under this name is used (and left alone) when
+    /// the host hasn't installed its own.
+    #[serde(default)]
+    pub system_command: Option<String>,
+    #[serde(default = "default_version_args")]
+    pub version_args: Vec<String>,
+}
+
+fn default_version_args() -> Vec<String> {
+    vec!["--version".to_string()]
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolSignature {
+    /// Release asset holding the detached signature of the checksums asset.
+    pub asset: String,
+    /// ASCII-armored OpenPGP public key, relative to the plugin folder.
+    pub key_file: String,
+}
+
+/// One entry of a command template: a plain argument, or a group included depending on a parameter.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum ArgItem {
+    Literal(String),
+    Conditional {
+        /// A parameter name (a bool is true / any other kind is present), or the built-in `ffmpeg_dir`.
+        #[serde(rename = "if")]
+        if_param: String,
+        args: Vec<String>,
+        #[serde(default, rename = "else")]
+        else_args: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParamSpec {
+    /// `url`, `enum`, `bool` or `string`.
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub values: Vec<String>,
+    #[serde(default)]
+    pub optional: bool,
+    #[serde(default)]
+    pub max_len: Option<usize>,
+}
+
+/// A fixed command line a plugin may run: the tool, the argument template, and the typed
+/// parameters that may be substituted. The host runs nothing else, never through a shell.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandSpec {
+    pub id: String,
+    pub tool: String,
+    pub args: Vec<ArgItem>,
+    #[serde(default)]
+    pub params: std::collections::BTreeMap<String, ParamSpec>,
+}
+
+/// Values the host itself supplies to a template.
+pub const BUILTIN_PLACEHOLDERS: [&str; 2] = ["output_dir", "ffmpeg_dir"];
+
+pub fn valid_short_id(id: &str) -> bool {
+    let b = id.as_bytes();
+    (1..=40).contains(&b.len())
+        && (b[0].is_ascii_lowercase() || b[0].is_ascii_digit())
+        && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'_' | b'-'))
+}
+
+/// `{name}` placeholders in an argument string.
+pub fn placeholders(arg: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = arg;
+    while let Some(start) = rest.find('{') {
+        let after = &rest[start + 1..];
+        match after.find('}') {
+            Some(end) => {
+                out.push(&after[..end]);
+                rest = &after[end + 1..];
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+impl CommandSpec {
+    fn all_args(&self) -> Vec<&str> {
+        let mut out = Vec::new();
+        for a in &self.args {
+            match a {
+                ArgItem::Literal(s) => out.push(s.as_str()),
+                ArgItem::Conditional { args, else_args, .. } => {
+                    out.extend(args.iter().map(|s| s.as_str()));
+                    out.extend(else_args.iter().map(|s| s.as_str()));
+                }
+            }
+        }
+        out
+    }
+
+    /// The command line as the operator reads it at review: placeholders left visible, groups shown
+    /// with their condition.
+    pub fn display(&self) -> String {
+        let mut parts: Vec<String> = vec![self.tool.clone()];
+        for a in &self.args {
+            match a {
+                ArgItem::Literal(s) => parts.push(s.clone()),
+                ArgItem::Conditional { if_param, args, else_args } => {
+                    let mut g = format!("[if {if_param}: {}", args.join(" "));
+                    if !else_args.is_empty() {
+                        g.push_str(&format!(" | else: {}", else_args.join(" ")));
+                    }
+                    g.push(']');
+                    parts.push(g);
+                }
+            }
+        }
+        parts.join(" ")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
     pub manifest_version: u32,
@@ -270,6 +431,15 @@ pub struct PluginManifest {
     pub web: Option<WebSection>,
     #[serde(default)]
     pub permissions: Vec<PermissionRequest>,
+    /// Where the plugin's page appears (default: a floating dock panel).
+    #[serde(default)]
+    pub ui: Option<UiSection>,
+    /// Command-line tools the host manages for this plugin (see `ToolSpec`).
+    #[serde(default)]
+    pub tools: Vec<ToolSpec>,
+    /// The only commands the plugin may run (see `CommandSpec`); granted per id via `process.run`.
+    #[serde(default)]
+    pub commands: Vec<CommandSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -390,6 +560,114 @@ impl PluginManifest {
             }
             if p.id == "commands.send" && p.commands.is_empty() {
                 return bad("'commands.send' needs a commands list".to_string());
+            }
+            if p.id == "process.run" {
+                if p.commands.is_empty() {
+                    return bad("'process.run' needs a commands list".to_string());
+                }
+                for c in &p.commands {
+                    if !self.commands.iter().any(|d| &d.id == c) {
+                        return bad(format!("'process.run' lists '{c}', which this plugin doesn't declare in \"commands\""));
+                    }
+                }
+            }
+        }
+        self.validate_ui()?;
+        self.validate_tools_and_commands()
+    }
+
+    fn validate_ui(&self) -> Result<(), ManifestError> {
+        let Some(ui) = &self.ui else { return Ok(()) };
+        let bad = |m: String| Err(ManifestError::Invalid(m));
+        if !ui.placements.is_empty() && !self.web.as_ref().is_some_and(|w| w.sandbox) {
+            return bad("ui placements are only for sandboxed web plugins".to_string());
+        }
+        if !ui.placements.is_empty() && !self.permissions.iter().any(|p| p.id == "ui.panel") {
+            return bad("showing UI in the console needs the 'ui.panel' permission".to_string());
+        }
+        if ui.placements.len() > 4 {
+            return bad("at most 4 placements".to_string());
+        }
+        for p in &ui.placements {
+            match p.slot.as_str() {
+                "dock" | "video-picker" => {}
+                "library-source" => {
+                    if p.label.trim().is_empty() || p.label.chars().count() > 40 {
+                        return bad("a 'library-source' placement needs a label of up to 40 characters".to_string());
+                    }
+                    if !RESOURCE_CATEGORIES.contains(&p.tab.as_str()) {
+                        return bad("a 'library-source' placement needs a tab: songs, scriptures, media, presentations or themes".to_string());
+                    }
+                }
+                other => return bad(format!("unknown placement slot '{other}'")),
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_tools_and_commands(&self) -> Result<(), ManifestError> {
+        let bad = |m: String| Err(ManifestError::Invalid(m));
+        if (!self.tools.is_empty() || !self.commands.is_empty()) && !self.web.as_ref().is_some_and(|w| w.sandbox) {
+            return bad("tools and commands are only supported for sandboxed web plugins".to_string());
+        }
+        let mut tool_ids = std::collections::HashSet::new();
+        for t in &self.tools {
+            if !valid_short_id(&t.id) || !tool_ids.insert(t.id.clone()) {
+                return bad(format!("bad or duplicate tool id '{}'", t.id));
+            }
+            let repo_ok = t.github.split('/').count() == 2
+                && t.github.split('/').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')) && !p.chars().all(|c| c == '.'));
+            if !repo_ok {
+                return bad(format!("tool '{}': github must be \"owner/repo\"", t.id));
+            }
+            let plain = |n: &str| !n.is_empty() && n.len() <= 120 && n.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
+            if t.assets.is_empty() || !t.assets.iter().all(|(os, a)| matches!(os.as_str(), "linux" | "windows" | "macos") && plain(a)) {
+                return bad(format!("tool '{}': assets must map linux/windows/macos to plain release asset names", t.id));
+            }
+            if !plain(&t.checksums) || !plain(&t.signature.asset) {
+                return bad(format!("tool '{}': checksums and signature must be plain release asset names", t.id));
+            }
+            if !relative_path_is_contained(&t.signature.key_file) {
+                return bad(format!("tool '{}': signature.key_file must stay inside the plugin folder", t.id));
+            }
+            if let Some(c) = &t.system_command {
+                if !plain(c) {
+                    return bad(format!("tool '{}': bad system_command", t.id));
+                }
+            }
+        }
+        let mut cmd_ids = std::collections::HashSet::new();
+        for c in &self.commands {
+            if !valid_short_id(&c.id) || !cmd_ids.insert(c.id.clone()) {
+                return bad(format!("bad or duplicate command id '{}'", c.id));
+            }
+            if !tool_ids.contains(&c.tool) {
+                return bad(format!("command '{}' uses undeclared tool '{}'", c.id, c.tool));
+            }
+            for (name, p) in &c.params {
+                if !valid_short_id(name) || BUILTIN_PLACEHOLDERS.contains(&name.as_str()) {
+                    return bad(format!("command '{}': bad parameter name '{name}'", c.id));
+                }
+                match p.kind.as_str() {
+                    "url" | "bool" | "string" => {}
+                    "enum" if !p.values.is_empty() && p.values.iter().all(|v| !v.is_empty() && !v.starts_with('-')) => {}
+                    other => return bad(format!("command '{}': parameter '{name}' has an invalid type/values ({other})", c.id)),
+                }
+            }
+            let known = |n: &str| c.params.contains_key(n) || BUILTIN_PLACEHOLDERS.contains(&n);
+            for a in &c.args {
+                if let ArgItem::Conditional { if_param, .. } = a {
+                    if !known(if_param) {
+                        return bad(format!("command '{}': 'if' refers to unknown parameter '{if_param}'", c.id));
+                    }
+                }
+            }
+            for arg in c.all_args() {
+                for ph in placeholders(arg) {
+                    if !known(ph) {
+                        return bad(format!("command '{}': unknown placeholder {{{ph}}}", c.id));
+                    }
+                }
             }
         }
         Ok(())

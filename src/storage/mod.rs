@@ -10,7 +10,6 @@ pub mod pattern_cache;
 pub mod pptx_import;
 pub mod rtf;
 pub mod transcode;
-pub mod ytdlp_import;
 pub mod keyring;
 
 pub use db::{CcliUsageRow, Database, InstalledBibleInfo, PairedDevice};
@@ -22,4 +21,3 @@ pub use media_search_providers::{MediaSearchProvider, MediaSearchRegistry, Media
 pub use openlp_import::OpenLPImporter;
 pub use paths::{DataDirSource, InstallConfig, ResolvedPaths};
 pub use pptx_import::PptxImporter;
-pub use ytdlp_import::{YtDlpDownloadOptions, YtDlpImporter, YtDlpProgress, YtDlpStatusResponse};
