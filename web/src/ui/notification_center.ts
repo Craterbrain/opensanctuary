@@ -70,14 +70,6 @@ export function setMuted(source: string, on: boolean): void {
   changed();
 }
 
-export function getNotices(): readonly Notice[] {
-  return items;
-}
-
-export function unreadCount(): number {
-  return unread;
-}
-
 export function markAllRead(): void {
   if (!unread) return;
   unread = 0;

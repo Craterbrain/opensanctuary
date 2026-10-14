@@ -49,8 +49,6 @@ export interface KeyringTokenResponse extends KeyringResponse {
  * Any arbitrary string service namespace can be used by plugins and custom providers.
  */
 export const KEYRING_SERVICES = {
-  PEXELS: 'OpenSanctuary:Pexels',
-  PIXABAY: 'OpenSanctuary:Pixabay',
   CCLI: 'OpenSanctuary:CCLI',
   CLOUD_SYNC: 'OpenSanctuary:CloudSync',
   GENERAL: 'OpenSanctuary:General',

@@ -370,8 +370,8 @@ pub(super) struct StartTvProvisionRequest {
 /// does (`app.create_pairing_session`, not reimplemented), then hands the
 /// whole connect/install/launch sequence to `crate::network::adb::provision`
 /// as a background task -- returns a `task_id` immediately, same
-/// fire-and-forget-plus-poll shape as the yt-dlp import flow
-/// (`GET /api/media/ytdlp/progress/:task_id`).
+/// fire-and-forget-plus-poll shape as a plugin's `process.run` jobs
+/// (`POST /api/plugin-host/process/{start,poll}`).
 pub(super) async fn start_tv_provision_handler(
     State(app): State<AppState>,
     headers: HeaderMap,

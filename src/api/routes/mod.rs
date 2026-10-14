@@ -347,7 +347,7 @@ mod gate_tests {
             "/api/songs", "/api/scriptures", "/api/media", "/api/themes", "/api/themes/default",
             "/api/presentations", "/api/slide-templates", "/api/import/openlp", "/api/import/pptx",
             "/api/import/freeshow-show",
-            "/api/media/online/import", "/api/displays/open", "/api/displays/close",
+            "/api/displays/open", "/api/displays/close",
             "/api/displays/refresh", "/api/system/pick-folder", "/api/system/pick-file",
             "/api/network/tls/regenerate", "/api/network/interfaces", "/api/keyring/plugin/token",
             "/api/some/future/route",
