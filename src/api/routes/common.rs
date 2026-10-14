@@ -271,7 +271,7 @@ pub(super) fn router() -> Router<AppState> {
 
 #[cfg(test)]
 mod common_tests {
-    use super::{is_same_machine_browser_request, validate_https_url};
+    use super::{is_same_machine_browser_request, validate_https_url, validate_safe_path};
     use axum::http::HeaderMap;
 
     fn hm(pairs: &[(&str, &str)]) -> HeaderMap {
@@ -280,6 +280,43 @@ mod common_tests {
             h.insert(axum::http::HeaderName::from_bytes(k.as_bytes()).unwrap(), v.parse().unwrap());
         }
         h
+    }
+
+    #[test]
+    fn safe_path_rejects_network_device_and_traversal_paths_on_every_platform() {
+        // UNC / SMB and device-style paths: rejected by string shape, so this holds on
+        // Linux too (where they would otherwise parse as ordinary relative names).
+        for bad in [
+            r"\\attacker\share\x.exe",
+            "//attacker/share/x.exe",
+            r"\\?\C:\Windows\win.ini",
+            r"\\.\PhysicalDrive0",
+            "  \\\\padded\\share",
+            "",
+            "   ",
+            "a\0b",
+            "../etc/passwd",
+            "/tmp/ok/../../etc/passwd",
+        ] {
+            assert!(validate_safe_path(bad).is_err(), "should reject {:?}", bad);
+        }
+        for good in ["/home/user/service.ewsx", "relative/service.ewsx"] {
+            assert!(validate_safe_path(good).is_ok(), "should accept {:?}", good);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn safe_path_handles_windows_prefixes() {
+        // Only a plain drive prefix is a local path; every other prefix kind
+        // (UNC, verbatim, device namespace) is refused.
+        assert!(validate_safe_path(r"C:\Users\tester\service.ewsx").is_ok());
+        assert!(validate_safe_path(r"D:/shows/service.ewsx").is_ok());
+        assert!(validate_safe_path(r"\\server\share\service.ewsx").is_err());
+        assert!(validate_safe_path(r"\\?\UNC\server\share\x").is_err());
+        assert!(validate_safe_path(r"\\?\C:\x").is_err());
+        assert!(validate_safe_path(r"\\.\C:\x").is_err());
+        assert!(validate_safe_path(r"C:\Users\..\Windows\x").is_err());
     }
 
     #[test]
