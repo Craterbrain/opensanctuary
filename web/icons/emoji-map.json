@@ -102,7 +102,7 @@
   {"glyph": "⬍", "icon": "align-middle", "note": "Align elements to vertical middle."},
   {"glyph": "🎸", "icon": "guitar", "note": "Clean Chords & Cues (strip chord markup)."},
   {"glyph": "🍪", "icon": "cookie", "note": "Browser Cookies form label (yt-dlp cookies-from-browser select)."},
-  {"glyph": "✂", "icon": null, "note": "Decorative prefix inside a checkbox label sentence (SponsorBlock); no other checkbox label has an icon."},
+  {"glyph": "✂", "icon": "scissors", "note": "Cut / remove segments: Video Downloader \"SponsorBlock: remove sponsor segments\" option."},
   {"glyph": "←", "icon": null, "note": "Only inside a <kbd> key label; a key name, keep as text."},
   {"glyph": "🌅", "icon": "sunrise", "note": "Load \"Sunday Morning Worship Service\" sample."},
   {"glyph": "🍞", "icon": "communion", "note": "Load \"Communion & Praise Service\" sample."},

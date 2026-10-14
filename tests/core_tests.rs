@@ -6870,6 +6870,11 @@ async fn test_ytdlp_plugin_runs_only_its_declared_command_and_adds_media() {
         std::fs::copy(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/plugins/_shared").join(f), web_dir.join("plugins/_shared").join(f)).unwrap();
     }
 
+    // The console's icons, as the plugin frame is allowed to load them.
+    std::fs::create_dir_all(web_dir.join("icons/orange")).unwrap();
+    std::fs::write(web_dir.join("icons/orange/check.svg"), "<svg xmlns=\"http://www.w3.org/2000/svg\"/>").unwrap();
+    std::fs::write(web_dir.join("icons/emoji-map.json"), r#"[{"glyph":"\u2713","icon":"check"},{"glyph":"\u2702\ufe0f","icon":"scissors"},{"glyph":"\ud83d\udd0d","icon":null}]"#).unwrap();
+
     // A stand-in yt-dlp in the place the host installs the real one.
     let data_dir = tmp.path().join("data");
     let tool_dir = data_dir.join("tools/plugins/ytdlp");
@@ -7021,13 +7026,27 @@ echo "{\"id\":\"abc123\",\"title\":\"Fake Title\",\"duration\":12.5,\"thumbnail\
 
     // The console's shared SDK and theme are served to an approved plugin, and nothing else is reachable
     // through the `__os/` prefix.
-    for (path, want) in [("sdk.js", 200), ("theme.css", 200), ("other.js", 404), ("..%2fplugin.json", 404), ("sdk.js/x", 404)] {
+    let now = json(c.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap()).await;
+    let now = now.as_array().unwrap().iter().find(|p| p["id"] == "ytdlp").unwrap().clone();
+    assert_eq!(now["state"], "active", "{now}");
+    assert_eq!(c.get(format!("{base}/plugin-frame/ytdlp/index.html")).send().await.unwrap().status().as_u16(), 200, "the plugin's own page");
+    for (path, want) in [("sdk.js", 200), ("theme.css", 200), ("other.js", 404), ("..%2fplugin.json", 404), ("sdk.js/x", 404),
+                         ("icons.js", 200), ("icons/orange/check.svg", 200), ("icons/orange/nope.svg", 404), ("icons/Orange/check.svg", 404),
+                         ("icons/orange/check.svg/x", 404), ("icons/orange/..%2f..%2fplugin.json", 404), ("icons/../../etc/passwd", 404), ("icons/orange/check", 404)] {
         let r = c.get(format!("{base}/plugin-frame/ytdlp/__os/{path}")).send().await.unwrap();
-        assert_eq!(r.status().as_u16(), want, "{path}");
+        let csp = r.headers().get("content-security-policy").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+        let (st, body) = (r.status().as_u16(), r.text().await.unwrap_or_default());
+        assert_eq!(st, want, "{path}: {}", body.chars().take(120).collect::<String>());
         if want == 200 {
-            assert!(r.headers()["content-security-policy"].to_str().unwrap().contains("sandbox allow-scripts"));
+            assert!(csp.contains("sandbox allow-scripts"), "{path}");
         }
     }
+
+    // The emoji map reaches the frame as a script, with variation selectors stripped and glyphs without an icon left out.
+    let icons_js = c.get(format!("{base}/plugin-frame/ytdlp/__os/icons.js")).send().await.unwrap().text().await.unwrap();
+    assert!(icons_js.starts_with("window.__OS_EMOJI = {"), "{icons_js}");
+    assert!(icons_js.contains("\"\u{2713}\":\"check\"") && icons_js.contains("\"\u{2702}\":\"scissors\""), "{icons_js}");
+    assert!(!icons_js.contains('\u{fe0f}') && !icons_js.contains('\u{1f50d}'), "{icons_js}");
 
     // A token without library.write can't add media; and a revoke kills everything.
     let run_only = json(mint(serde_json::json!([{ "id": "process.run", "commands": ["download"] }])).await).await["token"].as_str().unwrap().to_string();

@@ -90,7 +90,14 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   `__os/sdk.js` (served by the host to any approved sandboxed plugin): the console sends its design
   tokens (`--os-*`) to the frame and again whenever the theme changes, and the stylesheet gives
   `.btn`, inputs, `.os-list`, `.os-tabs`, `.os-badge`, `.card` and so on the console's own look, so
-  a plugin built from them is indistinguishable from built-in UI. `OS.call(method, params)` is the
+  a plugin built from them is indistinguishable from built-in UI. **Icons, not emoji:** a page that
+  loads `__os/icons.js` and then `__os/sdk.js` gets the console's own SVG icons exactly as the console
+  does: emoji that have an icon in `web/icons/emoji-map.json` (and `{icon:name}` tokens) are swapped
+  for `<img class="ui-icon">` pointing at `__os/icons/<set>/<name>.svg`, the file in the current
+  icon set, and follow the operator's icon-set choice. `OS.icon(name)` returns the markup for one.
+  Text that can't hold an image (`placeholder=`, `title=`, `<option>`) stays plain. Need an icon that
+  doesn't exist? Add it to `web/icons/crimson/` and run `bun icons/derive_sets.ts` (see
+  `web/icons/README.md`), then map its emoji in `emoji-map.json`. `OS.call(method, params)` is the
   bridge; `OS.on('state', ...)` the event stream; `OS.slot` says where the page is shown.
 - **Running a command-line tool: `process.run`.** A sandboxed plugin can't run programs, but it can
   declare in `plugin.json` the exact commands it needs (`commands`: the tool, an argument template

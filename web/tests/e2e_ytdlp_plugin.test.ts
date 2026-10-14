@@ -25,6 +25,23 @@ printf 'fake media' > "$dir/E2E Clip [zz9].$ext"
 echo "{\\"id\\":\\"zz9\\",\\"title\\":\\"E2E Clip\\",\\"duration\\":3.5,\\"_filename\\":\\"$dir/E2E Clip [zz9].webm\\"}"
 `;
 
+/** The page uses the console's icons, not emoji: <img class="ui-icon"> from __os/icons/<set>/, loaded, and no emoji glyphs left in the text. */
+async function expectNativeIcons(frame: import("playwright").Frame, atLeast: number) {
+  await frame.waitForFunction(
+    (n) => {
+      const imgs = Array.from(document.querySelectorAll<HTMLImageElement>("img.ui-icon"));
+      return imgs.length >= n && imgs.every((i) => i.complete && i.naturalWidth > 0);
+    },
+    atLeast, { timeout: 10000 },
+  );
+  const info = await frame.evaluate(() => ({
+    srcs: Array.from(document.querySelectorAll<HTMLImageElement>("img.ui-icon")).map((i) => i.getAttribute("src") || ""),
+    text: document.body.innerText,
+  }));
+  expect(info.srcs.every((s) => /^__os\/icons\/[a-z0-9-]+\/[a-z0-9-]+\.svg$/.test(s))).toBe(true);
+  expect(/[\u{1F300}-\u{1FAFF}\u2702\u2B07\u2728\u25B6\u25C0]/u.test(info.text)).toBe(false);
+}
+
 describe("E2E Live Test: Video Downloader plugin (yt-dlp) downloads through the host", () => {
   let server: SpawnedTestServer;
   let browser: Browser;
@@ -95,6 +112,7 @@ describe("E2E Live Test: Video Downloader plugin (yt-dlp) downloads through the 
     await page.screenshot({ path: `${artifactDir}/screenshot_ytdlp_plugin_panel.png` });
     await page.screenshot({ path: "../docs/screenshots/ytdlp-plugin.png" });
 
+    await expectNativeIcons(frame, 5);
     // The same plugin also fills the video background picker's download tab (and the pointer there goes away).
     expect(await page.locator('#plugin-picker-pane iframe[data-slot="video-picker"]').count()).toBe(1);
     expect(await page.locator("#plugin-picker-hint").evaluate((el) => el.classList.contains("hidden"))).toBe(true);

@@ -5,6 +5,23 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { spawnTestServer, teardownTestServer, ensureArtifactDir, type SpawnedTestServer } from "./e2e_helpers";
 
+/** The page uses the console's icons, not emoji: <img class="ui-icon"> from __os/icons/<set>/, loaded, and no emoji glyphs left in the text. */
+async function expectNativeIcons(frame: import("playwright").Frame, atLeast: number) {
+  await frame.waitForFunction(
+    (n) => {
+      const imgs = Array.from(document.querySelectorAll<HTMLImageElement>("img.ui-icon"));
+      return imgs.length >= n && imgs.every((i) => i.complete && i.naturalWidth > 0);
+    },
+    atLeast, { timeout: 10000 },
+  );
+  const info = await frame.evaluate(() => ({
+    srcs: Array.from(document.querySelectorAll<HTMLImageElement>("img.ui-icon")).map((i) => i.getAttribute("src") || ""),
+    text: document.body.innerText,
+  }));
+  expect(info.srcs.every((s) => /^__os\/icons\/[a-z0-9-]+\/[a-z0-9-]+\.svg$/.test(s))).toBe(true);
+  expect(/[\u{1F300}-\u{1FAFF}\u2702\u2B07\u2728\u25B6\u25C0]/u.test(info.text)).toBe(false);
+}
+
 describe("E2E Live Test: Online Bibles plugin replaces the built-in Bible downloader", () => {
   let server: SpawnedTestServer;
   let browser: Browser;
@@ -63,6 +80,7 @@ describe("E2E Live Test: Online Bibles plugin replaces the built-in Bible downlo
     await node.click();
     const frame = frameOf()!;
     await frame.waitForSelector("#catalog-list li", { state: "visible", timeout: 40000 }); // the curated list at least
+    await expectNativeIcons(frame, 3);
     await page.screenshot({ path: `${artifactDir}/screenshot_online_bibles_panel.png` });
     await page.screenshot({ path: `../docs/screenshots/online-bibles-plugin.png` });
 

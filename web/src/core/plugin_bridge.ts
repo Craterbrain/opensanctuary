@@ -20,13 +20,14 @@
  *   tool.status|update            process.run: the host-managed tool behind those commands
  *   library.addMedia { job, file, ... } library.write on "media": a finished file from a job's folder
  *   ui.pasteText                  ui.panel: the clipboard's text (for a URL box)
- *   ui.theme                      the console's design tokens (--os-*), so a page can look native
+ *   ui.theme                      the console's design tokens (--os-*) and icon set, so a page can look native
  *   ui.resize { height }          ui.panel
  *   log { message }
  * console -> plugin: `{ type: 'os.response', id, ok, result|error }`
  *   and, with show.observe, `{ type: 'os.event', event: 'state', data }` for each state update.
  */
 import { api, type PluginInfo } from "./api_client.ts";
+import { getCurrentIconSet } from "./icon_sets.ts";
 import { registerLibrarySource, unregisterLibrarySource } from "../ui/library_panel.ts";
 
 interface Running {
@@ -68,7 +69,8 @@ function collectThemeVars(): Record<string, string> {
 function pushTheme(win?: Window) {
   const vars = collectThemeVars();
   const targets = win ? [win] : Array.from(running.keys());
-  targets.forEach((w) => { try { w.postMessage({ type: 'os.theme', vars }, '*'); } catch { /* frame gone */ } });
+  const iconSet = getCurrentIconSet();
+  targets.forEach((w) => { try { w.postMessage({ type: 'os.theme', vars, iconSet }, '*'); } catch { /* frame gone */ } });
 }
 
 let themeObserver: MutationObserver | null = null;
@@ -244,7 +246,7 @@ async function handle(r: Running, method: string, params: any): Promise<unknown>
       return { text: text.slice(0, 4000) };
     }
     case 'ui.theme':
-      return { vars: collectThemeVars() };
+      return { vars: collectThemeVars(), iconSet: getCurrentIconSet() };
     case 'ui.resize': {
       need('ui.panel');
       const h = Math.max(40, Math.min(600, Number(params?.height) || 0));

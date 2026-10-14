@@ -48,6 +48,10 @@ code, .mono { font-family: var(--os-font-mono); font-size: 0.95em; }
 ::-webkit-scrollbar-thumb { background: var(--os-border-strong); border-radius: var(--os-radius-pill); border: 2px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-track { background: transparent; }
 
+/* ---- icons (the console's own, swapped in for emoji by sdk.js) ---- */
+.ui-icon { width: 1.2em; height: 1.2em; vertical-align: -0.22em; pointer-events: none; }
+.btn-primary .ui-icon, .btn-danger .ui-icon { filter: brightness(0) invert(1); }
+
 /* ---- buttons ---- */
 .btn {
   --btn-h: var(--os-control-h);

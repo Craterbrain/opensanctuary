@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <style>
+    .stroke-red { fill: none; stroke: #f43f5e; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-light-red { fill: none; stroke: #fda4af; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .stroke-dark-red { fill: none; stroke: #e11d48; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <circle class="stroke-red" cx="6" cy="18" r="3"/>
+  <circle class="stroke-red" cx="18" cy="18" r="3"/>
+  <line class="stroke-dark-red" x1="15.88" y1="15.88" x2="4" y2="4"/>
+  <line class="stroke-dark-red" x1="8.12" y1="15.88" x2="10.5" y2="13.5"/>
+  <line class="stroke-dark-red" x1="13.5" y1="10.5" x2="20" y2="4"/>
+  <path class="stroke-light-red" d="M12 12v.01"/>
+</svg>

@@ -904,6 +904,44 @@ fn csp_host_ok(h: &str) -> bool {
         && (!h.contains('*') || h.starts_with("*."))
 }
 
+/// The CSP every frame response carries: nothing but the hosts the plugin was granted, and a sandbox.
+fn frame_csp(row: &PluginGrantRow) -> String {
+    let granted = parse_granted(row);
+    let mut sources: Vec<String> = Vec::new();
+    for p in granted.0.iter().filter(|p| p.id == "network.outbound") {
+        for h in p.hosts.iter().filter(|h| csp_host_ok(h)) {
+            sources.push(format!("https://{h} wss://{h} http://{h} ws://{h}"));
+        }
+    }
+    let connect = if sources.is_empty() { "'none'".to_string() } else { sources.join(" ") };
+    format!(
+        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
+         font-src 'self' data:; media-src 'self' blob:; connect-src {connect}; base-uri 'none'; form-action 'none'; \
+         frame-ancestors 'self'; sandbox allow-scripts"
+    )
+}
+
+/// `icons/<set>/<name>.svg` with a plain set and icon name (letters, digits, dashes) -> (set, name).
+fn icon_path(shared: &str) -> Option<(&str, &str)> {
+    let rest = shared.strip_prefix("icons/")?;
+    let (set, file) = rest.split_once('/')?;
+    let name = file.strip_suffix(".svg")?;
+    let plain = |s: &str| !s.is_empty() && s.len() <= 40 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    (plain(set) && plain(name)).then_some((set, name))
+}
+
+/// A script defining `window.__OS_EMOJI` (glyph -> icon name, for the glyphs that have an icon).
+fn icons_script(map_path: &std::path::Path) -> String {
+    let entries: Vec<serde_json::Value> = std::fs::read(map_path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let mut map = serde_json::Map::new();
+    for e in entries {
+        if let (Some(g), Some(i)) = (e.get("glyph").and_then(|v| v.as_str()), e.get("icon").and_then(|v| v.as_str())) {
+            map.insert(g.replace('\u{fe0f}', ""), serde_json::Value::String(i.to_string()));
+        }
+    }
+    format!("window.__OS_EMOJI = {};\n", serde_json::Value::Object(map))
+}
+
 /// GET /plugin-frame/:id/*path -- serves a sandboxed plugin's files, but only while the plugin is
 /// approved and the folder still hashes to what was reviewed. Every response carries a CSP that
 /// forbids everything except what the plugin was granted (`network.outbound` hosts), and a
@@ -939,9 +977,24 @@ pub(super) async fn serve_plugin_frame(
     if !ok {
         return not_found();
     }
+    // `__os/icons.js`: the console's emoji -> icon map, as a script (a frame can't fetch JSON).
+    if shared.as_deref() == Some("icons.js") {
+        let body = icons_script(&app.web_dir.join("icons").join("emoji-map.json"));
+        return axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/javascript; charset=utf-8")
+            .header(header::CONTENT_SECURITY_POLICY, frame_csp(&row))
+            .header(header::CACHE_CONTROL, "no-store")
+            .body(axum::body::Body::from(body))
+            .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "couldn't build the response").into_response());
+    }
     let file = match &shared {
         Some(name) if matches!(name.as_str(), "sdk.js" | "theme.css") => app.web_dir.join("plugins").join("_shared").join(name),
-        Some(_) => return not_found(),
+        // `__os/icons/<set>/<name>.svg`: the console's own icons (one folder per theme), plain names only.
+        Some(name) => match icon_path(name) {
+            Some((set, icon)) => app.web_dir.join("icons").join(set).join(format!("{icon}.svg")),
+            None => return not_found(),
+        },
         None => dir.join(&rel),
     };
     match std::fs::symlink_metadata(&file) {
@@ -950,26 +1003,14 @@ pub(super) async fn serve_plugin_frame(
     }
     let Ok(bytes) = std::fs::read(&file) else { return not_found() };
 
-    let granted = parse_granted(&row);
-    let mut sources: Vec<String> = Vec::new();
-    for p in granted.0.iter().filter(|p| p.id == "network.outbound") {
-        for h in p.hosts.iter().filter(|h| csp_host_ok(h)) {
-            sources.push(format!("https://{h} wss://{h} http://{h} ws://{h}"));
-        }
-    }
-    let connect = if sources.is_empty() { "'none'".to_string() } else { sources.join(" ") };
-    let csp = format!(
-        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
-         font-src 'self' data:; media-src 'self' blob:; connect-src {connect}; base-uri 'none'; form-action 'none'; \
-         frame-ancestors 'self'; sandbox allow-scripts"
-    );
+    let csp = frame_csp(&row);
     axum::response::Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type_for(&rel))
         .header(header::CONTENT_SECURITY_POLICY, csp)
         .header(header::CACHE_CONTROL, "no-store")
         .body(axum::body::Body::from(bytes))
-        .unwrap_or_else(|_| not_found())
+        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "couldn't build the response").into_response())
 }
 
 pub(super) fn router() -> Router<AppState> {

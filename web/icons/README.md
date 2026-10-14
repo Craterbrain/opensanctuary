@@ -60,3 +60,10 @@ make the icon (see "Adding icons"), then add the glyph to `emoji-map.json`.
   (`title=`) can't show images, so emoji set there stay text.
 - Icons on a solid brand-colored background are drawn white by a block at the end of
   `style.css`; add new "primary background" selectors there.
+
+## Icons in plugin pages
+
+Sandboxed plugin pages (docs/PLUGINS.md) use these same icons: the host serves
+`icons/<set>/<name>.svg` to an approved plugin frame as `__os/icons/<set>/<name>.svg` and the map in
+`emoji-map.json` as `__os/icons.js`, and the plugin SDK (`plugins/_shared/sdk.js`) swaps emoji for
+them the way `emoji_icons.ts` does. `scissors` was added for the Video Downloader's SponsorBlock option.
