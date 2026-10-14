@@ -1,10 +1,16 @@
 # Plugin permission system design for OpenSanctuary (OS-Next)
 
-Status: design (written by an Opus design pass). **Removed since:** the pre-manifest forms this document calls "legacy" (loose `.so/.dll/.dylib` files as ABI 1 plugins, bare `.js` scripts with no manifest, and the one-time grandfathering of both) no longer exist; sections below that describe them (marked) are history. Native plugins must declare `backend.abi = 2`. **Implemented:** phase 0 (hardening) and phase 1 (manifest, grants, native/web gating, console UI, audit log), plus the grant check on plugin keyring tokens from phase 2. **Also implemented:** phase 2 (scoped plugin tokens, the plugin command credential, minisign signer pinning) and phase 3 (the ABI 2 `PluginHost` API, `export_plugin!`, `examples/plugin_observer.rs`). and phase 4 (sandboxed web plugins: opaque-origin iframe, per-plugin CSP, permission-checked `postMessage` bridge, `ui.panel` dock, `web/plugins/sandbox_demo`). **Host API for sandboxed plugins:** `net.fetch` (server-side, allowlisted, public-IP-only, redirect-checked) and `library.addSong`, used by `web/plugins/genius_lyrics` (the Genius lyrics import, moved out of the core). **Online Bibles** (the built-in `BibleProvider` registry, its routes and the Store/Import Bible tabs are gone) is `web/plugins/online_bibles`, using `net.fetch` and the new `library.addScriptures`. **Stock Images** (the built-in Pexels/Pixabay search is gone) is `web/plugins/stock_media`: `net.fetch` with limited headers, `keyring.own` for the API keys and the new `library.addMediaUrl` host download. **Video Downloader** (the built-in yt-dlp importer/updater are gone) is `web/plugins/ytdlp`, built on the new `process.run` permission: manifest-declared command templates, host-managed signature-verified tools, throwaway job folders and `library.addMedia`; and sandboxed plugin pages are placed natively (`ui.placements`: library sources, the video picker, a dock) and themed from the console's design tokens (`__os/theme.css`, `__os/sdk.js`). **Command handling:** REST, WebSocket and a native plugin's queued commands now share `src/api/command_pipeline.rs` (`authenticate_command` + `run_command_pipeline`: shorthand expansion, one plugin veto on identical text, parse, execute, persist, broadcast). **Not done:** `ui.toolbar`, and `commands.modify` / `keyring.service` (deliberately reserved). Decisions on the open questions at the end follow the recommendations unless noted.
+Status: **implemented.** This began as a design (written by an Opus design pass) and is kept as the reference for how plugin permissions work; sections 0, 6 and 8 are history. What exists today:
+
+- **Manifest, grants, digest pinning, signer pinning, audit log, scoped plugin tokens**, and a console review screen (Settings > Plugins) where only the console can approve, deny, revoke or **override** (an Advanced mode that grants exactly the permissions the operator picks, behind a warning; see section 4).
+- **Three kinds of plugin:** *sandboxed web* (an isolated frame behind a permission-checked bridge: the recommended kind), *native* (a Rust library, ABI 2, with the `PluginHost` API and `export_plugin!`; `examples/plugin_observer.rs`) and *console script* (`ui.dom`: runs in the console page, Critical). Pre-manifest forms (bare libraries and scripts, grandfathering, ABI 1) were removed; a native manifest must declare `backend.abi = 2`.
+- **Permissions in force:** every id in the table in section 2 marked enforced. `settings.read`, `settings.write`, `process.spawn`, `network.listen` and the `filesystem.*` ids are accepted in a manifest and shown at review, but the host does not (yet) act on them.
+- **Features built on it:** placements (`ui.placements`) and ribbon buttons (`ui.toolbar`), `net.fetch` with limited headers, `library.addSong/addScriptures/addMedia/addMediaUrl`, `process.run` with host-managed signed tools, `notifications.post`, shared keyring namespaces (`keyring.service`) and command rewriting (`commands.modify`). The bundled plugins (`web/plugins/`) are the worked examples. The guide for writing a plugin is `docs/PLUGINS.md`; this document is the permission model behind it.
+- **Commands** from REST, WebSocket and a native plugin's queue all go through `src/api/command_pipeline.rs`: shorthand expansion, `commands.modify` rewriting, one plugin veto on the final command, parse, execute, persist, broadcast.
 
 ---
 
-## 0. What exists today
+## 0. What existed before this system (history)
 
 | Surface | Mechanism | Identity | Authorization today |
 |---|---|---|---|
@@ -74,18 +80,23 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 | `commands.modify` | `commands[]` (explicit, no `*`) | Critical | **E** (native plugins only) | n/a | Rewrite a command before it runs, same kind of command only; never the emergency controls. See PLUGINS.md. |
 | `keyring.own` | — | Medium | **E** (host API) | **E** | The `OpenSanctuary:Plugin:<id>` namespace only. |
 | `keyring.service` | `services[]` (`OpenSanctuary:Shared:<name>`), `access` (`read`\|`write`) | Critical | **E** (sandboxed web, native host API) | | Shared keyring namespaces; owner rules in PLUGINS.md. Only the `Shared:` prefix is grantable, never System, another plugin's namespace or a host service. |
-| `settings.read` | `keys[]` | Medium | **E** (host API) | **E** | |
-| `settings.write` | `keys[]` | High | **E** | **E** | Never `csp_mode`, `frame_mode`, `cors_mode` or TLS settings. |
+| `settings.read` | `keys[]` | Medium | reserved | reserved | Accepted and shown, not acted on yet. |
+| `settings.write` | `keys[]` | High | reserved | reserved | Accepted and shown, not acted on yet. If it is ever implemented it must never cover `csp_mode`, `frame_mode`, `cors_mode` or TLS settings. |
 | `network.outbound` | `hosts[]` | Medium | consent-only | **E** (iframe CSP) | |
 | `network.listen` | `ports[]` | High | consent-only | n/a | |
 | `filesystem.plugin_data` | — | Low | consent-only; `host.data_dir()` returns `data_dir/plugin-data/<id>/` | n/a | |
 | `filesystem.read` / `.write` | `paths[]` | High / Critical | consent-only | n/a | |
-| `process.spawn` | — | Critical | consent-only | n/a | |
+| `process.spawn` | — | Critical | consent-only | n/a | A native library can already start anything; declared so the operator is told. |
+| `process.run` | `commands[]` (ids of commands declared in the manifest) | Critical | n/a | **E** | Sandboxed plugins only: the host runs exactly the manifest's declared command templates, no shell, throwaway job folders, with host-managed signed tools. See PLUGINS.md. |
 | `ui.panel` | — | Medium | n/a | **E** (slots) | |
 | `ui.toolbar` | — | Medium | n/a | **E** (sandboxed web plugins) | Up to 2 ribbon buttons declared in `ui.toolbar`; see PLUGINS.md |
 | `notifications.post` | — | Low | n/a | **E** (`POST /api/plugin-host/notify`) | Posts to the console's notification center; see PLUGINS.md |
 
-**E** means the host enforces it. **Info** or **consent-only** means it is shown at consent time and recorded, but not technically enforced.
+**E** means the host enforces it. **Info** or **consent-only** means it is shown at consent time and recorded, but not technically enforced.  **Reserved** means the id is accepted but nothing acts on it yet.
+
+**Which kinds can hold what.** `native.code`: native only. `ui.dom`: console scripts only. `ui.panel`, `ui.toolbar`, `process.run`, `notifications.post`: sandboxed web plugins. `commands.modify`: native plugins only (a browser tab can't sit in the command path). `keyring.service`: sandboxed and native (a console script already has console authority). The review screen's Advanced override refuses combinations that make no sense for the plugin's kind.
+
+**How scopes narrow.** A scoped plugin token (`POST /api/plugins/:id/token`) can carry `keyring.own`, `keyring.service`, `commands.send`, `network.outbound`, `library.write`, `process.run` and `notifications.post`, and never more than the live grant: `PermissionSet::narrowed_by` intersects every list (commands, hosts, categories, services) and takes the lower access for `keyring.service`. Asking for more than was granted is refused, not silently reduced. Every use re-checks the live grant, so a revoke stops a token at once.
 
 **Unknown permission ids:** if the manifest's `manifest_version` is newer than the host supports, the plugin is refused with "requires newer OS-Next". Otherwise the manifest is rejected (fail closed).
 
@@ -218,7 +229,7 @@ CREATE TABLE IF NOT EXISTS plugin_audit (
     ts_ms       INTEGER NOT NULL,
     plugin_id   TEXT NOT NULL,
     actor       TEXT NOT NULL,     -- 'system' | 'host' | 'console:<device id>' | 'plugin:<id>'
-    action      TEXT NOT NULL,     -- discovered|changed|approved|denied|revoked|grandfathered|token_issued|denied_call|load_failed
+    action      TEXT NOT NULL,     -- discovered|changed|approved|denied|revoked|token_issued|denied_call|load_failed|media_added|tool_updated|tool_update_failed|keyring_shared_access|command_modified|modify_rejected|modify_disabled  (an override is an `approved` entry whose detail has an `override` diff)
     detail_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_plugin_audit_plugin ON plugin_audit(plugin_id, ts_ms);
@@ -227,6 +238,17 @@ CREATE INDEX IF NOT EXISTS idx_plugin_audit_plugin ON plugin_audit(plugin_id, ts
 - `denied_call` rows are coalesced to one per (plugin, permission) per run, so they cannot flood the table.
 - The table is pruned to the last 5,000 rows on startup.
 - New db module: `src/storage/db/plugins.rs`.
+
+
+### Advanced override (operator)
+
+The normal review grants a subset of what the plugin asked for. For the cases that isn't enough, each plugin card has an **Advanced: override what this plugin asks for** toggle, shown behind a warning that it may break the plugin or give it more access than its author intended, and applied only after the operator ticks "I understand this may break the plugin". It lets the operator:
+
+- switch off any permission the plugin asked for, **even a required one**;
+- edit a permission's scope list (hosts, commands, library categories, paths, ports, services and access);
+- switch on **any permission the host knows** that the plugin did not ask for (the list comes from `GET /api/plugins/permissions`).
+
+`POST /api/plugins/:id/approve` takes the result as `override` (the exact list to grant; `granted` is ignored when it is present). The host validates it with `plugin_permissions::validate_grant` (known ids; no duplicates; only scope lists the permission actually takes; valid hosts and categories; `ui.dom` only for console scripts, `native.code` and `commands.modify` only for native plugins; `keyring.service` only for shareable namespaces; `commands.modify` lists checked like a manifest's) and the digest check still applies. What is stored is what is enforced, everywhere a normal grant is: the frame's network policy, scoped tokens, command and library checks. The card shows a **Permissions overridden** badge with what differs (extra, withheld, re-scoped); the audit entry for the approval carries the same diff and the server logs a warning. Approving again the normal way clears the override. Only the console can do it, like any approval.
 
 ---
 
@@ -414,7 +436,7 @@ Each phase ships on its own.
 **Phase 4: sandboxed web plugins**
 - `/plugin-frame/<id>/…` served with a per-plugin CSP: `default-src 'none'; script-src 'self'; connect-src <network.outbound hosts>`, plus `sandbox allow-scripts`.
 - A `postMessage` bridge in `web/src/core/plugin_bridge.ts`. It mints a scoped token through the console, proxies `sendCommand` and state events, and checks `show.observe` and `commands.send`.
-- `ui.panel` and `ui.toolbar` slots.
+- `ui.panel` and `ui.toolbar` slots (both implemented).
 - Same-realm loading stays available only under `ui.dom` (Critical).
 - Risks: the largest phase; the `strict` CSP mode and `frame_mode` settings interact with this and need testing.
 
@@ -430,6 +452,6 @@ Each phase ships on its own.
 6. **Copy the library to a private cache before `dlopen` to close the TOCTOU window?** Recommend **no**. It breaks plugins that load sibling libraries, and the attacker it stops can already edit `library.db`.
 7. **HMAC grant rows with a key in the OS keyring?** Recommend **no**, for the same reason as question 6. It adds complexity for little real protection.
 8. **Keep auto-loading `hello_world.js` by default?** Recommend **no**. Make it opt-in through the new consent screen.
-9. **Offer `commands.modify` (rewriting commands) or `keyring.service` (shared namespaces such as Pexels) in v1?** Recommend **reserve both and offer neither**. Add them when a real plugin needs them.
+9. **Offer `commands.modify` (rewriting commands) or `keyring.service` (shared namespaces) in v1?** The recommendation was to reserve both until a real plugin needed them; both have since been implemented, with the safeguards in docs/PLUGINS.md (same-kind rewrites only, never the emergency controls, native plugins only; shared namespaces limited to `OpenSanctuary:Shared:`).
 
 **New dependencies: none.** Everything uses serde_json, sha2, minisign-verify (minisign is already a dev-dependency), semver, uuid, rusqlite and libloading, which are all already present.
