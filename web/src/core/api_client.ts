@@ -332,6 +332,15 @@ export const api = {
       await resolveHostSessionToken();
       return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/approve`, { digest, granted }, { headers: hostTokenHeader() });
     },
+    /** The Advanced override: grant exactly these permissions instead of what the plugin asked for. */
+    approveOverride: async (id: string, digest: string, grants: PluginGrantInput[]) => {
+      await resolveHostSessionToken();
+      return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/approve`, { digest, override: grants }, { headers: hostTokenHeader() });
+    },
+    permissionCatalog: async () => {
+      await resolveHostSessionToken();
+      return api.get<PluginCatalogEntry[]>('/api/plugins/permissions', { headers: hostTokenHeader() });
+    },
     deny: async (id: string) => {
       await resolveHostSessionToken();
       return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/deny`, {}, { headers: hostTokenHeader() });
@@ -425,7 +434,29 @@ export interface PluginPermissionInfo {
   ports?: number[];
 }
 
+/** One permission to grant by hand in the Advanced override (the scope lists are optional). */
+export interface PluginGrantInput {
+  id: string;
+  categories?: string[];
+  commands?: string[];
+  hosts?: string[];
+  keys?: string[];
+  paths?: string[];
+  ports?: number[];
+}
+
+/** A permission the host knows, from GET /api/plugins/permissions. */
+export interface PluginCatalogEntry {
+  id: string;
+  tier: 'low' | 'medium' | 'high' | 'critical';
+  enforcement: string;
+  scope: 'categories' | 'commands' | 'hosts' | 'paths' | 'ports' | 'keys' | 'none';
+  categories: string[];
+}
+
 export interface PluginInfo {
+  overridden?: boolean;
+  override_diff?: { added: string[]; removed: string[]; changed: string[] } | null;
   id: string;
   kind: 'native' | 'web' | 'sandbox';
   sandboxed?: boolean;
