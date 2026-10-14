@@ -339,6 +339,28 @@ export const api = {
   // web/src/core/host_session.ts. `authorizeDevice`, `getStatus`, and
   // `verifyDevice` stay unauthenticated by design — they're called by a
   // technician's phone or an unpaired device that has no host token to send.
+  plugins: {
+    list: async () => {
+      await resolveHostSessionToken();
+      return api.get<PluginInfo[]>('/api/plugins', { headers: hostTokenHeader() });
+    },
+    approve: async (id: string, digest: string, granted: string[]) => {
+      await resolveHostSessionToken();
+      return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/approve`, { digest, granted }, { headers: hostTokenHeader() });
+    },
+    deny: async (id: string) => {
+      await resolveHostSessionToken();
+      return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/deny`, {}, { headers: hostTokenHeader() });
+    },
+    revoke: async (id: string) => {
+      await resolveHostSessionToken();
+      return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/revoke`, {}, { headers: hostTokenHeader() });
+    },
+    audit: async () => {
+      await resolveHostSessionToken();
+      return api.get<PluginAuditEntry[]>('/api/plugins/audit?limit=100', { headers: hostTokenHeader() });
+    },
+  },
   pairing: {
     createSession: async () => {
       await resolveHostSessionToken();
@@ -399,3 +421,43 @@ export const api = {
     },
   },
 };
+
+export interface PluginPermissionInfo {
+  id: string;
+  tier: 'low' | 'medium' | 'high' | 'critical';
+  enforcement: string;
+  reason?: string;
+  optional?: boolean;
+  categories?: string[];
+  commands?: string[];
+  hosts?: string[];
+  keys?: string[];
+  paths?: string[];
+  ports?: number[];
+}
+
+export interface PluginInfo {
+  id: string;
+  kind: 'native' | 'web' | 'legacy-native' | 'legacy-web';
+  name: string;
+  version: string | null;
+  state: 'pending' | 'active' | 'changed' | 'denied' | 'revoked' | 'incompatible';
+  error: string | null;
+  digest: string;
+  approved_digest: string | null;
+  requested: PluginPermissionInfo[];
+  granted: PluginPermissionInfo[];
+  decided_at: number | null;
+  decided_by: string | null;
+  loaded: boolean;
+  restart_required: boolean;
+}
+
+export interface PluginAuditEntry {
+  id: number;
+  ts_ms: number;
+  plugin_id: string;
+  actor: string;
+  action: string;
+  detail_json: string;
+}

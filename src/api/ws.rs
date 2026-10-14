@@ -22,6 +22,9 @@ pub struct ConsoleLock {
     pub last_seen: std::time::Instant,
 }
 
+const PLUGIN_TOKEN_TTL_SECS: i64 = 12 * 60 * 60;
+const PLUGIN_TOKENS_PER_PLUGIN: usize = 8;
+
 const CONSOLE_HTTP_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Clone)]
@@ -56,7 +59,8 @@ pub struct AppState {
     /// nowhere to open a display output. API handlers report `available: false` in that case.
     pub display_manager: Option<Arc<crate::webview::DisplayManagerHandle>>,
     /// Active plugin authorization tokens: token -> plugin_name
-    pub plugin_tokens: Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
+    /// token -> (plugin id, expiry unix seconds). Tokens expire and are capped per plugin.
+    pub plugin_tokens: Arc<tokio::sync::RwLock<std::collections::HashMap<String, (String, i64)>>>,
     /// Secret host session token for host console authorization
     pub host_session_token: String,
     /// Active listening server port (cleartext HTTP AV plane, default 8080)
@@ -159,18 +163,32 @@ impl AppState {
         }
     }
 
-    /// Issues a unique, scoped capability token for a plugin.
+    /// Issues a unique, scoped capability token for a plugin. Tokens expire after
+    /// `PLUGIN_TOKEN_TTL_SECS`, and a plugin holds at most `PLUGIN_TOKENS_PER_PLUGIN` at once
+    /// (the oldest is dropped), so the map can't grow without bound.
     pub async fn issue_plugin_token(&self, plugin_name: &str) -> String {
         let token = format!("plg_{}", uuid::Uuid::new_v4().simple());
+        let now = chrono::Utc::now().timestamp();
+        let plugin = plugin_name.trim().to_string();
         let mut tokens = self.plugin_tokens.write().await;
-        tokens.insert(token.clone(), plugin_name.trim().to_string());
+        tokens.retain(|_, (_, exp)| *exp > now);
+        let mut mine: Vec<(String, i64)> =
+            tokens.iter().filter(|(_, (p, _))| *p == plugin).map(|(t, (_, exp))| (t.clone(), *exp)).collect();
+        if mine.len() >= PLUGIN_TOKENS_PER_PLUGIN {
+            mine.sort_by_key(|(_, exp)| *exp);
+            for (t, _) in mine.iter().take(mine.len() + 1 - PLUGIN_TOKENS_PER_PLUGIN) {
+                tokens.remove(t);
+            }
+        }
+        tokens.insert(token.clone(), (plugin, now + PLUGIN_TOKEN_TTL_SECS));
         token
     }
 
-    /// Resolves a plugin capability token to its associated plugin name.
+    /// Resolves a plugin capability token to its associated plugin name, if it hasn't expired.
     pub async fn resolve_plugin_token(&self, token: &str) -> Option<String> {
+        let now = chrono::Utc::now().timestamp();
         let tokens = self.plugin_tokens.read().await;
-        tokens.get(token.trim()).cloned()
+        tokens.get(token.trim()).filter(|(_, exp)| *exp > now).map(|(p, _)| p.clone())
     }
 
     /// Creates an ephemeral pairing session with TTL (in seconds, default 300)
@@ -577,8 +595,12 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         }
                     }
 
-                    if !app.plugin_manager.check_command(&safe_text) {
-                        tracing::warn!("WebSocket command blocked by plugin: {}", safe_text);
+                    // Plugins see the same text whichever door a command came through: the
+                    // bare command after shorthand expansion (what `/api/command` hands
+                    // them), never the credential-bearing envelope.
+                    let plugin_text = serde_json::to_string(&value).unwrap_or_default();
+                    if !app.plugin_manager.check_command(&plugin_text) {
+                        tracing::warn!("WebSocket command blocked by plugin: {}", plugin_text);
                         continue;
                     }
 

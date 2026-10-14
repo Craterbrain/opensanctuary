@@ -4810,7 +4810,22 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
         .send().await.unwrap();
     assert_eq!(fake_resp.status(), reqwest::StatusCode::NOT_FOUND);
 
-    // A real, installed plugin still gets a token.
+    // A real, installed plugin that nobody has approved yet gets no token...
+    let unapproved = client.post(format!("http://{}/api/keyring/plugin/token", addr))
+        .header("x-host-token", "test_host_session_plugin")
+        .json(&serde_json::json!({ "plugin_name": "hello_world" }))
+        .send().await.unwrap();
+    assert_eq!(unapproved.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // ...and once approved with keyring access it does.
+    let found = os_next::core::plugin_registry::discover(
+        &test_dir.path().join("native"), std::path::Path::new("web/plugins"), env!("CARGO_PKG_VERSION"));
+    os_next::core::plugin_registry::sync(&db, &found);
+    let row = db.get_plugin_grant("hello_world").unwrap().unwrap();
+    db.set_plugin_decision(
+        "hello_world", "approved", r#"[{"id":"keyring.own"}]"#,
+        row.observed_manifest_sha256.as_deref(), Some(&row.observed_digest), "test",
+    ).unwrap();
     let real_resp = client.post(format!("http://{}/api/keyring/plugin/token", addr))
         .header("x-host-token", "test_host_session_plugin")
         .json(&serde_json::json!({ "plugin_name": "hello_world" }))
@@ -5982,4 +5997,204 @@ async fn test_console_credential_survives_restart_and_is_revocable() {
         .header("x-host-token", &credential)
         .send().await.unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+/// Plugin dispatch honours grants: a hook is only called for a plugin granted it, and a
+/// revoke stops the plugin at once.
+#[test]
+fn test_plugin_dispatch_respects_grants_and_revocation() {
+    use os_next::core::plugin_permissions::{PermissionRequest, PermissionSet};
+    use os_next::core::plugins::{OsPlugin, PluginManager};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Counting {
+        commands: Arc<AtomicUsize>,
+        states: Arc<AtomicUsize>,
+        veto: bool,
+    }
+    impl OsPlugin for Counting {
+        fn name(&self) -> &'static str {
+            "counting"
+        }
+        fn on_state_change(&self, _s: &os_next::core::models::ShowState) {
+            self.states.fetch_add(1, Ordering::SeqCst);
+        }
+        fn on_command(&self, _c: &str) -> bool {
+            self.commands.fetch_add(1, Ordering::SeqCst);
+            !self.veto
+        }
+        fn provide_resources(&self, category: &str) -> Vec<serde_json::Value> {
+            vec![serde_json::json!({ "id": format!("x-{category}"), "title": "from plugin" })]
+        }
+    }
+
+    let (commands, states) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let mk = || Box::new(Counting { commands: commands.clone(), states: states.clone(), veto: true });
+    let state = os_next::core::models::ShowState::default();
+
+    // Granted nothing: never consulted, never vetoes, contributes nothing.
+    let mut pm = PluginManager::new();
+    pm.register_plugin_with_grants("counting".into(), mk(), PermissionSet::empty());
+    assert!(pm.check_command("NextSlide"));
+    pm.notify_state_change(&state);
+    assert!(pm.collect_resources("songs").is_empty());
+    assert_eq!((commands.load(Ordering::SeqCst), states.load(Ordering::SeqCst)), (0, 0));
+
+    // Granted exactly three things.
+    pm.set_grants(
+        "counting",
+        PermissionSet(vec![
+            PermissionRequest::simple("show.observe"),
+            PermissionRequest::with_categories("resources.provide", &["songs"]),
+        ]),
+    );
+    pm.notify_state_change(&state);
+    assert_eq!(states.load(Ordering::SeqCst), 1);
+    assert!(pm.check_command("NextSlide"), "observe/provide alone must not grant a veto");
+    assert_eq!(commands.load(Ordering::SeqCst), 0);
+    let songs = pm.collect_resources("songs");
+    assert_eq!(songs.len(), 1);
+    assert_eq!(songs[0]["_plugin"], "counting", "items are stamped with their source plugin");
+    assert!(pm.collect_resources("themes").is_empty(), "only the granted category");
+
+    // Intercept granted: it can veto -- but never an emergency command.
+    pm.set_grants("counting", PermissionSet(vec![PermissionRequest::simple("commands.intercept")]));
+    assert!(!pm.check_command(r#""NextSlide""#));
+    assert!(pm.check_command(r#""ToggleBlackout""#));
+    assert!(pm.check_command(r#"{"SetAlert":{"text":"fire"}}"#));
+    // A song titled like an emergency command does NOT get that bypass.
+    assert!(!pm.check_command(r#"{"AddToSchedule":{"title":"SetAlert ToggleBlackout"}}"#));
+
+    // Revoke: immediately inert.
+    assert!(pm.revoke("counting"));
+    let before = commands.load(Ordering::SeqCst);
+    assert!(pm.check_command(r#""NextSlide""#));
+    assert_eq!(commands.load(Ordering::SeqCst), before);
+    assert!(!pm.set_grants("not-loaded", PermissionSet::empty()));
+}
+
+/// The console's grant routes: who may call them, digest pinning, and that approval/
+/// change/revoke actually gate what the server will serve under /plugins/.
+#[tokio::test]
+async fn test_plugin_grant_routes_and_web_plugin_serving() {
+    let test_dir = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(test_dir.path().join("plugins.db").to_str().unwrap()).unwrap();
+    let web_dir = test_dir.path().join("web");
+    std::fs::create_dir_all(web_dir.join("plugins")).unwrap();
+    std::fs::write(web_dir.join("plugins/demo_gate.js"), b"export default { init() {} };").unwrap();
+
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        tx,
+        engine,
+        db: db.clone(),
+        asset_graph: Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media"))),
+        web_dir: web_dir.clone(),
+        media_dir: test_dir.path().join("media"),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
+        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
+        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
+        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "plugin_test_host_token".to_string(),
+        server_port: addr.port(),
+        https_port: None,
+        https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let app_for_plugin_token = app_state.clone();
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    let base = format!("http://{}", addr);
+    let client = reqwest::Client::new();
+    let host = "plugin_test_host_token";
+
+    // A paired remote, a persistent console credential and a plugin token.
+    let remote_token = "dev_tok_remote_for_plugin_test";
+    db.upsert_paired_device(&os_next::storage::PairedDevice {
+        id: "remote_x".into(), name: "Remote".into(), platform: "mobile-remote".into(),
+        paired_at: 0, last_seen: 0, token: remote_token.into(),
+    }).unwrap();
+    let console_cred = "console_tok_for_plugin_test";
+    db.upsert_paired_device(&os_next::storage::PairedDevice {
+        id: "console_x".into(), name: "Laptop".into(), platform: "console".into(),
+        paired_at: 0, last_seen: 0, token: os_next::storage::db::console_credential_hash(console_cred),
+    }).unwrap();
+    let plugin_token = app_for_plugin_token.issue_plugin_token("demo_gate").await;
+
+    // Only a console may list or decide: no credential, a remote's device token and a
+    // plugin token are all refused.
+    for headers in [vec![], vec![("x-device-token", remote_token)], vec![("x-host-token", remote_token)], vec![("x-plugin-token", plugin_token.as_str())]] {
+        let mut r = client.get(format!("{base}/api/plugins"));
+        for (k, v) in &headers { r = r.header(*k, *v); }
+        assert_eq!(r.send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED, "{headers:?}");
+    }
+    let resp = client.post(format!("{base}/api/plugins/demo_gate/approve")).header("x-plugin-token", &plugin_token)
+        .json(&serde_json::json!({ "digest": "x", "granted": [] })).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED, "a plugin must not approve itself");
+
+    // Discovered as pending and NOT served.
+    let list: serde_json::Value = client.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap().json().await.unwrap();
+    let demo = list.as_array().unwrap().iter().find(|p| p["id"] == "demo_gate").unwrap().clone();
+    assert_eq!(demo["state"], "pending");
+    assert_eq!(demo["kind"], "legacy-web");
+    let digest = demo["digest"].as_str().unwrap().to_string();
+    let served = |path: &'static str| {
+        let (client, base) = (client.clone(), base.clone());
+        async move { client.get(format!("{base}{path}")).send().await.unwrap().status() }
+    };
+    assert_eq!(served("/plugins/demo_gate.js").await, reqwest::StatusCode::NOT_FOUND);
+
+    // A stale digest is refused; a missing required permission is refused.
+    let approve = |token: &'static str, digest: String, granted: Vec<&'static str>| {
+        let (client, base) = (client.clone(), base.clone());
+        async move {
+            client.post(format!("{base}/api/plugins/demo_gate/approve")).header("x-host-token", token)
+                .json(&serde_json::json!({ "digest": digest, "granted": granted })).send().await.unwrap()
+        }
+    };
+    assert_eq!(approve(host, "stale".into(), vec!["ui.dom", "keyring.own"]).await.status(), reqwest::StatusCode::CONFLICT);
+    assert_eq!(approve(host, digest.clone(), vec!["ui.dom"]).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(served("/plugins/demo_gate.js").await, reqwest::StatusCode::NOT_FOUND);
+
+    // A console credential may approve; the audit trail says which console.
+    let resp = approve(console_cred, digest.clone(), vec!["ui.dom", "keyring.own"]).await;
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    assert_eq!(resp.json::<serde_json::Value>().await.unwrap()["state"], "active");
+    assert_eq!(served("/plugins/demo_gate.js").await, reqwest::StatusCode::OK);
+    // Nothing else under /plugins/ is reachable, manifests and unknown files included.
+    assert_eq!(served("/plugins/other.js").await, reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(served("/plugins/demo_gate.plugin.json").await, reqwest::StatusCode::NOT_FOUND);
+    let audit: serde_json::Value = client.get(format!("{base}/api/plugins/audit")).header("x-host-token", host).send().await.unwrap().json().await.unwrap();
+    assert!(audit.as_array().unwrap().iter().any(|a| a["action"] == "approved" && a["actor"] == "console:console_x"));
+
+    // Editing the script after approval stops it being served until it is reviewed again.
+    std::fs::write(web_dir.join("plugins/demo_gate.js"), b"export default { init() { /* swapped */ } };").unwrap();
+    assert_eq!(served("/plugins/demo_gate.js").await, reqwest::StatusCode::NOT_FOUND);
+    let list: serde_json::Value = client.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap().json().await.unwrap();
+    let demo = list.as_array().unwrap().iter().find(|p| p["id"] == "demo_gate").unwrap().clone();
+    assert_eq!(demo["state"], "changed");
+    let new_digest = demo["digest"].as_str().unwrap().to_string();
+    assert_ne!(new_digest, digest);
+    assert_eq!(approve(host, new_digest, vec!["ui.dom", "keyring.own"]).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(served("/plugins/demo_gate.js").await, reqwest::StatusCode::OK);
+
+    // Revoke stops it again.
+    let resp = client.post(format!("{base}/api/plugins/demo_gate/revoke")).header("x-host-token", host).send().await.unwrap();
+    assert_eq!(resp.json::<serde_json::Value>().await.unwrap()["state"], "revoked");
+    assert_eq!(served("/plugins/demo_gate.js").await, reqwest::StatusCode::NOT_FOUND);
 }

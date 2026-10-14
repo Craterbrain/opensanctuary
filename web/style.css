@@ -6002,3 +6002,24 @@ video {
 .cost-medium { color: #facc15; }
 .cost-heavy { color: #fb7185; }
 .pattern-cache-controls .settings-row-desc { white-space: nowrap; }
+
+/* Settings > Plugins */
+.plugin-card { padding: 14px 16px; margin-bottom: 12px; }
+.plugin-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.plugin-state--active { background: rgba(46, 160, 67, 0.25); color: #7ee787; }
+.plugin-state--pending, .plugin-state--changed { background: rgba(210, 153, 34, 0.25); color: #e3b341; }
+.plugin-state--denied, .plugin-state--revoked, .plugin-state--incompatible { background: rgba(248, 81, 73, 0.25); color: #ff7b72; }
+.plugin-permissions { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.plugin-permission { display: block; }
+.plugin-permission input { margin-right: 8px; }
+.plugin-permission-id { font-family: ui-monospace, monospace; margin-right: 8px; }
+.plugin-permission-params { margin-left: 8px; opacity: 0.8; }
+.plugin-permission-reason { margin: 2px 0 0 26px; opacity: 0.75; font-size: 0.9em; }
+.plugin-tier--critical { background: rgba(248, 81, 73, 0.25); color: #ff7b72; }
+.plugin-tier--high { background: rgba(240, 136, 62, 0.25); color: #ffa657; }
+.plugin-tier--medium { background: rgba(210, 153, 34, 0.2); color: #e3b341; }
+.plugin-tier--low { background: rgba(110, 118, 129, 0.25); }
+.plugin-warning { color: #e3b341; margin: 8px 0; }
+.plugin-error { color: #ff7b72; margin: 8px 0; }
+.plugin-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.plugin-audit { margin-top: 16px; }

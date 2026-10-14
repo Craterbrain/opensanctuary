@@ -137,10 +137,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let plugin_dir = os_next::storage::paths::plugin_dir();
     let mut plugin_manager = os_next::core::plugins::PluginManager::new();
-    if let Err(e) = plugin_manager.load_plugins_from_dir(&plugin_dir) {
-        tracing::error!("Failed to load backend plugins: {}", e);
-    } else {
-        tracing::info!("Backend Plugin Manager initialized from {:?}", plugin_dir);
+    {
+        // Only libraries the operator has approved, and whose files are unchanged since,
+        // are loaded (docs/PLUGIN_PERMISSIONS.md).
+        let web_plugins_dir = os_next::storage::paths::resolve_web_dir(args.web_dir.as_deref()).join("plugins");
+        let discovered = os_next::core::plugin_registry::discover(&plugin_dir, &web_plugins_dir, env!("CARGO_PKG_VERSION"));
+        os_next::core::plugin_registry::sync(&db, &discovered);
+        db.prune_plugin_audit(5000);
+        plugin_manager.load_approved(os_next::core::plugin_registry::approved_natives(&db, &discovered));
+        tracing::info!("Backend Plugin Manager initialized from {:?} ({} loaded)", plugin_dir, plugin_manager.plugin_count());
     }
     let plugin_manager = Arc::new(plugin_manager);
 

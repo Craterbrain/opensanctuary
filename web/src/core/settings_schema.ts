@@ -55,6 +55,7 @@ export const SETTINGS_CATEGORIES: SettingCategoryDef[] = [
   { id: 'backgrounds', label: 'Animated Backgrounds', icon: '🎬' },
   { id: 'network', label: 'Network', icon: '🌐' },
   { id: 'paired-devices', label: 'Paired Devices', icon: '📺' },
+  { id: 'plugins', label: 'Plugins', icon: '🧩' },
   { id: 'alerts', label: 'Alerts & Nursery', icon: '🔔' },
   { id: 'integrations', label: 'Integrations', icon: '🔌' },
   { id: 'storage', label: 'Storage', icon: '📁' },

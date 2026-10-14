@@ -21,6 +21,7 @@ import { api, UpdateCheckResult } from "../core/api_client.ts";
 import { escapeHtml } from "../core/presentation_helpers.ts";
 import { closeModal, showConfirmDialog } from "./dialog_manager.ts";
 import { openCcliReportModal } from "./ccli_report_modal.ts";
+import { renderPluginsSettings } from "./plugins_settings.ts";
 import { ICON_SETS, ICON_SET_PREVIEW_ICONS, IconSetDef, iconUrl, resolveTheme } from "../core/icon_sets.ts";
 
 export interface SettingsContext {
@@ -481,6 +482,10 @@ export function renderSettingsContent() {
   }
   if (!q && activeSettingsCategory === 'paired-devices') {
     renderPairedDevicesSettings(content);
+    return;
+  }
+  if (!q && activeSettingsCategory === 'plugins') {
+    renderPluginsSettings(content);
     return;
   }
 

@@ -5,6 +5,7 @@ mod keyring;
 mod library;
 mod network;
 mod pairing;
+mod plugins;
 mod pattern_cache;
 mod reports;
 mod schedule;
@@ -92,6 +93,10 @@ pub(crate) fn needs_host_token(method: &axum::http::Method, path: &str) -> bool 
                 | "/api/internal/verify-host-token"
         ) && (path == "/api/keyring/plugin/token" || !path.starts_with("/api/keyring/"));
     }
+    // Plugin management: paths, digests and the audit trail are console-only reads.
+    if path == "/api/plugins" || path.starts_with("/api/plugins/") {
+        return true;
+    }
     matches!(
         path,
         "/api/network/interfaces"
@@ -112,6 +117,26 @@ async fn host_token_gate_middleware(
     if needs_host_token(req.method(), req.uri().path()) {
         if let Err((status, body)) = common::require_host_token(req.headers(), &app) {
             return (status, body).into_response();
+        }
+    }
+    next.run(req).await
+}
+
+/// Serves `/plugins/<name>.js` only for web plugins the operator has approved (and whose
+/// file still matches what was reviewed). Everything else under `/plugins/` -- including
+/// the `.plugin.json` manifests -- is a 404, so an unapproved script can't be loaded
+/// even by guessing its URL.
+async fn plugin_asset_gate_middleware(
+    axum::extract::State(app): axum::extract::State<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    use axum::response::IntoResponse;
+    let path = req.uri().path();
+    if let Some(rest) = path.strip_prefix("/plugins/") {
+        let allowed = !rest.contains('/') && !rest.contains("..") && plugins::web_plugin_file_is_active(&app, rest);
+        if !allowed {
+            return axum::http::StatusCode::NOT_FOUND.into_response();
         }
     }
     next.run(req).await
@@ -249,6 +274,7 @@ pub fn create_router(app_state: AppState) -> Router {
         .merge(settings::router())
         .merge(keyring::router())
         .merge(pairing::router())
+        .merge(plugins::router())
         .merge(network::router())
         .merge(displays::router())
         .merge(system::router())
@@ -269,6 +295,9 @@ pub fn create_router(app_state: AppState) -> Router {
                 ServeDir::new(web_dir),
             )
         )
+        // After the fallback so it also covers the static files; a layer only wraps what was
+        // added before it.
+        .layer(from_fn_with_state(app_state.clone(), plugin_asset_gate_middleware))
         .layer(from_fn_with_state(app_state.clone(), security_headers_middleware))
         .with_state(app_state)
 }
@@ -277,6 +306,14 @@ pub fn create_router(app_state: AppState) -> Router {
 mod gate_tests {
     use super::needs_host_token;
     use axum::http::Method;
+
+    #[test]
+    fn plugin_management_routes_are_console_only() {
+        for p in ["/api/plugins", "/api/plugins/audit", "/api/plugins/x/approve", "/api/plugins/x/revoke"] {
+            assert!(needs_host_token(&Method::GET, p), "GET {p}");
+            assert!(needs_host_token(&Method::POST, p), "POST {p}");
+        }
+    }
 
     #[test]
     fn state_changing_api_routes_are_gated_by_default() {

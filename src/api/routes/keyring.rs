@@ -86,6 +86,24 @@ pub(super) async fn keyring_plugin_token(
     if !is_known_plugin_name(&app, name) {
         return Err(AppError::NotFound("No installed plugin with that name".to_string()));
     }
+    // A token unlocks the plugin's keyring namespace, so it is only minted for a plugin the
+    // operator has approved (and not since changed) with `keyring.own` granted.
+    let row = match app.db.get_plugin_grant(name).ok().flatten() {
+        Some(r) => Some(r),
+        None => {
+            let app2 = app.clone();
+            let _ = tokio::task::spawn_blocking(move || super::plugins::rescan(&app2)).await;
+            app.db.get_plugin_grant(name).ok().flatten()
+        }
+    };
+    let allowed = row.as_ref().is_some_and(|r| {
+        r.effective_state() == "active" && crate::core::plugin_registry::parse_granted(r).has("keyring.own")
+    });
+    if !allowed {
+        return Err(AppError::Forbidden(
+            "This plugin hasn't been approved with keyring access (Settings > Plugins)".to_string(),
+        ));
+    }
     let token = app.issue_plugin_token(name).await;
     let service = format!("OpenSanctuary:Plugin:{}", name);
     Ok(Json(serde_json::json!({
