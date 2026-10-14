@@ -3,9 +3,9 @@ use std::sync::Arc;
 use crate::core::plugin_permissions::PermissionSet;
 use libloading::{Library, Symbol};
 
-/// The v1 plugin interface. **Frozen: never add or reorder methods** -- the trait object's
-/// vtable is the ABI between the host and every plugin library already built against it.
-/// New host capabilities go through `PluginHost` (ABI 2) instead.
+/// The plugin hooks. **Never add or reorder methods** -- the trait object's vtable is the ABI
+/// between the host and every plugin library built against it. New host capabilities go through
+/// `PluginHost` instead.
 pub trait OsPlugin: Send + Sync {
     fn name(&self) -> &'static str;
     fn on_state_change(&self, state: &crate::core::models::ShowState);
@@ -92,8 +92,6 @@ pub struct ApprovedNative {
     pub id: String,
     pub library: PathBuf,
     pub grants: PermissionSet,
-    /// 1 = the frozen `OsPlugin` trait only; 2 = also receives a `PluginHost`.
-    pub abi: u32,
 }
 
 /// Builds the `PluginHost` handed to an ABI 2 plugin.
@@ -124,7 +122,7 @@ impl PluginManager {
             let grants = Arc::new(GrantCell::new(a.grants.clone()));
             match self.load_library(&a, &grants, host) {
                 Ok((plugin, lib)) => {
-                    tracing::info!("Loaded Backend Plugin: {} ({}, ABI {})", a.id, plugin.name(), a.abi);
+                    tracing::info!("Loaded Backend Plugin: {} ({})", a.id, plugin.name());
                     self.plugins.push(LoadedPlugin { id: a.id, grants, plugin });
                     self._libraries.push(lib);
                 }
@@ -141,33 +139,27 @@ impl PluginManager {
     ) -> Result<(Box<dyn OsPlugin>, Library), Box<dyn std::error::Error>> {
         unsafe {
             let lib = Library::new(&a.library)?;
+            // The library must say it speaks ABI 2 and must have been built for *this* host.
             let exported_abi: Option<u32> = lib.get::<*const u32>(b"OS_PLUGIN_ABI").ok().map(|s| **s);
-            if a.abi >= 2 || exported_abi.is_some() {
-                // ABI 2: the library must say so, and must have been built for *this* host.
-                if exported_abi != Some(2) {
-                    return Err("manifest declares ABI 2 but the library doesn't export OS_PLUGIN_ABI = 2".into());
-                }
-                let ver: libloading::Symbol<*const [u8; ABI_VERSION_FIELD_LEN]> = lib.get(b"OS_PLUGIN_HOST_VERSION")?;
-                let bytes: [u8; ABI_VERSION_FIELD_LEN] = **ver;
-                let end = bytes.iter().position(|b| *b == 0).unwrap_or(ABI_VERSION_FIELD_LEN);
-                let built_for = std::str::from_utf8(&bytes[..end]).unwrap_or("?");
-                if built_for != env!("CARGO_PKG_VERSION") {
-                    return Err(format!(
-                        "plugin was built for OS-Next {built_for}, this is {}; rebuild it against this version",
-                        env!("CARGO_PKG_VERSION")
-                    )
-                    .into());
-                }
-                let factory = host.ok_or("this build can't give a plugin a host handle")?;
-                let handle: Arc<dyn PluginHost> = factory(&a.id, grants.clone());
-                let constructor: Symbol<unsafe extern "C" fn(*const Arc<dyn PluginHost>) -> *mut dyn OsPlugin> =
-                    lib.get(b"create_plugin_v2")?;
-                let raw_plugin = constructor(&handle as *const Arc<dyn PluginHost>);
-                return Ok((Box::from_raw(raw_plugin), lib));
+            if exported_abi != Some(2) {
+                return Err("the library doesn't export OS_PLUGIN_ABI = 2 (plugins built for the old ABI 1 are no longer supported)".into());
             }
-            // ABI 1: expected symbol create_plugin() -> *mut dyn OsPlugin
-            let constructor: Symbol<unsafe extern "C" fn() -> *mut dyn OsPlugin> = lib.get(b"create_plugin")?;
-            let raw_plugin = constructor();
+            let ver: libloading::Symbol<*const [u8; ABI_VERSION_FIELD_LEN]> = lib.get(b"OS_PLUGIN_HOST_VERSION")?;
+            let bytes: [u8; ABI_VERSION_FIELD_LEN] = **ver;
+            let end = bytes.iter().position(|b| *b == 0).unwrap_or(ABI_VERSION_FIELD_LEN);
+            let built_for = std::str::from_utf8(&bytes[..end]).unwrap_or("?");
+            if built_for != env!("CARGO_PKG_VERSION") {
+                return Err(format!(
+                    "plugin was built for OS-Next {built_for}, this is {}; rebuild it against this version",
+                    env!("CARGO_PKG_VERSION")
+                )
+                .into());
+            }
+            let factory = host.ok_or("this build can't give a plugin a host handle")?;
+            let handle: Arc<dyn PluginHost> = factory(&a.id, grants.clone());
+            let constructor: Symbol<unsafe extern "C" fn(*const Arc<dyn PluginHost>) -> *mut dyn OsPlugin> =
+                lib.get(b"create_plugin_v2")?;
+            let raw_plugin = constructor(&handle as *const Arc<dyn PluginHost>);
             Ok((Box::from_raw(raw_plugin), lib))
         }
     }
@@ -183,7 +175,7 @@ impl PluginManager {
     /// `load_approved` and the grant flow.
     pub fn register_plugin(&mut self, plugin: Box<dyn OsPlugin>) {
         let id = plugin.name().to_string();
-        self.register_plugin_with_grants(id, plugin, PermissionSet::legacy_full());
+        self.register_plugin_with_grants(id, plugin, PermissionSet::in_process());
     }
 
     pub fn register_plugin_with_grants(&mut self, id: String, plugin: Box<dyn OsPlugin>, grants: PermissionSet) {

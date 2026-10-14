@@ -1,6 +1,6 @@
 # Plugin permission system design for OpenSanctuary (OS-Next)
 
-Status: design (written by an Opus design pass). **Implemented:** phase 0 (hardening) and phase 1 (manifest, grants, native/web gating, console UI, audit log), plus the grant check on plugin keyring tokens from phase 2. **Also implemented:** phase 2 (scoped plugin tokens, the plugin command credential, minisign signer pinning) and phase 3 (the ABI 2 `PluginHost` API, `export_plugin!`, `examples/plugin_observer.rs`). and phase 4 (sandboxed web plugins: opaque-origin iframe, per-plugin CSP, permission-checked `postMessage` bridge, `ui.panel` dock, `web/plugins/sandbox_demo`). **Host API for sandboxed plugins:** `net.fetch` (server-side, allowlisted, public-IP-only, redirect-checked) and `library.addSong`, used by `web/plugins/genius_lyrics` (the Genius lyrics import, moved out of the core). **Online Bibles** (the built-in `BibleProvider` registry, its routes and the Store/Import Bible tabs are gone) is `web/plugins/online_bibles`, using `net.fetch` and the new `library.addScriptures`. **Stock Images** (the built-in Pexels/Pixabay search is gone) is `web/plugins/stock_media`: `net.fetch` with limited headers, `keyring.own` for the API keys and the new `library.addMediaUrl` host download. **Video Downloader** (the built-in yt-dlp importer/updater are gone) is `web/plugins/ytdlp`, built on the new `process.run` permission: manifest-declared command templates, host-managed signature-verified tools, throwaway job folders and `library.addMedia`; and sandboxed plugin pages are placed natively (`ui.placements`: library sources, the video picker, a dock) and themed from the console's design tokens (`__os/theme.css`, `__os/sdk.js`). **Command handling:** REST, WebSocket and a native plugin's queued commands now share `src/api/command_pipeline.rs` (`authenticate_command` + `run_command_pipeline`: shorthand expansion, one plugin veto on identical text, parse, execute, persist, broadcast). **Not done:** `ui.toolbar`, and `commands.modify` / `keyring.service` (deliberately reserved). Decisions on the open questions at the end follow the recommendations unless noted.
+Status: design (written by an Opus design pass). **Removed since:** the pre-manifest forms this document calls "legacy" (loose `.so/.dll/.dylib` files as ABI 1 plugins, bare `.js` scripts with no manifest, and the one-time grandfathering of both) no longer exist; sections below that describe them (marked) are history. Native plugins must declare `backend.abi = 2`. **Implemented:** phase 0 (hardening) and phase 1 (manifest, grants, native/web gating, console UI, audit log), plus the grant check on plugin keyring tokens from phase 2. **Also implemented:** phase 2 (scoped plugin tokens, the plugin command credential, minisign signer pinning) and phase 3 (the ABI 2 `PluginHost` API, `export_plugin!`, `examples/plugin_observer.rs`). and phase 4 (sandboxed web plugins: opaque-origin iframe, per-plugin CSP, permission-checked `postMessage` bridge, `ui.panel` dock, `web/plugins/sandbox_demo`). **Host API for sandboxed plugins:** `net.fetch` (server-side, allowlisted, public-IP-only, redirect-checked) and `library.addSong`, used by `web/plugins/genius_lyrics` (the Genius lyrics import, moved out of the core). **Online Bibles** (the built-in `BibleProvider` registry, its routes and the Store/Import Bible tabs are gone) is `web/plugins/online_bibles`, using `net.fetch` and the new `library.addScriptures`. **Stock Images** (the built-in Pexels/Pixabay search is gone) is `web/plugins/stock_media`: `net.fetch` with limited headers, `keyring.own` for the API keys and the new `library.addMediaUrl` host download. **Video Downloader** (the built-in yt-dlp importer/updater are gone) is `web/plugins/ytdlp`, built on the new `process.run` permission: manifest-declared command templates, host-managed signature-verified tools, throwaway job folders and `library.addMedia`; and sandboxed plugin pages are placed natively (`ui.placements`: library sources, the video picker, a dock) and themed from the console's design tokens (`__os/theme.css`, `__os/sdk.js`). **Command handling:** REST, WebSocket and a native plugin's queued commands now share `src/api/command_pipeline.rs` (`authenticate_command` + `run_command_pipeline`: shorthand expansion, one plugin veto on identical text, parse, execute, persist, broadcast). **Not done:** `ui.toolbar`, and `commands.modify` / `keyring.service` (deliberately reserved). Decisions on the open questions at the end follow the recommendations unless noted.
 
 ---
 
@@ -64,7 +64,7 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 | id | Params | Tier | Native | Token / iframe | Gates |
 |---|---|---|---|---|---|
 | `native.code` | — | Critical | implicit, informational | n/a | Required for any backend library. |
-| `ui.dom` | — | Critical | n/a | consent-only | Legacy same-realm web plugin, equivalent to console access. |
+| `ui.dom` | — | Critical | n/a | consent-only | A same-realm (non-sandboxed) web plugin, equivalent to console access. |
 | `show.observe` | — | Low | **E** | **E** | `on_state_change`, `host.snapshot()`, WS state over the bridge. |
 | `library.read` | `categories[]` | Low | **E** (host API) | info (GETs are public) | `host.library_list()`. |
 | `resources.provide` | `categories[]` ⊆ {songs, scriptures, media, presentations, themes} | Medium | **E** | n/a | `provide_resources(category)`. |
@@ -99,7 +99,7 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 <plugin_dir()>/<id>/plugin.json.minisig    # optional detached signature over plugin.json bytes
 <plugin_dir()>/<id>/lib/<platform file>    # native
 <plugin_dir()>/<id>/web/…                  # optional sandboxed web part (phase 4)
-<plugin_dir()>/*.so|dll|dylib              # legacy loose files (no manifest) — still discovered
+<plugin_dir()>/*.so|dll|dylib              # bare libraries (no manifest): ignored with a warning (removed)
 <web_dir>/plugins/<stem>.js (+ <stem>.plugin.json)  # bundled web plugins
 ```
 
@@ -139,7 +139,7 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 
 **Pinning:**
 - `manifest_sha256` is the SHA-256 of the `plugin.json` bytes.
-- `artifact_digest` is the SHA-256 over the sorted lines `"<relpath>\0<sha256>\n"` for every file under `lib/` and `web/` (or the single legacy file). Each file's hash must also equal the `sha256` the manifest declares for it.
+- `artifact_digest` is the SHA-256 over the sorted lines `"<relpath>\0<sha256>\n"` for every file under `lib/` and `web/` (or the single script file of a same-realm web plugin). Each file's hash must also equal the `sha256` the manifest declares for it.
 - Approval records both values. On every boot, and on every web-plugin fetch, the host recomputes them. **Any mismatch moves the plugin to `changed`: it is not loaded, and the console asks for re-review.**
 
 **Signatures (optional, TOFU):**
@@ -155,7 +155,7 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 #[no_mangle] pub static OS_PLUGIN_HOST_VERSION: &str = env!("CARGO_PKG_VERSION"); // os-next version built against
 ```
 
-The host refuses to load the library on a mismatch. A legacy library with no marker is ABI 1, and the host calls only the frozen `OsPlugin` v1 vtable on it.
+The host refuses to load the library on a mismatch. A library with no marker (the removed ABI 1) is refused.
 
 ---
 
@@ -192,7 +192,7 @@ POST /api/plugins/{id}/token         {scopes?:[perm…]}           // console mi
 ```sql
 CREATE TABLE IF NOT EXISTS plugin_grants (
     plugin_id          TEXT PRIMARY KEY,
-    kind               TEXT NOT NULL CHECK (kind IN ('native','web','legacy-native','legacy-web')),
+    kind               TEXT NOT NULL CHECK (kind IN ('native','web','sandbox'))  -- older databases also allow the removed legacy kinds; those rows are deleted on scan,
     name               TEXT NOT NULL,
     version            TEXT,
     source_path        TEXT NOT NULL,
@@ -311,22 +311,17 @@ It does shorthand expansion (the duplicated AddToSchedule/StageItem block in `ws
 
 ## 6. Migration and back-compat
 
-**Legacy native files** (loose `.so/.dll/.dylib`, no manifest):
-- `id = "legacy." + file_stem`, `kind='legacy-native'`, digest is the file's SHA-256.
-- Synthesized permission request: `[native.code, show.observe, commands.intercept, resources.provide:*]`, which is everything v1 can do.
-- **One-time grandfathering:** on the first boot of the new version, if the settings key `plugins.grandfathered_v1` is absent, every legacy file already present is inserted as `approved`, with an audit row `grandfathered`, and the key is then set. This changes nothing about what already runs.
-- Any legacy file that appears or changes after that boot is `pending` and is not loaded until it is approved.
-- The console shows a dismissible banner: "N plugins were approved automatically during upgrade — review".
-
-**No manifest, non-legacy:** this case doesn't exist. Directory-form plugins without `plugin.json` are ignored and logged with `load_failed`.
-
-**ABI:** legacy files are treated as ABI 1 and only the v1 vtable is called. Docs warn that a v1 plugin must be rebuilt against the exact os-next version; this is already true today and is now documented.
+**Removed: legacy native files and web scripts.** This section once described synthesizing a plugin
+for each bare `.so/.dll/.dylib` (and a bare `.js` with no manifest) and approving the native ones once
+when permissions first shipped (`plugins.grandfathered_v1`). None of that exists now: those files are
+ignored with a log warning, no plugin is ever approved automatically, and `plugin.json` must declare
+`"abi": 2`. A directory-form plugin without `plugin.json` is also ignored.
 
 **`web/plugins/hello_world.js`:**
 - Ship `web/plugins/hello_world.plugin.json` with `id: "hello_world"` (so existing `plugin:hello_world` keyring rows keep matching), `kind: web`, and permissions `[ui.dom, keyring.own]`.
 - Bundled plugins under the read-only `web_dir` are first-party but still `pending` by default. **Recommendation:** stop auto-loading the demo button. It becomes opt-in in Settings → Plugins, which also makes it a good live demo of the consent flow.
 
-**Keyring:** owner tags `plugin:<id>` stay unchanged. Legacy web ids equal the file stem, which already matches.
+**Keyring:** owner tags `plugin:<id>` stay unchanged. Web plugin ids equal the file stem, which already matches.
 
 **Docs:**
 - `docs/PLUGINS.md` gets a manifest/permissions section and a threat-model box.
@@ -361,7 +356,7 @@ It does shorthand expansion (the duplicated AddToSchedule/StageItem block in `ws
    - a stale `digest` gets 409;
    - an audit row is written with the right `decided_by`.
 5. `test_changed_digest_blocks_load`: build a temp `plugin_dir` with a dummy file, approve it, modify a byte, and check that discovery reports `changed` and the loader skips it.
-6. `test_legacy_grandfathering_runs_once`.
+6. ~~`test_legacy_grandfathering_runs_once`~~ (removed with grandfathering; replaced by `nothing_is_approved_automatically_and_a_changed_binary_stops_loading_until_reapproved` and `bare_libraries_and_scripts_are_ignored_and_old_rows_are_purged`).
 7. `test_scoped_plugin_token`:
    - `keyring.own` allows `/api/keyring/set` in its own namespace;
    - `/api/command` with `NextSlide` (allowlisted) returns 200, `NewSchedule` returns 403, and there is no console-lock interference;
@@ -387,7 +382,7 @@ Each phase ships on its own.
 - Risk: a plugin that matched on the `{"cmd":…}` envelope text over WS changes behaviour. That is unlikely and is called out in the changelog.
 
 **Phase 1: manifest, grants and native gating (the core)**
-- New: `src/core/plugin_permissions.rs`, `src/core/plugin_registry.rs` (discovery, digests, legacy synthesis, grandfathering), `src/storage/db/plugins.rs`, `src/api/routes/plugins.rs`, and a Settings → Plugins UI module in `web/src/`.
+- New: `src/core/plugin_permissions.rs`, `src/core/plugin_registry.rs` (discovery, digests), `src/storage/db/plugins.rs`, `src/api/routes/plugins.rs`, and a Settings → Plugins UI module in `web/src/`.
 - Changed:
   - `plugins.rs`: `LoadedPlugin` and `GrantCell`, gated dispatch, `set_grants`/`revoke`;
   - `main.rs`: discovery and load from approved candidates;
@@ -426,7 +421,7 @@ Each phase ships on its own.
 
 ## Open questions for the owner, with recommendations
 
-1. **Grandfather existing legacy native plugins on upgrade?** Recommend **yes, once**, with a review banner. It causes no security regression and avoids breaking shows.
+1. **Grandfather existing legacy native plugins on upgrade?** *Was* "yes, once"; the whole legacy path has since been removed, so nothing is grandfathered.
 2. **Must native-plugin approval require the per-run host token, or is a persistent console credential enough?** Recommend **a console credential is enough** for now, because installing still needs file access to the server. If an "install from file" upload API is ever added, that route must require the per-run host token.
 3. **Signed same-key updates that request no new permissions: auto-approve or one-click?** Recommend **one-click**, never silent. A live service shouldn't change code without someone seeing it.
 4. **Do plugin-originated commands bypass the one-console lock?** Recommend **yes**, attributed in audit. Plugins aren't consoles, and a DMX panic button shouldn't fail because a console is connected.

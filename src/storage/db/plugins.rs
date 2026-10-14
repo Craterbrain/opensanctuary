@@ -108,6 +108,13 @@ pub struct ObservedPlugin<'a> {
 }
 
 impl Database {
+    /// Drops rows for the removed pre-manifest plugin kinds (`legacy-native`, `legacy-web`). The
+    /// audit log is history, so it keeps its entries.
+    pub fn purge_legacy_plugins(&self) -> Result<usize> {
+        let conn = self.conn();
+        Ok(conn.execute("DELETE FROM plugin_grants WHERE kind IN ('legacy-native', 'legacy-web')", [])?)
+    }
+
     pub fn get_plugin_grant(&self, plugin_id: &str) -> Result<Option<PluginGrantRow>> {
         let conn = self.conn();
         let mut stmt = conn.prepare_cached(&format!("SELECT {GRANT_COLS} FROM plugin_grants WHERE plugin_id = ?1"))?;
@@ -125,22 +132,17 @@ impl Database {
         rows.collect()
     }
 
-    /// Records what is on disk. A brand-new plugin is inserted with the given initial
-    /// decision; an existing one keeps its decision and only its `observed_*` fields move.
-    pub fn upsert_observed_plugin(
-        &self,
-        o: &ObservedPlugin<'_>,
-        initial_status: &str,
-        initial_granted_json: &str,
-    ) -> Result<()> {
+    /// Records what is on disk. A brand-new plugin is inserted as `pending` with nothing granted
+    /// (nothing is ever approved automatically); an existing one keeps its decision and only its
+    /// `observed_*` fields move.
+    pub fn upsert_observed_plugin(&self, o: &ObservedPlugin<'_>) -> Result<()> {
         let now = chrono::Utc::now().timestamp_millis();
         let conn = self.conn();
-        let approved = initial_status == "approved";
         conn.execute(
             "INSERT INTO plugin_grants (plugin_id, kind, name, version, source_path, observed_manifest_sha256, \
                  observed_digest, requested_json, error, approved_manifest_sha256, approved_digest, status, \
                  granted_json, decided_at, decided_by, first_seen, last_seen, observed_signer, approved_signer)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16, ?17, ?18)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, NULL, NULL, 'pending', '[]', NULL, NULL, ?10, ?10, ?11, NULL)
              ON CONFLICT(plugin_id) DO UPDATE SET
                  kind = excluded.kind, name = excluded.name, version = excluded.version,
                  source_path = excluded.source_path,
@@ -160,15 +162,8 @@ impl Database {
                 o.digest,
                 o.requested_json,
                 o.error,
-                if approved { o.manifest_sha256.map(|s| s.to_string()) } else { None },
-                if approved { Some(o.digest.to_string()) } else { None },
-                initial_status,
-                initial_granted_json,
-                if approved { Some(now) } else { None },
-                if approved { Some("system:grandfathered") } else { None },
                 now,
                 o.signer,
-                if approved { o.signer.map(|s| s.to_string()) } else { None },
             ],
         )?;
         Ok(())

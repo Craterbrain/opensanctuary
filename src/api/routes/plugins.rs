@@ -52,7 +52,7 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         v["enforcement"] = serde_json::Value::String(p.enforcement_for(&row.kind).to_string());
         v
     };
-    let native = row.kind == "native" || row.kind == "legacy-native";
+    let native = row.kind == "native";
     // A sandboxed plugin's entry page comes from its manifest (the folder is the plugin).
     let entry = (row.kind == "sandbox")
         .then(|| std::fs::read(std::path::Path::new(&row.source_path).join("plugin.json")).ok())
@@ -135,8 +135,8 @@ pub(super) async fn list_plugins(
     let list: Vec<_> = rows
         .iter()
         .filter(|r| match q.kind.as_deref() {
-            Some("web") => r.kind == "web" || r.kind == "legacy-web" || r.kind == "sandbox",
-            Some("native") => r.kind == "native" || r.kind == "legacy-native",
+            Some("web") => r.kind == "web" || r.kind == "sandbox",
+            Some("native") => r.kind == "native",
             _ => true,
         })
         .filter(|r| !only_active || r.effective_state() == "active")
@@ -894,7 +894,7 @@ pub(super) async fn plugin_add_media(State(app): State<AppState>, headers: Heade
 pub(crate) fn web_plugin_file_is_active(app: &AppState, file_name: &str) -> bool {
     let Some(stem) = file_name.strip_suffix(".js") else { return false };
     let Some(row) = app.db.get_plugin_grant(stem).ok().flatten() else { return false };
-    if !(row.kind == "web" || row.kind == "legacy-web") || row.effective_state() != "active" {
+    if row.kind != "web" || row.effective_state() != "active" {
         return false;
     }
     let path = app.web_dir.join("plugins").join(file_name);
