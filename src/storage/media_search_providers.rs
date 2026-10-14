@@ -5,8 +5,7 @@
 //! - `PixabayProvider` – https://pixabay.com/api/docs/
 //!
 //! New providers can be added by implementing `MediaSearchProvider` and
-//! registering them in `MediaSearchRegistry::new_default()`. Mirrors the
-//! `BibleProvider`/`BibleProviderRegistry` pattern in `bible_providers.rs`.
+//! registering them in `MediaSearchRegistry::new_default()`.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

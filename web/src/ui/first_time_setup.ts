@@ -17,25 +17,6 @@ import { appOptions, saveAppOptions } from "../app_core.ts";
 
 const MODAL_ID = "first-time-setup-modal";
 
-/**
- * Curated, not auto-detected: the online catalog (ChurchApps/OpenLP/Bolls.life)
- * mixes public-domain and copyrighted translations with no reliable license
- * field to filter on, so this list is hand-picked -- everything here is
- * pre-1928 (US public domain by age) or, for BSB/WEB, explicitly released
- * public domain by its own translation project. Verified present in the live
- * catalog under these exact abbreviations before adding them here.
- */
-const PUBLIC_DOMAIN_TRANSLATIONS: Array<{ abbr: string; label: string }> = [
-  { abbr: "KJV", label: "King James Version (1769)" },
-  { abbr: "ASV", label: "American Standard Version (1901)" },
-  { abbr: "WEB", label: "World English Bible" },
-  { abbr: "BSB", label: "Berean Standard Bible" },
-  { abbr: "YLT", label: "Young's Literal Translation (1898)" },
-  { abbr: "DBY", label: "Darby Translation (1890)" },
-  { abbr: "DRB", label: "Douay-Rheims Bible (1899)" },
-  { abbr: "GNV", label: "Geneva Bible (1599)" },
-];
-
 const STEPS = ["welcome", "data-dir", "church-name", "bibles", "songs", "network", "done"] as const;
 type Step = typeof STEPS[number];
 
@@ -149,18 +130,17 @@ function stepHtml(step: Step): string {
     }
 
     case "bibles": {
-      const options = PUBLIC_DOMAIN_TRANSLATIONS
-        .map((t) => `<option value="${escapeHtml(t.abbr)}">${escapeHtml(t.label)}</option>`)
-        .join("");
       return `
         <h3 class="fts-step-title">Bible Content</h3>
         <p class="fts-text">
-          No Bible translations are bundled by default (most are copyrighted) -- download a
-          public-domain translation now, or point at content you already have.
+          No Bible translations are bundled by default (most are copyrighted). Downloading them is
+          done by the <strong>Online Bibles</strong> plugin. Turning it on lets this server fetch Bible
+          text from bolls.life, api.churchapps.org, bible-api.com and GitHub (and nowhere else) and add
+          it to your Bible library. You can review or turn it off any time in Settings &rarr; Plugins.
         </p>
         <div class="form-row">
-          <select id="fts-bible-select" class="search-input fts-grow">${options}</select>
-          <button class="btn btn-primary" id="fts-download-bible">⬇ Download</button>
+          <button class="btn btn-primary" id="fts-enable-online-bibles" type="button">Turn on Online Bibles</button>
+          <button class="btn" id="fts-open-plugins" type="button">Review in Settings</button>
         </div>
         <div class="os-divider"></div>
         <p class="form-help">Already have Bible files (.db) from another install?</p>
@@ -216,12 +196,10 @@ function wireStep(step: Step, body: HTMLElement): void {
     const adoptBtn = body.querySelector("#fts-adopt-legacy-library") as HTMLButtonElement | null;
     adoptBtn?.addEventListener("click", () => adoptLegacyLibrary(adoptBtn));
   } else if (step === "bibles") {
-    const downloadBtn = body.querySelector("#fts-download-bible") as HTMLButtonElement | null;
-    const select = body.querySelector("#fts-bible-select") as HTMLSelectElement | null;
-    downloadBtn?.addEventListener("click", () => {
-      const abbr = select?.value || "KJV";
-      const label = PUBLIC_DOMAIN_TRANSLATIONS.find((t) => t.abbr === abbr)?.label || abbr;
-      downloadBible(abbr, label, downloadBtn);
+    const enableBtn = body.querySelector("#fts-enable-online-bibles") as HTMLButtonElement | null;
+    enableBtn?.addEventListener("click", () => enableOnlineBibles(enableBtn));
+    body.querySelector("#fts-open-plugins")?.addEventListener("click", () => {
+      window.dispatchEvent(new CustomEvent("os-open-plugins-settings"));
     });
     wireDirectoryBrowse(body, "fts-bibles-dir", "fts-bibles-browse");
   } else if (step === "songs") {
@@ -280,32 +258,25 @@ async function adoptLegacyLibrary(btn: HTMLButtonElement): Promise<void> {
   }
 }
 
-async function downloadBible(abbr: string, label: string, btn: HTMLButtonElement): Promise<void> {
+/** Approves the bundled Online Bibles plugin with everything it asks for (the step's text says what that is). */
+async function enableOnlineBibles(btn: HTMLButtonElement): Promise<void> {
   const originalText = btn.textContent;
   btn.disabled = true;
-  btn.textContent = `⏳ Downloading ${label}…`;
+  btn.textContent = "Turning on…";
   try {
-    let translation = abbr.toLowerCase();
-    let provider = "churchapps";
-    let sourceKey: string | null = null;
-    try {
-      const data = await api.bibles.onlineCatalog();
-      const list: any[] = Array.isArray(data) ? data : data.catalog || [];
-      const entry = list.find((b) => (b.abbreviation || "").toUpperCase() === abbr);
-      if (entry) {
-        translation = entry.id;
-        provider = entry.provider || "churchapps";
-        sourceKey = entry.source_key || null;
-      }
-    } catch (_) { /* fall through with the abbreviation itself as translation id */ }
-
-    const result = await api.bibles.downloadOnline({ translation, provider, source_key: sourceKey });
-    showToast(`✓ Downloaded ${label} (${result.verses_count ?? "?"} verses)`, "success");
-    btn.textContent = `✓ ${label} Installed`;
+    const plugins = await api.plugins.list();
+    const plugin = plugins.find((p) => p.id === "online_bibles");
+    if (!plugin) throw new Error("the Online Bibles plugin isn't installed");
+    if (plugin.state !== "active") {
+      const updated = await api.plugins.approve(plugin.id, plugin.digest, plugin.requested.map((r) => r.id));
+      window.dispatchEvent(new CustomEvent("os-plugin-changed", { detail: { plugin: updated } }));
+    }
+    showToast("Online Bibles is on: use its panel at the bottom right to download a translation.", "success");
+    btn.textContent = "✓ Online Bibles is on";
   } catch (e: any) {
-    showToast(`Could not download ${label}: ${e?.message || e}`, "error");
+    showToast(`Could not turn on Online Bibles: ${e?.message || e}`, "error");
     btn.disabled = false;
-    btn.textContent = originalText || "⬇ Download";
+    btn.textContent = originalText || "Turn on Online Bibles";
   }
 }
 

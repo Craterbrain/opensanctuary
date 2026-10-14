@@ -13,8 +13,9 @@ use std::net::{IpAddr, SocketAddr};
 
 use reqwest::redirect::Policy;
 
-/// The most of a response body the host will read for a plugin.
-pub const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
+/// The most of a response body the host will read for a plugin. Large on purpose: a whole Bible
+/// translation is one 10-15 MB JSON file.
+pub const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 4;
 
 pub struct Fetched {
@@ -112,7 +113,10 @@ pub async fn fetch(allowed: &[String], url: &str) -> Result<Fetched, String> {
         let addr = resolve_public(&host, port).await?;
         let client = reqwest::Client::builder()
             .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .timeout(std::time::Duration::from_secs(20))
+            // Total ceiling for a big download on a slow link; a stalled transfer still dies after 30s
+            // of silence (read_timeout).
+            .timeout(std::time::Duration::from_secs(180))
+            .read_timeout(std::time::Duration::from_secs(30))
             .connect_timeout(std::time::Duration::from_secs(10))
             .redirect(Policy::none())
             .resolve(&host, addr) // connect to exactly the address that was just checked

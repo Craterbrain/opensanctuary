@@ -537,6 +537,11 @@ export async function loadSettingsServerInfo() {
   return settingsServerInfo;
 }
 
+/** Opens straight to a settings category (e.g. 'plugins') once the modal is showing. */
+export function openSettingsAt(categoryId: string) {
+  openSettingsCategory(categoryId);
+}
+
 export function resetOptionsModal() {
   activeSettingsCategory = 'general';
   settingsSearchQuery = '';

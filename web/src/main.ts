@@ -6,11 +6,23 @@ import { clock } from "./core/timesync.ts";
 import { VideoSyncController } from "./core/video_sync.ts";
 import { keyring } from "./core/keyring.ts";
 import { resolveHostSessionToken } from "./core/host_session.ts";
-import { startSandboxedPlugin } from "./core/plugin_bridge.ts";
+import { startSandboxedPlugin, stopSandboxedPlugin, isSandboxedPluginRunning } from "./core/plugin_bridge.ts";
 import { startEmojiIcons } from "./core/emoji_icons.ts";
 
 // 0. Swap emoji for the themed SVG icons (static markup now, rendered content as it appears)
 startEmojiIcons();
+
+// A plugin was approved/revoked in Settings > Plugins (or the first-run wizard): a sandboxed
+// plugin starts or stops right away. (A same-realm console script needs a page reload.)
+window.addEventListener("os-plugin-changed", (ev) => {
+  const plugin = (ev as CustomEvent).detail?.plugin;
+  if (!plugin || plugin.kind !== "sandbox") return;
+  if (plugin.state === "active") {
+    if (!isSandboxedPluginRunning(plugin.id)) startSandboxedPlugin(plugin);
+  } else {
+    stopSandboxedPlugin(plugin.id);
+  }
+});
 
 // 1. Initialize Plugin System
 export const pluginManager = new PluginManager();

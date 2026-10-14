@@ -106,7 +106,9 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   const actions = el('div', 'plugin-actions');
   const act = async (fn: () => Promise<unknown>, done: string) => {
     try {
-      await fn();
+      const updated = await fn();
+      // Tell the console, so a sandboxed plugin starts/stops without a reload.
+      window.dispatchEvent(new CustomEvent('os-plugin-changed', { detail: { plugin: updated } }));
       showToast(done);
       refresh();
     } catch (e: any) {

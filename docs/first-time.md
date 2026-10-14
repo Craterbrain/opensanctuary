@@ -50,9 +50,8 @@ support.
 
 4. **Bible content.** The load-bearing step (see above). Three options
    presented together, not sequential forced choices:
-   - Fetch a public-domain translation now via the existing
-     `BibleProviderRegistry` (KJV/ASV/WEB) — one click, works offline
-     afterward.
+   - Turn on the **Online Bibles** plugin (one click; the step lists the hosts it can
+     reach) and download a translation from its panel — works offline afterward.
    - Point at existing Bible `.db` files (someone with a prior install, or
      files obtained separately) — sets `biblesDirectory`
      (`paths.md`'s Settings entry).

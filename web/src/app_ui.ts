@@ -22,7 +22,7 @@ import {
   setActiveResourceViewMode,
 } from './ui/library_panel.ts';
 import { parseScriptureReference } from './core/bible_parser.ts';
-import { resetOptionsModal, onSettingsSearchInput, saveNetworkSettings, refreshPairedDevicesAfterAdbProvision } from './ui/settings_dialog.ts';
+import { resetOptionsModal, openSettingsAt, onSettingsSearchInput, saveNetworkSettings, refreshPairedDevicesAfterAdbProvision } from './ui/settings_dialog.ts';
 import { showToast } from './core/ui_utils.ts';
 import { openThemeEditor } from './ui/theme_editor.ts';
 import {
@@ -90,7 +90,6 @@ import {
   installedBibles,
   isDualBibleMode,
   liveSlideMatrixEl,
-  onlineBibleCatalog,
   openModal,
   optionsModal,
   previewSlideMatrixEl,
@@ -110,7 +109,6 @@ import {
   setEditingItemId,
   setExpandedScheduleIndex,
   setIsDualBibleMode,
-  setOnlineBibleCatalog,
   shortcutsModal,
   storeModal,
   triggerUndoFromPlaceholder,
@@ -1469,8 +1467,9 @@ on('catalog-zoom-slider', 'input', (e: Event) => {
 on('btn-close-store', 'click', () => closeModal(storeModal));
 on('btn-close-store-footer', 'click', () => closeModal(storeModal));
 on('btn-store-open-bibles', 'click', () => {
+  // Online Bibles is a plugin now: take the operator to Settings > Plugins to turn it on.
   closeModal(storeModal);
-  openImportModal();
+  window.dispatchEvent(new CustomEvent('os-open-plugins-settings'));
 });
 
 // Web Streamer Modal Handlers
@@ -2042,25 +2041,11 @@ document.querySelectorAll<HTMLElement>('.article-nav-item').forEach(navEl => {
 // ============================================================================
 // FREESHOW-STYLE BIBLE IMPORTER MODAL
 // ============================================================================
-const tabBtnApi = document.getElementById('tab-btn-api');
-const tabBtnGithub = document.getElementById('tab-btn-github');
 const tabBtnYtdlp = document.getElementById('tab-btn-ytdlp');
 const tabBtnLocal = document.getElementById('tab-btn-local');
-const importViewApi = document.getElementById('import-view-api');
-const importViewGithub = document.getElementById('import-view-github');
 const importViewYtdlp = document.getElementById('import-view-ytdlp');
 const importViewLocal = document.getElementById('import-view-local');
-const apiBibleCatalogList = document.getElementById('api-bible-catalog-list');
-const apiBibleSearchInput = document.getElementById('api-bible-search-input') as HTMLInputElement | null;
-const apiBibleLangFilter = document.getElementById('api-bible-lang-filter') as HTMLInputElement | null;
-const apiBibleCountLabel = document.getElementById('api-bible-count-label');
 
-const ghRepoInput = document.getElementById('gh-repo-input') as HTMLInputElement | null;
-const ghVersionsPathInput = document.getElementById('gh-versions-path-input') as HTMLInputElement | null;
-const btnGhBrowse = document.getElementById('btn-gh-browse');
-const ghBibleCountLabel = document.getElementById('gh-bible-count-label');
-const ghBibleSourceLabel = document.getElementById('gh-bible-source-label');
-const ghBibleCatalogList = document.getElementById('gh-bible-catalog-list');
 
 const ytdlpUrlInput = document.getElementById('ytdlp-url-input') as HTMLInputElement | null;
 const btnYtdlpPaste = document.getElementById('btn-ytdlp-paste') as HTMLButtonElement | null;
@@ -2131,32 +2116,20 @@ if (btnYtdlpPaste) {
   });
 }
 
-function openImportModal(initialMode = 'api') {
+function openImportModal(initialMode = 'ytdlp') {
   if (importModal) showModal(importModal);
   resetImportModal();
   if (initialMode) setImportMode(initialMode);
-  loadOnlineBibleCatalog();
 }
 
 function setImportMode(mode: string) {
   setActiveImportMode(mode);
-  if (tabBtnApi) tabBtnApi.classList.toggle('active', mode === 'api');
-  if (tabBtnGithub) tabBtnGithub.classList.toggle('active', mode === 'github');
   if (tabBtnYtdlp) tabBtnYtdlp.classList.toggle('active', mode === 'ytdlp');
   if (tabBtnLocal) tabBtnLocal.classList.toggle('active', mode === 'local');
-  if (importViewApi) importViewApi.style.display = mode === 'api' ? 'flex' : 'none';
-  if (importViewGithub) importViewGithub.style.display = mode === 'github' ? 'flex' : 'none';
   if (importViewYtdlp) importViewYtdlp.style.display = mode === 'ytdlp' ? 'flex' : 'none';
   if (importViewLocal) importViewLocal.style.display = mode === 'local' ? 'flex' : 'none';
 }
 
-if (tabBtnApi) on(tabBtnApi, 'click', () => setImportMode('api'));
-if (tabBtnGithub) on(tabBtnGithub, 'click', () => {
-  setImportMode('github');
-  if (ghBibleCatalogList && (!ghBibleCatalogList.children || ghBibleCatalogList.children.length <= 1) && ghRepoInput && ghRepoInput.value.trim()) {
-    browseGitHubBibleRepo();
-  }
-});
 if (tabBtnYtdlp) on(tabBtnYtdlp, 'click', () => setImportMode('ytdlp'));
 if (tabBtnLocal) on(tabBtnLocal, 'click', () => setImportMode('local'));
 
@@ -2332,439 +2305,20 @@ if (ytdlpUrlInput) {
 }
 
 
-const ISO_LANG_MAP: Record<string, string> = {
-  eng: "English", en: "English",
-  spa: "Spanish", es: "Spanish", esp: "Spanish",
-  fra: "French", fr: "French", fre: "French",
-  deu: "German", de: "German", ger: "German",
-  por: "Portuguese", pt: "Portuguese",
-  rus: "Russian", ru: "Russian",
-  ukr: "Ukrainian", uk: "Ukrainian",
-  zho: "Chinese", chi: "Chinese", zh: "Chinese", cmn: "Chinese",
-  lat: "Latin", la: "Latin",
-  grc: "Greek", ell: "Greek", el: "Greek",
-  heb: "Hebrew", he: "Hebrew",
-  ita: "Italian", it: "Italian",
-  kor: "Korean", ko: "Korean",
-  tgl: "Tagalog", tl: "Tagalog", fil: "Tagalog",
-  ara: "Arabic", ar: "Arabic",
-  vie: "Vietnamese", vi: "Vietnamese",
-  hin: "Hindi", hi: "Hindi",
-  nld: "Dutch", nl: "Dutch", dut: "Dutch",
-  swe: "Swedish", sv: "Swedish",
-  nor: "Norwegian", no: "Norwegian",
-  dan: "Danish", da: "Danish",
-  fin: "Finnish", fi: "Finnish",
-  pol: "Polish", pl: "Polish",
-  ces: "Czech", cs: "Czech", cze: "Czech",
-  ron: "Romanian", ro: "Romanian", rum: "Romanian",
-  hun: "Hungarian", hu: "Hungarian",
-  afr: "Afrikaans", af: "Afrikaans",
-  ind: "Indonesian", id: "Indonesian",
-  msa: "Malay", ms: "Malay",
-  swh: "Swahili", sw: "Swahili",
-  tam: "Tamil", ta: "Tamil",
-  tel: "Telugu", te: "Telugu",
-  ben: "Bengali", bn: "Bengali",
-  jpn: "Japanese", ja: "Japanese"
-};
-
-function cleanLanguageName(raw: any) {
-  if (!raw) return "English";
-  const str = String(raw).trim();
-  const lower = str.toLowerCase();
-  if (ISO_LANG_MAP[lower]) return ISO_LANG_MAP[lower];
-  for (const [k, v] of Object.entries(ISO_LANG_MAP)) {
-    if (k.length > 2 && lower.includes(k)) return v;
-  }
-  const firstWord = str.split(/[\s/,\(\)]+/)[0] || str;
-  if (ISO_LANG_MAP[firstWord.toLowerCase()]) return ISO_LANG_MAP[firstWord.toLowerCase()];
-  return firstWord.charAt(0).toUpperCase() + firstWord.slice(1);
-}
-
-async function loadOnlineBibleCatalog() {
-  if (onlineBibleCatalog.length > 0) {
-    populateBibleLanguageFilter(onlineBibleCatalog);
-    renderOnlineBibleCatalog(onlineBibleCatalog);
-    return;
-  }
-
-  if (apiBibleCatalogList) {
-    apiBibleCatalogList.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--text-dim);">Connecting to ChurchApps & OpenLP Bible Catalog...</div>`;
-  }
-
-  try {
-    const res = await fetch('/api/bibles/online/catalog');
-    if (res.ok) {
-      const data = await res.json();
-      const rawList = Array.isArray(data) ? data : (data.catalog || getPopularBibleCatalog());
-      setOnlineBibleCatalog(deduplicateBibleCatalog(rawList));
-      populateBibleLanguageFilter(onlineBibleCatalog);
-      renderOnlineBibleCatalog(onlineBibleCatalog);
-    } else {
-      setOnlineBibleCatalog(deduplicateBibleCatalog(getPopularBibleCatalog()));
-      populateBibleLanguageFilter(onlineBibleCatalog);
-      renderOnlineBibleCatalog(onlineBibleCatalog);
-    }
-  } catch (err) {
-    setOnlineBibleCatalog(deduplicateBibleCatalog(getPopularBibleCatalog()));
-    populateBibleLanguageFilter(onlineBibleCatalog);
-    renderOnlineBibleCatalog(onlineBibleCatalog);
-  }
-}
-
-function getPopularBibleCatalog() {
-  return [
-    { id: 'kjv', abbreviation: 'KJV', name: 'King James Version (1769)', language: 'English' },
-    { id: 'nkjv', abbreviation: 'NKJV', name: 'New King James Version', language: 'English' },
-    { id: 'esv', abbreviation: 'ESV', name: 'English Standard Version', language: 'English' },
-    { id: 'niv', abbreviation: 'NIV', name: 'New International Version', language: 'English' },
-    { id: 'nlt', abbreviation: 'NLT', name: 'New Living Translation', language: 'English' },
-    { id: 'asv', abbreviation: 'ASV', name: 'American Standard Version (1901)', language: 'English' },
-    { id: 'bsb', abbreviation: 'BSB', name: 'Berean Standard Bible', language: 'English' },
-    { id: 'web', abbreviation: 'WEB', name: 'World English Bible', language: 'English' },
-    { id: 'bbe', abbreviation: 'BBE', name: 'Bible in Basic English', language: 'English' },
-    { id: 'rvr1960', abbreviation: 'RVR1960', name: 'Reina-Valera 1960', language: 'Spanish' },
-    { id: 'lsg', abbreviation: 'LSG', name: 'Louis Segond 1910', language: 'French' },
-    { id: 'lut', abbreviation: 'LUT', name: 'Lutherbibel 1912', language: 'German' },
-    { id: 'cle', abbreviation: 'CLE', name: 'Biblia Sacra Vulgata (Clementine Latin)', language: 'Latin' },
-    { id: 'almeida', abbreviation: 'ALM', name: 'João Ferreira de Almeida', language: 'Portuguese' },
-    { id: 'synod', abbreviation: 'SYNOD', name: 'Синодальный перевод (Russian Synodal)', language: 'Russian' },
-    { id: 'ubio', abbreviation: 'UBIO', name: 'Біблія в пер. Івана Огієнка', language: 'Ukrainian' },
-    { id: 'cuv', abbreviation: 'CUV', name: '和合本 (Chinese Union Version)', language: 'Chinese' },
-    { id: 'tag', abbreviation: 'TAG', name: 'Ang Biblia (1905)', language: 'Tagalog' }
-  ];
-}
-
-function deduplicateBibleCatalog(items: any[]) {
-  if (!Array.isArray(items)) return [];
-  const map = new Map();
-
-  for (const item of items) {
-    const rawAbbr = (item.abbreviation || item.id || '').trim().toUpperCase();
-    const lang = cleanLanguageName(item.language);
-    const name = (item.name || rawAbbr).trim();
-    
-    // Only deduplicate if exact abbreviation AND language match
-    const key = `${rawAbbr}::${lang.toLowerCase()}::${name.toLowerCase().slice(0, 15)}`;
-    const src = item.source || 'ChurchApps';
-
-    if (map.has(key)) {
-      const existing = map.get(key);
-      if (name.length > existing.name.length) {
-        existing.name = name;
-      }
-      if (!existing.sources.includes(src)) {
-        existing.sources.push(src);
-      }
-      if (!existing.source_key && item.source_key) {
-        existing.source_key = item.source_key;
-      }
-    } else {
-      map.set(key, {
-        id: item.id || rawAbbr,
-        abbreviation: rawAbbr,
-        name: name,
-        language: lang,
-        sources: [src],
-        provider: item.provider || 'churchapps',
-        source_key: item.source_key || null
-      });
-    }
-  }
-
-  return Array.from(map.values()).sort((a, b) => {
-    const aEng = a.language.toLowerCase() === 'english';
-    const bEng = b.language.toLowerCase() === 'english';
-    if (aEng !== bEng) return bEng ? 1 : -1;
-    if (a.language !== b.language) return a.language.localeCompare(b.language);
-    return a.name.localeCompare(b.name);
-  });
-}
-
-function populateBibleLanguageFilter(items: any[]) {
-  if (!apiBibleLangFilter) return;
-  const currentVal = (apiBibleLangFilter.value || 'all').toLowerCase();
-
-  const counts: Record<string, number> = {};
-  for (const item of items) {
-    const l = cleanLanguageName(item.language) || 'English';
-    counts[l] = (counts[l] || 0) + 1;
-  }
-
-  const langs = Object.keys(counts).sort((a, b) => {
-    if (a.toLowerCase() === 'english') return -1;
-    if (b.toLowerCase() === 'english') return 1;
-    if (a.toLowerCase() === 'spanish') return -1;
-    if (b.toLowerCase() === 'spanish') return 1;
-    return a.localeCompare(b);
-  });
-
-  let optionsHtml = `<option value="all">🌐 All Languages (${items.length})</option>`;
-  for (const l of langs) {
-    const isSelected = l.toLowerCase() === currentVal ? 'selected' : '';
-    optionsHtml += `<option value="${escapeHtml(l.toLowerCase())}" ${isSelected}>${escapeHtml(l)} (${counts[l]})</option>`;
-  }
-  apiBibleLangFilter.innerHTML = optionsHtml;
-}
-
-function renderOnlineBibleCatalog(items: any[]) {
-  if (!apiBibleCatalogList) return;
-  const query = apiBibleSearchInput ? apiBibleSearchInput.value.trim().toLowerCase() : '';
-  const selectedLang = apiBibleLangFilter ? apiBibleLangFilter.value.toLowerCase() : 'all';
-
-  const filtered = (items || []).filter((b: any) => {
-    const matchQuery = !query || 
-      (b.name || '').toLowerCase().includes(query) ||
-      (b.abbreviation || '').toLowerCase().includes(query) ||
-      (b.language || '').toLowerCase().includes(query);
-    
-    const matchLang = selectedLang === 'all' || (b.language || '').toLowerCase() === selectedLang;
-
-    return matchQuery && matchLang;
-  });
-
-  if (apiBibleCountLabel) {
-    apiBibleCountLabel.textContent = `Showing ${filtered.length} of ${items.length} translations`;
-  }
-
-  apiBibleCatalogList.innerHTML = '';
-
-  if (filtered.length === 0) {
-    apiBibleCatalogList.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--text-dim);">No Bible translations match your filter</div>`;
-    return;
-  }
-
-  filtered.forEach((b: any) => {
-    const itemEl = document.createElement('div');
-    itemEl.className = 'freeshow-bible-item';
-
-    const lang = (b.language || 'ENG').toUpperCase();
-    const abbr = b.abbreviation ? ` (${b.abbreviation})` : '';
-    const sourcesStr = (b.sources && b.sources.length > 0) ? b.sources.join(' • ') : (b.source || 'ChurchApps • OpenLP');
-
-    itemEl.innerHTML = `
-      <div class="bible-item-main" style="display: flex; flex-direction: column; gap: 2px;">
-        <div style="display: flex; align-items: center; gap: 6px;">
-          <span class="bible-lang-badge">${escapeHtml(lang)}</span>
-          <span class="bible-name-text" style="font-weight: 600;">${escapeHtml(b.name)}${escapeHtml(abbr)}</span>
-        </div>
-        <div style="font-size: 10px; color: var(--text-dim); margin-left: 2px;">
-          Source: <span style="color: var(--os-accent-text);">${escapeHtml(sourcesStr)}</span>
-        </div>
-      </div>
-      <button class="btn-install-bible" data-abbr="${escapeHtml(b.abbreviation || b.id)}">Install / Download</button>
-    `;
-
-    const btn = itemEl.querySelector<HTMLButtonElement>('.btn-install-bible');
-    if (btn) {
-      btn.addEventListener('click', async () => {
-        const transId = (b.abbreviation || b.id || 'kjv').toUpperCase();
-        btn.disabled = true;
-        btn.textContent = '⏳ Downloading Entire Bible...';
-        showToast(`⏳ Downloading entire ${transId} Bible (all 66 books, ~31,000 verses)...`, 'info');
-
-        try {
-          const res = await fetch('/api/bibles/online/download', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              translation: transId,
-              provider: b.provider || 'churchapps',
-              source_key: b.source_key || null
-            })
-          });
-
-          if (res.ok) {
-            const data = await res.json();
-            showToast(`✓ Successfully downloaded complete ${data.translation} Bible (${data.chapters_count} chapters, ${data.verses_count} verses)!`, 'success');
-            btn.classList.add('installed');
-            btn.textContent = '✓ Ready';
-            await refreshInstalledBibles();
-            setActiveBibleVersion(transId.toLowerCase());
-            renderCategoryTree('scriptures');
-            updateSearchModeUI();
-            await loadLibraryTab('scriptures');
-            closeModal(importModal);
-            if (resourceSearchInput) resourceSearchInput.focus();
-          } else {
-            const errText = await res.text();
-            showToast(`Bible download error: ${errText}`, 'error');
-            btn.disabled = false;
-            btn.textContent = 'Install / Download';
-          }
-        } catch (err) {
-          showToast(`Network error downloading Bible: ${err instanceof Error ? err.message : String(err)}`, 'error');
-          btn.disabled = false;
-          btn.textContent = 'Install / Download';
-        }
-      });
-    }
-
-    apiBibleCatalogList.appendChild(itemEl);
-  });
-}
-
-let bibleSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-on(apiBibleSearchInput, 'input', () => {
-  clearTimeout(bibleSearchDebounceTimer ?? undefined);
-  bibleSearchDebounceTimer = setTimeout(() => {
-    renderOnlineBibleCatalog(onlineBibleCatalog);
-  }, 150);
-});
-if (apiBibleLangFilter) {
-  apiBibleLangFilter.addEventListener('change', () => {
-    renderOnlineBibleCatalog(onlineBibleCatalog);
-  });
-}
-
 on('btn-import-back', 'click', handleImportBack);
 on('btn-close-import', 'click', () => { stopYtdlpPolling(); closeModal(importModal); });
 on('btn-close-import-footer', 'click', () => { stopYtdlpPolling(); closeModal(importModal); });
 
-// ============================================================================
-// GITHUB BIBLE REPO IMPORTER
-// ============================================================================
-async function browseGitHubBibleRepo() {
-  const repo = ghRepoInput ? ghRepoInput.value.trim() : 'arron-taylor/bible-versions';
-  const versionsPath = ghVersionsPathInput ? ghVersionsPathInput.value.trim() : 'versions';
+// Something (the Store card, the first-run wizard) asked to land on Settings > Plugins.
+window.addEventListener('os-open-plugins-settings', () => {
+  showModal(optionsModal);
+  openSettingsAt('plugins');
+});
 
-  if (!repo) {
-    showToast('Please enter a GitHub repository (e.g. arron-taylor/bible-versions)', 'error');
-    return;
-  }
-
-  if (btnGhBrowse) {
-    (btnGhBrowse as HTMLButtonElement).disabled = true;
-    btnGhBrowse.textContent = '⏳ Loading...';
-  }
-  if (ghBibleCatalogList) {
-    ghBibleCatalogList.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--text-dim);">Connecting to GitHub API for <strong>${escapeHtml(repo)}</strong>...</div>`;
-  }
-  if (ghBibleCountLabel) ghBibleCountLabel.textContent = 'Fetching repo catalog...';
-  if (ghBibleSourceLabel) ghBibleSourceLabel.textContent = repo;
-
-  try {
-    const res = await fetch('/api/bibles/github/catalog', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo, versions_path: versionsPath })
-    });
-
-    const data = await res.json();
-    if (data.success && Array.isArray(data.catalog)) {
-      renderGitHubBibleCatalog(data.catalog);
-    } else {
-      if (ghBibleCatalogList) {
-        ghBibleCatalogList.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--os-danger-text);">Failed to load repo catalog: ${escapeHtml(data.error || 'Unknown error')}</div>`;
-      }
-      if (ghBibleCountLabel) ghBibleCountLabel.textContent = 'Failed to load';
-    }
-  } catch (err: any) {
-    if (ghBibleCatalogList) {
-      ghBibleCatalogList.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--os-danger-text);">Network error: ${escapeHtml(err.message)}</div>`;
-    }
-    if (ghBibleCountLabel) ghBibleCountLabel.textContent = 'Network error';
-  } finally {
-    if (btnGhBrowse) {
-      (btnGhBrowse as HTMLButtonElement).disabled = false;
-      btnGhBrowse.textContent = '🔍 Browse';
-    }
-  }
-}
-
-function renderGitHubBibleCatalog(items: any[]) {
-  if (!ghBibleCatalogList) return;
-  if (ghBibleCountLabel) {
-    ghBibleCountLabel.textContent = `Found ${items.length} Bible translation${items.length === 1 ? '' : 's'}`;
-  }
-
-  ghBibleCatalogList.innerHTML = '';
-  if (items.length === 0) {
-    ghBibleCatalogList.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--text-dim);">No .json Bible translations found in this repository path.</div>`;
-    return;
-  }
-
-  items.forEach(b => {
-    const itemEl = document.createElement('div');
-    itemEl.className = 'freeshow-bible-item';
-
-    const lang = (b.language || 'ENG').toUpperCase();
-    const abbr = b.abbreviation ? ` (${b.abbreviation})` : '';
-
-    itemEl.innerHTML = `
-      <div class="bible-item-main" style="display: flex; flex-direction: column; gap: 2px;">
-        <div style="display: flex; align-items: center; gap: 6px;">
-          <span class="bible-lang-badge">${escapeHtml(lang)}</span>
-          <span class="bible-name-text" style="font-weight: 600;">${escapeHtml(b.name)}${escapeHtml(abbr)}</span>
-        </div>
-        <div style="font-size: 10px; color: var(--text-dim); margin-left: 2px;">
-          Source: <span style="color: var(--os-accent-text);">${escapeHtml(b.source || 'GitHub')}</span>
-        </div>
-      </div>
-      <button class="btn-install-bible" data-id="${escapeHtml(b.id)}">Install / Download</button>
-    `;
-
-    const btn = itemEl.querySelector('.btn-install-bible') as HTMLButtonElement | null;
-    if (btn) {
-      btn.addEventListener('click', async () => {
-        const transId = (b.abbreviation || b.id || 'BIBLE').toUpperCase();
-        btn.disabled = true;
-        btn.textContent = '⏳ Downloading from GitHub...';
-        showToast(`⏳ Downloading ${b.name} from GitHub...`, 'info');
-
-        try {
-          const res = await fetch('/api/bibles/online/download', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              translation: transId,
-              provider: 'github',
-              source_key: b.source_key
-            })
-          });
-
-          if (res.ok) {
-            const data = await res.json();
-            showToast(`✓ Successfully downloaded complete ${data.translation} Bible (${data.chapters_count} chapters, ${data.verses_count} verses)!`, 'success');
-            btn.classList.add('installed');
-            btn.textContent = '✓ Ready';
-            await refreshInstalledBibles();
-            setActiveBibleVersion(transId.toLowerCase());
-            renderCategoryTree('scriptures');
-            updateSearchModeUI();
-            await loadLibraryTab('scriptures');
-            closeModal(importModal);
-            if (resourceSearchInput) resourceSearchInput.focus();
-          } else {
-            const errText = await res.text();
-            showToast(`Bible download error: ${errText}`, 'error');
-            btn.disabled = false;
-            btn.textContent = 'Install / Download';
-          }
-        } catch (err: any) {
-          showToast(`Network error downloading Bible: ${err instanceof Error ? err.message : String(err)}`, 'error');
-          btn.disabled = false;
-          btn.textContent = 'Install / Download';
-        }
-      });
-    }
-
-    ghBibleCatalogList.appendChild(itemEl);
-  });
-}
-
-if (btnGhBrowse) on(btnGhBrowse, 'click', browseGitHubBibleRepo);
-if (ghRepoInput) {
-  ghRepoInput.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === 'Enter') browseGitHubBibleRepo();
-  });
-}
-if (ghVersionsPathInput) {
-  ghVersionsPathInput.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === 'Enter') browseGitHubBibleRepo();
-  });
-}
+// A plugin added Bible chapters (e.g. the Online Bibles plugin): refresh the installed-translations list.
+window.addEventListener('os-library-changed', (ev) => {
+  if ((ev as CustomEvent).detail?.category === 'scriptures') void refreshInstalledBibles();
+});
 
 // FreeShow .fsb File Import
 on('file-freeshow-fsb', 'change', async (e: Event) => {
@@ -3422,7 +2976,6 @@ refreshAvailableThemes();
 refreshInstalledBibles();
 loadLibraryTab('songs');
 initWorkspaceResizers();
-loadOnlineBibleCatalog();
 initFirstTimeSetup();
 checkYtdlpUpdaterStatus();
 setInterval(checkYtdlpUpdaterStatus, 20 * 60 * 1000);
@@ -3445,7 +2998,6 @@ registerUiCallbacks({
   openImportModal,
   openSlideEditor,
   promptNewSectionHeader,
-  renderOnlineBibleCatalog,
   setImportMode,
   switchToPairingTab,
   switchToAdbProvisionTab,

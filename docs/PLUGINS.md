@@ -7,12 +7,11 @@ TypeScript frontend. They don't share code, a manifest format, or a lifecycle. P
 matches what you're extending: intercept/observe the show engine (backend), or extend the
 operator UI (frontend).
 
-There's also a narrower, unrelated plugin-shaped concept — `BibleProvider` in
-`src/storage/bible_providers.rs` — for pluggable *Bible data sources* only (see its own doc
-comments). It is not a general extension point and isn't covered here.
+Online Bible downloads and passage lookup used to be a built-in `BibleProvider` registry; they are now
+the **Online Bibles** plugin (`web/plugins/online_bibles/`, see "Sandboxed web plugins" below).
 
 `MediaSearchProvider` (`src/storage/media_search_providers.rs`, built-in `PexelsProvider` and
-`PixabayProvider`) follows the same pattern as `BibleProvider` — a stateless trait + registry
+`PixabayProvider`) is a stateless trait + registry
 for live external API integrations that need a query and a per-provider API key, which neither
 `OsPlugin` (synchronous, no query, dylib-only) nor the frontend `PluginManager` fit well. It backs
 the Media tab's "Online Images" search (`GET /api/media/online/search`) and isn't a general
@@ -77,6 +76,13 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   pinned to the address it checked); every redirect hop is re-checked, bodies are capped at 2 MB, and
   a refusal is audited. `library.addSong {song}` (needs `library.write` on `songs`) stores a song; the
   host mints its id and applies size limits. A sandboxed frame can't submit a `<form>`, so use buttons.
+- **Online Bibles is a plugin.** Downloading translations (ChurchApps / Bolls.life / the OpenLP community
+  list, and any public GitHub repository laid out like `arron-taylor/bible-versions`) and looking up a
+  passage or a whole book (bible-api.com) is `web/plugins/online_bibles/`. It asks for those five hosts,
+  `library.write` on `scriptures` (`library.addScriptures`: the host derives each chapter's id and verse
+  range, so re-downloading a translation replaces its chapters; the same grant can therefore also replace
+  chapters of a translation you already have, which its review text says) and optionally `AddToSchedule`.
+  The first-run wizard's Bible step turns it on for you, listing what it can reach.
 - **Genius lyrics is a plugin.** Searching Genius and importing lyrics used to be built into the
   server and the Song Library panel; it is now `web/plugins/genius_lyrics/` (a sandboxed panel that
   asks only for `genius.com`, `library.write` on songs, and optionally `AddToSchedule`/`GoLive`). Approve

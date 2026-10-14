@@ -1184,25 +1184,6 @@ export function renderCatalogTable(items: any[], tabName: string, matchedOnlineR
     else if (tabName === 'themes') headers.innerHTML = `<th>Name</th><th>Font / Layout</th><th>Type</th>`;
   }
 
-  if (matchedOnlineRef && items.length === 0 && tabName === 'scriptures') {
-    const fetchTrans = ctx.getActiveBibleVersion() === 'all' ? (ctx.getAppOptions().defaultBibleVersion || 'kjv') : ctx.getActiveBibleVersion();
-    const activeObj = ctx.getInstalledBibles().find(b => b.id === fetchTrans) || ctx.getInstalledBibles()[0];
-    const promptTr = document.createElement('tr');
-    promptTr.className = 'catalog-fetch-prompt-row';
-    promptTr.tabIndex = 0;
-    promptTr.innerHTML = `
-      <td colspan="3">
-        🌐 Fetch & Stage "${ctx.escapeHtml(matchedOnlineRef.formatted)}" [${ctx.escapeHtml(activeObj.abbreviation)}] from Online Scripture API ➔
-      </td>
-    `;
-    promptTr.addEventListener('click', () => fetchAndStageOnlineScripture(matchedOnlineRef.formatted, fetchTrans));
-    promptTr.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') fetchAndStageOnlineScripture(matchedOnlineRef.formatted, fetchTrans);
-    });
-    catalogTableBody.appendChild(promptTr);
-    return;
-  }
-
   appendCatalogTableRows(items, tabName, 0);
 }
 
@@ -1715,29 +1696,6 @@ export function renderAssetPreview(item: any, tabName: string) {
   if (previewCanvasEl && previewLyricsEl) {
     resolveSlideBackgroundElement(previewCanvasEl, previewSlide);
     renderSlideVisual(previewCanvasEl, previewElementsEl, previewLyricsEl, previewSlide, theme);
-  }
-}
-
-export async function fetchAndStageOnlineScripture(query: string, translation: string = 'kjv') {
-  if (!ctx) return;
-  try {
-    const res = await fetch('/api/bibles/online/fetch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, translation })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      await loadLibraryTab('scriptures');
-      const targetId = data.id || (data.items && data.items.length > 0 ? data.items[0].id : null);
-      if (targetId) {
-        addItemToSchedule('scriptures', targetId);
-      }
-    } else {
-      ctx.showToast('Could not fetch online scripture for: ' + query, 'error');
-    }
-  } catch (e) {
-    ctx.showToast('Fetch error: ' + (e instanceof Error ? e.message : String(e)), 'error');
   }
 }
 
