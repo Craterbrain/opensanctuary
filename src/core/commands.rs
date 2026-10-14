@@ -158,6 +158,132 @@ pub enum ShowCommand {
     Redo,
 }
 
+/// Every `ShowCommand` variant name, in declaration order. `variant_name` matches the enum
+/// exhaustively, so adding a variant without updating both fails to compile (and a test checks the
+/// two agree).
+pub const SHOW_COMMAND_VARIANTS: &[&str] = &[
+    "GoLive", "StageItem", "StageItemDirect", "NextSlide", "PrevSlide", "NextItem", "PrevItem",
+    "JumpSlide", "JumpSection", "ToggleBlackout", "ToggleClearText", "ToggleLogo", "SetAlert",
+    "SetWebStream", "SetTransition", "MediaScheduledStart", "MediaPause", "MediaSetLoop",
+    "MediaSetMute", "MediaSetVolume", "MediaPreroll", "SetItemTheme", "SetSlideBackground",
+    "SetSlideDuration", "SetPresentationDefaultDuration", "SetPresentationLoop", "SetGlobalTheme",
+    "AddToSchedule", "AddScheduleHeader", "RemoveFromSchedule", "ReorderSchedule",
+    "ReorderItemSlides", "DuplicateItemSlide", "RemoveItemSlide", "MergeScheduleItems",
+    "SetArrangement", "ToggleScheduleItemExpand", "SetScheduleTitle", "NewSchedule", "LoadSchedule",
+    "AddSlideElement", "RemoveSlideElement", "UpdateSlideElementTransform",
+    "UpdateTextBlockContent", "UpdateElementEffects", "ReorderSlideElements", "GroupSlideElements",
+    "UngroupSlideElements", "SetSlideBackgroundV2", "SetSlideTransition", "SetSlideSpeakerNotes",
+    "SetSlideCcliMetadata", "BatchSlideEdit", "Undo", "Redo",
+];
+
+/// The variant name of a parsed command: what plugin permission checks compare against.
+pub fn variant_name(cmd: &ShowCommand) -> &'static str {
+    match cmd {
+        ShowCommand::GoLive{..} => "GoLive",
+        ShowCommand::StageItem{..} => "StageItem",
+        ShowCommand::StageItemDirect(..) => "StageItemDirect",
+        ShowCommand::NextSlide => "NextSlide",
+        ShowCommand::PrevSlide => "PrevSlide",
+        ShowCommand::NextItem => "NextItem",
+        ShowCommand::PrevItem => "PrevItem",
+        ShowCommand::JumpSlide(..) => "JumpSlide",
+        ShowCommand::JumpSection(..) => "JumpSection",
+        ShowCommand::ToggleBlackout => "ToggleBlackout",
+        ShowCommand::ToggleClearText => "ToggleClearText",
+        ShowCommand::ToggleLogo => "ToggleLogo",
+        ShowCommand::SetAlert(..) => "SetAlert",
+        ShowCommand::SetWebStream(..) => "SetWebStream",
+        ShowCommand::SetTransition(..) => "SetTransition",
+        ShowCommand::MediaScheduledStart{..} => "MediaScheduledStart",
+        ShowCommand::MediaPause{..} => "MediaPause",
+        ShowCommand::MediaSetLoop(..) => "MediaSetLoop",
+        ShowCommand::MediaSetMute(..) => "MediaSetMute",
+        ShowCommand::MediaSetVolume(..) => "MediaSetVolume",
+        ShowCommand::MediaPreroll{..} => "MediaPreroll",
+        ShowCommand::SetItemTheme{..} => "SetItemTheme",
+        ShowCommand::SetSlideBackground{..} => "SetSlideBackground",
+        ShowCommand::SetSlideDuration{..} => "SetSlideDuration",
+        ShowCommand::SetPresentationDefaultDuration{..} => "SetPresentationDefaultDuration",
+        ShowCommand::SetPresentationLoop{..} => "SetPresentationLoop",
+        ShowCommand::SetGlobalTheme{..} => "SetGlobalTheme",
+        ShowCommand::AddToSchedule(..) => "AddToSchedule",
+        ShowCommand::AddScheduleHeader{..} => "AddScheduleHeader",
+        ShowCommand::RemoveFromSchedule(..) => "RemoveFromSchedule",
+        ShowCommand::ReorderSchedule{..} => "ReorderSchedule",
+        ShowCommand::ReorderItemSlides{..} => "ReorderItemSlides",
+        ShowCommand::DuplicateItemSlide{..} => "DuplicateItemSlide",
+        ShowCommand::RemoveItemSlide{..} => "RemoveItemSlide",
+        ShowCommand::MergeScheduleItems{..} => "MergeScheduleItems",
+        ShowCommand::SetArrangement{..} => "SetArrangement",
+        ShowCommand::ToggleScheduleItemExpand(..) => "ToggleScheduleItemExpand",
+        ShowCommand::SetScheduleTitle(..) => "SetScheduleTitle",
+        ShowCommand::NewSchedule => "NewSchedule",
+        ShowCommand::LoadSchedule(..) => "LoadSchedule",
+        ShowCommand::AddSlideElement{..} => "AddSlideElement",
+        ShowCommand::RemoveSlideElement{..} => "RemoveSlideElement",
+        ShowCommand::UpdateSlideElementTransform{..} => "UpdateSlideElementTransform",
+        ShowCommand::UpdateTextBlockContent{..} => "UpdateTextBlockContent",
+        ShowCommand::UpdateElementEffects{..} => "UpdateElementEffects",
+        ShowCommand::ReorderSlideElements{..} => "ReorderSlideElements",
+        ShowCommand::GroupSlideElements{..} => "GroupSlideElements",
+        ShowCommand::UngroupSlideElements{..} => "UngroupSlideElements",
+        ShowCommand::SetSlideBackgroundV2{..} => "SetSlideBackgroundV2",
+        ShowCommand::SetSlideTransition{..} => "SetSlideTransition",
+        ShowCommand::SetSlideSpeakerNotes{..} => "SetSlideSpeakerNotes",
+        ShowCommand::SetSlideCcliMetadata{..} => "SetSlideCcliMetadata",
+        ShowCommand::BatchSlideEdit{..} => "BatchSlideEdit",
+        ShowCommand::Undo => "Undo",
+        ShowCommand::Redo => "Redo",
+    }
+}
+
+/// Commands with no fields: there is nothing to rewrite, so `commands.modify` can't list them.
+pub const UNIT_COMMANDS: &[&str] = &["NextSlide", "PrevSlide", "NextItem", "PrevItem", "ToggleBlackout", "ToggleClearText", "ToggleLogo", "NewSchedule", "Undo", "Redo"];
+
+/// Never modifiable by a plugin, whatever it is granted: sending output to an arbitrary URL, replacing
+/// the whole schedule, and history. (The emergency commands are excluded separately, before any
+/// modifier runs.)
+pub const NEVER_MODIFIABLE: &[&str] = &["SetWebStream", "NewSchedule", "LoadSchedule", "Undo", "Redo"];
+
+/// Why a plugin's rewrite of a command was refused, or the command to run instead. The rewrite must be
+/// a bare command of the **same variant** (so it can never turn a slide change into a blackout, and
+/// scope checks made before the rewrite still hold), small, and valid: the host re-serializes the parsed
+/// command to its canonical form, which also drops unknown fields.
+pub fn validate_rewrite(original: &serde_json::Value, variant: &str, rewritten: &str) -> Result<serde_json::Value, &'static str> {
+    let orig_len = serde_json::to_string(original).map(|t| t.len()).unwrap_or(0);
+    let limit = (256 * 1024usize).min(orig_len.saturating_mul(4).saturating_add(4 * 1024));
+    if rewritten.len() > limit {
+        return Err("the rewritten command is too large");
+    }
+    let value: serde_json::Value = serde_json::from_str(rewritten).map_err(|_| "the rewrite isn't valid JSON")?;
+    let bare = match &value {
+        serde_json::Value::String(_) => true,
+        serde_json::Value::Object(m) => m.len() == 1 && !m.contains_key("cmd"),
+        _ => false,
+    };
+    if !bare {
+        return Err("the rewrite must be a bare command, not an envelope");
+    }
+    if crate::core::plugin_permissions::command_variant(rewritten).as_deref() != Some(variant) {
+        return Err("a rewrite can't change the kind of command");
+    }
+    let parsed: ShowCommand = serde_json::from_value(value).map_err(|_| "the rewrite isn't a valid command")?;
+    if variant_name(&parsed) != variant {
+        return Err("a rewrite can't change the kind of command");
+    }
+    serde_json::to_value(&parsed).map_err(|_| "the rewrite couldn't be re-encoded")
+}
+
+/// The commands a plugin may be granted `commands.modify` for: everything with fields except the
+/// emergency controls and `NEVER_MODIFIABLE`.
+pub fn modifiable_variants() -> Vec<&'static str> {
+    SHOW_COMMAND_VARIANTS
+        .iter()
+        .copied()
+        .filter(|v| !UNIT_COMMANDS.contains(v) && !NEVER_MODIFIABLE.contains(v) && !crate::core::plugin_permissions::SAFETY_CRITICAL_COMMANDS.contains(v))
+        .collect()
+}
+
 /// One edit within a `BatchSlideEdit` (the "Apply" button's full diff of
 /// everything changed in one editor sitting -- see
 /// `EditorHistoryManager.computeBatchOps` in web/src/editor/history.ts,
@@ -369,3 +495,75 @@ mod slide_edit_op_wire_tests {
     }
 }
 
+#[cfg(test)]
+mod modify_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_variant_list_matches_the_enum() {
+        // Every variant declared in this file's `ShowCommand` enum, read from the source, equals the list.
+        let src = include_str!("commands.rs");
+        let start = src.find("pub enum ShowCommand {").unwrap();
+        let end = start + src[start..].find("\n}\n").unwrap();
+        let declared: Vec<&str> = src[start..end]
+            .lines()
+            .skip(1)
+            .filter_map(|l| {
+                let rest = l.strip_prefix("    ")?;
+                if rest.starts_with(' ') || !rest.chars().next()?.is_ascii_uppercase() {
+                    return None;
+                }
+                let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+                Some(Box::leak(name.into_boxed_str()) as &str)
+            })
+            .collect();
+        assert_eq!(declared, SHOW_COMMAND_VARIANTS);
+        let mut seen = std::collections::HashSet::new();
+        assert!(SHOW_COMMAND_VARIANTS.iter().all(|v| seen.insert(*v)));
+        // Every sample serializes under the name variant_name reports.
+        for (cmd, name) in [
+            (ShowCommand::NextSlide, "NextSlide"),
+            (ShowCommand::SetScheduleTitle("x".into()), "SetScheduleTitle"),
+            (ShowCommand::AddScheduleHeader { title: "t".into(), index: None }, "AddScheduleHeader"),
+            (ShowCommand::SetAlert(None), "SetAlert"),
+        ] {
+            assert_eq!(variant_name(&cmd), name);
+            assert!(SHOW_COMMAND_VARIANTS.contains(&name));
+        }
+    }
+
+    #[test]
+    fn what_can_be_modified() {
+        let ok = modifiable_variants();
+        for yes in ["AddToSchedule", "SetItemTheme", "SetScheduleTitle", "AddScheduleHeader", "GoLive"] {
+            assert!(ok.contains(&yes), "{yes}");
+        }
+        for no in ["ToggleBlackout", "ToggleClearText", "ToggleLogo", "SetAlert", "SetWebStream", "NewSchedule", "LoadSchedule", "Undo", "Redo", "NextSlide", "PrevItem"] {
+            assert!(!ok.contains(&no), "{no} must not be modifiable");
+        }
+    }
+
+    #[test]
+    fn a_rewrite_must_be_a_small_valid_command_of_the_same_kind() {
+        let orig = json!({ "AddScheduleHeader": { "title": "Hello", "index": null } });
+        let ok = validate_rewrite(&orig, "AddScheduleHeader", r#"{"AddScheduleHeader":{"title":"HELLO","index":null}}"#).unwrap();
+        assert_eq!(ok, json!({ "AddScheduleHeader": { "title": "HELLO", "index": null } }));
+        // Unknown fields are dropped by re-serializing the parsed command.
+        let canon = validate_rewrite(&orig, "AddScheduleHeader", r#"{"AddScheduleHeader":{"title":"x","index":null,"evil":{"a":1}}}"#).unwrap();
+        assert_eq!(canon, json!({ "AddScheduleHeader": { "title": "x", "index": null } }));
+        for (why, bad) in [
+            ("another command", r#"{"SetAlert":"boo"}"#.to_string()),
+            ("a bare emergency command", r#""ToggleBlackout""#.to_string()),
+            ("an envelope", r#"{"cmd":{"AddScheduleHeader":{"title":"x","index":null}},"host_token":"t"}"#.to_string()),
+            ("two keys", r#"{"AddScheduleHeader":{"title":"x","index":null},"SetAlert":"x"}"#.to_string()),
+            ("not json", "AddScheduleHeader".to_string()),
+            ("a number", "5".to_string()),
+            ("an array", "[]".to_string()),
+            ("wrong field types", r#"{"AddScheduleHeader":{"title":5}}"#.to_string()),
+            ("too large", format!(r#"{{"AddScheduleHeader":{{"title":"{}","index":null}}}}"#, "x".repeat(40_000))),
+        ] {
+            assert!(validate_rewrite(&orig, "AddScheduleHeader", &bad).is_err(), "{why}");
+        }
+    }
+}

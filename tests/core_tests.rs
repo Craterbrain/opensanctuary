@@ -6110,7 +6110,8 @@ async fn test_real_cdylib_plugin_abi2_end_to_end() {
             "backend": {"abi": 2, "libraries": { platform_key(): {"path": format!("lib/{lib_name}"), "sha256": sha256_hex(&lib_bytes)} }},
             "permissions": [
                 {"id": "show.observe"}, {"id": "filesystem.plugin_data"}, {"id": "keyring.own", "optional": true},
-                {"id": "commands.send", "commands": ["NextSlide"], "optional": true}
+                {"id": "commands.send", "commands": ["NextSlide"], "optional": true},
+                {"id": "commands.modify", "commands": ["SetScheduleTitle"], "optional": true}
             ]
         }).to_string(),
     ).unwrap();
@@ -6182,6 +6183,31 @@ async fn test_real_cdylib_plugin_abi2_end_to_end() {
     assert_eq!((queued.plugin_id.as_str(), queued.variant.as_str()), ("org.example.observer", "NextSlide"));
     assert!(pm.command_allowed("org.example.observer", "NextSlide"));
     assert!(!pm.command_allowed("org.example.observer", "NewSchedule"));
+
+    // commands.modify: the library exports a modifier, but it was not granted, so it is never built or called.
+    let title = serde_json::json!({ "SetScheduleTitle": "sunday" });
+    assert_eq!(pm.apply_modifiers(title.clone()).0, title, "no grant, no modifier");
+    // Loaded with the grant (the approval is applied at load time), it does its job, and only on what was listed.
+    let with_modify = os_next::core::plugins::ApprovedNative {
+        id: "org.example.observer".into(),
+        library: dir.join("lib").join(&lib_name),
+        grants: PermissionSet(vec![
+            PermissionRequest::simple("show.observe"),
+            PermissionRequest { id: "commands.modify".into(), commands: vec!["SetScheduleTitle".into()], ..Default::default() },
+        ]),
+    };
+    let mut pm2 = PluginManager::new();
+    pm2.load_approved(vec![with_modify], Some(&factory));
+    assert_eq!(pm2.plugin_count(), 1);
+    let (changed, events) = pm2.apply_modifiers(title.clone());
+    assert_eq!(changed, serde_json::json!({ "SetScheduleTitle": "SUNDAY" }));
+    assert_eq!(events.len(), 1);
+    assert_eq!(pm2.modifier_stats("org.example.observer"), Some((1, false)));
+    let other = serde_json::json!({ "AddScheduleHeader": { "title": "Sunday", "index": null } });
+    assert_eq!(pm2.apply_modifiers(other.clone()).0, other, "not in its list");
+    assert_eq!(pm2.apply_modifiers(serde_json::json!("ToggleBlackout")).0, serde_json::json!("ToggleBlackout"));
+    assert!(pm2.revoke("org.example.observer"));
+    assert_eq!(pm2.apply_modifiers(title.clone()).0, title, "revoked: unchanged");
 
     // Revoke: the hook is no longer even called, and a queued command would be dropped.
     assert!(pm.revoke("org.example.observer"));
@@ -7033,4 +7059,478 @@ async fn test_stock_media_plugin_host_api_limits() {
     let narrow = json(c.post(format!("{base}/api/plugins/stock_media/token")).header("x-host-token", host)
         .json(&serde_json::json!({ "scopes": [{ "id": "keyring.own" }] })).send().await.unwrap()).await["token"].as_str().unwrap().to_string();
     assert_eq!(media_url(serde_json::json!({ "url": "https://images.pexels.com/a.jpg", "title": "x" }), Some(narrow)).await.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+/// The Advanced override: the operator grants exactly the permissions they choose, which may
+/// differ from what the plugin asked for (extra, withheld, re-scoped), validated and audited.
+#[tokio::test]
+async fn test_advanced_permission_override() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("adv.db").to_str().unwrap()).unwrap();
+    let web_dir = tmp.path().join("web");
+    let dest = web_dir.join("plugins/stock_media");
+    std::fs::create_dir_all(&dest).unwrap();
+    for entry in std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/plugins/stock_media")).unwrap().flatten() {
+        std::fs::copy(entry.path(), dest.join(entry.file_name())).unwrap();
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"), data_dir: tmp.path().to_path_buf(),
+        host_session_token: "adv_host".to_string(), server_port: addr.port(),
+        ..base_app_state(db.clone())
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+    let host = "adv_host";
+    let json = |r: reqwest::Response| async move { r.json::<serde_json::Value>().await.unwrap() };
+
+    // The catalog lists every permission the host knows, console only.
+    assert_eq!(c.get(format!("{base}/api/plugins/permissions")).send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+    let catalog = json(c.get(format!("{base}/api/plugins/permissions")).header("x-host-token", host).send().await.unwrap()).await;
+    let entry = |id: &str| catalog.as_array().unwrap().iter().find(|e| e["id"] == id).cloned().unwrap_or_else(|| panic!("{id} missing"));
+    assert_eq!((entry("network.outbound")["scope"].as_str(), entry("library.write")["scope"].as_str(), entry("show.observe")["scope"].as_str()), (Some("hosts"), Some("categories"), Some("none")));
+    assert_eq!(entry("process.run")["tier"], "critical");
+
+    let list = json(c.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap()).await;
+    let p = list.as_array().unwrap().iter().find(|p| p["id"] == "stock_media").unwrap().clone();
+    let digest = p["digest"].clone();
+    let approve = |body: serde_json::Value| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugins/stock_media/approve")).header("x-host-token", "adv_host").json(&body).send().await.unwrap() }
+    };
+
+    // The ordinary path still refuses anything not requested, and a required permission can't be dropped.
+    assert_eq!(approve(serde_json::json!({ "digest": digest, "granted": ["ui.panel", "network.outbound", "keyring.own", "library.write", "show.observe"] })).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(approve(serde_json::json!({ "digest": digest, "granted": ["ui.panel"] })).await.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // The override validates what the operator types: unknown ids, kinds that don't fit, bad scopes, duplicates.
+    for (why, grants) in [
+        ("unknown permission", serde_json::json!([{ "id": "made.up" }])),
+        ("ui.dom has no meaning for a sandboxed page", serde_json::json!([{ "id": "ui.dom" }])),
+        ("native.code has no meaning for a web page", serde_json::json!([{ "id": "native.code" }])),
+        ("a host that isn't a host", serde_json::json!([{ "id": "network.outbound", "hosts": ["evil.test/path"] }])),
+        ("a wildcard in the middle", serde_json::json!([{ "id": "network.outbound", "hosts": ["a.*.test"] }])),
+        ("an unknown category", serde_json::json!([{ "id": "library.write", "categories": ["secrets"] }])),
+        ("a scope the permission doesn't take", serde_json::json!([{ "id": "commands.send", "categories": ["media"], "commands": ["NextSlide"] }])),
+        ("a duplicate", serde_json::json!([{ "id": "show.observe" }, { "id": "show.observe" }])),
+        ("commands.modify on a sandboxed page", serde_json::json!([{ "id": "commands.modify", "commands": ["GoLive"] }])),
+        ("keyring.service with a namespace that isn't shareable", serde_json::json!([{ "id": "keyring.service", "services": ["OpenSanctuary:System"], "access": "read" }])),
+    ] {
+        let r = approve(serde_json::json!({ "digest": digest, "override": grants })).await;
+        assert_eq!(r.status(), reqwest::StatusCode::BAD_REQUEST, "{why}");
+    }
+    // A stale digest still wins over an override.
+    assert_eq!(approve(serde_json::json!({ "digest": "stale", "override": [] })).await.status(), reqwest::StatusCode::CONFLICT);
+
+    // A real override: drop required keyring.own and library.write, narrow the hosts, add two the plugin never asked for.
+    let r = approve(serde_json::json!({ "digest": digest, "override": [
+        { "id": "ui.panel" },
+        { "id": "network.outbound", "hosts": ["api.pexels.com"] },
+        { "id": "show.observe" },
+        { "id": "commands.send", "commands": ["NextSlide", "PrevSlide"] },
+    ] })).await;
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let v = json(r).await;
+    assert_eq!(v["state"], "active");
+    assert_eq!(v["overridden"], true);
+    let diff = &v["override_diff"];
+    assert_eq!(diff["added"], serde_json::json!(["show.observe", "commands.send"]));
+    assert_eq!(diff["changed"], serde_json::json!(["network.outbound"]));
+    let mut removed: Vec<&str> = diff["removed"].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
+    removed.sort();
+    assert_eq!(removed, ["keyring.own", "library.write", "notifications.post"]);
+
+    // It is what is enforced: the frame may reach only the narrowed host, and tokens carry the extras but not what was withheld.
+    let r = c.get(format!("{base}/plugin-frame/stock_media/index.html")).header("x-host-token", host).send().await.unwrap();
+    let csp = r.headers().get("content-security-policy").unwrap().to_str().unwrap().to_string();
+    assert!(csp.contains("https://api.pexels.com") && !csp.contains("pixabay"), "{csp}");
+    let mint = |scopes: serde_json::Value| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugins/stock_media/token")).header("x-host-token", "adv_host").json(&serde_json::json!({ "scopes": scopes })).send().await.unwrap() }
+    };
+    assert_eq!(mint(serde_json::json!([{ "id": "commands.send", "commands": ["NextSlide"] }])).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(mint(serde_json::json!([{ "id": "commands.send", "commands": ["GoLive"] }])).await.status(), reqwest::StatusCode::FORBIDDEN, "only the commands the operator chose");
+    assert_eq!(mint(serde_json::json!([{ "id": "library.write", "categories": ["media"] }])).await.status(), reqwest::StatusCode::FORBIDDEN, "withheld");
+    assert_eq!(mint(serde_json::json!([{ "id": "network.outbound", "hosts": ["pixabay.com"] }])).await.status(), reqwest::StatusCode::FORBIDDEN, "narrowed");
+
+    // The audit trail records the override.
+    let audit = json(c.get(format!("{base}/api/plugins/audit")).header("x-host-token", host).send().await.unwrap()).await.to_string();
+    assert!(audit.contains("override") && audit.contains("show.observe"), "{audit}");
+
+    // Approving again the ordinary way (all requested, no extras) clears the override.
+    let r = approve(serde_json::json!({ "digest": digest, "granted": ["ui.panel", "network.outbound", "keyring.own", "library.write"] })).await;
+    let v = json(r).await;
+    assert_eq!(v["overridden"], false);
+}
+
+/// `keyring.service`: two sandboxed plugins share a keyring namespace under the host's rules.
+#[tokio::test]
+async fn test_shared_keyring_namespaces_between_plugins() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("shared.db").to_str().unwrap()).unwrap();
+    let web_dir = tmp.path().join("web");
+    const S: &str = "OpenSanctuary:Shared:kp-test-pexels";
+    let write_plugin = |id: &str, perms: serde_json::Value| {
+        let dir = web_dir.join("plugins").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.html"), "<html></html>").unwrap();
+        std::fs::write(
+            dir.join("plugin.json"),
+            serde_json::json!({ "manifest_version": 1, "id": id, "name": id, "web": { "entry": "index.html", "sandbox": true }, "permissions": perms }).to_string(),
+        ).unwrap();
+    };
+    write_plugin("kp_a", serde_json::json!([{ "id": "keyring.service", "services": [S], "access": "write" }, { "id": "network.outbound", "hosts": ["example.com"] }]));
+    write_plugin("kp_b", serde_json::json!([{ "id": "keyring.service", "services": [S], "access": "read" }, { "id": "keyring.own" }]));
+    // Bad shapes are errors on the plugin, not silently narrowed.
+    write_plugin("kp_bad1", serde_json::json!([{ "id": "keyring.service", "services": ["OpenSanctuary:System"], "access": "read" }]));
+    write_plugin("kp_bad2", serde_json::json!([{ "id": "keyring.service", "services": ["OpenSanctuary:Plugin:kp_a"] }]));
+    write_plugin("kp_bad3", serde_json::json!([{ "id": "keyring.service", "services": ["OpenSanctuary:Shared:Upper"] }]));
+    write_plugin("kp_bad4", serde_json::json!([{ "id": "keyring.service", "services": [S], "access": "root" }]));
+    write_plugin("kp_bad5", serde_json::json!([{ "id": "keyring.service" }]));
+    write_plugin("kp_bad6", serde_json::json!([{ "id": "keyring.own", "services": [S] }]));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"), data_dir: tmp.path().to_path_buf(),
+        host_session_token: "kp_host".to_string(), server_port: addr.port(), ..base_app_state(db.clone())
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+    let host = "kp_host";
+    let json = |r: reqwest::Response| async move { r.json::<serde_json::Value>().await.unwrap() };
+    let _ = os_next::storage::KeyringService::delete_secret(S, "api_key");
+
+    let list = json(c.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap()).await;
+    let find = |id: &str| list.as_array().unwrap().iter().find(|p| p["id"] == id).cloned().unwrap_or_else(|| panic!("{id} missing"));
+    for bad in ["kp_bad1", "kp_bad2", "kp_bad3", "kp_bad4", "kp_bad5", "kp_bad6"] {
+        assert!(find(bad)["error"].is_string(), "{bad} must be refused: {}", find(bad));
+    }
+    assert!(find("kp_a")["error"].is_null() && find("kp_b")["error"].is_null());
+    assert_eq!(find("kp_a")["requested"][0]["tier"], "critical");
+    // The review screen says who else shares the namespace.
+    assert_eq!(find("kp_a")["shared_with"][0]["plugins"][0]["id"], "kp_b");
+    assert_eq!(find("kp_b")["shared_with"][0]["plugins"][0]["access"], "write");
+
+    let approve = |id: &'static str, granted: serde_json::Value| {
+        let (c, base, list) = (c.clone(), base.clone(), list.clone());
+        async move {
+            let digest = list.as_array().unwrap().iter().find(|p| p["id"] == id).unwrap()["digest"].clone();
+            c.post(format!("{base}/api/plugins/{id}/approve")).header("x-host-token", "kp_host").json(&serde_json::json!({ "digest": digest, "granted": granted })).send().await.unwrap()
+        }
+    };
+    assert_eq!(approve("kp_a", serde_json::json!(["keyring.service", "network.outbound"])).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(approve("kp_b", serde_json::json!(["keyring.service", "keyring.own"])).await.status(), reqwest::StatusCode::OK);
+    let mint = |id: &'static str, scopes: serde_json::Value| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugins/{id}/token")).header("x-host-token", "kp_host").json(&serde_json::json!({ "scopes": scopes })).send().await.unwrap() }
+    };
+    // A token can't carry more than the grant: another service, or write where only read was granted.
+    assert_eq!(mint("kp_a", serde_json::json!([{ "id": "keyring.service", "services": ["OpenSanctuary:Shared:other"], "access": "read" }])).await.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(mint("kp_b", serde_json::json!([{ "id": "keyring.service", "services": [S], "access": "write" }])).await.status(), reqwest::StatusCode::FORBIDDEN, "read can't be widened to write");
+    assert_eq!(mint("kp_a", serde_json::json!([{ "id": "keyring.service", "services": [S, "OpenSanctuary:Shared:other"], "access": "write" }])).await.status(), reqwest::StatusCode::FORBIDDEN, "no extra service");
+    assert_eq!(mint("kp_a", serde_json::json!([{ "id": "keyring.own" }])).await.status(), reqwest::StatusCode::FORBIDDEN, "kp_a never got keyring.own");
+    let tok_a = json(mint("kp_a", serde_json::json!([{ "id": "keyring.service", "services": [S], "access": "write" }])).await).await["token"].as_str().unwrap().to_string();
+    let tok_b = json(mint("kp_b", serde_json::json!([{ "id": "keyring.service", "services": [S], "access": "read" }, { "id": "keyring.own" }])).await).await["token"].as_str().unwrap().to_string();
+
+    let call = |op: &'static str, token: Option<String>, service: &str, account: &str, secret: Option<&str>| {
+        let (c, base, service, account) = (c.clone(), base.clone(), service.to_string(), account.to_string());
+        let secret = secret.map(|s| s.to_string());
+        async move {
+            let mut body = serde_json::json!({ "service": service, "account": account });
+            if let Some(s) = secret { body["secret"] = s.into(); }
+            let mut r = c.post(format!("{base}/api/keyring/{op}")).json(&body);
+            r = match token { Some(t) => r.header("x-plugin-token", t), None => r.header("x-host-token", "kp_host") };
+            let res = r.send().await.unwrap();
+            (res.status(), res.json::<serde_json::Value>().await.unwrap_or_default())
+        }
+    };
+    let ok = reqwest::StatusCode::OK;
+    let forbidden = reqwest::StatusCode::FORBIDDEN;
+
+    // A writes; the row is tagged as a shared row owned by A. B (read) sees it but can't change or delete it.
+    assert_eq!(call("set", Some(tok_a.clone()), S, "api_key", Some("pexels-secret-1")).await.0, ok);
+    assert_eq!(db.get_keyring_owner(S, "api_key").unwrap().as_deref(), Some("shared:plugin:kp_a"));
+    let (st, v) = call("get", Some(tok_b.clone()), S, "api_key", None).await;
+    assert_eq!((st, v["secret"].as_str()), (ok, Some("pexels-secret-1")));
+    assert_eq!(call("has", Some(tok_b.clone()), S, "api_key", None).await.1["exists"], true);
+    assert_eq!(call("set", Some(tok_b.clone()), S, "api_key", Some("swap")).await.0, forbidden, "read access can't set");
+    assert_eq!(call("delete", Some(tok_b.clone()), S, "api_key", None).await.0, forbidden);
+
+    // The console can read and replace any shared row; the row becomes the console's and A can no longer overwrite it.
+    assert_eq!(call("set", None, S, "api_key", Some("console-value")).await.0, ok);
+    assert_eq!(db.get_keyring_owner(S, "api_key").unwrap().as_deref(), Some("shared:host"));
+    assert_eq!(call("set", Some(tok_a.clone()), S, "api_key", Some("grab")).await.0, forbidden, "a plugin can't take over a console-owned row");
+    assert_eq!(call("get", Some(tok_b.clone()), S, "api_key", None).await.1["secret"], "console-value");
+    assert_eq!(call("delete", Some(tok_a.clone()), S, "api_key", None).await.0, forbidden);
+
+    // A row that exists under a shared-looking name but wasn't created through this feature is invisible.
+    os_next::storage::KeyringService::set_secret(S, "legacy", "old-secret").unwrap();
+    db.record_keyring_owner(S, "legacy", "host").unwrap();
+    assert_eq!(call("get", Some(tok_b.clone()), S, "legacy", None).await.1["secret"], serde_json::Value::Null);
+    assert_eq!(call("has", Some(tok_b.clone()), S, "legacy", None).await.1["exists"], false);
+    assert_eq!(call("get", Some(tok_b.clone()), S, "never-stored", None).await.1["secret"], serde_json::Value::Null);
+
+    // Nothing outside the shared area through the shared grant: not another plugin's namespace, not the host's services,
+    // not the System namespace -- and A's token has no keyring.own, so not even its own.
+    for service in ["OpenSanctuary:Plugin:kp_b", "OpenSanctuary:Plugin:kp_a", "OpenSanctuary:CCLI", "OpenSanctuary:Shared:other", "OpenSanctuary:System"] {
+        assert_eq!(call("set", Some(tok_a.clone()), service, "x", Some("v")).await.0, forbidden, "{service}");
+        assert_ne!(call("get", Some(tok_a.clone()), service, "x", None).await.1["secret"], serde_json::json!("v"), "{service}");
+    }
+    // kp_b has keyring.own too: its own namespace works as before, and doesn't leak to kp_a.
+    assert_eq!(call("set", Some(tok_b.clone()), "OpenSanctuary:Plugin:kp_b", "own", Some("mine")).await.0, ok);
+    assert_eq!(call("get", Some(tok_b.clone()), "OpenSanctuary:Plugin:kp_b", "own", None).await.1["secret"], "mine");
+    assert_eq!(call("get", Some(tok_a.clone()), "OpenSanctuary:Plugin:kp_b", "own", None).await.0, forbidden);
+    // The System namespace is blocked by prefix and in any case, even for the console.
+    for service in ["OpenSanctuary:System", "opensanctuary:system", "OpenSanctuary:SystemTls", "OpenSanctuary:system:x"] {
+        assert_eq!(call("get", None, service, "x", None).await.0, forbidden, "{service}");
+    }
+
+    // The console lists shared entries (never values); a plugin can't.
+    let listing = c.get(format!("{base}/api/keyring/shared")).header("x-host-token", host).send().await.unwrap();
+    let text = listing.text().await.unwrap();
+    assert!(text.contains("api_key") && text.contains("shared:host") && !text.contains("console-value") && !text.contains("old-secret"), "{text}");
+    assert_eq!(c.get(format!("{base}/api/keyring/shared")).send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(c.get(format!("{base}/api/keyring/shared")).header("x-plugin-token", &tok_a).send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // The audit trail records first use and refusals, never the secret.
+    let audit = json(c.get(format!("{base}/api/plugins/audit")).header("x-host-token", host).send().await.unwrap()).await.to_string();
+    assert!(audit.contains("keyring_shared_access") && audit.contains("denied_call") && !audit.contains("pexels-secret-1") && !audit.contains("console-value"), "{audit}");
+
+    // A's own write can be deleted by A (its own row), and revoking kills the token at once.
+    assert_eq!(call("set", Some(tok_a.clone()), S, "mine", Some("a-secret")).await.0, ok);
+    assert_eq!(call("delete", Some(tok_a.clone()), S, "mine", None).await.0, ok);
+    assert_eq!(c.post(format!("{base}/api/plugins/kp_a/revoke")).header("x-host-token", host).send().await.unwrap().status(), ok);
+    assert_eq!(call("get", Some(tok_a.clone()), S, "api_key", None).await.0, reqwest::StatusCode::UNAUTHORIZED);
+
+    // Cleanup of real keyring entries this test created.
+    for (svc, acct) in [(S, "api_key"), (S, "legacy"), (S, "mine"), ("OpenSanctuary:Plugin:kp_b", "own")] {
+        let _ = os_next::storage::KeyringService::delete_secret(svc, acct);
+    }
+}
+
+// --- commands.modify: plugins rewrite commands in the real pipeline ---------------------------------
+
+mod modify_pipeline {
+    use super::*;
+    use os_next::api::command_pipeline::{run_command_pipeline, CommandOrigin};
+    use os_next::core::plugin_permissions::{PermissionRequest, PermissionSet};
+    use os_next::core::plugins::{CommandModifier, OsPlugin, PluginManager};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    struct Quiet(&'static str);
+    impl OsPlugin for Quiet {
+        fn name(&self) -> &'static str { self.0 }
+        fn on_state_change(&self, _s: &os_next::core::models::ShowState) {}
+        fn on_command(&self, _c: &str) -> bool { true }
+    }
+
+    /// Records every command text a veto hook is shown.
+    struct Spy(Arc<Mutex<Vec<String>>>);
+    impl OsPlugin for Spy {
+        fn name(&self) -> &'static str { "spy" }
+        fn on_state_change(&self, _s: &os_next::core::models::ShowState) {}
+        fn on_command(&self, c: &str) -> bool { self.0.lock().unwrap().push(c.to_string()); true }
+    }
+
+    /// A modifier built from a closure; counts how often it was asked.
+    struct Fn(Arc<AtomicUsize>, Box<dyn std::ops::Fn(&str) -> Option<String> + Send + Sync>);
+    impl CommandModifier for Fn {
+        fn modify_command(&self, cmd: &str) -> Option<String> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            (self.1)(cmd)
+        }
+    }
+
+    fn grant(commands: &[&str]) -> PermissionSet {
+        PermissionSet(vec![
+            PermissionRequest { id: "commands.modify".into(), commands: commands.iter().map(|c| c.to_string()).collect(), ..Default::default() },
+            PermissionRequest::simple("commands.intercept"),
+        ])
+    }
+
+    fn add(pm: &mut PluginManager, id: &str, commands: &[&str], f: impl std::ops::Fn(&str) -> Option<String> + Send + Sync + 'static) -> Arc<AtomicUsize> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let name: &'static str = Box::leak(id.to_string().into_boxed_str());
+        pm.register_plugin_with_grants(id.to_string(), Box::new(Quiet(name)), grant(commands));
+        assert!(pm.set_modifier(id, Box::new(Fn(calls.clone(), Box::new(f)))));
+        calls
+    }
+
+    fn app_with(pm: PluginManager) -> os_next::api::ws::AppState {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = os_next::storage::Database::new(tmp.path().join("m.db").to_str().unwrap()).unwrap();
+        std::mem::forget(tmp);
+        os_next::api::ws::AppState { plugin_manager: Arc::new(pm), ..base_app_state(db) }
+    }
+
+    fn run(app: &os_next::api::ws::AppState, cmd: serde_json::Value) -> Result<os_next::api::command_pipeline::Executed, os_next::api::command_pipeline::CommandRejection> {
+        run_command_pipeline(app, cmd, &CommandOrigin::Console { session_id: "t".into() })
+    }
+
+    fn title(app: &os_next::api::ws::AppState) -> String {
+        app.engine.snapshot().schedule.title
+    }
+
+    fn upper(text: &str) -> Option<String> {
+        let v: serde_json::Value = serde_json::from_str(text).ok()?;
+        Some(serde_json::json!({ "SetScheduleTitle": v["SetScheduleTitle"].as_str()?.to_uppercase() }).to_string())
+    }
+
+    #[test]
+    fn a_modifier_changes_only_the_commands_it_was_granted() {
+        let mut pm = PluginManager::new();
+        let calls = add(&mut pm, "up", &["SetScheduleTitle"], upper);
+        let app = app_with(pm);
+        run(&app, serde_json::json!({ "SetScheduleTitle": "hello" })).unwrap();
+        assert_eq!(title(&app), "HELLO");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // A command it wasn't granted never even reaches it.
+        run(&app, serde_json::json!({ "AddScheduleHeader": { "title": "hello", "index": null } })).unwrap();
+        run(&app, serde_json::json!("NextSlide")).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(app.plugin_manager.modifier_stats("up"), Some((1, false)));
+    }
+
+    #[test]
+    fn emergency_controls_never_reach_a_modifier_even_if_a_grant_lists_them() {
+        let mut pm = PluginManager::new();
+        // Granted by hand, bypassing manifest validation, to prove the host still never asks.
+        let calls = add(&mut pm, "evil", &["ToggleBlackout", "SetAlert", "ToggleClearText", "ToggleLogo", "SetWebStream", "NewSchedule"], |_| Some(r#"{"SetAlert":"pwned"}"#.to_string()));
+        let app = app_with(pm);
+        for cmd in [serde_json::json!("ToggleBlackout"), serde_json::json!({ "SetAlert": "fire" }), serde_json::json!("ToggleClearText"), serde_json::json!("ToggleLogo"), serde_json::json!("NewSchedule")] {
+            run(&app, cmd).unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(app.engine.snapshot().state.alert_text.as_deref(), Some("fire"), "the real alert ran, unchanged");
+    }
+
+    #[test]
+    fn a_rewrite_into_another_command_is_dropped_and_repeated_failures_switch_it_off() {
+        let mut pm = PluginManager::new();
+        let calls = add(&mut pm, "sneaky", &["SetScheduleTitle"], |_| Some(r#"{"SetAlert":"boo"}"#.to_string()));
+        let app = app_with(pm);
+        for i in 0..3 {
+            run(&app, serde_json::json!({ "SetScheduleTitle": format!("t{i}") })).unwrap();
+            assert_eq!(title(&app), format!("t{i}"), "the original command ran");
+        }
+        assert!(app.engine.snapshot().state.alert_text.is_none(), "no alert was ever produced");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(app.plugin_manager.modifier_stats("sneaky"), Some((0, true)), "switched off after three failures");
+        run(&app, serde_json::json!({ "SetScheduleTitle": "after" })).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 3, "not asked again");
+        assert_eq!(title(&app), "after");
+        let audit = app.db.list_plugin_audit(50).unwrap();
+        assert!(audit.iter().any(|a| a.plugin_id == "sneaky" && a.action == "modify_rejected"));
+        assert!(audit.iter().any(|a| a.plugin_id == "sneaky" && a.action == "modify_disabled"));
+        let notified = app.notifications.since(0);
+        assert!(notified.iter().any(|n| n.title.contains("switched off") && n.body.contains("sneaky")), "{notified:?}");
+    }
+
+    #[test]
+    fn modifiers_chain_in_plugin_id_order_and_the_veto_sees_the_final_command() {
+        let mut pm = PluginManager::new();
+        let append = |s: &'static str| move |text: &str| -> Option<String> {
+            let v: serde_json::Value = serde_json::from_str(text).ok()?;
+            Some(serde_json::json!({ "SetScheduleTitle": format!("{}{s}", v["SetScheduleTitle"].as_str()?) }).to_string())
+        };
+        // Registered out of order on purpose: "a_first" must still run before "z_last".
+        add(&mut pm, "z_last", &["SetScheduleTitle"], append("Z"));
+        add(&mut pm, "a_first", &["SetScheduleTitle"], append("A"));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        pm.register_plugin_with_grants("spy".into(), Box::new(Spy(seen.clone())), PermissionSet(vec![PermissionRequest::simple("commands.intercept")]));
+        let app = app_with(pm);
+        run(&app, serde_json::json!({ "SetScheduleTitle": "x" })).unwrap();
+        assert_eq!(title(&app), "xAZ");
+        // The veto hook was shown the rewritten command, never the original.
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(seen[0].contains("xAZ") && !seen[0].contains(r#""x""#), "{seen:?}");
+    }
+
+    #[test]
+    fn a_veto_still_blocks_a_rewritten_command() {
+        struct Block;
+        impl OsPlugin for Block {
+            fn name(&self) -> &'static str { "block" }
+            fn on_state_change(&self, _s: &os_next::core::models::ShowState) {}
+            fn on_command(&self, c: &str) -> bool { !c.contains("FORBIDDEN") }
+        }
+        let mut pm = PluginManager::new();
+        add(&mut pm, "up", &["SetScheduleTitle"], |_| Some(r#"{"SetScheduleTitle":"FORBIDDEN"}"#.to_string()));
+        pm.register_plugin_with_grants("block".into(), Box::new(Block), PermissionSet(vec![PermissionRequest::simple("commands.intercept")]));
+        let app = app_with(pm);
+        let before = title(&app);
+        assert!(run(&app, serde_json::json!({ "SetScheduleTitle": "fine" })).is_err(), "a modifier can't be used to sneak past a veto");
+        assert_eq!(title(&app), before);
+    }
+
+    #[test]
+    fn a_panicking_modifier_keeps_the_original_and_is_switched_off_after_three() {
+        let mut pm = PluginManager::new();
+        let calls = add(&mut pm, "boom", &["SetScheduleTitle"], |_| -> Option<String> { panic!("modifier bug") });
+        let app = app_with(pm);
+        for i in 0..4 {
+            run(&app, serde_json::json!({ "SetScheduleTitle": format!("p{i}") })).unwrap();
+            assert_eq!(title(&app), format!("p{i}"));
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 3, "asked three times, then switched off");
+        assert_eq!(app.plugin_manager.modifier_stats("boom"), Some((0, true)));
+    }
+
+    #[test]
+    fn a_slow_modifier_cannot_stall_a_command_and_is_switched_off() {
+        let mut pm = PluginManager::new();
+        let calls = add(&mut pm, "slow", &["SetScheduleTitle"], |t| { std::thread::sleep(std::time::Duration::from_millis(400)); upper(t) });
+        let app = app_with(pm);
+        let started = std::time::Instant::now();
+        run(&app, serde_json::json!({ "SetScheduleTitle": "quick" })).unwrap();
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_millis(250), "the command didn't wait for the slow modifier: {took:?}");
+        assert_eq!(title(&app), "quick", "the original ran");
+        assert_eq!(app.plugin_manager.modifier_stats("slow"), Some((0, true)));
+        run(&app, serde_json::json!({ "SetScheduleTitle": "again" })).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "never asked again");
+        assert!(app.db.list_plugin_audit(20).unwrap().iter().any(|a| a.plugin_id == "slow" && a.action == "modify_disabled"));
+    }
+
+    #[test]
+    fn revoking_stops_a_modifier_immediately() {
+        let mut pm = PluginManager::new();
+        let calls = add(&mut pm, "up", &["SetScheduleTitle"], upper);
+        let app = app_with(pm);
+        run(&app, serde_json::json!({ "SetScheduleTitle": "one" })).unwrap();
+        assert_eq!(title(&app), "ONE");
+        assert!(app.plugin_manager.revoke("up"));
+        run(&app, serde_json::json!({ "SetScheduleTitle": "two" })).unwrap();
+        assert_eq!(title(&app), "two");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn every_door_gets_the_same_modification() {
+        let mut pm = PluginManager::new();
+        add(&mut pm, "up", &["SetScheduleTitle"], upper);
+        let app = app_with(pm);
+        for (i, origin) in [CommandOrigin::Console { session_id: "c".into() }, CommandOrigin::Device { id: "d".into() }, CommandOrigin::Plugin { id: "p".into() }].into_iter().enumerate() {
+            run_command_pipeline(&app, serde_json::json!({ "SetScheduleTitle": format!("door{i}") }), &origin).unwrap();
+            assert_eq!(title(&app), format!("DOOR{i}"));
+        }
+    }
+
+    #[test]
+    fn unknown_fields_in_a_rewrite_are_dropped() {
+        let mut pm = PluginManager::new();
+        add(&mut pm, "noisy", &["AddScheduleHeader"], |_| Some(r#"{"AddScheduleHeader":{"title":"Clean","index":null,"smuggled":{"x":1}}}"#.to_string()));
+        let app = app_with(pm);
+        let out = run(&app, serde_json::json!({ "AddScheduleHeader": { "title": "Orig", "index": null } })).unwrap();
+        assert!(out.state.schedule.items.iter().any(|i| i.title == "Clean"));
+        assert!(!serde_json::to_string(&out.state.schedule).unwrap().contains("smuggled"));
+    }
 }

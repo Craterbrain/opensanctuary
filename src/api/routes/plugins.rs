@@ -85,7 +85,56 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         ),
         None => (Vec::new(), Vec::new()),
     };
+    // Granted differently from what the plugin asked for (the Advanced override): extra, dropped or re-scoped permissions.
+    let diff = override_summary(&requested, &granted);
+    let non_empty = |k: &str| diff[k].as_array().is_some_and(|a| !a.is_empty());
+    // Dropping an *optional* permission is an ordinary choice; extra, re-scoped or missing required ones are an override.
+    let overridden = state == "active"
+        && (non_empty("added") || non_empty("changed") || requested.iter().filter(|r| !r.optional).any(|r| !granted.iter().any(|g| g.id == r.id)));
+    let override_diff = overridden.then(|| diff.clone());
+    // Other plugins that share a keyring namespace this one asks for or holds, so the operator sees who else can read it.
+    let shared_with = {
+        let mine: Vec<&PermissionRequest> = (if state == "active" { &granted } else { &requested }).iter().filter(|p| p.id == "keyring.service").collect();
+        let others = app.db.list_plugin_grants().unwrap_or_default();
+        let mut out = Vec::new();
+        for svc in mine.iter().flat_map(|p| p.services.iter()) {
+            let mut plugins = Vec::new();
+            for o in others.iter().filter(|o| o.plugin_id != row.plugin_id) {
+                let theirs: Vec<PermissionRequest> = serde_json::from_str(if o.effective_state() == "active" { &o.granted_json } else { &o.requested_json }).unwrap_or_default();
+                if let Some(p) = theirs.iter().find(|p| p.id == "keyring.service" && p.services.contains(svc)) {
+                    plugins.push(serde_json::json!({ "id": o.plugin_id, "name": o.name, "access": p.access.clone().unwrap_or_else(|| "read".to_string()), "state": o.effective_state() }));
+                }
+            }
+            out.push(serde_json::json!({ "service": svc, "plugins": plugins }));
+        }
+        out
+    };
+    // commands.modify: what it changed this run, whether it was switched off, and which other approved plugins
+    // also modify the same commands (modifiers run in plugin-id order, each on the previous one's output).
+    let modify = {
+        let mine = (if state == "active" { &granted } else { &requested }).iter().find(|p| p.id == "commands.modify");
+        mine.map(|m| {
+            let (changed, tripped) = app.plugin_manager.modifier_stats(&row.plugin_id).unwrap_or((0, false));
+            let runs_after: Vec<String> = app
+                .db
+                .list_plugin_grants()
+                .unwrap_or_default()
+                .iter()
+                .filter(|o| o.plugin_id != row.plugin_id && o.effective_state() == "active" && o.plugin_id < row.plugin_id)
+                .filter(|o| {
+                    let g: Vec<PermissionRequest> = serde_json::from_str(&o.granted_json).unwrap_or_default();
+                    g.iter().any(|p| p.id == "commands.modify" && p.commands.iter().any(|c| m.commands.contains(c)))
+                })
+                .map(|o| o.plugin_id.clone())
+                .collect();
+            serde_json::json!({ "changed": changed, "tripped": tripped, "runs_after": runs_after, "active": app.plugin_manager.modifier_stats(&row.plugin_id).is_some() })
+        })
+    };
     serde_json::json!({
+        "modify": modify,
+        "shared_with": shared_with,
+        "overridden": overridden,
+        "override_diff": override_diff,
         "commands": commands,
         "tools": tools,
         "placements": read_manifest(row).and_then(|m| m.ui).map(|u| u.placements).unwrap_or_default(),
@@ -152,7 +201,13 @@ pub(super) struct ApproveReq {
     /// The digest the operator reviewed; refused if the files have changed since.
     digest: String,
     /// Ids of the requested permissions being granted (all non-optional ones are required).
+    #[serde(default)]
     granted: Vec<String>,
+    /// The Advanced override: the exact permissions to grant, replacing the plugin's own request.
+    /// May drop permissions it asked for (even required ones), change their scopes and add ones it
+    /// never asked for. When present, `granted` is ignored. The console shows a warning first.
+    #[serde(default, rename = "override")]
+    override_grants: Option<Vec<PermissionRequest>>,
 }
 
 fn actor_of(headers: &HeaderMap, app: &AppState) -> String {
@@ -192,15 +247,36 @@ pub(super) async fn approve_plugin(
         return Err(err(StatusCode::CONFLICT, "the plugin changed since it was reviewed; reload and review again"));
     }
     let requested: Vec<PermissionRequest> = serde_json::from_str(&row.requested_json).unwrap_or_default();
-    for p in requested.iter().filter(|p| !p.optional) {
-        if !req.granted.iter().any(|g| g == &p.id) {
-            return Err(err(StatusCode::BAD_REQUEST, &format!("'{}' is required by this plugin", p.id)));
+    let mut override_diff = None;
+    let granted: Vec<PermissionRequest> = if let Some(custom) = req.override_grants {
+        let mut seen = std::collections::HashSet::new();
+        for p in &custom {
+            crate::core::plugin_permissions::validate_grant(p, &row.kind).map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+            if !seen.insert(p.id.clone()) {
+                return Err(err(StatusCode::BAD_REQUEST, &format!("'{}' is listed twice", p.id)));
+            }
         }
-    }
-    if let Some(unknown) = req.granted.iter().find(|g| !requested.iter().any(|p| &p.id == *g)) {
-        return Err(err(StatusCode::BAD_REQUEST, &format!("'{unknown}' was not requested by this plugin")));
-    }
-    let granted: Vec<PermissionRequest> = requested.into_iter().filter(|p| req.granted.contains(&p.id)).collect();
+        override_diff = Some(override_summary(&requested, &custom));
+        // Keep the plugin's own reason text where the permission was one it asked for.
+        custom
+            .into_iter()
+            .map(|mut p| {
+                p.reason = requested.iter().find(|r| r.id == p.id).and_then(|r| r.reason.clone());
+                p.optional = false;
+                p
+            })
+            .collect()
+    } else {
+        for p in requested.iter().filter(|p| !p.optional) {
+            if !req.granted.iter().any(|g| g == &p.id) {
+                return Err(err(StatusCode::BAD_REQUEST, &format!("'{}' is required by this plugin", p.id)));
+            }
+        }
+        if let Some(unknown) = req.granted.iter().find(|g| !requested.iter().any(|p| &p.id == *g)) {
+            return Err(err(StatusCode::BAD_REQUEST, &format!("'{unknown}' was not requested by this plugin")));
+        }
+        requested.into_iter().filter(|p| req.granted.contains(&p.id)).collect()
+    };
     let granted_json = serde_json::to_string(&granted).unwrap_or_else(|_| "[]".to_string());
     let actor = actor_of(&headers, &app);
     app.db
@@ -210,12 +286,36 @@ pub(super) async fn approve_plugin(
         &id,
         &actor,
         "approved",
-        &serde_json::json!({ "granted": granted.iter().map(|p| &p.id).collect::<Vec<_>>(), "digest": row.observed_digest }).to_string(),
+        &serde_json::json!({ "granted": granted.iter().map(|p| &p.id).collect::<Vec<_>>(), "digest": row.observed_digest, "override": override_diff }).to_string(),
     );
+    if override_diff.is_some() {
+        tracing::warn!("plugin '{id}' was approved with an operator override of its requested permissions");
+    }
     // A plugin that's already loaded (re-approval after a revoke) picks its grants up now.
     app.plugin_manager.set_grants(&id, PermissionSet(granted));
     let fresh = app.db.get_plugin_grant(&id).ok().flatten().ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
     Ok(Json(view(&app, &fresh)))
+}
+
+/// What an Advanced override changed relative to what the plugin asked for.
+fn override_summary(requested: &[PermissionRequest], granted: &[PermissionRequest]) -> serde_json::Value {
+    let same_scope = |a: &PermissionRequest, b: &PermissionRequest| {
+        (&a.categories, &a.commands, &a.keys, &a.hosts, &a.paths, &a.ports) == (&b.categories, &b.commands, &b.keys, &b.hosts, &b.paths, &b.ports)
+    };
+    let added: Vec<&String> = granted.iter().filter(|g| !requested.iter().any(|r| r.id == g.id)).map(|g| &g.id).collect();
+    let removed: Vec<&String> = requested.iter().filter(|r| !granted.iter().any(|g| g.id == r.id)).map(|r| &r.id).collect();
+    let changed: Vec<&String> = granted
+        .iter()
+        .filter(|g| requested.iter().any(|r| r.id == g.id && !same_scope(r, g)))
+        .map(|g| &g.id)
+        .collect();
+    serde_json::json!({ "added": added, "removed": removed, "changed": changed })
+}
+
+/// GET /api/plugins/permissions -- every permission the host knows, for the Advanced override.
+pub(super) async fn permission_catalog(State(app): State<AppState>, headers: HeaderMap) -> Result<impl IntoResponse, ApiErr> {
+    require_host_token(&headers, &app)?;
+    Ok(Json(crate::core::plugin_permissions::catalog_json()))
 }
 
 async fn decide(
@@ -272,7 +372,7 @@ pub(super) struct TokenReq {
 }
 
 /// Permissions a token can carry at all.
-const TOKEN_SCOPES: [&str; 6] = ["keyring.own", "commands.send", "network.outbound", "library.write", "process.run", "notifications.post"];
+const TOKEN_SCOPES: [&str; 7] = ["keyring.own", "keyring.service", "commands.send", "network.outbound", "library.write", "process.run", "notifications.post"];
 
 /// POST /api/plugins/:id/token -- the console mints a token for an approved plugin, limited to
 /// (a subset of) what it was granted. The token is checked against the live grant on every use.
@@ -971,10 +1071,7 @@ fn content_type_for(path: &str) -> &'static str {
 
 /// Only plain host[:port] (optionally with a `*.` wildcard) may reach a CSP source list.
 fn csp_host_ok(h: &str) -> bool {
-    !h.is_empty()
-        && h.len() <= 255
-        && h.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '*'))
-        && (!h.contains('*') || h.starts_with("*."))
+    crate::core::plugin_permissions::valid_host_entry(h)
 }
 
 /// The CSP every frame response carries: nothing but the hosts the plugin was granted, and a sandbox.
@@ -1100,6 +1197,7 @@ pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/plugins", get(list_plugins))
         .route("/api/plugins/audit", get(plugin_audit))
+        .route("/api/plugins/permissions", get(permission_catalog))
         .route("/api/plugins/:id/approve", post(approve_plugin))
         .route("/api/plugins/:id/deny", post(deny_plugin))
         .route("/api/plugins/:id/revoke", post(revoke_plugin))

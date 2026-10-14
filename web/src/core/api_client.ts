@@ -332,6 +332,23 @@ export const api = {
       await resolveHostSessionToken();
       return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/approve`, { digest, granted }, { headers: hostTokenHeader() });
     },
+    /** The Advanced override: grant exactly these permissions instead of what the plugin asked for. */
+    approveOverride: async (id: string, digest: string, grants: PluginGrantInput[]) => {
+      await resolveHostSessionToken();
+      return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/approve`, { digest, override: grants }, { headers: hostTokenHeader() });
+    },
+    sharedSecrets: async () => {
+      await resolveHostSessionToken();
+      return (await api.get<{ entries: Array<{ service: string; account: string; owner: string }> }>('/api/keyring/shared', { headers: hostTokenHeader() })).entries;
+    },
+    deleteSharedSecret: async (service: string, account: string) => {
+      await resolveHostSessionToken();
+      return api.post<{ success: boolean }>('/api/keyring/delete', { service, account }, { headers: hostTokenHeader() });
+    },
+    permissionCatalog: async () => {
+      await resolveHostSessionToken();
+      return api.get<PluginCatalogEntry[]>('/api/plugins/permissions', { headers: hostTokenHeader() });
+    },
     deny: async (id: string) => {
       await resolveHostSessionToken();
       return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/deny`, {}, { headers: hostTokenHeader() });
@@ -423,9 +440,37 @@ export interface PluginPermissionInfo {
   keys?: string[];
   paths?: string[];
   ports?: number[];
+  services?: string[];
+  access?: 'read' | 'write';
+}
+
+/** One permission to grant by hand in the Advanced override (the scope lists are optional). */
+export interface PluginGrantInput {
+  id: string;
+  services?: string[];
+  access?: 'read' | 'write';
+  categories?: string[];
+  commands?: string[];
+  hosts?: string[];
+  keys?: string[];
+  paths?: string[];
+  ports?: number[];
+}
+
+/** A permission the host knows, from GET /api/plugins/permissions. */
+export interface PluginCatalogEntry {
+  id: string;
+  tier: 'low' | 'medium' | 'high' | 'critical';
+  enforcement: string;
+  scope: 'categories' | 'commands' | 'hosts' | 'paths' | 'ports' | 'keys' | 'services' | 'none';
+  categories: string[];
 }
 
 export interface PluginInfo {
+  modify?: { changed: number; tripped: boolean; runs_after: string[]; active: boolean } | null;
+  shared_with?: Array<{ service: string; plugins: Array<{ id: string; name: string; access: string; state: string }> }>;
+  overridden?: boolean;
+  override_diff?: { added: string[]; removed: string[]; changed: string[] } | null;
   id: string;
   kind: 'native' | 'web' | 'sandbox';
   sandboxed?: boolean;

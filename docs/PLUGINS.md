@@ -127,6 +127,63 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   up focus so Enter still means Go Live. The plugin can call `OS.call('ui.toolbar.update',
   { id, disabled?, pressed? })` to grey a button out or show it pressed, nothing else. Revoking or
   denying a plugin removes its buttons immediately. See the Sandboxed Demo Panel for a working one.
+- **Overriding what a plugin asks for (Advanced).** On any plugin's card in Settings > Plugins,
+  "Advanced: override what this plugin asks for" opens an editor, behind a warning that this may
+  break the plugin or give it more access than its author intended. Every permission it asked for
+  can be switched off (even one it marked required) and its lists (hosts, commands, library
+  categories, paths, ports) edited to narrow or widen them, and any permission the host knows
+  that it did *not* ask for can be switched on. Applying it needs a tick on "I understand this may
+  break the plugin", then sends the exact set to grant (`POST /api/plugins/<id>/approve` with
+  `override`; the permission list comes from `GET /api/plugins/permissions`). The host checks
+  what you typed (known ids, scopes the permission actually takes, valid hosts and categories;
+  `ui.dom` is refused for a sandboxed page and `native.code` for anything but a native plugin) and
+  enforces exactly the result everywhere a normal grant applies: the frame's network policy,
+  scoped tokens, command and library checks. The card then shows a "Permissions overridden" badge
+  and what differs (extra, withheld, re-scoped), the audit log records the same, and approving
+  again without the override clears it. Only the console can do this, like any approval.
+- **Sharing a keyring namespace: `keyring.service`.** A plugin normally sees only its own secrets
+  (`keyring.own`). Two plugins that need the same one (say a Pexels key) can share a namespace
+  instead: both request `keyring.service` with `services: ["OpenSanctuary:Shared:<name>"]` (1 to 4,
+  lowercase letters, digits, `.`, `_`, `-`, exact; nothing else is ever grantable, so the System
+  namespace, any plugin's own namespace and the app's own services stay out of reach) and
+  `access: "read"` (the default) or `"write"`. It is Critical tier, for sandboxed and native plugins
+  (not console scripts, which already have console access). The review screen says which shared area
+  a plugin can read, who else shares it, and warns when the plugin can also reach the network. The
+  rules: a plugin can only read rows tagged as shared (`shared:plugin:<id>` or `shared:host`), so a
+  secret that happened to be stored under a shared-looking name before this existed is never exposed;
+  with write access it can only create, replace or delete its *own* rows, so a co-sharer can't swap
+  another's key; the console can manage every shared row (Settings > Plugins > Shared secrets lists
+  them, never the values, with a Delete for each). In a sandboxed plugin:
+  `OS.call('keyring.get', { service: 'OpenSanctuary:Shared:pexels', account: 'api_key' })`
+  (`keyring.set` / `keyring.delete` likewise; with no `service` it is the plugin's own namespace and
+  needs `keyring.own`). A native plugin uses `keyring_shared_get/set/delete` on its host handle. Both
+  go through one policy (`src/api/keyring_policy.rs`). The first use and each refusal are audited
+  (never the secret), and the check always uses the plugin's live grant, so a revoke stops it at once.
+- **Rewriting commands: `commands.modify`.** A native plugin can change a command before it runs
+  (`commands.intercept` can only veto). Critical tier, native plugins only: a page in a browser tab
+  can't sit in the command path (it is asynchronous, may be on another machine, and remote and
+  plugin commands never pass through a console), so sandboxed and console-script plugins are
+  refused. List the commands in `plugin.json`: `{ "id": "commands.modify", "commands": ["AddToSchedule", "SetItemTheme"] }`
+  (explicit names; no `*`; nothing for the emergency controls Blackout, Clear Text, Logo and Alert, nor
+  `SetWebStream`, `NewSchedule`, `LoadSchedule`, Undo/Redo, nor a command that carries no data). The
+  library exports a modifier next to its plugin with `os_next::export_command_modifier!(|host| ...)`
+  (an implementation of `CommandModifier::modify_command(&self, json) -> Option<String>`, see
+  `examples/plugin_observer.rs`). The host only builds it when the permission was granted, so approving
+  (or re-approving) takes effect after a restart; a revoke takes effect at once. In the command
+  pipeline it runs after shorthand expansion (it sees the full item that will really run) and **before**
+  the veto, so a `commands.intercept` plugin always judges the command that will actually execute and
+  can't be bypassed. Every door goes through it (console, remote, plugin). The rules for a rewrite:
+  a bare command, **the same kind of command** (it can never turn a slide change into a blackout, so
+  the scope checks made before still hold), under 256 KB and at most 4x the original plus 4 KB, and it
+  must parse; the host then re-encodes the parsed command, dropping any unknown fields. Several
+  modifiers run once each in plugin-id order, each on the previous one's output (the review screen
+  says "Runs after: ..."). Each gets 50 ms on its own thread (100 ms for all of them per command),
+  panics are caught, and any failure keeps the last good command, so this is **never a security
+  control** and can't stall a show; a modifier that is too slow, still busy, or fails three times in a
+  row is switched off until restart (audit `modify_disabled`, plus a notification). Audit: the first
+  rewrite per plugin and command (`command_modified`), refusals (`modify_rejected`); only hashes of
+  the before and after are logged, never the content. A native plugin's digest now also covers its
+  `plugin.json`, so editing the manifest after approval shows up as a change.
 - **Notifications: `notifications.post`.** The console has one notification center (the bell in
   the ribbon, with an unread badge) that collects everything: its own toasts, notices from the host
   (for example a finished tool update) and notifications from plugins. A sandboxed plugin granted

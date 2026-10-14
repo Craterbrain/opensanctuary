@@ -1,6 +1,6 @@
 # OpenSanctuary
 
-_Last edited: 2026-10-02 08:28_
+_Last edited: 2026-10-14_
 
 A next-generation church presentation engine — the software that drives the
 screens during a church service (lyrics, scripture, announcements, video)
@@ -64,17 +64,21 @@ The operator console (library, schedule, preview and live panes) and the slide b
 **Content & import**
 - Real importers for EasyWorship, OpenLP, FreeShow, and PowerPoint — not
   just "read the text," but slides, backgrounds, and arrangements. YMMV
-- Bible lookup against a pluggable provider registry (public-domain
-  translations fetchable in-app; point at your own `.db` files for
-  anything copyrighted).
-- Song lyrics lookup via Genius, as an optional plugin you approve (Settings → Plugins).
-- Online video import via `yt-dlp`, with automatic H.264→VP9 conversion
-  for native hardware-decoded playback on the target TV hardware
-  (`src/storage/transcode.rs`) — see `BUILDING.md`.
+- Bible translations you own work out of the box (point at your own `.db`
+  files); downloading public-domain translations and looking up passages
+  online is the **Online Bibles** plugin.
+- Song lyrics lookup is the **Genius Lyrics** plugin, online video import is
+  the **Video Downloader** (`yt-dlp`) plugin and free stock photos are the
+  **Stock Images** plugin — see [Plugins](#plugins). Downloaded H.264 video is
+  converted to VP9 automatically for native hardware-decoded playback on the
+  target TV hardware (`src/storage/transcode.rs`) — see `BUILDING.md`.
 
 **Extensibility & operations**
-- Two independent plugin systems — backend (Rust, `libloading`) and
-  frontend (TypeScript) — see `docs/PLUGINS.md`.
+- A permissioned plugin system — sandboxed web plugins, native (Rust)
+  plugins and console scripts, each approved by the operator — see
+  [Plugins](#plugins).
+- A notification center (the **Notices** button) that collects the app's own
+  messages and notices from plugins, with per-source muting.
 - Network diagnostics: mDNS discovery, hostname-conflict detection, DHCP
   Option 12 broadcasting, multi-interface management.
 - Host-token-gated console API — only the paired console can mutate the
@@ -82,6 +86,34 @@ The operator console (library, schedule, preview and live panes) and the slide b
   explicitly paired.
 - Signed, verified auto-updates (Ed25519/minisign) with a background
   check on startup — see `docs/update.md`.
+
+## Plugins
+
+Optional features are plugins, and nothing runs until the operator approves it in
+**Settings → Plugins**. The review screen shows exactly what a plugin asks for (which
+websites it may reach, whether it may write to your library, which commands it may run)
+with a risk level for each, and a plugin that changes on disk drops back to "needs
+review" until you look at it again. A sandboxed plugin never gets the console's own credentials.
+
+Bundled with the app (all sandboxed web plugins, off until you turn them on):
+
+| Plugin | What it does | Where it appears |
+|---|---|---|
+| **Genius Lyrics** | Search Genius and import lyrics as formatted song slides | Songs library |
+| **Online Bibles** | Download public-domain translations, look up passages online | Scriptures library |
+| **Video Downloader (yt-dlp)** | Download video or audio from YouTube and 1000+ sites into your Media library. The app installs and updates `yt-dlp` itself (signature- and checksum-verified) | Media library, and the video background picker |
+| **Stock Images (Pexels & Pixabay)** | Search free stock photos and add them as backgrounds, using your own free API key from each site | Media library |
+
+![Stock Images plugin](docs/screenshots/stock-media-plugin.png)
+
+Three kinds exist: **sandboxed web plugins** (an isolated page that can only ask the app
+for things through a permission-checked bridge, the recommended kind), **native plugins**
+(Rust libraries, ABI 2, pinned by hash) and **console scripts** (run inside the console
+page with full console access, so they are marked Critical). Plugins can add panels to the
+library sidebars, run a declared command-line tool, post to the notification center, and
+use the app's own icons and theme so they look native. To write one, start with
+`docs/PLUGINS.md` (the guide) and `docs/PLUGIN_PERMISSIONS.md` (the permission model);
+`web/plugins/` holds the bundled ones as worked examples.
 
 ## Releases
 
@@ -116,8 +148,8 @@ then check the installer's SHA-256 against `checksums.txt`.
 ## Building from source
 
 See [BUILDING.md](BUILDING.md) — covers prerequisites, the headless-only
-build, cross-compiling for Windows, and the optional `yt-dlp`/`ffmpeg`
-dependency for online media import.
+build, cross-compiling for Windows, and the optional `ffmpeg` / `yt-dlp`
+tools used by video import and the Video Downloader plugin.
 
 ## License
 
@@ -134,7 +166,8 @@ MIT — see [LICENSE](LICENSE). This covers OpenSanctuary's own code only.
 ## Repository layout
 
 - `src/` — Rust backend (show engine, storage, network, media pipeline)
-- `web/` — TypeScript/HTML operator UI and live/stage/remote output pages
+- `web/` — TypeScript/HTML operator UI and live/stage/remote output pages;
+  `web/plugins/` holds the bundled plugins
 - `apps/` — companion apps (Android TV, Roku) for remote display output
 - `packaging/` — `.deb`/Windows installer build scripts, `install.sh`
 - `tests/` — Rust integration tests and import-format fixtures

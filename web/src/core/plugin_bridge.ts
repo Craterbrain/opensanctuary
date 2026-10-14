@@ -12,7 +12,9 @@
  * Protocol (plugin -> console): `{ type: 'os.request', id, method, params }`
  *   getState                      show.observe
  *   sendCommand { command }       commands.send (only the granted command names)
- *   keyring.get|set|delete        keyring.own (the plugin's own namespace)
+ *   keyring.get|set|delete { service?, account, secret? }  keyring.own (the plugin's own namespace), or keyring.service
+ *                                 with `service` set to a granted shared namespace (`OpenSanctuary:Shared:<name>`);
+ *                                 set and delete there need `write` access
  *   net.fetch { url, headers? }   network.outbound: the *server* fetches it, only from granted hosts (headers: Authorization,
  *                                 Accept, Accept-Language)
  *   library.addSong { song }      library.write on "songs"; refreshes the library list
@@ -109,11 +111,15 @@ function commandName(cmd: unknown): string | null {
 }
 
 async function mintToken(r: Running): Promise<string | null> {
-  const scopes: Array<{ id: string; commands?: string[]; hosts?: string[]; categories?: string[] }> = [];
+  const scopes: Array<{ id: string; commands?: string[]; hosts?: string[]; categories?: string[]; services?: string[]; access?: string }> = [];
   if (r.granted.has('keyring.own')) scopes.push({ id: 'keyring.own' });
   if (r.granted.has('commands.send')) scopes.push({ id: 'commands.send', commands: r.commands });
   if (r.granted.has('network.outbound')) scopes.push({ id: 'network.outbound', hosts: grantedList(r.plugin, 'network.outbound', 'hosts') });
   if (r.granted.has('library.write')) scopes.push({ id: 'library.write', categories: grantedList(r.plugin, 'library.write', 'categories') });
+  const shared = r.plugin.granted.filter((g) => g.id === 'keyring.service');
+  if (shared.length) {
+    scopes.push({ id: 'keyring.service', services: shared.flatMap((g) => g.services ?? []), access: shared.some((g) => g.access === 'write') ? 'write' : 'read' });
+  }
   if (r.granted.has('process.run')) scopes.push({ id: 'process.run', commands: grantedList(r.plugin, 'process.run', 'commands') });
   if (r.granted.has('notifications.post')) scopes.push({ id: 'notifications.post' });
   if (!scopes.length) return null;
@@ -163,9 +169,19 @@ async function handle(r: Running, method: string, params: any): Promise<unknown>
     case 'keyring.get':
     case 'keyring.set':
     case 'keyring.delete': {
-      need('keyring.own');
       const op = method.split('.')[1];
-      const body: Record<string, unknown> = { service: `OpenSanctuary:Plugin:${r.plugin.id}`, account: String(params?.account ?? '') };
+      const own = `OpenSanctuary:Plugin:${r.plugin.id}`;
+      const service = params?.service === undefined ? own : String(params.service);
+      if (service === own) {
+        need('keyring.own');
+      } else {
+        // A shared namespace (keyring.service): it must be one this plugin was granted, and changing it needs write access.
+        need('keyring.service');
+        const grants = r.plugin.granted.filter((g) => g.id === 'keyring.service' && (g.services ?? []).includes(service));
+        if (!grants.length) throw new Error(`shared keyring '${service}' not granted`);
+        if (op !== 'get' && !grants.some((g) => g.access === 'write')) throw new Error(`read-only access to '${service}'`);
+      }
+      const body: Record<string, unknown> = { service, account: String(params?.account ?? '') };
       if (op === 'set') body.secret = String(params?.secret ?? '');
       const res = await withToken(r, (t) => fetch(`/api/keyring/${op}`, {
         method: 'POST',

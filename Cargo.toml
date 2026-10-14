@@ -14,13 +14,13 @@ repository = "https://github.com/Craterbrain/opensanctuary"
 [package.metadata.deb]
 name = "opensanctuary"
 depends = "libwebkit2gtk-4.1-0, libgtk-3-0, libjavascriptcoregtk-4.1-0"
-# Optional, not required to run the app -- BUILDING.md's "Online media
-# import (yt-dlp + ffmpeg)" section. `apt install ./opensanctuary.deb`
+# Optional, not required to run the app -- BUILDING.md's "Video tools
+# (ffmpeg + yt-dlp)" section. `apt install ./opensanctuary.deb`
 # installs both by default (Debian's "Recommends" is opt-out, unlike
 # "Suggests"), but `apt install --no-install-recommends` or removing them
-# later leaves the app itself working fine -- the Media tab's "import from
-# URL" just stops working (no yt-dlp), or imported H.264 video doesn't get
-# converted to VP9 (no ffmpeg).
+# later leaves the app itself working fine -- the Video Downloader plugin
+# installs its own yt-dlp when none is found, and imported H.264 video just
+# isn't converted to VP9 (no ffmpeg).
 recommends = "ffmpeg, yt-dlp"
 section = "sound"
 priority = "optional"

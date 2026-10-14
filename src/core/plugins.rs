@@ -61,6 +61,14 @@ pub trait PluginHost: Send + Sync {
     fn data_dir(&self) -> Result<PathBuf, PluginError>;
     /// `level`: 0 error, 1 warn, 2 info, 3 debug.
     fn log(&self, level: u8, msg: &str);
+    // --- appended in a later release: never reorder or insert above this line ---
+    /// `keyring.service`: reads a secret from a shared namespace (`OpenSanctuary:Shared:<name>`) the
+    /// plugin was granted. `None` when there is none or the plugin may not see it.
+    fn keyring_shared_get(&self, service: &str, account: &str) -> Result<Option<String>, PluginError>;
+    /// `keyring.service` with `write` access: stores a secret there, as this plugin's own entry.
+    fn keyring_shared_set(&self, service: &str, account: &str, secret: &str) -> Result<(), PluginError>;
+    /// `keyring.service` with `write` access: deletes an entry this plugin created.
+    fn keyring_shared_delete(&self, service: &str, account: &str) -> Result<bool, PluginError>;
 }
 
 /// A plugin's live grant state. Shared (`Arc`) so a revoke from the console takes effect
@@ -75,6 +83,13 @@ impl GrantCell {
         Self { enabled: std::sync::atomic::AtomicBool::new(true), perms: std::sync::RwLock::new(perms) }
     }
 
+    /// Runs `f` on the current grant, or returns `None` once the plugin has been revoked.
+    pub fn with<R>(&self, f: impl FnOnce(&PermissionSet) -> R) -> Option<R> {
+        self.enabled
+            .load(std::sync::atomic::Ordering::Acquire)
+            .then(|| f(&self.perms.read().unwrap_or_else(|e| e.into_inner())))
+    }
+
     pub fn allows(&self, check: impl FnOnce(&PermissionSet) -> bool) -> bool {
         self.enabled.load(std::sync::atomic::Ordering::Acquire)
             && check(&self.perms.read().unwrap_or_else(|e| e.into_inner()))
@@ -85,6 +100,97 @@ struct LoadedPlugin {
     id: String,
     grants: Arc<GrantCell>,
     plugin: Box<dyn OsPlugin>,
+    /// Only a plugin that was granted `commands.modify` *at load time* and exports a modifier has one.
+    modifier: Option<ModifierWorker>,
+}
+
+/// `commands.modify`: rewrite a command before it runs. Return `None` to leave it unchanged or
+/// `Some(json)` to replace it. The host only shows you commands in your granted list, the kind of
+/// command may not change, and a slow or failing modifier is skipped (and eventually switched off).
+/// It is not a security control (any failure lets the original command run): use `commands.intercept`
+/// to veto. Exported with `export_command_modifier!`.
+pub trait CommandModifier: Send + Sync {
+    fn modify_command(&self, cmd_json: &str) -> Option<String>;
+}
+
+/// The longest one modifier may take for one command, and the most all of them may take together.
+pub const MODIFIER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(50);
+pub const MODIFIER_BUDGET: std::time::Duration = std::time::Duration::from_millis(100);
+/// This many invalid rewrites or panics in a row switch a modifier off until restart.
+const MODIFIER_MAX_FAILURES: u32 = 3;
+
+enum CallResult {
+    Unchanged,
+    Rewritten(String),
+    Panicked,
+    TimedOut,
+    Busy,
+}
+
+/// One modifier on its own thread. Rust can't pre-empt a thread, so a hung modifier keeps its thread;
+/// the only isolation available is to stop waiting (and never call it again).
+struct ModifierWorker {
+    tx: std::sync::mpsc::SyncSender<(String, std::sync::mpsc::SyncSender<Option<Option<String>>>)>,
+    tripped: std::sync::atomic::AtomicBool,
+    failures: std::sync::atomic::AtomicU32,
+    changed: std::sync::atomic::AtomicU64,
+    /// A call is outstanding (it timed out earlier and hasn't returned).
+    in_flight: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ModifierWorker {
+    fn spawn(id: &str, modifier: Box<dyn CommandModifier>) -> Self {
+        use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+        let (tx, rx) = std::sync::mpsc::sync_channel::<(String, std::sync::mpsc::SyncSender<Option<Option<String>>>)>(1);
+        let in_flight = Arc::new(AtomicBool::new(false));
+        let flag = in_flight.clone();
+        let _ = std::thread::Builder::new().name(format!("plugin-modify-{id}")).spawn(move || {
+            while let Ok((text, reply)) = rx.recv() {
+                let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| modifier.modify_command(&text)));
+                flag.store(false, Ordering::Release);
+                // A closed reply channel just means the host stopped waiting.
+                let _ = reply.send(out.ok());
+            }
+        });
+        Self { tx, tripped: AtomicBool::new(false), failures: AtomicU32::new(0), changed: AtomicU64::new(0), in_flight }
+    }
+
+    fn call(&self, text: String, timeout: std::time::Duration) -> CallResult {
+        use std::sync::atomic::Ordering;
+        if self.in_flight.swap(true, Ordering::AcqRel) {
+            return CallResult::Busy;
+        }
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        if self.tx.try_send((text, reply_tx)).is_err() {
+            self.in_flight.store(false, Ordering::Release);
+            return CallResult::Busy;
+        }
+        match reply_rx.recv_timeout(timeout) {
+            Ok(Some(None)) => CallResult::Unchanged,
+            Ok(Some(Some(rewritten))) => CallResult::Rewritten(rewritten),
+            Ok(None) => CallResult::Panicked,
+            Err(_) => CallResult::TimedOut,
+        }
+    }
+
+    fn trip(&self) {
+        self.tripped.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    fn is_tripped(&self) -> bool {
+        self.tripped.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+/// What happened while modifiers ran on a command, for the caller to audit and tell the operator about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModifyEvent {
+    Modified { plugin: String, variant: String, before_sha: String, after_sha: String },
+    Rejected { plugin: String, variant: String, reason: String },
+    /// A modifier was switched off until restart.
+    Disabled { plugin: String, reason: String },
+    /// The 100 ms budget ran out; the remaining modifiers were skipped for this command.
+    BudgetExhausted { variant: String },
 }
 
 /// A native library the registry found approved and unchanged, ready to load.
@@ -121,9 +227,9 @@ impl PluginManager {
         for a in approved {
             let grants = Arc::new(GrantCell::new(a.grants.clone()));
             match self.load_library(&a, &grants, host) {
-                Ok((plugin, lib)) => {
+                Ok((plugin, modifier, lib)) => {
                     tracing::info!("Loaded Backend Plugin: {} ({})", a.id, plugin.name());
-                    self.plugins.push(LoadedPlugin { id: a.id, grants, plugin });
+                    self.plugins.push(LoadedPlugin { id: a.id, grants, plugin, modifier });
                     self._libraries.push(lib);
                 }
                 Err(e) => tracing::error!("Failed to load plugin {:?}: {}", a.library, e),
@@ -136,7 +242,7 @@ impl PluginManager {
         a: &ApprovedNative,
         grants: &Arc<GrantCell>,
         host: Option<HostFactory<'_>>,
-    ) -> Result<(Box<dyn OsPlugin>, Library), Box<dyn std::error::Error>> {
+    ) -> Result<(Box<dyn OsPlugin>, Option<ModifierWorker>, Library), Box<dyn std::error::Error>> {
         unsafe {
             let lib = Library::new(&a.library)?;
             // The library must say it speaks ABI 2 and must have been built for *this* host.
@@ -160,8 +266,118 @@ impl PluginManager {
             let constructor: Symbol<unsafe extern "C" fn(*const Arc<dyn PluginHost>) -> *mut dyn OsPlugin> =
                 lib.get(b"create_plugin_v2")?;
             let raw_plugin = constructor(&handle as *const Arc<dyn PluginHost>);
-            Ok((Box::from_raw(raw_plugin), lib))
+            let plugin = Box::from_raw(raw_plugin);
+            // commands.modify: the optional exported modifier is only ever constructed when the
+            // permission was granted. A library that exports one without the grant is never asked.
+            let granted = grants.with(|g| g.0.iter().any(|p| p.id == "commands.modify")).unwrap_or(false);
+            let symbol = lib.get::<unsafe extern "C" fn(*const Arc<dyn PluginHost>) -> *mut dyn CommandModifier>(b"create_command_modifier_v1");
+            let modifier = match (granted, symbol) {
+                (true, Ok(ctor)) => {
+                    let raw = ctor(&handle as *const Arc<dyn PluginHost>);
+                    Some(ModifierWorker::spawn(&a.id, Box::from_raw(raw)))
+                }
+                (true, Err(_)) => {
+                    tracing::warn!("plugin '{}' was granted commands.modify but doesn't export a modifier", a.id);
+                    None
+                }
+                (false, Ok(_)) => {
+                    tracing::info!("plugin '{}' exports a command modifier but wasn't granted commands.modify; it will not be called", a.id);
+                    None
+                }
+                (false, Err(_)) => None,
+            };
+            Ok((plugin, modifier, lib))
         }
+    }
+
+    /// Gives an already-registered in-process plugin a command modifier (for host code and tests; a
+    /// library's modifier is created at load time and only if it was granted `commands.modify`).
+    pub fn set_modifier(&mut self, id: &str, modifier: Box<dyn CommandModifier>) -> bool {
+        match self.plugins.iter_mut().find(|p| p.id == id) {
+            Some(p) => {
+                p.modifier = Some(ModifierWorker::spawn(id, modifier));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// `(commands changed this run, switched off until restart)` for a plugin that has a modifier.
+    pub fn modifier_stats(&self, id: &str) -> Option<(u64, bool)> {
+        let w = self.plugins.iter().find(|p| p.id == id)?.modifier.as_ref()?;
+        Some((w.changed.load(std::sync::atomic::Ordering::Relaxed), w.is_tripped()))
+    }
+
+    /// Runs the plugins' modifiers over a command (`commands.modify`). Called after shorthand
+    /// expansion and before the veto, so `commands.intercept` plugins judge the command that will
+    /// actually run. Emergency controls and anything modifiable by nobody are returned untouched
+    /// without consulting anyone. Modifiers run in plugin-id order, each on the previous one's output,
+    /// once; any failure keeps the last good command (this never stops a show). Returns the command to
+    /// run and what the caller should audit.
+    pub fn apply_modifiers(&self, value: serde_json::Value) -> (serde_json::Value, Vec<ModifyEvent>) {
+        use crate::core::plugin_permissions::{command_variant, is_safety_critical, sha256_hex};
+        let mut events = Vec::new();
+        if !self.plugins.iter().any(|p| p.modifier.is_some()) {
+            return (value, events);
+        }
+        let text = serde_json::to_string(&value).unwrap_or_default();
+        let Some(variant) = command_variant(&text) else { return (value, events) };
+        // Decided before any modifier runs, so the emergency path is never delayed or touched.
+        if is_safety_critical(&text) || crate::core::commands::NEVER_MODIFIABLE.contains(&variant.as_str()) {
+            return (value, events);
+        }
+        let mut candidates: Vec<&LoadedPlugin> = self
+            .plugins
+            .iter()
+            .filter(|p| p.modifier.as_ref().is_some_and(|m| !m.is_tripped()))
+            .filter(|p| p.grants.allows(|g| g.modifies(&variant)))
+            .collect();
+        candidates.sort_by(|a, b| a.id.cmp(&b.id));
+        let started = std::time::Instant::now();
+        let mut current = value;
+        for p in candidates {
+            let Some(worker) = p.modifier.as_ref() else { continue };
+            let spent = started.elapsed();
+            if spent >= MODIFIER_BUDGET {
+                events.push(ModifyEvent::BudgetExhausted { variant: variant.clone() });
+                break;
+            }
+            let cur_text = serde_json::to_string(&current).unwrap_or_default();
+            let wait = MODIFIER_TIMEOUT.min(MODIFIER_BUDGET - spent);
+            use std::sync::atomic::Ordering;
+            let mut fail = |reason: &str, events: &mut Vec<ModifyEvent>| {
+                events.push(ModifyEvent::Rejected { plugin: p.id.clone(), variant: variant.clone(), reason: reason.to_string() });
+                if worker.failures.fetch_add(1, Ordering::AcqRel) + 1 >= MODIFIER_MAX_FAILURES {
+                    worker.trip();
+                    events.push(ModifyEvent::Disabled { plugin: p.id.clone(), reason: "it kept failing while changing commands".to_string() });
+                }
+            };
+            match worker.call(cur_text.clone(), wait) {
+                CallResult::Unchanged => worker.failures.store(0, Ordering::Release),
+                CallResult::Rewritten(new_text) => match crate::core::commands::validate_rewrite(&current, &variant, &new_text) {
+                    Ok(new_value) => {
+                        worker.failures.store(0, Ordering::Release);
+                        let after = serde_json::to_string(&new_value).unwrap_or_default();
+                        if after != cur_text {
+                            worker.changed.fetch_add(1, Ordering::Relaxed);
+                            events.push(ModifyEvent::Modified { plugin: p.id.clone(), variant: variant.clone(), before_sha: sha256_hex(cur_text.as_bytes()), after_sha: sha256_hex(after.as_bytes()) });
+                            current = new_value;
+                        }
+                    }
+                    Err(why) => fail(why, &mut events),
+                },
+                CallResult::Panicked => fail("it panicked", &mut events),
+                CallResult::TimedOut => {
+                    worker.trip();
+                    events.push(ModifyEvent::Disabled { plugin: p.id.clone(), reason: "it was too slow while changing a command".to_string() });
+                }
+                CallResult::Busy => {
+                    worker.trip();
+                    events.push(ModifyEvent::Disabled { plugin: p.id.clone(), reason: "it was still busy with an earlier command".to_string() });
+                }
+            }
+        }
+        (current, events)
     }
 
     /// Whether the loaded plugin currently holds `commands.send` for this command name.
@@ -180,7 +396,7 @@ impl PluginManager {
 
     pub fn register_plugin_with_grants(&mut self, id: String, plugin: Box<dyn OsPlugin>, grants: PermissionSet) {
         tracing::info!("Registered Plugin: {}", plugin.name());
-        self.plugins.push(LoadedPlugin { id, grants: Arc::new(GrantCell::new(grants)), plugin });
+        self.plugins.push(LoadedPlugin { id, grants: Arc::new(GrantCell::new(grants)), plugin, modifier: None });
     }
 
     /// Replaces a loaded plugin's grants and re-enables it. Returns whether it is loaded.
@@ -350,6 +566,27 @@ macro_rules! export_plugin {
             let host: ::std::sync::Arc<dyn $crate::core::plugins::PluginHost> = unsafe { (*host).clone() };
             let plugin: ::std::boxed::Box<dyn $crate::core::plugins::OsPlugin> = ::std::boxed::Box::new(($ctor)(host));
             ::std::boxed::Box::into_raw(plugin)
+        }
+    };
+}
+
+/// Exports a command modifier (`commands.modify`) from a plugin library, alongside `export_plugin!`.
+/// The host only constructs it when the operator granted `commands.modify`.
+///
+/// ```ignore
+/// os_next::export_command_modifier!(|host| MyModifier::new(host));
+/// ```
+#[macro_export]
+macro_rules! export_command_modifier {
+    ($ctor:expr) => {
+        #[no_mangle]
+        #[allow(improper_ctypes_definitions)]
+        pub extern "C" fn create_command_modifier_v1(
+            host: *const ::std::sync::Arc<dyn $crate::core::plugins::PluginHost>,
+        ) -> *mut dyn $crate::core::plugins::CommandModifier {
+            let host: ::std::sync::Arc<dyn $crate::core::plugins::PluginHost> = unsafe { (*host).clone() };
+            let modifier: ::std::boxed::Box<dyn $crate::core::plugins::CommandModifier> = ::std::boxed::Box::new(($ctor)(host));
+            ::std::boxed::Box::into_raw(modifier)
         }
     };
 }
