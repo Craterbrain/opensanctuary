@@ -31,13 +31,13 @@ const KNOWN: &[(&str, Tier, &str)] = &[
     ("show.observe", Tier::Low, "enforced"),
     ("library.read", Tier::Low, "enforced"),
     ("resources.provide", Tier::Medium, "enforced"),
-    ("library.write", Tier::High, "reserved"),
+    ("library.write", Tier::High, "enforced"),
     ("commands.send", Tier::Medium, "enforced"),
     ("commands.intercept", Tier::High, "enforced"),
     ("keyring.own", Tier::Medium, "enforced"),
     ("settings.read", Tier::Medium, "reserved"),
     ("settings.write", Tier::High, "reserved"),
-    ("network.outbound", Tier::Medium, "consent-only"),
+    ("network.outbound", Tier::Medium, "enforced"),
     ("network.listen", Tier::High, "consent-only"),
     ("filesystem.plugin_data", Tier::Low, "enforced"),
     ("filesystem.read", Tier::High, "consent-only"),
@@ -94,8 +94,24 @@ impl PermissionRequest {
         base
     }
 
-    pub fn enforcement(&self) -> &'static str {
-        KNOWN.iter().find(|(id, _, _)| *id == self.id).map(|(_, _, e)| *e).unwrap_or("unknown")
+    /// What the host actually polices for this permission, by plugin type. A native library
+    /// shares the server's address space, so only the hooks the host mediates are enforced; a
+    /// same-realm console script shares the page. A sandboxed page is enforced end to end.
+    pub fn enforcement_for(&self, kind: &str) -> &'static str {
+        let base = KNOWN.iter().find(|(id, _, _)| *id == self.id).map(|(_, _, e)| *e).unwrap_or("unknown");
+        match kind {
+            "native" | "legacy-native" => match self.id.as_str() {
+                "show.observe" | "commands.intercept" | "resources.provide" => "enforced",
+                "native.code" => "informational",
+                _ => "consent-only",
+            },
+            "web" | "legacy-web" => match self.id.as_str() {
+                "keyring.own" | "commands.send" => "enforced",
+                "ui.dom" => "consent-only",
+                _ => if base == "enforced" { "consent-only" } else { base },
+            },
+            _ => base,
+        }
     }
 }
 
@@ -122,6 +138,17 @@ impl PermissionSet {
         self.0
             .iter()
             .any(|p| p.id == "library.read" && p.categories.iter().any(|c| c == "*" || c == category))
+    }
+
+    pub fn writes(&self, category: &str) -> bool {
+        self.0
+            .iter()
+            .any(|p| p.id == "library.write" && p.categories.iter().any(|c| c == "*" || c == category))
+    }
+
+    /// The granted outbound hosts (`network.outbound`), across every entry.
+    pub fn outbound_hosts(&self) -> Vec<String> {
+        self.0.iter().filter(|p| p.id == "network.outbound").flat_map(|p| p.hosts.clone()).collect()
     }
 
     pub fn provides(&self, category: &str) -> bool {
@@ -153,6 +180,12 @@ impl PermissionSet {
                 "commands.send" => {
                     p.commands = narrow(&want.commands, &have.commands);
                     if p.commands.is_empty() {
+                        continue;
+                    }
+                }
+                "network.outbound" => {
+                    p.hosts = narrow(&want.hosts, &have.hosts);
+                    if p.hosts.is_empty() {
                         continue;
                     }
                 }

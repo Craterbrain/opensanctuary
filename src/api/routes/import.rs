@@ -10,7 +10,6 @@ use crate::core::models::{Presentation, Song};
 use super::common::{require_host_token, validate_safe_path};
 
 use crate::storage::freeshow_import;
-use crate::storage::genius_import::GeniusImporter;
 use crate::storage::ytdlp_import::{YtDlpImporter, YtDlpDownloadOptions};
 
 pub(super) async fn get_bibles(State(app): State<AppState>) -> impl IntoResponse {
@@ -88,37 +87,6 @@ pub(super) async fn delete_bible(
         Ok(true) => Ok(Json(serde_json::json!({ "success": true, "deleted": id }))),
         Ok(false) => Ok(Json(serde_json::json!({ "success": false, "error": format!("Bible translation '{}' not found", id) }))),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Database error deleting Bible: {}", e))),
-    }
-}
-
-#[derive(Deserialize)]
-pub struct GeniusSearchQuery {
-    q: String,
-}
-
-pub(super) async fn genius_search(Query(query): Query<GeniusSearchQuery>) -> impl IntoResponse {
-    match GeniusImporter::search_christian_lyrics(&query.q).await {
-        Ok(results) => Json(serde_json::json!({ "success": true, "results": results })),
-        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
-    }
-}
-
-#[derive(Deserialize)]
-pub struct GeniusImportReq {
-    url: String,
-    title: Option<String>,
-    artist: Option<String>,
-}
-
-pub(super) async fn genius_import(State(app): State<AppState>, Json(req): Json<GeniusImportReq>) -> impl IntoResponse {
-    match GeniusImporter::fetch_and_import_lyrics(&req.url, req.title.as_deref(), req.artist.as_deref()).await {
-        Ok(song) => {
-            if let Err(e) = app.db.insert_song(&song) {
-                tracing::warn!("Failed to persist Genius imported song '{}': {}", song.title, e);
-            }
-            Json(serde_json::json!({ "success": true, "song": song }))
-        }
-        Err(e) => Json(serde_json::json!({ "success": false, "error": e.to_string() })),
     }
 }
 
@@ -524,8 +492,6 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/bibles/online/fetch", post(fsb_fetch))
         .route("/api/bibles/online/download", post(download_bible_full))
         .route("/api/bibles/github/catalog", post(github_bible_catalog))
-        .route("/api/songs/genius/search", get(genius_search))
-        .route("/api/songs/genius/import", post(genius_import))
         .route("/api/media/ytdlp/download", post(ytdlp_download))
         .route("/api/media/ytdlp/progress/:task_id", get(ytdlp_progress))
 }

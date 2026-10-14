@@ -64,11 +64,24 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   `/plugin-frame/<id>/` only while approved and the whole folder still hashes to what was reviewed
   (symlinks and oversized folders are refused), with a CSP that forbids everything except the
   `network.outbound` hosts it was granted. It talks to the console only through `postMessage`
-  (`getState`, `sendCommand`, `keyring.*`, `ui.resize`, `log`, and a `state` event with
-  `show.observe`); the console's bridge checks each request against the grant and holds the
+  (`getState`, `sendCommand`, `keyring.*`, `net.fetch`, `library.addSong`, `ui.resize`, `log`, and a
+  `state` event with `show.observe`); the console's bridge checks each request against the grant and holds the
   plugin's scoped token, and the server re-checks commands and keyring access against that token.
   This is the only plugin type where the permission list is actually enforced end to end; prefer it
   over a same-realm script (`ui.dom`) whenever the plugin only needs a panel and a few actions.
+- **Network and library access for a sandboxed plugin.** `net.fetch {url}` (needs
+  `network.outbound` with a `hosts` list) makes the *server* fetch the page, because the plugin
+  can't connect anywhere itself and a browser couldn't read a cross-origin page anyway. The host
+  allows https only, no credentials in the URL, only the granted hosts (`example.com`,
+  `*.example.com`, optionally `:port`), and only addresses that resolve to public IPs (the client is
+  pinned to the address it checked); every redirect hop is re-checked, bodies are capped at 2 MB, and
+  a refusal is audited. `library.addSong {song}` (needs `library.write` on `songs`) stores a song; the
+  host mints its id and applies size limits. A sandboxed frame can't submit a `<form>`, so use buttons.
+- **Genius lyrics is a plugin.** Searching Genius and importing lyrics used to be built into the
+  server and the Song Library panel; it is now `web/plugins/genius_lyrics/` (a sandboxed panel that
+  asks only for `genius.com`, `library.write` on songs, and optionally `AddToSchedule`/`GoLive`). Approve
+  it in Settings > Plugins and it appears as a panel. It is also the worked example of a plugin that
+  needs the network.
 - **Existing plugins.** Loose `.so`/`.dll`/`.dylib` files already installed when permissions
   shipped are approved once with the legacy v1 permission set and flagged for review; anything
   that appears afterwards starts as pending. A web script with no manifest is treated as asking

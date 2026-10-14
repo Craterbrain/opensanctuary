@@ -17,7 +17,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
  * which this test adds directly rather than going through the real render
  * pipeline. This is a regression test for a real bug fixed in this file:
  * `renderCatalogTable` prepends a decorative ".catalog-fetch-prompt-row"
- * (the "Search Genius for Christian Lyrics" prompt) ahead of the real item
+ * (an online-fetch prompt) ahead of the real item
  * rows whenever the Songs tab's search box has 2+ characters, which used to
  * shift `highlightCatalogRow(idx)`'s raw positional DOM lookup off by one --
  * highlighting/focusing the prompt row instead of the item actually clicked.
@@ -98,7 +98,7 @@ describe('library_panel.ts: highlightCatalogRow', () => {
     }
   });
 
-  test('skips the leading Genius-search prompt row so item index N highlights the row actually at index N', () => {
+  test('skips the leading online-fetch prompt row so item index N highlights the row actually at index N', () => {
     const tableBody = fakeDocument.getElementById('catalog-table-body');
     tableBody.children.length = 0;
 

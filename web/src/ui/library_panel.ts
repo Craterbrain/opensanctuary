@@ -2,7 +2,7 @@
  * OpenSanctuary / OS-Next Library / Resource Panel Controller
  * Extracted from app_core.ts (ongoing modularization pass) — browsing, searching,
  * and adding songs/scriptures/media/presentations/themes to the schedule: the
- * Bible translation selector, Genius lyrics search, online image search (Pexels/
+ * Bible translation selector, online image search (Pexels/
  * Pixabay), and the table/grid catalog renderers.
  *
  * Cross-cutting state (currentTab, selectedLibraryItem, activeBibleVersion,
@@ -60,6 +60,12 @@ export function setCurrentDualSecondaryVerses(verses: any[]): void {
 
 export function initLibraryPanel(context: LibraryPanelContext) {
   ctx = context;
+
+  // A plugin added something (e.g. an imported song): reload the tab if it's the one on screen.
+  window.addEventListener('os-library-changed', (ev) => {
+    const category = (ev as CustomEvent).detail?.category;
+    if (category && ctx && ctx.getCurrentTab() === category) void loadLibraryTab(category);
+  });
 
   document.getElementById('ctx-theme-edit')?.addEventListener('click', () => {
     if (contextMenuTargetTheme) openThemeEditor(contextMenuTargetTheme);
@@ -160,7 +166,6 @@ export function updateSearchModeUI() {
       if (mode === 'title') resourceSearchInput.placeholder = '🔍 Search Song Titles Only...';
       else if (mode === 'lyrics') resourceSearchInput.placeholder = '🔍 Search Full Lyrics Only...';
       else if (mode === 'ccli') resourceSearchInput.placeholder = '🔍 Search by CCLI # or Song ID...';
-      else if (mode === 'genius' || activeCategory === 'genius-christian') resourceSearchInput.placeholder = '✨ Search Genius Christian & Worship Lyrics (e.g. Holy Forever, Way Maker)...';
       else resourceSearchInput.placeholder = '🔍 Search Titles, Lyrics, or CCLI #...';
     } else if (lp.getCurrentTab() === 'scriptures') {
       const activeObj = lp.getInstalledBibles().find(b => b.id === lp.getActiveBibleVersion()) || { abbreviation: 'All' };
@@ -197,8 +202,7 @@ export function renderSearchModeMenu() {
       { id: 'all', label: '🔍 All Fields (Default)' },
       { id: 'title', label: '📄 Title Only' },
       { id: 'lyrics', label: '📝 Lyrics Only' },
-      { id: 'ccli', label: '🔢 CCLI # / Catalog ID' },
-      { id: 'genius', label: '✨ Genius Christian Lyrics' }
+      { id: 'ccli', label: '🔢 CCLI # / Catalog ID' }
     ];
   } else if (lp.getCurrentTab() === 'scriptures') {
     options = [
@@ -413,8 +417,7 @@ export function renderCategoryTree(tabName: string) {
       { id: 'all', label: '📁 All Songs' },
       { id: 'collections', label: '📁 Collections' },
       { id: 'my-collections', label: '📁 My Collections' },
-      { id: 'favorites', label: '⭐ Favorites' },
-      { id: 'genius-christian', label: '✨ Genius Christian Lyrics' }
+      { id: 'favorites', label: '⭐ Favorites' }
     ];
   } else if (tabName === 'media') {
     nodes = [
@@ -574,206 +577,6 @@ if (btnToggleDualBible) {
 
 // As-You-Type Query Engine & Filtering Logic
 
-let geniusSearchTimer: ReturnType<typeof setTimeout> | null = null;
-
-export async function searchGeniusChristianSongs(query: string) {
-  if (!ctx) return;
-  const lp = ctx;
-  if (geniusSearchTimer) clearTimeout(geniusSearchTimer);
-
-  const container = (activeResourceViewMode === 'table') ? catalogTableBody : catalogGrid;
-  if (container) {
-    container.innerHTML = `
-      <div class="list-message">✨ Searching Genius for Christian lyrics matching "${lp.escapeHtml(query)}"...</div>`;
-  }
-
-  geniusSearchTimer = setTimeout(async () => {
-    try {
-      const res = await fetch(`/api/songs/genius/search?q=${encodeURIComponent(query)}`);
-      if (res.ok) {
-        const hits = await res.json();
-        if (hits.length === 0) {
-          if (container) {
-            container.innerHTML = `
-              <div class="ui-empty-state ui-empty-state--compact">
-                <div class="empty-state-title">No Christian lyrics found on Genius for "${lp.escapeHtml(query)}".</div>
-                <div class="empty-state-desc">Try searching by another title or artist.</div>
-              </div>`;
-          }
-        } else {
-          renderGeniusHits(hits);
-        }
-      } else {
-        if (container) {
-          container.innerHTML = `<div class="list-message list-message--error">Error searching Genius: ${lp.escapeHtml(res.statusText)}</div>`;
-        }
-      }
-    } catch (e) {
-      if (container) {
-        container.innerHTML = `<div class="list-message list-message--error">Network error: ${lp.escapeHtml(e instanceof Error ? e.message : String(e))}</div>`;
-      }
-    }
-  }, 300);
-}
-
-export function renderGeniusHits(hits: any[]) {
-  if (!ctx) return;
-  const lp = ctx;
-  if (catalogItemCountEl) {
-    catalogItemCountEl.textContent = `${hits.length} Genius songs`;
-  }
-
-  if (activeResourceViewMode === 'table') {
-    if (catalogTable) catalogTable.style.display = 'table';
-    if (catalogGrid) catalogGrid.style.display = 'none';
-    const headers = document.getElementById('catalog-headers');
-    if (headers) headers.innerHTML = `<th>Title</th><th>Artist</th><th>Source</th>`;
-    if (!catalogTableBody) return;
-    catalogTableBody.innerHTML = '';
-
-    hits.forEach((hit: any, idx: number) => {
-      const tr = document.createElement('tr');
-      tr.dataset.id = hit.id;
-      tr.dataset.index = String(idx);
-      tr.tabIndex = 0;
-      if (idx === 0) tr.classList.add('selected');
-
-      const ccliBadge = hit.ccli_number
-        ? `<span class="os-badge os-badge--neutral">CCLI #${lp.escapeHtml(hit.ccli_number)}</span>`
-        : '';
-
-      tr.innerHTML = `
-        <td class="cell-title">✨ ${escapeUserHtml(hit.title)}</td>
-        <td>${escapeUserHtml(hit.artist)}</td>
-        <td class="cell-badges">
-          <span class="os-badge os-badge--accent">GENIUS</span>
-          ${ccliBadge}
-        </td>
-      `;
-
-      tr.addEventListener('click', () => {
-        highlightCatalogRow(idx);
-        renderGeniusPreview(hit);
-      });
-
-      tr.addEventListener('dblclick', () => {
-        importAndStageGeniusSong(hit);
-      });
-
-      tr.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        highlightCatalogRow(idx);
-        lp.setContextMenuTarget({ type: 'genius-hit', hit: hit });
-        lp.showContextMenu(document.getElementById('library-item-context-menu'), e.clientX, e.clientY);
-      });
-
-      catalogTableBody.appendChild(tr);
-    });
-
-    if (hits.length > 0) renderGeniusPreview(hits[0]);
-  } else {
-    if (catalogTable) catalogTable.style.display = 'none';
-    if (catalogGrid) catalogGrid.style.display = 'grid';
-    if (!catalogGrid) return;
-    catalogGrid.innerHTML = '';
-
-    hits.forEach((hit: any, idx: number) => {
-      const card = document.createElement('div');
-      card.className = `catalog-grid-card ${idx === 0 ? 'selected' : ''}`;
-      card.dataset.id = hit.id;
-      card.tabIndex = 0;
-
-      const thumbStyle = hit.thumbnail
-        ? `background-image: url('${escapeCssUrl(hit.thumbnail)}'); background-size: cover; background-position: center;`
-        : `background: linear-gradient(135deg, #1f1c18, #473e34);`;
-
-      const ccliTag = hit.ccli_number ? `#${hit.ccli_number}` : 'GENIUS';
-
-      card.innerHTML = `
-        <div class="grid-card-thumb" style="${thumbStyle}">
-          <span class="os-thumb-badge">${lp.escapeHtml(ccliTag)}</span>
-          ${hit.thumbnail ? '' : '✨'}
-        </div>
-        <div class="grid-card-title">${escapeUserHtml(hit.title)}</div>
-      `;
-
-      card.addEventListener('click', () => {
-        document.querySelectorAll('.catalog-grid-card').forEach(c => c.classList.remove('selected'));
-        card.classList.add('selected');
-        renderGeniusPreview(hit);
-      });
-
-      card.addEventListener('dblclick', () => {
-        importAndStageGeniusSong(hit);
-      });
-
-      catalogGrid.appendChild(card);
-    });
-
-    if (hits.length > 0) renderGeniusPreview(hits[0]);
-  }
-}
-
-export function renderGeniusPreview(hit: any) {
-  if (!resourcePreviewMonitor) return;
-  if (!ctx) return;
-  const ccliHtml = hit.ccli_number
-    ? `<div class="asset-preview-card-meta">🔢 CCLI Song #: ${ctx.escapeHtml(hit.ccli_number)}</div>`
-    : '';
-
-  resourcePreviewMonitor.innerHTML = `
-    <div class="asset-preview-content asset-preview-card">
-      <span class="os-badge os-badge--accent">✨ GENIUS CHRISTIAN LYRICS</span>
-      <div class="asset-preview-card-title">${escapeUserHtml(hit.title)}</div>
-      <div class="asset-preview-card-subtitle">${escapeUserHtml(hit.artist)}</div>
-      ${ccliHtml}
-      <p class="asset-preview-card-desc">
-        Double-click or click below to automatically import all formatted lyrics slides into your Library & Schedule.
-      </p>
-      <button class="btn btn-primary" id="btn-preview-import-genius">
-        📥 Import & Stage Lyrics
-      </button>
-    </div>
-  `;
-
-  const btn = document.getElementById('btn-preview-import-genius');
-  if (btn) {
-    btn.addEventListener('click', () => importAndStageGeniusSong(hit));
-  }
-}
-
-export async function importAndStageGeniusSong(hit: any, goLive: boolean = false) {
-  if (!ctx) return;
-  const lp = ctx;
-  try {
-    const res = await fetch('/api/songs/genius/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: hit.url, title: hit.title, artist: hit.artist })
-    });
-    if (res.ok) {
-      const song = await res.json();
-      currentSearchModes.songs = 'all';
-      activeCategory = 'all';
-      if (resourceSearchInput) resourceSearchInput.value = '';
-      updateSearchModeUI();
-      await loadLibraryTab('songs');
-      addItemToSchedule('songs', song.id);
-      if (goLive) {
-        setTimeout(() => lp.sendCommand({ GoLive: { item_index: null, slide_index: 0 } }), 100);
-      }
-      const ccliMsg = song.ccli_number ? ` (CCLI #${song.ccli_number})` : '';
-      lp.showToast(`✓ Imported "${song.title}"${ccliMsg} with ${song.slides.length} slides from Genius!`, 'success');
-    } else {
-      const err = await res.text();
-      lp.showToast(`Could not import lyrics from Genius: ${err}`, 'error');
-    }
-  } catch (e) {
-    lp.showToast(`Import error: ${e instanceof Error ? e.message : String(e)}`, 'error');
-  }
-}
-
 // ============================================================================
 // ONLINE IMAGE SEARCH (Pexels / Pixabay) — Media tab "Online Images" category
 // ============================================================================
@@ -802,7 +605,7 @@ export async function searchOnlineImages(query: string) {
   const lp = ctx;
   // Triggered only by pressing Enter (see app_ui.ts's keydown handler) — these
   // hit paid/rate-limited external APIs, so there's no per-keystroke debounce
-  // needed here, unlike the Genius search this was originally modeled on.
+  // needed here.
   if (catalogTable) catalogTable.style.display = 'none';
   if (catalogGrid) {
     catalogGrid.style.display = 'grid';
@@ -961,29 +764,6 @@ export function filterAndRenderCatalog() {
     return;
   }
 
-  if (lp.getCurrentTab() === 'songs' && (mode === 'genius' || activeCategory === 'genius-christian')) {
-    if (!query) {
-      if (catalogItemCountEl) catalogItemCountEl.textContent = 'Genius Search';
-      const container = (activeResourceViewMode === 'table') ? catalogTableBody : catalogGrid;
-      if (container) {
-        container.innerHTML = `
-          <div class="ui-empty-state grid-span-all">
-            <div class="empty-state-icon">✨</div>
-            <div class="empty-state-title">Genius Christian & Worship Lyrics</div>
-            <div class="empty-state-desc">
-              Type a song title or artist in the search bar above to search Genius for Christian lyrics (e.g. "Holy Forever", "Way Maker", "Goodness of God", "10,000 Reasons").
-            </div>
-          </div>`;
-      }
-      if (resourcePreviewMonitor) {
-        resourcePreviewMonitor.innerHTML = '<div class="asset-preview-empty">Search Genius for Christian lyrics</div>';
-      }
-      return;
-    }
-    searchGeniusChristianSongs(rawQuery);
-    return;
-  }
-
   if (!query) {
     if (lp.getCurrentTab() === 'scriptures') {
       if (lp.getActiveBibleVersion() === 'all') {
@@ -1008,9 +788,6 @@ export function filterAndRenderCatalog() {
       filteredLibraryItems = [...activeLibraryItems];
     }
   } else if (lp.getCurrentTab() === 'songs') {
-    if (rawQuery.length >= 2) {
-      matchedOnlineReference = { type: 'genius', query: rawQuery };
-    }
     filteredLibraryItems = activeLibraryItems.filter(s => {
       const matchTitle = (s.title || '').toLowerCase().includes(query) || (s.alternate_title || '').toLowerCase().includes(query);
       const matchAuthor = (s.author || '').toLowerCase().includes(query);
@@ -1407,35 +1184,6 @@ export function renderCatalogTable(items: any[], tabName: string, matchedOnlineR
     else if (tabName === 'themes') headers.innerHTML = `<th>Name</th><th>Font / Layout</th><th>Type</th>`;
   }
 
-  if (matchedOnlineRef && tabName === 'songs' && matchedOnlineRef.type === 'genius') {
-    const promptTr = document.createElement('tr');
-    promptTr.className = 'catalog-fetch-prompt-row';
-    promptTr.tabIndex = 0;
-    promptTr.innerHTML = `
-      <td colspan="3">
-        ✨ Search Genius for Christian Lyrics: "${ctx.escapeHtml(matchedOnlineRef.query)}" ➔
-      </td>
-    `;
-    promptTr.addEventListener('click', () => {
-      currentSearchModes.songs = 'genius';
-      updateSearchModeUI();
-      filterAndRenderCatalog();
-    });
-    promptTr.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        currentSearchModes.songs = 'genius';
-        updateSearchModeUI();
-        filterAndRenderCatalog();
-      }
-    });
-    if (items.length === 0) {
-      catalogTableBody.appendChild(promptTr);
-      return;
-    } else {
-      catalogTableBody.appendChild(promptTr);
-    }
-  }
-
   if (matchedOnlineRef && items.length === 0 && tabName === 'scriptures') {
     const fetchTrans = ctx.getActiveBibleVersion() === 'all' ? (ctx.getAppOptions().defaultBibleVersion || 'kjv') : ctx.getActiveBibleVersion();
     const activeObj = ctx.getInstalledBibles().find(b => b.id === fetchTrans) || ctx.getInstalledBibles()[0];
@@ -1461,7 +1209,7 @@ export function renderCatalogTable(items: any[], tabName: string, matchedOnlineR
 export function highlightCatalogRow(idx: number) {
   if (!catalogTableBody) return;
   selectedCatalogIndex = idx;
-  // Exclude the decorative ".catalog-fetch-prompt-row" (Genius/online-fetch
+  // Exclude the decorative ".catalog-fetch-prompt-row" (online-fetch
   // prompt), which `renderCatalogTable` prepends ahead of the real item
   // rows -- otherwise `idx` (an item index, same semantics `createCatalogTableRow`
   // uses) would be off by one against raw DOM row position whenever that

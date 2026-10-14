@@ -195,7 +195,7 @@ fn releases_client_with_timeout(total: std::time::Duration) -> Result<reqwest::C
     reqwest::Client::builder()
         // The GitHub Releases API 403s an unauthenticated request with no
         // User-Agent at all -- unlike this crate's other reqwest callers
-        // (genius_import.rs, freeshow_import.rs), which set one to look
+        // (freeshow_import.rs), which set one to look
         // like a browser, this just needs to identify the app honestly.
         .user_agent(concat!("opensanctuary-updater/", env!("CARGO_PKG_VERSION")))
         .timeout(total)

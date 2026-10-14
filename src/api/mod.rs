@@ -1,6 +1,7 @@
 pub mod command_pipeline;
 pub mod error;
 pub mod plugin_host;
+pub mod plugin_net;
 pub mod routes;
 pub mod ws;
 

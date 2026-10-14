@@ -30,7 +30,6 @@ one target per hand-rolled parser.
 | `freeshow_show_import` | `FreeShowShowImporter::import_show_bytes` | raw `.show` (JSON) bytes |
 | `freeshow_fsb` | `FreeShowImporter::import_fsb_content` | JSON text |
 | `scripture_ref` | `parse_scripture_reference` | free-text reference string |
-| `genius_lyrics` | `parse_genius_lyrics_to_song` + `extract_ccli_from_text` | free-text lyrics |
 | `rtf_parse` | `parse_rtf` | raw RTF bytes |
 
 Each target calls the same `pub fn` entry point the real import routes
@@ -75,7 +74,7 @@ Run every target for a fixed budget each:
 ```sh
 for t in pptx_import ewsx_import openlp_service_json openlp_theme \
          openlp_otz freeshow_show_import freeshow_fsb scripture_ref \
-         genius_lyrics rtf_parse; do
+         rtf_parse; do
   cargo +nightly fuzz run "$t" -- -max_total_time=120 || break
 done
 ```
