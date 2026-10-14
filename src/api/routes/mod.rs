@@ -91,6 +91,8 @@ pub(crate) fn needs_host_token(method: &axum::http::Method, path: &str) -> bool 
                 | "/api/pairing/authorize"       // one-time pairing session token
                 | "/api/pairing/verify"          // yes/no on a guessed device token
                 | "/api/internal/verify-host-token"
+                | "/api/plugin-host/fetch"       // plugin token (scoped, checked against the live grant)
+                | "/api/plugin-host/songs"
         ) && (path == "/api/keyring/plugin/token" || !path.starts_with("/api/keyring/"));
     }
     // Plugin management: paths, digests and the audit trail are console-only reads.
@@ -333,7 +335,7 @@ mod gate_tests {
             "/api/songs", "/api/scriptures", "/api/media", "/api/themes", "/api/themes/default",
             "/api/presentations", "/api/slide-templates", "/api/import/openlp", "/api/import/pptx",
             "/api/import/freeshow-show", "/api/bibles/online/download", "/api/bibles/online/fetch",
-            "/api/bibles/github/catalog", "/api/songs/genius/import", "/api/media/ytdlp/download",
+            "/api/bibles/github/catalog", "/api/media/ytdlp/download",
             "/api/media/online/import", "/api/displays/open", "/api/displays/close",
             "/api/displays/refresh", "/api/system/pick-folder", "/api/system/pick-file",
             "/api/network/tls/regenerate", "/api/network/interfaces", "/api/keyring/plugin/token",

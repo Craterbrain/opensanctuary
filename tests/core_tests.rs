@@ -6671,3 +6671,133 @@ async fn test_rest_ws_and_plugin_commands_share_one_pipeline() {
     // And an unparseable payload is a rejection, not a crash.
     assert!(os_next::api::command_pipeline::run_command_pipeline(&app_for_direct, serde_json::json!({"Nope": 1}), &origin).is_err());
 }
+
+/// The host API behind the Genius Lyrics plugin: the host fetches only from granted hosts (and
+/// never a non-public address), and a plugin granted `library.write` can add songs but not choose
+/// their ids or exceed limits.
+#[tokio::test]
+async fn test_plugin_host_fetch_and_add_song_for_the_genius_plugin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("genius.db").to_str().unwrap()).unwrap();
+    // Install the real bundled plugin into a throwaway web dir.
+    let web_dir = tmp.path().join("web");
+    let dest = web_dir.join("plugins/genius_lyrics");
+    std::fs::create_dir_all(&dest).unwrap();
+    for entry in std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/plugins/genius_lyrics")).unwrap().flatten() {
+        std::fs::copy(entry.path(), dest.join(entry.file_name())).unwrap();
+    }
+
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        tx, engine, db: db.clone(),
+        asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
+        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
+        data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
+        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
+        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
+        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "gen_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+    let host = "gen_host";
+    let json = |r: reqwest::Response| async move { r.json::<serde_json::Value>().await.unwrap() };
+
+    // Discovered as a pending sandboxed plugin that asks for exactly what it needs.
+    let list = json(c.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap()).await;
+    let p = list.as_array().unwrap().iter().find(|p| p["id"] == "genius_lyrics").unwrap().clone();
+    assert_eq!((p["kind"].as_str(), p["state"].as_str(), p["error"].is_null()), (Some("sandbox"), Some("pending"), true), "{p}");
+    let ids: Vec<&str> = p["requested"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["ui.panel", "network.outbound", "library.write", "commands.send"]);
+    let hosts: Vec<&str> = p["requested"][1]["hosts"].as_array().unwrap().iter().map(|h| h.as_str().unwrap()).collect();
+    assert_eq!(hosts, ["genius.com", "www.genius.com"], "network access is limited to Genius");
+
+    // No token, no service.
+    let r = c.post(format!("{base}/api/plugin-host/songs")).json(&serde_json::json!({ "song": {} })).send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let r = c.post(format!("{base}/api/plugin-host/fetch")).json(&serde_json::json!({ "url": "https://genius.com/" })).send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // Approve with the network + write permissions but not the command permission.
+    let r = c.post(format!("{base}/api/plugins/genius_lyrics/approve")).header("x-host-token", host)
+        .json(&serde_json::json!({ "digest": p["digest"], "granted": ["ui.panel", "network.outbound", "library.write"] })).send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+
+    // A token can't ask for more than the grant: another host, or another category.
+    let mint = |scopes: serde_json::Value| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugins/genius_lyrics/token")).header("x-host-token", "gen_host").json(&serde_json::json!({ "scopes": scopes })).send().await.unwrap() }
+    };
+    assert_eq!(mint(serde_json::json!([{ "id": "network.outbound", "hosts": ["evil.example"] }])).await.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(mint(serde_json::json!([{ "id": "library.write", "categories": ["themes"] }])).await.status(), reqwest::StatusCode::FORBIDDEN);
+    let body = json(mint(serde_json::json!([
+        { "id": "network.outbound", "hosts": ["genius.com", "www.genius.com"] },
+        { "id": "library.write", "categories": ["songs"] }
+    ])).await).await;
+    let token = body["token"].as_str().unwrap().to_string();
+
+    // The host refuses anything outside the grant -- without making a request.
+    for url in ["https://example.com/", "http://genius.com/", "https://genius.com@evil.test/", "https://127.0.0.1/", "https://genius.com.evil.test/"] {
+        let r = c.post(format!("{base}/api/plugin-host/fetch")).header("x-plugin-token", &token)
+            .json(&serde_json::json!({ "url": url })).send().await.unwrap();
+        assert_eq!(r.status(), reqwest::StatusCode::FORBIDDEN, "{url}");
+    }
+    // A granted *name* that resolves to a loopback address is still refused (DNS can't be a way in).
+    let err = os_next::api::plugin_net::fetch(&["localhost:9".to_string()], "https://localhost:9/").await.err().unwrap();
+    assert!(err.contains("public address"), "{err}");
+
+    // Adding a song: the plugin's JSON shape is accepted; the host mints the id; limits apply.
+    let song = serde_json::json!({
+        "id": "attacker_chosen", "title": "Way Maker", "author": "Sinach", "copyright": "Genius Christian Lyrics", "ccli_number": "7115744",
+        "slides": [{ "text": "Way maker\nMiracle worker", "header": "V1", "label": "Verse 1", "tag": "Verse 1" }],
+        "theme_name": null, "alternate_title": null
+    });
+    let post_song = |song: serde_json::Value, token: String| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugin-host/songs")).header("x-plugin-token", token).json(&serde_json::json!({ "song": song })).send().await.unwrap() }
+    };
+    let r = post_song(song.clone(), token.clone()).await;
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let added = json(r).await;
+    let id = added["id"].as_str().unwrap();
+    assert!(id.starts_with("song_") && id != "attacker_chosen", "the host mints the id: {id}");
+    let stored = db.get_song_by_id(id).unwrap().expect("song stored");
+    assert_eq!((stored.title.as_str(), stored.ccli_number.as_deref(), stored.slides.len()), ("Way Maker", Some("7115744"), 1));
+    assert_eq!(stored.slides[0].header.as_deref(), Some("V1"));
+
+    // No id at all is fine too (the plugin never has to invent one).
+    let mut no_id = song.clone();
+    no_id.as_object_mut().unwrap().remove("id");
+    let r = post_song(no_id, token.clone()).await;
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    assert!(json(r).await["id"].as_str().unwrap().starts_with("song_"));
+
+    let mut empty = song.clone();
+    empty["slides"] = serde_json::json!([]);
+    assert_eq!(post_song(empty, token.clone()).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    let mut huge = song.clone();
+    huge["slides"][0]["text"] = serde_json::json!("x".repeat(20_001));
+    assert_eq!(post_song(huge, token.clone()).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(post_song(serde_json::json!({ "title": 5 }), token.clone()).await.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // A token without library.write can't add; revoking the plugin kills the token.
+    let net_only = json(mint(serde_json::json!([{ "id": "network.outbound", "hosts": ["genius.com"] }])).await).await;
+    assert_eq!(post_song(song.clone(), net_only["token"].as_str().unwrap().to_string()).await.status(), reqwest::StatusCode::FORBIDDEN);
+    c.post(format!("{base}/api/plugins/genius_lyrics/revoke")).header("x-host-token", host).send().await.unwrap();
+    assert_eq!(post_song(song, token).await.status(), reqwest::StatusCode::UNAUTHORIZED);
+}

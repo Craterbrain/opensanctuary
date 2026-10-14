@@ -45,7 +45,7 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
     let describe = |p: &PermissionRequest| {
         let mut v = serde_json::to_value(p).unwrap_or_default();
         v["tier"] = serde_json::to_value(p.tier()).unwrap_or_default();
-        v["enforcement"] = serde_json::Value::String(p.enforcement().to_string());
+        v["enforcement"] = serde_json::Value::String(p.enforcement_for(&row.kind).to_string());
         v
     };
     let native = row.kind == "native" || row.kind == "legacy-native";
@@ -237,7 +237,7 @@ pub(super) struct TokenReq {
 }
 
 /// Permissions a token can carry at all.
-const TOKEN_SCOPES: [&str; 2] = ["keyring.own", "commands.send"];
+const TOKEN_SCOPES: [&str; 4] = ["keyring.own", "commands.send", "network.outbound", "library.write"];
 
 /// POST /api/plugins/:id/token -- the console mints a token for an approved plugin, limited to
 /// (a subset of) what it was granted. The token is checked against the live grant on every use.
@@ -313,6 +313,90 @@ pub(crate) async fn authorize_plugin_command(app: &AppState, token: &str, cmd: &
         return Err(format!("this plugin may not send '{variant}'"));
     }
     Ok(caller.plugin_id)
+}
+
+/// The plugin credential on a host-API call (`x-plugin-token`), resolved against the plugin's
+/// live grant.
+async fn plugin_caller(app: &AppState, headers: &HeaderMap) -> Result<crate::api::ws::PluginCaller, ApiErr> {
+    let token = headers.get("x-plugin-token").and_then(|v| v.to_str().ok()).unwrap_or("");
+    app.resolve_plugin_caller(token)
+        .await
+        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "invalid, expired or revoked plugin token"))
+}
+
+#[derive(Deserialize)]
+pub(super) struct PluginFetchReq {
+    url: String,
+}
+
+/// POST /api/plugin-host/fetch -- the host fetches a URL for a plugin granted `network.outbound`,
+/// only from the hosts it was granted (see `plugin_net`). Returns the status, content type and
+/// (size-capped) text body; a non-2xx status is the plugin's to interpret.
+pub(super) async fn plugin_fetch(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PluginFetchReq>,
+) -> Result<impl IntoResponse, ApiErr> {
+    let caller = plugin_caller(&app, &headers).await?;
+    let hosts = caller.scopes.outbound_hosts();
+    if hosts.is_empty() {
+        return Err(err(StatusCode::FORBIDDEN, "this plugin wasn't granted network access"));
+    }
+    match crate::api::plugin_net::fetch(&hosts, &req.url).await {
+        Ok(f) => Ok(Json(serde_json::json!({
+            "success": true, "status": f.status, "content_type": f.content_type, "body": f.body, "url": f.final_url,
+        }))),
+        Err(e) => {
+            app.db.add_plugin_audit(
+                &caller.plugin_id,
+                &format!("plugin:{}", caller.plugin_id),
+                "denied_call",
+                &serde_json::json!({ "fetch": req.url.chars().take(200).collect::<String>(), "reason": e }).to_string(),
+            );
+            Err(err(StatusCode::FORBIDDEN, &e))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub(super) struct PluginSongReq {
+    song: serde_json::Value,
+}
+
+/// POST /api/plugin-host/songs -- adds a song to the library for a plugin granted `library.write`
+/// on `songs`. The id is always minted here, and size limits apply, so a plugin can add songs but
+/// can't overwrite one or flood the library with an oversized payload.
+pub(super) async fn plugin_add_song(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PluginSongReq>,
+) -> Result<impl IntoResponse, ApiErr> {
+    let caller = plugin_caller(&app, &headers).await?;
+    if !caller.scopes.writes("songs") {
+        return Err(err(StatusCode::FORBIDDEN, "this plugin wasn't granted write access to songs"));
+    }
+    // The id is the host's to choose: whatever the plugin sent (or didn't) is replaced below.
+    let mut raw = req.song;
+    if let Some(obj) = raw.as_object_mut() {
+        obj.insert("id".to_string(), serde_json::Value::String(String::new()));
+    }
+    let mut song: crate::core::models::Song =
+        serde_json::from_value(raw).map_err(|e| err(StatusCode::BAD_REQUEST, &format!("not a song: {e}")))?;
+    if song.title.trim().is_empty() || song.title.len() > 300 || song.author.len() > 300 {
+        return Err(err(StatusCode::BAD_REQUEST, "a song needs a title (up to 300 characters)"));
+    }
+    if song.slides.is_empty() || song.slides.len() > 200 || song.slides.iter().any(|s| s.text.len() > 20_000) {
+        return Err(err(StatusCode::BAD_REQUEST, "a song needs 1-200 slides of up to 20,000 characters"));
+    }
+    song.id = format!("song_{}", uuid::Uuid::new_v4());
+    app.db.insert_song(&song).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {e}")))?;
+    app.db.add_plugin_audit(
+        &caller.plugin_id,
+        &format!("plugin:{}", caller.plugin_id),
+        "song_added",
+        &serde_json::json!({ "id": song.id, "title": song.title }).to_string(),
+    );
+    Ok(Json(serde_json::json!({ "success": true, "id": song.id, "song": song })))
 }
 
 /// True when `file_name` (e.g. `hello_world.js`) is an approved, unchanged web plugin.
@@ -473,4 +557,6 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/plugins/:id/revoke", post(revoke_plugin))
         .route("/api/plugins/:id/token", post(mint_plugin_token))
         .route("/plugin-frame/:id/*path", get(serve_plugin_frame))
+        .route("/api/plugin-host/fetch", post(plugin_fetch))
+        .route("/api/plugin-host/songs", post(plugin_add_song))
 }

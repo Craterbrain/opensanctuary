@@ -13,6 +13,8 @@
  *   getState                      show.observe
  *   sendCommand { command }       commands.send (only the granted command names)
  *   keyring.get|set|delete        keyring.own (the plugin's own namespace)
+ *   net.fetch { url }             network.outbound: the *server* fetches it, only from granted hosts
+ *   library.addSong { song }      library.write on "songs"; refreshes the library list
  *   ui.resize { height }          ui.panel
  *   log { message }
  * console -> plugin: `{ type: 'os.response', id, ok, result|error }`
@@ -26,6 +28,10 @@ interface Running {
   granted: Set<string>;
   commands: string[];
   token: string | null;
+}
+
+function grantedList(p: PluginInfo, id: string, field: 'hosts' | 'categories'): string[] {
+  return p.granted.filter(g => g.id === id).flatMap(g => (g[field] as string[] | undefined) ?? []);
 }
 
 const running = new Map<Window, Running>();
@@ -46,9 +52,11 @@ function commandName(cmd: unknown): string | null {
 }
 
 async function mintToken(r: Running): Promise<string | null> {
-  const scopes: Array<{ id: string; commands?: string[] }> = [];
+  const scopes: Array<{ id: string; commands?: string[]; hosts?: string[]; categories?: string[] }> = [];
   if (r.granted.has('keyring.own')) scopes.push({ id: 'keyring.own' });
   if (r.granted.has('commands.send')) scopes.push({ id: 'commands.send', commands: r.commands });
+  if (r.granted.has('network.outbound')) scopes.push({ id: 'network.outbound', hosts: grantedList(r.plugin, 'network.outbound', 'hosts') });
+  if (r.granted.has('library.write')) scopes.push({ id: 'library.write', categories: grantedList(r.plugin, 'library.write', 'categories') });
   if (!scopes.length) return null;
   try {
     return (await api.plugins.token(r.plugin.id, scopes)).token;
@@ -107,6 +115,30 @@ async function handle(r: Running, method: string, params: any): Promise<unknown>
       }));
       if (!res.ok) throw new Error(`keyring ${op} failed (${res.status})`);
       return res.json();
+    }
+    case 'net.fetch': {
+      need('network.outbound');
+      const res = await withToken(r, (t) => fetch('/api/plugin-host/fetch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-plugin-token': t },
+        body: JSON.stringify({ url: String(params?.url ?? '') }),
+      }));
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `fetch refused (${res.status})`);
+      return { status: body.status, contentType: body.content_type, body: body.body, url: body.url };
+    }
+    case 'library.addSong': {
+      need('library.write');
+      const res = await withToken(r, (t) => fetch('/api/plugin-host/songs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-plugin-token': t },
+        body: JSON.stringify({ song: params?.song }),
+      }));
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `couldn't add the song (${res.status})`);
+      // Let the library list pick the new song up.
+      window.dispatchEvent(new CustomEvent('os-library-changed', { detail: { category: 'songs', id: body.id } }));
+      return { id: body.id, song: body.song };
     }
     case 'ui.resize': {
       need('ui.panel');

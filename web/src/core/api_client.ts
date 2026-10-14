@@ -356,7 +356,7 @@ export const api = {
       await resolveHostSessionToken();
       return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/revoke`, {}, { headers: hostTokenHeader() });
     },
-    token: async (id: string, scopes?: Array<{ id: string; commands?: string[] }>) => {
+    token: async (id: string, scopes?: Array<{ id: string; commands?: string[]; hosts?: string[]; categories?: string[] }>) => {
       await resolveHostSessionToken();
       return api.post<{ success: boolean; token: string; service: string }>(
         `/api/plugins/${encodeURIComponent(id)}/token`, scopes ? { scopes } : {}, { headers: hostTokenHeader() });

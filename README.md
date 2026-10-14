@@ -67,7 +67,7 @@ The operator console (library, schedule, preview and live panes) and the slide b
 - Bible lookup against a pluggable provider registry (public-domain
   translations fetchable in-app; point at your own `.db` files for
   anything copyrighted).
-- Song lyrics lookup via Genius.
+- Song lyrics lookup via Genius, as an optional plugin you approve (Settings → Plugins).
 - Online video import via `yt-dlp`, with automatic H.264→VP9 conversion
   for native hardware-decoded playback on the target TV hardware
   (`src/storage/transcode.rs`) — see `BUILDING.md`.

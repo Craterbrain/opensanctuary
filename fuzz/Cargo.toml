@@ -75,13 +75,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "genius_lyrics"
-path = "fuzz_targets/genius_lyrics.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "rtf_parse"
 path = "fuzz_targets/rtf_parse.rs"
 test = false

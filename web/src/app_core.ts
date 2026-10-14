@@ -57,7 +57,6 @@ import {
   selectAndPreviewItem,
   addDualScriptureToSchedule,
   updateSearchModeUI,
-  importAndStageGeniusSong,
   tryHandleOnlineImagesEnter,
   getActiveResourceViewMode,
   setActiveResourceViewMode,
@@ -3607,9 +3606,7 @@ on('ctx-slide-copy', 'click', () => {
 // 3. Resource Library Context Menu Handlers
 on('ctx-lib-add-sched', 'click', () => {
   if (currentContextMenuTarget) {
-    if (currentContextMenuTarget.type === 'genius-hit') {
-      importAndStageGeniusSong(currentContextMenuTarget.hit, false);
-    } else if (currentContextMenuTarget.item) {
+    if (currentContextMenuTarget.item) {
       if (currentContextMenuTarget.tab === 'scriptures' && isDualBibleMode) {
         const item = currentContextMenuTarget.item;
         const pVersion = (item.version || activeBibleVersion || 'Primary').toUpperCase();
@@ -3631,9 +3628,7 @@ on('ctx-lib-add-dual', 'click', () => {
 });
 on('ctx-lib-golive', 'click', () => {
   if (currentContextMenuTarget) {
-    if (currentContextMenuTarget.type === 'genius-hit') {
-      importAndStageGeniusSong(currentContextMenuTarget.hit, true);
-    } else if (currentContextMenuTarget.item) {
+    if (currentContextMenuTarget.item) {
       if (currentContextMenuTarget.tab === 'scriptures' && isDualBibleMode) {
         const item = currentContextMenuTarget.item;
         const pVersion = (item.version || activeBibleVersion || 'Primary').toUpperCase();
