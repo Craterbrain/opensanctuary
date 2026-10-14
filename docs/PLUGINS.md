@@ -22,11 +22,12 @@ extension point either.
 ## Permissions (read this first)
 
 A plugin does nothing until the operator approves it in **Settings > Plugins**. The full
-design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_PERMISSIONS.md).
+model, threat model and every permission are in [PLUGIN_PERMISSIONS.md](PLUGIN_PERMISSIONS.md).
 
 - **What is enforced.** A backend plugin's hooks are only called if it was granted the
   matching permission: `commands.intercept` (`on_command`), `show.observe`
-  (`on_state_change`), `resources.provide` for a category (`provide_resources`). A web
+  (`on_state_change`), `resources.provide` for a category (`provide_resources`), and a modifier
+  (`commands.modify`) is only built if that was granted. A web
   plugin script is only served from `/plugins/` while approved, and its keyring token is only
   minted if it was granted `keyring.own`. Emergency commands (`ToggleBlackout`,
   `ToggleClearText`, `ToggleLogo`, `SetAlert`) can never be vetoed, decided on the parsed
@@ -42,20 +43,38 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   plugin tokens cannot. Every decision is recorded in the audit log.
 - **Manifest.** Put a `plugin.json` next to the plugin (see `web/plugins/hello_world.plugin.json`):
   `manifest_version`, `id`, `name`, `permissions` (each with an optional `reason`), and a
-  `backend.libraries` map of `"<os>-<arch>"` to `{path, sha256}` for a native plugin, laid out as
+  `backend` section (`"abi": 2` and a `libraries` map of `"<os>-<arch>"` to `{path, sha256}`) for a native plugin, laid out as
   `<plugins dir>/<id>/plugin.json` + the library, or a `web.entry` for a console script. Unknown
   permissions are rejected, never ignored.
 - **ABI 2 (`PluginHost`).** A native plugin built with `os_next::export_plugin!` gets a host
   handle in its constructor instead of reaching around the server. Each call is checked against
-  its live grant: `snapshot()` (`show.observe`), `send_command()` (`commands.send`, only the
-  granted command names, rate-limited, queued and run through the normal veto path, never
-  inline), `library_list()` (`library.read`), `keyring_*` (`keyring.own`), `data_dir()`
-  (`filesystem.plugin_data`). See `examples/plugin_observer.rs`, a real plugin used as the
-  template and by the dlopen test. The interface is a Rust trait object, so the plugin must be
-  built with the same compiler and OS-Next version as the host; the host refuses a library whose
-  `OS_PLUGIN_HOST_VERSION` differs. The `OsPlugin` trait's methods never change or reorder.
-  **Update a plugin by replacing the file, not overwriting it in place:** the loaded library is
-  memory-mapped, and truncating it crashes the server.
+  its live grant, so a revoke stops it even mid-way. The whole host API:
+
+  | Call | Needs |
+  |---|---|
+  | `snapshot()` | `show.observe` |
+  | `send_command(cmd)`: only the granted command names, rate-limited, queued and run through the normal veto path, never inline | `commands.send` |
+  | `library_list(category)` | `library.read` |
+  | `keyring_get/set/delete(account)`: the plugin's own `OpenSanctuary:Plugin:<id>` namespace | `keyring.own` |
+  | `keyring_shared_get/set/delete(service, account)`: a granted `OpenSanctuary:Shared:<name>` namespace | `keyring.service` |
+  | `data_dir()`: a private folder, `<data dir>/plugin-data/<id>/` | `filesystem.plugin_data` |
+  | `log(level, msg)`: writes to the server log | none |
+  | `plugin_id()`, `has(permission)` | none |
+
+  Besides the host calls, a native plugin implements the `OsPlugin` hooks (`on_state_change`,
+  `on_command`, `provide_resources`) and may export a `CommandModifier` (`commands.modify`, below).
+  **What a native plugin cannot do:** it has no way to post a notification (`notifications.post` and
+  the notification center are for sandboxed web plugins; the only output a native plugin has is
+  `log()`, which goes to the server log and is not shown to the operator), and it has no UI of its own
+  (no panel, no ribbon buttons: those are `ui.panel` / `ui.toolbar`, sandboxed plugins only). If you
+  need to tell the operator something from native code, say so in the log and pair it with a sandboxed
+  plugin; a notification call for native plugins is not built yet. See `examples/plugin_observer.rs`, a
+  real plugin used as the template and by the dlopen test. The interface is a Rust trait object, so
+  the plugin must be built with the same compiler and OS-Next version as the host; the host refuses a
+  library whose `OS_PLUGIN_HOST_VERSION` differs. The `OsPlugin` trait's methods never change or
+  reorder, and new `PluginHost` calls are only ever appended. **Update a plugin by replacing the
+  file, not overwriting it in place:** the loaded library is memory-mapped, and truncating it crashes
+  the server.
 - **Sandboxed web plugins** (`web.sandbox: true`, a folder `web/plugins/<id>/` with `plugin.json`
   and an HTML entry page; see `web/plugins/sandbox_demo/`). The page runs in an iframe with
   `sandbox="allow-scripts"` and no `allow-same-origin`, so it has an opaque origin: no access to the
@@ -197,7 +216,7 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   last 200, and are not an audit trail. Host side: `src/api/notifications.rs` (the bus; the host's
   own code posts with `post_host`), routes in `src/api/routes/notifications.rs`; the console
   polls `GET /api/notifications?after=<id>` every 2 seconds (`&wait=<s>` makes the host hold the
-  request until something new arrives, for a client that wants it). Native plugins don't have this call yet.
+  request until something new arrives, for a client that wants it). Native plugins can't post notifications (their `PluginHost` has no such call; only `log()`).
 - **Stock Images is a plugin.** Searching Pexels and Pixabay (the Media library's "Online Images")
   is `web/plugins/stock_media/`, one plugin for both sites: a sandboxed page in the Media library
   sidebar with a search box, a source toggle per site, a thumbnail grid and an "API keys" section.
