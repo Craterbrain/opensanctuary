@@ -10,7 +10,6 @@ use crate::core::models::{Presentation, Song};
 use super::common::{require_host_token, validate_safe_path};
 
 use crate::storage::freeshow_import;
-use crate::storage::ytdlp_import::{YtDlpImporter, YtDlpDownloadOptions};
 
 pub(super) async fn get_bibles(State(app): State<AppState>) -> impl IntoResponse {
     let bibles = app.db.get_installed_bibles().unwrap_or_default();
@@ -87,19 +86,6 @@ pub(super) async fn delete_bible(
         Ok(true) => Ok(Json(serde_json::json!({ "success": true, "deleted": id }))),
         Ok(false) => Ok(Json(serde_json::json!({ "success": false, "error": format!("Bible translation '{}' not found", id) }))),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Database error deleting Bible: {}", e))),
-    }
-}
-
-pub(super) async fn ytdlp_download(State(app): State<AppState>, Json(options): Json<YtDlpDownloadOptions>) -> impl IntoResponse {
-    let task_id = YtDlpImporter::start_background_download(options, app.media_dir.clone(), app.data_dir.join("tools"), app.db.clone());
-    Json(serde_json::json!({ "success": true, "task_id": task_id }))
-}
-
-pub(super) async fn ytdlp_progress(AxumPath(task_id): AxumPath<String>) -> impl IntoResponse {
-    if let Some(progress) = YtDlpImporter::get_progress(&task_id) {
-        Json(serde_json::json!({ "success": true, "progress": progress }))
-    } else {
-        Json(serde_json::json!({ "success": false, "error": "Task not found" }))
     }
 }
 
@@ -352,6 +338,4 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/import/openlp", post(import_openlp))
         .route("/api/import/pptx", post(import_pptx))
         .route("/api/import/freeshow-show", post(import_freeshow_show))
-        .route("/api/media/ytdlp/download", post(ytdlp_download))
-        .route("/api/media/ytdlp/progress/:task_id", get(ytdlp_progress))
 }

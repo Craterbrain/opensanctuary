@@ -6029,3 +6029,14 @@ video {
 .plugin-dock-card { background: var(--bg-panel, #1c1f26); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; overflow: hidden; box-shadow: 0 6px 24px rgba(0,0,0,0.4); }
 .plugin-dock-title { padding: 6px 10px; font-size: 12px; opacity: 0.8; border-bottom: 1px solid rgba(255,255,255,0.08); }
 .plugin-dock-card iframe { display: block; width: 100%; height: 160px; border: 0; background: transparent; }
+
+/* Plugin pages shown in the Resource Library (a plugin's own source tab, in place of the list) */
+.plugin-source-pane { grid-column: 2 / -1; display: none; flex: 1 1 auto; min-width: 0; min-height: 0; flex-direction: column; background: var(--os-bg-panel); }
+.plugin-source { display: none; flex: 1 1 auto; min-height: 0; }
+.plugin-source iframe { flex: 1 1 auto; width: 100%; height: 100%; min-height: 240px; border: 0; background: transparent; }
+.plugin-source-node::after { content: "plugin"; margin-left: var(--os-space-3); font-size: var(--os-fs-2xs); color: var(--os-text-tertiary); text-transform: uppercase; letter-spacing: 0.04em; }
+.plugin-picker-pane { display: flex; flex: 1 1 auto; min-height: 340px; flex-direction: column; }
+.plugin-picker-pane .plugin-source { flex: 1 1 auto; }
+.plugin-source--picker iframe { min-height: 340px; }
+.plugin-tool { margin: var(--os-space-2) 0; font-size: var(--os-fs-sm); color: var(--os-text-secondary); }
+.plugin-command { margin: var(--os-space-3) 0; padding: var(--os-space-4); font-family: var(--os-font-mono); font-size: var(--os-fs-xs); white-space: pre-wrap; word-break: break-all; background: var(--os-bg-sunken); border: 1px solid var(--os-border); border-radius: var(--os-radius-sm); }

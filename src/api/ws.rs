@@ -113,11 +113,6 @@ pub struct AppState {
     /// rather than hitting GitHub on every poll. `None` until the first
     /// check (kicked off in `main.rs` shortly after startup) completes.
     pub update_status: Arc<std::sync::Mutex<Option<crate::network::updater::UpdateCheckResult>>>,
-    /// Result of the last yt-dlp self-update check (startup, or every 12h
-    /// after -- see `crate::network::ytdlp_updater`). `GET
-    /// /api/ytdlp-updater/status` just reads this. `None` until the first
-    /// check completes.
-    pub ytdlp_update_status: Arc<std::sync::Mutex<Option<crate::network::ytdlp_updater::YtdlpUpdateOutcome>>>,
 }
 
 #[derive(Debug, Clone)]

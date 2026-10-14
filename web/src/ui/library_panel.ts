@@ -64,7 +64,8 @@ export function initLibraryPanel(context: LibraryPanelContext) {
   // A plugin added something (e.g. an imported song): reload the tab if it's the one on screen.
   window.addEventListener('os-library-changed', (ev) => {
     const category = (ev as CustomEvent).detail?.category;
-    if (category && ctx && ctx.getCurrentTab() === category) void loadLibraryTab(category);
+    // Refresh the list, but don't pull the operator out of the plugin page that just added something.
+    if (category && ctx && ctx.getCurrentTab() === category) void loadLibraryTab(category, { keepPluginView: true });
   });
 
   document.getElementById('ctx-theme-edit')?.addEventListener('click', () => {
@@ -260,7 +261,7 @@ btnSearchClear?.addEventListener('click', () => {
 
 let currentLibraryTabRequestId = 0;
 
-export async function loadLibraryTab(tabName?: string) {
+export async function loadLibraryTab(tabName?: string, opts: { keepPluginView?: boolean } = {}) {
   if (!ctx) return;
   const lp = ctx;
   const normTab = (tabName === 'song' || tabName === 'songs') ? 'songs'
@@ -270,7 +271,11 @@ export async function loadLibraryTab(tabName?: string) {
     : ((tabName === 'media') ? 'media' : (tabName || 'songs')))));
 
   lp.setCurrentTab(normTab);
-  activeCategory = 'all';
+  const keepPlugin = !!opts.keepPluginView && activeCategory.startsWith('plugin:');
+  if (!keepPlugin) {
+    activeCategory = 'all';
+    showLibrarySource(null);
+  }
   if (resourceSearchInput && resourceSearchInput.value) {
     resourceSearchInput.value = '';
     if (btnSearchClear) btnSearchClear.style.display = 'none';
@@ -310,6 +315,58 @@ export async function loadLibraryTab(tabName?: string) {
   }
 }
 
+// ---- plugin sources: a sandboxed plugin's page shown in place of a Resource Library tab's list ----
+interface LibrarySource { id: string; tab: string; label: string }
+const librarySources: LibrarySource[] = [];
+
+export function registerLibrarySource(src: LibrarySource) {
+  const i = librarySources.findIndex((s) => s.id === src.id);
+  if (i >= 0) librarySources[i] = src; else librarySources.push(src);
+  if (ctx) renderCategoryTree(ctx.getCurrentTab());
+}
+
+export function unregisterLibrarySource(id: string) {
+  const i = librarySources.findIndex((s) => s.id === id);
+  if (i < 0) return;
+  librarySources.splice(i, 1);
+  if (activeCategory === `plugin:${id}`) {
+    activeCategory = 'all';
+    showLibrarySource(null);
+    if (ctx) filterAndRenderCatalog();
+  }
+  if (ctx) renderCategoryTree(ctx.getCurrentTab());
+}
+
+/** Shows one plugin's page (or, with null, the normal list and preview). */
+function showLibrarySource(id: string | null) {
+  const pane = document.querySelector('.plugin-source-pane') as HTMLElement | null;
+  const catalog = document.querySelector('.resource-catalog-pane') as HTMLElement | null;
+  const preview = document.querySelector('.resource-preview-pane') as HTMLElement | null;
+  const on = !!id && !!pane;
+  pane?.querySelectorAll<HTMLElement>('.plugin-source').forEach((w) => {
+    w.style.display = id && w.dataset.pluginId === id ? 'flex' : 'none';
+  });
+  if (pane) pane.style.display = on ? 'flex' : 'none';
+  if (catalog) catalog.style.display = on ? 'none' : '';
+  if (preview) preview.style.display = on ? 'none' : '';
+}
+
+/** The sidebar entries for the plugins that put a page in this tab. */
+function appendLibrarySourceNodes(tabName: string, container: HTMLElement) {
+  for (const src of librarySources.filter((s) => s.tab === tabName)) {
+    const nodeEl = document.createElement('div');
+    nodeEl.className = `category-node plugin-source-node ${activeCategory === `plugin:${src.id}` ? 'active' : ''}`;
+    nodeEl.textContent = src.label;
+    nodeEl.addEventListener('click', () => {
+      activeCategory = `plugin:${src.id}`;
+      document.querySelectorAll('.category-node').forEach((c) => c.classList.remove('active'));
+      nodeEl.classList.add('active');
+      showLibrarySource(src.id);
+    });
+    container.appendChild(nodeEl);
+  }
+}
+
 export function renderCategoryTree(tabName: string) {
   if (!categoryTreeContainer) return;
   categoryTreeContainer.innerHTML = '';
@@ -332,6 +389,9 @@ export function renderCategoryTree(tabName: string) {
       <span class="bible-lang-badge">ALL</span>
     `;
     allNode.addEventListener('click', () => {
+      activeCategory = 'all';
+      showLibrarySource(null);
+      document.querySelectorAll('.category-node').forEach(c => c.classList.remove('active'));
       lp.setActiveBibleVersion('all');
       lp.setBibleVersionUserSelected(true);
       document.querySelectorAll('.bible-tree-node').forEach(b => b.classList.remove('active'));
@@ -379,6 +439,9 @@ export function renderCategoryTree(tabName: string) {
         nodeEl.addEventListener('click', () => {
           lp.setActiveBibleVersion(bible.id);
           lp.setBibleVersionUserSelected(true);
+          activeCategory = 'all';
+          showLibrarySource(null);
+          document.querySelectorAll('.category-node').forEach(c => c.classList.remove('active'));
           document.querySelectorAll('.bible-tree-node').forEach(b => b.classList.remove('active'));
           nodeEl.classList.add('active');
           updateSearchModeUI();
@@ -396,15 +459,20 @@ export function renderCategoryTree(tabName: string) {
       });
     }
 
-    // 3. Install Button at Bottom
+    // 3. Online Bibles (a plugin) at the bottom -- or a pointer to turn it on
     const actionWrap = document.createElement('div');
     actionWrap.className = 'category-tree-actions';
-
-    const btnInstallBibles = document.createElement('button');
-    btnInstallBibles.className = 'btn btn-sm btn-block';
-    btnInstallBibles.innerHTML = '➕ Install Bibles (ChurchApps)...';
-    btnInstallBibles.addEventListener('click', () => openImportModal());
-    actionWrap.appendChild(btnInstallBibles);
+    if (librarySources.some((x) => x.tab === 'scriptures')) {
+      appendLibrarySourceNodes('scriptures', actionWrap);
+    } else {
+      const btnInstallBibles = document.createElement('button');
+      btnInstallBibles.className = 'btn btn-sm btn-block';
+      btnInstallBibles.id = 'btn-install-bibles';
+      btnInstallBibles.innerHTML = '➕ Get Bibles online…';
+      btnInstallBibles.title = 'Online Bibles is a plugin: turn it on in Settings > Plugins';
+      btnInstallBibles.addEventListener('click', () => window.dispatchEvent(new CustomEvent('os-open-plugins-settings')));
+      actionWrap.appendChild(btnInstallBibles);
+    }
 
     categoryTreeContainer.appendChild(actionWrap);
     return;
@@ -426,8 +494,7 @@ export function renderCategoryTree(tabName: string) {
       { id: 'images', label: '🖼️ Images & Stills' },
       { id: 'audio', label: '🎵 Audio Tracks' },
       { id: 'feeds', label: '📡 Live Camera Feeds' },
-      { id: 'online-images', label: '🌐 Online Images (Pexels/Pixabay)' },
-      { id: 'ytdlp-import', label: '📥 Download Video (yt-dlp)' }
+      { id: 'online-images', label: '🌐 Online Images (Pexels/Pixabay)' }
     ];
   } else if (tabName === 'presentations') {
     nodes = [
@@ -449,11 +516,8 @@ export function renderCategoryTree(tabName: string) {
     nodeEl.className = `category-node ${activeCategory === n.id ? 'active' : ''}`;
     nodeEl.textContent = n.label;
     nodeEl.addEventListener('click', () => {
-      if (n.id === 'ytdlp-import') {
-        openImportModal('ytdlp');
-        return;
-      }
       activeCategory = n.id;
+      showLibrarySource(null);
       document.querySelectorAll('.category-node').forEach(c => c.classList.remove('active'));
       nodeEl.classList.add('active');
       if (n.id === 'online-images' && activeResourceViewMode !== 'grid') {
@@ -465,6 +529,7 @@ export function renderCategoryTree(tabName: string) {
     });
     categoryTreeContainer.appendChild(nodeEl);
   });
+  appendLibrarySourceNodes(normTab, categoryTreeContainer);
 }
 
 export function areTranslationsEquivalent(t1: unknown, t2: unknown) {
@@ -773,7 +838,7 @@ export function filterAndRenderCatalog() {
         if (filteredLibraryItems.length === 0) filteredLibraryItems = [...activeLibraryItems];
       }
     } else if (lp.getCurrentTab() === 'media') {
-      const effectiveCategory = (activeCategory && activeCategory !== 'all' && activeCategory !== 'ytdlp-import')
+      const effectiveCategory = (activeCategory && activeCategory !== 'all')
         ? activeCategory
         : mode;
       filteredLibraryItems = activeLibraryItems.filter(m => {
@@ -902,7 +967,7 @@ export function filterAndRenderCatalog() {
       const matchesSearch = matchName || matchPath || matchType;
 
       const mTypeLower = (m.media_type || '').toLowerCase();
-      const effectiveCategory = (activeCategory && activeCategory !== 'all' && activeCategory !== 'ytdlp-import')
+      const effectiveCategory = (activeCategory && activeCategory !== 'all')
         ? activeCategory
         : mode;
 

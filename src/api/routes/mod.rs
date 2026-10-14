@@ -94,6 +94,13 @@ pub(crate) fn needs_host_token(method: &axum::http::Method, path: &str) -> bool 
                 | "/api/plugin-host/fetch"       // plugin token (scoped, checked against the live grant)
                 | "/api/plugin-host/songs"
                 | "/api/plugin-host/scriptures"
+                | "/api/plugin-host/media"
+                | "/api/plugin-host/process/start"
+                | "/api/plugin-host/process/poll"
+                | "/api/plugin-host/process/cancel"
+                | "/api/plugin-host/process/release"
+                | "/api/plugin-host/tool/status"
+                | "/api/plugin-host/tool/update"
         ) && (path == "/api/keyring/plugin/token" || !path.starts_with("/api/keyring/"));
     }
     // Plugin management: paths, digests and the audit trail are console-only reads.
@@ -107,7 +114,7 @@ pub(crate) fn needs_host_token(method: &axum::http::Method, path: &str) -> bool 
             | "/api/network/check-hostname"
             | "/api/schedule/export"
             | "/api/media/online/search"
-    ) || path.starts_with("/api/media/ytdlp/progress/")
+    )
 }
 
 /// Rejects requests `needs_host_token` flags unless `x-host-token` matches.
@@ -336,7 +343,6 @@ mod gate_tests {
             "/api/songs", "/api/scriptures", "/api/media", "/api/themes", "/api/themes/default",
             "/api/presentations", "/api/slide-templates", "/api/import/openlp", "/api/import/pptx",
             "/api/import/freeshow-show",
-            "/api/media/ytdlp/download",
             "/api/media/online/import", "/api/displays/open", "/api/displays/close",
             "/api/displays/refresh", "/api/system/pick-folder", "/api/system/pick-file",
             "/api/network/tls/regenerate", "/api/network/interfaces", "/api/keyring/plugin/token",
@@ -361,6 +367,5 @@ mod gate_tests {
         assert!(!needs_host_token(&Method::POST, "/media/x"));
         assert!(needs_host_token(&Method::GET, "/api/schedule/export"));
         assert!(needs_host_token(&Method::GET, "/api/network/interfaces"));
-        assert!(needs_host_token(&Method::GET, "/api/media/ytdlp/progress/abc"));
     }
 }

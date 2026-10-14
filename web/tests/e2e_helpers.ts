@@ -42,6 +42,8 @@ export async function spawnTestServer(opts: {
   port: number;
   tempPrefix?: string;
   extraArgs?: string[];
+  /** Extra environment for the server process (on top of this process's own). */
+  env?: Record<string, string>;
   readyPath?: string;
   timeoutMs?: number;
   pollIntervalMs?: number;
@@ -64,6 +66,7 @@ export async function spawnTestServer(opts: {
       cwd: resolve(import.meta.dir, "../../"),
       stdout: "pipe",
       stderr: "pipe",
+      ...(opts.env ? { env: { ...process.env, ...opts.env } } : {}),
     }
   );
 

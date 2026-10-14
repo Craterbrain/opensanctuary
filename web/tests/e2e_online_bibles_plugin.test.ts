@@ -56,9 +56,15 @@ describe("E2E Live Test: Online Bibles plugin replaces the built-in Bible downlo
     await card.locator("button:has-text('Approve')").click();
     await page.waitForFunction(() => document.querySelector('iframe[data-plugin-id="online_bibles"]'), null, { timeout: 15000 });
     await page.keyboard.press("Escape");
+    // It lives in the Scriptures library sidebar (where "Install Bibles" used to be).
+    await page.click('.tab-btn[data-tab="scriptures"]');
+    const node = page.locator('.category-node:has-text("Online Bibles")');
+    await node.waitFor({ state: "visible", timeout: 10000 });
+    await node.click();
     const frame = frameOf()!;
-    await frame.waitForSelector("#catalog-list li", { timeout: 40000 }); // the curated list at least
+    await frame.waitForSelector("#catalog-list li", { state: "visible", timeout: 40000 }); // the curated list at least
     await page.screenshot({ path: `${artifactDir}/screenshot_online_bibles_panel.png` });
+    await page.screenshot({ path: `../docs/screenshots/online-bibles-plugin.png` });
 
     // Install a translation through the host API, the way the plugin's Download button does after parsing.
     const added = await bridge("library.addScriptures", { items: [

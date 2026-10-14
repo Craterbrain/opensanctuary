@@ -85,7 +85,6 @@ import { createEngineWebSocket, EngineWebSocketClient } from './core/ws_client.t
 // reversing that order). app_ui.ts calls registerUiCallbacks() once, near
 // the end of its own module body, after all of these are declared.
 interface UiCallbacks {
-  stopYtdlpPolling: () => void;
   editExistingItem: (item: any, scheduleContext?: { itemIndex: number; slideIndex?: number } | null) => void;
   openImportModal: (initialMode?: string) => void;
   openSlideEditor: (type?: string) => void;
@@ -116,7 +115,7 @@ export let currentTab = 'songs';
 export let selectedLibraryItem: any = null;
 export let currentEditorType = 'song';
 export let editingItemId: string | null = null;
-export let activeImportMode = 'ytdlp';
+export let activeImportMode = 'local';
 export let activeLiveViewMode = 'matrix'; // 'matrix' or 'list'
 export let expandedScheduleIndex: number | null = 0; // Only ONE schedule item expanded at a time, or null if all collapsed
 
@@ -504,24 +503,12 @@ function resetCreateModal() {
 }
 
 export function resetImportModal() {
-  // `ytdlpPollingInterval` itself lives in app_ui.ts's module scope (a
-  // separate ES module -- see main.ts's two `await import(...)` calls) and
-  // was only ever globalThis-snapshotted once, at load time, as `null`; the
-  // exposed *function* always closes over app_ui.ts's real, live variable,
-  // so call that instead of touching the stale snapshot directly.
-  uiCallbacks.stopYtdlpPolling?.();
   const fileEl = document.getElementById('file-freeshow-fsb') as HTMLInputElement | null;
   if (fileEl) fileEl.value = '';
-  uiCallbacks.setImportMode?.('ytdlp');
+  uiCallbacks.setImportMode?.('local');
 }
 
 export function handleImportBack() {
-  // 1. If currently on Local Files, switch back to the first tab (Online Video)
-  if (activeImportMode === 'local') {
-    uiCallbacks.setImportMode?.('ytdlp');
-    return;
-  }
-  // 2. If already at top level, close and reset the modal
   closeModal(importModal);
 }
 

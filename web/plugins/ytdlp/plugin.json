@@ -1,0 +1,149 @@
+{
+  "manifest_version": 1,
+  "id": "ytdlp",
+  "name": "Video Downloader (yt-dlp)",
+  "version": "1.0.0",
+  "publisher": "OpenSanctuary",
+  "description": "Download videos or audio from YouTube and 1000+ other sites into your Media Library with yt-dlp, which the host installs and keeps up to date (the release is signature- and checksum-verified).",
+  "web": {
+    "entry": "index.html",
+    "sandbox": true
+  },
+  "ui": {
+    "placements": [
+      {
+        "slot": "library-source",
+        "tab": "media",
+        "label": "📥 Download Video (yt-dlp)"
+      },
+      {
+        "slot": "video-picker"
+      }
+    ]
+  },
+  "permissions": [
+    {
+      "id": "ui.panel",
+      "reason": "Appears in the Media library, where video downloads used to be"
+    },
+    {
+      "id": "process.run",
+      "commands": [
+        "download"
+      ],
+      "reason": "Runs yt-dlp with exactly the command line shown below. yt-dlp itself then connects to whatever site you give it, and may read your browser's cookies if you choose that option"
+    },
+    {
+      "id": "library.write",
+      "categories": [
+        "media"
+      ],
+      "reason": "Adds the downloaded file to your Media Library"
+    },
+    {
+      "id": "commands.send",
+      "commands": [
+        "AddToSchedule",
+        "GoLive"
+      ],
+      "optional": true,
+      "reason": "\"Download & Go Live\" adds the video to the schedule and goes live"
+    }
+  ],
+  "tools": [
+    {
+      "id": "yt-dlp",
+      "github": "yt-dlp/yt-dlp",
+      "assets": {
+        "linux": "yt-dlp_linux",
+        "windows": "yt-dlp.exe",
+        "macos": "yt-dlp_macos"
+      },
+      "checksums": "SHA2-256SUMS",
+      "signature": {
+        "asset": "SHA2-256SUMS.sig",
+        "key_file": "yt-dlp-key.asc"
+      },
+      "system_command": "yt-dlp",
+      "version_args": [
+        "--version"
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "id": "download",
+      "tool": "yt-dlp",
+      "args": [
+        "--no-playlist",
+        "--newline",
+        "--progress",
+        "--print-json",
+        "-o",
+        "{output_dir}/%(title).100B [%(id)s].%(ext)s",
+        {
+          "if": "ffmpeg_dir",
+          "args": [
+            "--ffmpeg-location",
+            "{ffmpeg_dir}"
+          ]
+        },
+        {
+          "if": "sponsorblock",
+          "args": [
+            "--sponsorblock-remove",
+            "all"
+          ]
+        },
+        {
+          "if": "browser",
+          "args": [
+            "--cookies-from-browser",
+            "{browser}"
+          ]
+        },
+        {
+          "if": "audio_only",
+          "args": [
+            "-x",
+            "--audio-format",
+            "mp3",
+            "--audio-quality",
+            "0"
+          ],
+          "else": [
+            "-f",
+            "bestvideo[vcodec^=av01][ext=webm]+bestaudio[ext=webm]/bestvideo[vcodec^=vp9][ext=webm]+bestaudio[ext=webm]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best"
+          ]
+        },
+        "--",
+        "{url}"
+      ],
+      "params": {
+        "url": {
+          "type": "url"
+        },
+        "browser": {
+          "type": "enum",
+          "values": [
+            "chrome",
+            "firefox",
+            "brave",
+            "edge",
+            "chromium",
+            "opera",
+            "vivaldi",
+            "safari"
+          ],
+          "optional": true
+        },
+        "audio_only": {
+          "type": "bool"
+        },
+        "sponsorblock": {
+          "type": "bool"
+        }
+      }
+    }
+  ]
+}

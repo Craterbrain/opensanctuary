@@ -330,7 +330,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(security_header_settings)),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
     // Native plugins' host handles can now reach the server.
     let _ = plugin_app_slot.set(app_state.clone());
@@ -430,7 +429,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run Axum server in a background Tokio runtime thread
     let graph_for_task = asset_graph.clone();
     let startup_broadcast_hostname = network_hostname.to_string();
-    let ytdlp_tools_dir_for_task = resolved_paths.tools_dir();
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
@@ -532,29 +530,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Err(e) = app_state.db.sync_media_videos_folder(&app_state.media_dir.join("videos")) {
                 tracing::warn!("Failed to sync media videos folder: {}", e);
             }
-
-            // Keeps yt-dlp current (src/network/ytdlp_updater.rs): once on
-            // startup, then re-checked every 12h, same "tick() resolves
-            // immediately" shape as the app's own update-check task above.
-            // Never blocks boot -- its own spawned task, `create_router`
-            // below doesn't wait on it. yt-dlp ships releases far more
-            // often than this app does (sites keep breaking extraction),
-            // which is why this exists at all instead of just bundling a
-            // copy once at install time.
-            let ytdlp_update_status_for_task = app_state.ytdlp_update_status.clone();
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(12 * 60 * 60));
-                loop {
-                    interval.tick().await;
-                    let outcome = os_next::network::ytdlp_updater::check_and_update(&ytdlp_tools_dir_for_task).await;
-                    if outcome.updated || outcome.error {
-                        tracing::info!("yt-dlp updater: {}", outcome.message);
-                    } else {
-                        tracing::debug!("yt-dlp updater: {}", outcome.message);
-                    }
-                    *ytdlp_update_status_for_task.lock().unwrap_or_else(|e| e.into_inner()) = Some(outcome);
-                }
-            });
 
             // Runs commands native plugins queued through their host handle.
             tokio::spawn(os_next::api::plugin_host::drain_plugin_commands(plugin_command_rx, plugin_app_slot.clone()));

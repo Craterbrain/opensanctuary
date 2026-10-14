@@ -34,6 +34,7 @@ describe("E2E Live Test: Genius Lyrics plugin (sandboxed) imports through the ho
     // The old built-in Genius search mode and category are gone from the song library.
     expect(await page.locator("text=Genius Christian Lyrics").count()).toBe(0);
     expect((await fetch(`http://127.0.0.1:${PORT}/api/songs/genius/search?q=x`)).status).toBe(404);
+    expect(await page.locator('.category-node:has-text("Genius")').count()).toBe(0); // not until approved
     expect((await fetch(`http://127.0.0.1:${PORT}/plugin-frame/genius_lyrics/index.html`)).status).toBe(404);
 
     await page.keyboard.press("F2");
@@ -53,11 +54,20 @@ describe("E2E Live Test: Genius Lyrics plugin (sandboxed) imports through the ho
       null, { timeout: 10000 },
     );
 
-    await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: "networkidle" });
+    // Approving starts it straight away (no reload): its entry appears in the Songs library sidebar,
+    // where the built-in Genius search used to be.
+    await page.keyboard.press("Escape");
     await page.waitForFunction(() => document.querySelector('iframe[data-plugin-id="genius_lyrics"]'), null, { timeout: 15000 });
+    await page.click('.tab-btn[data-tab="songs"]');
+    const node = page.locator('.category-node:has-text("Genius Christian Lyrics")');
+    await node.waitFor({ state: "visible", timeout: 10000 });
+    await node.click();
     const frame = frameOf()!;
-    await frame.waitForSelector("#q", { timeout: 15000 });
+    await frame.waitForSelector("#q", { state: "visible", timeout: 15000 });
+    // The plugin's page replaces the list and preview, like the old Genius mode did.
+    expect(await page.locator(".resource-catalog-pane").isVisible()).toBe(false);
     await page.screenshot({ path: `${artifactDir}/screenshot_genius_plugin_panel.png` });
+    await page.screenshot({ path: `../docs/screenshots/genius-plugin.png` });
 
     // Search goes plugin -> bridge -> server fetch. Whether or not this machine can reach genius.com,
     // it must finish (results or a clear error) rather than hang.
@@ -82,9 +92,10 @@ describe("E2E Live Test: Genius Lyrics plugin (sandboxed) imports through the ho
     const stored = songs.find((x: any) => x.id === added.result.id);
     expect(stored?.title).toBe("E2E Bridge Song");
 
-    // The console's library list refreshes on its own.
-    await page.locator('.tab-btn:has-text("Songs"), [data-tab="songs"]').first().click().catch(() => {});
+    // The console's library list refreshes on its own: back on All Songs, the new song is there.
+    await page.locator('.category-node:has-text("All Songs")').click();
     await page.waitForSelector("text=E2E Bridge Song", { timeout: 10000 });
+    expect(await page.locator(".resource-catalog-pane").isVisible()).toBe(true);
 
     // Anything outside the grant is refused by the bridge.
     const refused = await frame.evaluate(() => new Promise<any>((resolve) => {

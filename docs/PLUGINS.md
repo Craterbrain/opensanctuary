@@ -83,6 +83,32 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   range, so re-downloading a translation replaces its chapters; the same grant can therefore also replace
   chapters of a translation you already have, which its review text says) and optionally `AddToSchedule`.
   The first-run wizard's Bible step turns it on for you, listing what it can reach.
+- **Where a sandboxed plugin's page appears, and how it looks.** A manifest's `ui.placements` choose:
+  `library-source` (a "plugin" entry in a Resource Library tab's sidebar, shown in place of the list
+  and preview, as Genius/Online Bibles/the downloader do), `video-picker` (the background picker's
+  Videos tab) or `dock` (a small floating panel, the default). The page loads `__os/theme.css` and
+  `__os/sdk.js` (served by the host to any approved sandboxed plugin): the console sends its design
+  tokens (`--os-*`) to the frame and again whenever the theme changes, and the stylesheet gives
+  `.btn`, inputs, `.os-list`, `.os-tabs`, `.os-badge`, `.card` and so on the console's own look, so
+  a plugin built from them is indistinguishable from built-in UI. `OS.call(method, params)` is the
+  bridge; `OS.on('state', ...)` the event stream; `OS.slot` says where the page is shown.
+- **Running a command-line tool: `process.run`.** A sandboxed plugin can't run programs, but it can
+  declare in `plugin.json` the exact commands it needs (`commands`: the tool, an argument template
+  and typed parameters) and the tools they use (`tools`: a GitHub release, the asset per OS, the
+  checksums asset, its detached OpenPGP signature, and the public key's file in the plugin folder).
+  The review screen shows each command line and each tool's source and key fingerprint. The host
+  installs and updates the tool (`tool.status` / `tool.update`, signature- then checksum-verified),
+  and runs a declared command on request (`process.start`, `process.poll`, `process.cancel`,
+  `process.release`): no shell, parameters validated by type (`url` http(s) only, `enum`, `bool`,
+  bounded `string`), a value used as a whole argument can't start with `-`, one throwaway job folder
+  per run, at most two jobs per plugin, output kept as capped lines. A finished file reaches the
+  library only through `library.addMedia`, which accepts a plain file name from *that job's* folder
+  (right extension, moved not copied). What the tool itself then does (for example reaching the
+  network) is not confined, which is exactly what the Critical-tier `process.run` grant tells you.
+- **Video Downloader is a plugin.** Downloading with yt-dlp (YouTube and 1000+ other sites, optional
+  browser cookies, SponsorBlock, audio-only) is `web/plugins/ytdlp/`: a sandboxed page in the Media
+  library sidebar and in the video picker, built on `process.run` above. The old built-in downloader,
+  updater and routes are gone.
 - **Genius lyrics is a plugin.** Searching Genius and importing lyrics used to be built into the
   server and the Song Library panel; it is now `web/plugins/genius_lyrics/` (a sandboxed panel that
   asks only for `genius.com`, `library.write` on songs, and optionally `AddToSchedule`/`GoLive`). Approve

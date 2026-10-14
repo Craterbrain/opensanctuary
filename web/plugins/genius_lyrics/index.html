@@ -3,28 +3,31 @@
 <head>
   <meta charset="utf-8">
   <title>Genius Lyrics</title>
+  <link rel="stylesheet" href="__os/theme.css">
   <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; padding: 10px; font: 13px system-ui, sans-serif; color: #e8e8ec; background: transparent; }
-    #search-form { display: flex; gap: 6px; margin-bottom: 8px; }
-    input[type=search] { flex: 1; padding: 5px 8px; border-radius: 4px; border: 1px solid #555; background: #14161b; color: inherit; }
-    button { padding: 4px 9px; cursor: pointer; }
-    #status { opacity: 0.75; min-height: 1.3em; margin-bottom: 6px; }
-    ul { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; }
-    li { padding: 6px 4px; border-top: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; gap: 4px; }
-    .title { font-weight: 600; }
-    .artist { opacity: 0.7; }
-    .row { display: flex; gap: 6px; }
+    html, body { height: 100%; }
+    body { display: flex; flex-direction: column; padding: var(--os-space-6); gap: var(--os-space-4); }
+    .page-head h4 { margin-bottom: var(--os-space-2); }
+    .page-head p { margin: 0; font-size: var(--os-fs-sm); }
+    #hits { flex: 1 1 auto; min-height: 0; }
+    .thumb { flex: 0 0 auto; width: 34px; height: 34px; display: grid; place-items: center; font-size: 18px;
+             background: linear-gradient(135deg, var(--os-bg-elevated), var(--os-bg-panel)); border: 1px solid var(--os-border); border-radius: var(--os-radius-sm); }
+    .actions { display: flex; gap: var(--os-space-3); flex: 0 0 auto; }
   </style>
 </head>
 <body>
-  <!-- No <form>: a sandboxed frame can't submit one (and doesn't need to). -->
-  <div id="search-form">
-    <input id="q" type="search" placeholder="Title or artist (e.g. Way Maker)" autocomplete="off">
-    <button id="search-btn" type="button">Search</button>
+  <div class="page-head">
+    <h4>✨ Genius Christian &amp; Worship Lyrics</h4>
+    <p>Search by song title or artist (e.g. “Holy Forever”, “Way Maker”, “Goodness of God”). Import adds the lyrics to your Songs as formatted slides.</p>
   </div>
-  <div id="status"></div>
-  <ul id="hits"></ul>
+  <!-- No <form>: a sandboxed frame can't submit one (and doesn't need to). -->
+  <div class="form-row" id="search-form">
+    <input id="q" type="search" placeholder="✨ Search Genius Christian &amp; Worship Lyrics…" autocomplete="off">
+    <button id="search-btn" class="btn btn-primary" type="button">Search</button>
+  </div>
+  <div id="status" class="status"></div>
+  <ul id="hits" class="os-list"></ul>
+  <script src="__os/sdk.js"></script>
   <script src="genius.js"></script>
   <script src="app.js"></script>
 </body>

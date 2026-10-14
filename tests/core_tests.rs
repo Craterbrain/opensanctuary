@@ -3960,7 +3960,6 @@ async fn test_freeshow_import_http_route() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4147,7 +4146,6 @@ async fn test_app_state_plugin_token_lifecycle() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     // Issue tokens for different plugins
@@ -4209,7 +4207,6 @@ async fn test_network_api_routes_and_conflict_detection() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4336,7 +4333,6 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4465,7 +4461,6 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4767,7 +4762,6 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -4862,7 +4856,6 @@ async fn test_command_endpoint_requires_host_token_for_unpaired_callers() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5019,7 +5012,6 @@ async fn test_library_mutation_and_admin_routes_require_host_token() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5086,11 +5078,6 @@ async fn test_library_mutation_and_admin_routes_require_host_token() {
     let resp = client.post(format!("http://{}/api/updates/download-and-install", addr)).send().await.unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
 
-    // Same gate for the yt-dlp self-updater's status (src/network/ytdlp_updater.rs)
-    // -- it's read-only, but still shouldn't leak to an unpaired LAN caller.
-    let resp = client.get(format!("http://{}/api/ytdlp-updater/status", addr)).send().await.unwrap();
-    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
-
     // ADB TV-provisioning routes -- without this, any LAN caller could
     // trigger a real adb install/launch sequence against whatever IP it
     // supplied, or read another operator's in-progress provisioning status.
@@ -5152,7 +5139,6 @@ async fn test_tv_provision_start_and_progress_against_unreachable_device() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5233,7 +5219,6 @@ async fn test_update_check_and_status_routes_against_real_test_repo() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5324,7 +5309,6 @@ async fn test_only_one_console_connected_at_a_time() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5441,7 +5425,6 @@ async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5566,7 +5549,6 @@ async fn test_security_headers_and_cors_policies() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5757,7 +5739,6 @@ async fn spawn_test_app(host_session_token: &str) -> String {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
 
     let router = os_next::api::create_router(app_state);
@@ -5882,7 +5863,6 @@ async fn test_console_credential_survives_restart_and_is_revocable() {
             pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
             update_status: Arc::new(std::sync::Mutex::new(None)),
-            ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
         };
         let router = os_next::api::create_router(app_state);
         tokio::spawn(async move {
@@ -6075,7 +6055,6 @@ async fn test_plugin_grant_routes_and_web_plugin_serving() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
     let app_for_plugin_token = app_state.clone();
     let router = os_next::api::create_router(app_state);
@@ -6205,7 +6184,6 @@ async fn test_scoped_plugin_tokens_for_commands_and_keyring() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
     let router = os_next::api::create_router(app_state);
     tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
@@ -6367,7 +6345,6 @@ async fn test_real_cdylib_plugin_abi2_end_to_end() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
     let slot: os_next::api::plugin_host::AppSlot = Arc::new(std::sync::OnceLock::new());
     slot.set(app_state.clone()).ok();
@@ -6462,7 +6439,6 @@ async fn test_sandboxed_plugin_frame_serving_and_csp() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
     let router = os_next::api::create_router(app_state);
     tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
@@ -6569,7 +6545,6 @@ async fn test_rest_ws_and_plugin_commands_share_one_pipeline() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
     let app_for_direct = app_state.clone();
     let router = os_next::api::create_router(app_state);
@@ -6667,7 +6642,6 @@ async fn test_plugin_host_fetch_and_add_song_for_the_genius_plugin() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
     let router = os_next::api::create_router(app_state);
     tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
@@ -6799,7 +6773,6 @@ async fn test_online_bibles_plugin_host_api_adds_chapters() {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
-        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
     let router = os_next::api::create_router(app_state);
     tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
@@ -6875,4 +6848,193 @@ async fn test_online_bibles_plugin_host_api_adds_chapters() {
     // Revoke: the token is dead.
     c.post(format!("{base}/api/plugins/online_bibles/revoke")).header("x-host-token", host).send().await.unwrap();
     assert_eq!(post(serde_json::json!([chapter("John", 3)]), token).await.status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+/// The video-downloader plugin's host side, end to end with a stand-in `yt-dlp`: what the review screen
+/// shows, who may run what, validated parameters, polling a job's output, moving the finished file into
+/// the library only from the plugin's own job folder, and revoke.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_ytdlp_plugin_runs_only_its_declared_command_and_adds_media() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("ytdlp.db").to_str().unwrap()).unwrap();
+    let web_dir = tmp.path().join("web");
+    let dest = web_dir.join("plugins/ytdlp");
+    std::fs::create_dir_all(&dest).unwrap();
+    for entry in std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/plugins/ytdlp")).unwrap().flatten() {
+        std::fs::copy(entry.path(), dest.join(entry.file_name())).unwrap();
+    }
+    std::fs::create_dir_all(web_dir.join("plugins/_shared")).unwrap();
+    for f in ["sdk.js", "theme.css"] {
+        std::fs::copy(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/plugins/_shared").join(f), web_dir.join("plugins/_shared").join(f)).unwrap();
+    }
+
+    // A stand-in yt-dlp in the place the host installs the real one.
+    let data_dir = tmp.path().join("data");
+    let tool_dir = data_dir.join("tools/plugins/ytdlp");
+    std::fs::create_dir_all(&tool_dir).unwrap();
+    let fake = tool_dir.join("yt-dlp");
+    std::fs::write(&fake, r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "2099.01.01"; exit 0; fi
+out=""; audio=0
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out="$2"; shift;; -x) audio=1;; --) shift; url="$1";; esac
+  shift
+done
+dir=$(dirname "$out")
+ext=webm; [ $audio = 1 ] && ext=mp3
+echo "[download]   0.0% of 1.00MiB at Unknown ETA Unknown"
+echo "[download]  50.0% of 1.00MiB at 2.00MiB/s ETA 00:01"
+printf 'fake media bytes' > "$dir/Fake Title [abc123].$ext"
+printf 'junk' > "$dir/Fake Title [abc123].f137.mp4.part"
+echo "[download] 100% of 1.00MiB at 2.00MiB/s ETA 00:00"
+echo "{\"id\":\"abc123\",\"title\":\"Fake Title\",\"duration\":12.5,\"thumbnail\":\"https://img.example/t.jpg\",\"_filename\":\"$dir/Fake Title [abc123].webm\",\"ext\":\"webm\",\"url\":\"$url\"}"
+"#).unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let media_dir = tmp.path().join("media");
+    let app_state = os_next::api::ws::AppState {
+        tx, engine, db: db.clone(),
+        asset_graph: Arc::new(os_next::media::AssetGraph::new(&media_dir)),
+        web_dir: web_dir.clone(), media_dir: media_dir.clone(),
+        data_dir: data_dir.clone(), skip_first_time_setup: true,
+        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
+        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "yt_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+    let host = "yt_host";
+    let json = |r: reqwest::Response| async move { r.json::<serde_json::Value>().await.unwrap() };
+
+    // What the review screen is shown: the exact command, the tool and its source, where it appears.
+    let list = json(c.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap()).await;
+    let p = list.as_array().unwrap().iter().find(|p| p["id"] == "ytdlp").unwrap().clone();
+    assert_eq!((p["kind"].as_str(), p["error"].is_null()), (Some("sandbox"), true), "{p}");
+    let line = p["commands"][0]["line"].as_str().unwrap();
+    assert!(line.starts_with("yt-dlp --no-playlist --newline --progress --print-json -o {output_dir}/"), "{line}");
+    assert!(line.contains("[if browser: --cookies-from-browser {browser}]") && line.ends_with("-- {url}"), "{line}");
+    assert_eq!(p["tools"][0]["github"], "yt-dlp/yt-dlp");
+    assert_eq!(p["tools"][0]["key_sha256"].as_str().unwrap().len(), 64);
+    assert_eq!(p["placements"].as_array().unwrap().len(), 2);
+    let ids: Vec<&str> = p["requested"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["ui.panel", "process.run", "library.write", "commands.send"]);
+    assert_eq!(p["requested"][1]["tier"], "critical");
+    assert_eq!(p["requested"][1]["enforcement"], "enforced");
+
+    // Nothing runs before approval (and a token can't be minted).
+    let mint = |scopes: serde_json::Value| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugins/ytdlp/token")).header("x-host-token", "yt_host").json(&serde_json::json!({ "scopes": scopes })).send().await.unwrap() }
+    };
+    assert_eq!(mint(serde_json::json!([{ "id": "process.run", "commands": ["download"] }])).await.status(), reqwest::StatusCode::FORBIDDEN);
+    let r = c.post(format!("{base}/api/plugins/ytdlp/approve")).header("x-host-token", host)
+        .json(&serde_json::json!({ "digest": p["digest"], "granted": ["ui.panel", "process.run", "library.write"] })).send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+
+    // A token can't ask for a command the manifest doesn't declare, or more than was granted.
+    assert_eq!(mint(serde_json::json!([{ "id": "process.run", "commands": ["rm-everything"] }])).await.status(), reqwest::StatusCode::FORBIDDEN);
+    let token = json(mint(serde_json::json!([
+        { "id": "process.run", "commands": ["download"] }, { "id": "library.write", "categories": ["media"] }])).await).await["token"].as_str().unwrap().to_string();
+    let call = |path: &'static str, body: serde_json::Value, token: String| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugin-host/{path}")).header("x-plugin-token", token).json(&body).send().await.unwrap() }
+    };
+    assert_eq!(c.post(format!("{base}/api/plugin-host/process/start")).json(&serde_json::json!({ "command": "download" })).send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // The tool is reported installed (the stand-in answers --version).
+    let st = json(call("tool/status", serde_json::json!({ "tool": "yt-dlp" }), token.clone()).await).await;
+    assert_eq!((st["installed"].as_bool(), st["source"].as_str(), st["version"].as_str()), (Some(true), Some("managed"), Some("2099.01.01")));
+    assert_eq!(call("tool/status", serde_json::json!({ "tool": "nope" }), token.clone()).await.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // Parameters are validated by the host; undeclared commands and parameters are refused.
+    for bad in [
+        serde_json::json!({ "command": "download", "params": { "url": "--exec touch /tmp/pwned" } }),
+        serde_json::json!({ "command": "download", "params": { "url": "file:///etc/passwd" } }),
+        serde_json::json!({ "command": "download", "params": { "url": "https://x.test/", "browser": "chrome; rm -rf /" } }),
+        serde_json::json!({ "command": "download", "params": { "url": "https://x.test/", "exec": "x" } }),
+        serde_json::json!({ "command": "download", "params": {} }),
+    ] {
+        assert_eq!(call("process/start", bad.clone(), token.clone()).await.status(), reqwest::StatusCode::BAD_REQUEST, "{bad}");
+    }
+    assert_eq!(call("process/start", serde_json::json!({ "command": "other", "params": {} }), token.clone()).await.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // A real run: poll until it ends; progress lines and the JSON line arrive, and the file is listed.
+    let started = json(call("process/start", serde_json::json!({ "command": "download", "params": { "url": "https://video.example/watch?v=abc123", "sponsorblock": true } }), token.clone()).await).await;
+    let job = started["job"].as_str().unwrap().to_string();
+    let mut since = 0;
+    let mut lines: Vec<String> = Vec::new();
+    let done = loop {
+        let v = json(call("process/poll", serde_json::json!({ "job": job, "since": since }), token.clone()).await).await;
+        since = v["next"].as_u64().unwrap();
+        lines.extend(v["lines"].as_array().unwrap().iter().map(|l| l.as_str().unwrap().to_string()));
+        if v["status"] != "running" { break v; }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+    assert_eq!((done["status"].as_str(), done["exit_code"].as_i64()), (Some("exited"), Some(0)), "{done}");
+    assert!(lines.iter().any(|l| l.contains("50.0%")), "{lines:?}");
+    assert!(lines.last().unwrap().starts_with('{') && lines.last().unwrap().contains("\"id\":\"abc123\""));
+    let names: Vec<&str> = done["files"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"Fake Title [abc123].webm"), "{names:?}");
+
+    // Adding media: only a plain file name from THIS plugin's finished job, of the right type.
+    let add = |file: &str, media_type: &str, job: &str, token: String| {
+        let (body, call) = (serde_json::json!({ "job": job, "file": file, "media_type": media_type, "title": "Fake Title", "id": "ytdlp_abc123", "duration": 12.5, "thumbnail": "https://img.example/t.jpg" }), &call);
+        call("media", body, token)
+    };
+    for bad in ["../../etc/passwd", "/etc/passwd", "sub/dir.webm", ".hidden.webm", "Fake Title [abc123].f137.mp4.part", "missing.webm"] {
+        let r = add(bad, "video", &job, token.clone()).await;
+        assert!(r.status() == reqwest::StatusCode::BAD_REQUEST || r.status() == reqwest::StatusCode::NOT_FOUND, "{bad}: {}", r.status());
+    }
+    assert_eq!(add("Fake Title [abc123].webm", "audio", &job, token.clone()).await.status(), reqwest::StatusCode::BAD_REQUEST, "an audio item must be an audio file");
+    assert_eq!(add("Fake Title [abc123].webm", "video", "not-a-job", token.clone()).await.status(), reqwest::StatusCode::NOT_FOUND);
+    let r = add("Fake Title [abc123].webm", "video", &job, token.clone()).await;
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let added = json(r).await;
+    assert_eq!(added["id"], "plugin_ytdlp_ytdlp_abc123");
+    let item = db.get_media_by_id("plugin_ytdlp_ytdlp_abc123").unwrap().expect("media item stored");
+    assert_eq!((item.name.as_str(), item.file_path.as_str(), item.duration_seconds), ("Fake Title", "/media/videos/Fake Title [abc123].webm", Some(12.5)));
+    assert_eq!(std::fs::read(media_dir.join("videos/Fake Title [abc123].webm")).unwrap(), b"fake media bytes");
+    assert!(!data_dir.join("plugin-jobs/ytdlp").join(&job).join("Fake Title [abc123].webm").exists(), "the file was moved, not copied");
+
+    // The job folder is the host's to clean up.
+    let r = json(call("process/release", serde_json::json!({ "job": job }), token.clone()).await).await;
+    assert_eq!(r["success"], true);
+    assert!(!data_dir.join("plugin-jobs/ytdlp").join(&job).exists());
+    assert_eq!(call("process/poll", serde_json::json!({ "job": job }), token.clone()).await.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // The console's shared SDK and theme are served to an approved plugin, and nothing else is reachable
+    // through the `__os/` prefix.
+    for (path, want) in [("sdk.js", 200), ("theme.css", 200), ("other.js", 404), ("..%2fplugin.json", 404), ("sdk.js/x", 404)] {
+        let r = c.get(format!("{base}/plugin-frame/ytdlp/__os/{path}")).send().await.unwrap();
+        assert_eq!(r.status().as_u16(), want, "{path}");
+        if want == 200 {
+            assert!(r.headers()["content-security-policy"].to_str().unwrap().contains("sandbox allow-scripts"));
+        }
+    }
+
+    // A token without library.write can't add media; and a revoke kills everything.
+    let run_only = json(mint(serde_json::json!([{ "id": "process.run", "commands": ["download"] }])).await).await["token"].as_str().unwrap().to_string();
+    assert_eq!(call("media", serde_json::json!({ "job": "x", "file": "a.webm", "media_type": "video", "title": "t" }), run_only).await.status(), reqwest::StatusCode::FORBIDDEN);
+    c.post(format!("{base}/api/plugins/ytdlp/revoke")).header("x-host-token", host).send().await.unwrap();
+    assert_eq!(call("process/start", serde_json::json!({ "command": "download", "params": { "url": "https://x.test/" } }), token).await.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // The shared SDK and theme are served to an approved plugin only (it was revoked just now).
+    assert_eq!(c.get(format!("{base}/plugin-frame/ytdlp/__os/sdk.js")).send().await.unwrap().status(), reqwest::StatusCode::NOT_FOUND);
 }

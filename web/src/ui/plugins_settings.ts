@@ -103,6 +103,25 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   if (!shown.length) list.appendChild(el('div', 'settings-hint', 'No permissions requested.'));
   card.appendChild(list);
 
+  // What it can run and the tools the host installs for it -- the operator must be able to read exactly this.
+  if (plugin.tools?.length) {
+    card.appendChild(el('div', 'settings-hint', 'Tools OpenSanctuary installs and keeps current for this plugin (downloaded from the release, then checked against the signed checksums with the key shipped in the plugin):'));
+    for (const t of plugin.tools) {
+      const sig = `key ${t.key_sha256.slice(0, 16)}…`;
+      card.appendChild(el('div', 'plugin-tool', `${t.id}: github.com/${t.github} (${t.checksums} signed by ${sig})` + (t.system_command ? `; uses a ${t.system_command} already on this computer if there is one` : '')));
+    }
+  }
+  if (plugin.commands?.length) {
+    card.appendChild(el('div', 'settings-hint', 'Commands this plugin can run (exactly these, never through a shell; values in { } are filled in and checked by OpenSanctuary):'));
+    for (const c of plugin.commands) {
+      card.appendChild(el('pre', 'plugin-command', c.line));
+    }
+  }
+  if (plugin.placements?.length) {
+    const where = plugin.placements.map((p) => p.slot === 'library-source' ? `the ${p.tab} library ("${p.label}")` : p.slot === 'video-picker' ? 'the video background picker' : 'a floating panel').join(', ');
+    card.appendChild(el('div', 'settings-hint', `Appears in: ${where}.`));
+  }
+
   const actions = el('div', 'plugin-actions');
   const act = async (fn: () => Promise<unknown>, done: string) => {
     try {

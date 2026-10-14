@@ -5,37 +5,22 @@
 (function () {
   'use strict';
 
-  var pending = {};
-  var nextId = 0;
-
-  function call(method, params) {
-    return new Promise(function (resolve, reject) {
-      var id = ++nextId;
-      pending[id] = { resolve: resolve, reject: reject };
-      parent.postMessage({ type: 'os.request', id: id, method: method, params: params }, '*');
-    });
-  }
-
-  window.addEventListener('message', function (ev) {
-    if (ev.source !== parent) return;
-    var m = ev.data;
-    if (!m || m.type !== 'os.response' || !pending[m.id]) return;
-    var p = pending[m.id];
-    delete pending[m.id];
-    if (m.ok) p.resolve(m.result); else p.reject(new Error(m.error));
-  });
+  var call = OS.call;
 
   var $ = function (id) { return document.getElementById(id); };
   var statusEl = $('status');
-  var progressEl = $('progress');
+  var progressWrap = $('progress-wrap');
+  var progressBar = $('progress-bar');
   var busy = false;
 
-  function setStatus(text) { statusEl.textContent = text; }
+  function setStatus(text, kind) {
+    statusEl.textContent = text;
+    statusEl.className = 'status' + (kind ? ' ' + kind : '');
+  }
   function setProgress(done, total) {
-    if (total == null) { progressEl.classList.add('hidden'); return; }
-    progressEl.classList.remove('hidden');
-    progressEl.max = total;
-    progressEl.value = done;
+    if (total == null) { progressWrap.classList.add('hidden'); return; }
+    progressWrap.classList.remove('hidden');
+    progressBar.style.width = Math.max(0, Math.min(100, (done / total) * 100)) + '%';
   }
 
   async function fetchText(url) {
@@ -64,16 +49,21 @@
       var meta = document.createElement('div');
       meta.className = 'meta';
       var name = document.createElement('div');
-      name.className = 'name';
-      name.textContent = e.abbreviation + ' — ' + e.name;
+      name.className = 'title';
+      var abbr = document.createElement('span');
+      abbr.className = 'abbr';
+      abbr.textContent = e.abbreviation;
+      name.appendChild(abbr);
+      name.appendChild(document.createTextNode(e.name));
       var sub = document.createElement('div');
       sub.className = 'sub';
-      sub.textContent = e.language + ' · ' + e.source;
+      sub.textContent = e.language + ' \u00b7 ' + e.source;
       meta.appendChild(name);
       meta.appendChild(sub);
       var btn = document.createElement('button');
       btn.type = 'button';
-      btn.textContent = 'Download';
+      btn.className = 'btn btn-sm btn-primary';
+      btn.textContent = 'Install / Download';
       btn.addEventListener('click', function () { downloadBible(e, btn); });
       li.appendChild(meta);
       li.appendChild(btn);
@@ -81,7 +71,8 @@
     });
     if (entries.length > (limit || 200)) {
       var more = document.createElement('li');
-      more.textContent = 'Showing the first ' + (limit || 200) + ' of ' + entries.length + ' — search to narrow it down.';
+      more.className = 'hint';
+      more.textContent = 'Showing the first ' + (limit || 200) + ' of ' + entries.length + ' \u2014 search to narrow it down.';
       listEl.appendChild(more);
     }
   }
@@ -94,7 +85,8 @@
       return !q || e.name.toLowerCase().indexOf(q) !== -1 || e.abbreviation.toLowerCase().indexOf(q) !== -1;
     });
     renderEntries($('catalog-list'), shown);
-    setStatus(shown.length + ' of ' + catalog.length + ' translations');
+    $('catalog-count').textContent = 'Showing ' + shown.length + ' of ' + catalog.length + ' translations';
+    setStatus('');
   }
 
   async function loadCatalog() {
@@ -155,9 +147,9 @@
       if (!chapters.length) throw new Error('that file had no chapters in a format this plugin understands');
       await storeChapters(chapters);
       var verses = chapters.reduce(function (n, c) { return n + c.verses.length; }, 0);
-      setStatus('Installed ' + entry.abbreviation + ': ' + chapters.length + ' chapters, ' + verses + ' verses.');
+      setStatus('Installed ' + entry.abbreviation + ': ' + chapters.length + ' chapters, ' + verses + ' verses.', 'ok');
     } catch (e) {
-      setStatus('Download failed: ' + e.message);
+      setStatus('Download failed: ' + e.message, 'error');
     } finally {
       busy = false;
       btn.disabled = false;
@@ -186,7 +178,7 @@
       renderEntries($('gh-list'), entries);
       setStatus(entries.length ? entries.length + ' Bibles in ' + repo.owner + '/' + repo.repo : 'No Bible files found in that folder.');
     } catch (e) {
-      setStatus('Could not read the repository: ' + e.message);
+      setStatus('Could not read the repository: ' + e.message, 'error');
     }
   }
   $('gh-browse').addEventListener('click', browseGithub);
@@ -234,9 +226,9 @@
       } catch (e) {
         msg += ' (Not added to the schedule: ' + e.message + ')';
       }
-      setStatus(msg);
+      setStatus(msg, 'ok');
     } catch (e) {
-      setStatus('Could not fetch that passage: ' + e.message);
+      setStatus('Could not fetch that passage: ' + e.message, 'error');
     } finally {
       busy = false;
       setProgress(0, null);
@@ -245,6 +237,6 @@
   $('passage-go').addEventListener('click', fetchPassage);
   $('passage-q').addEventListener('keydown', function (ev) { if (ev.key === 'Enter') fetchPassage(); });
 
-  call('ui.resize', { height: 420 }).catch(function () {});
+  if (OS.slot === 'dock') call('ui.resize', { height: 460 }).catch(function () {});
   loadCatalog();
 })();

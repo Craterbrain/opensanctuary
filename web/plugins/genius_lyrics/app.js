@@ -4,57 +4,55 @@
 (function () {
   'use strict';
 
-  var pending = {};
-  var nextId = 0;
-
-  function call(method, params) {
-    return new Promise(function (resolve, reject) {
-      var id = ++nextId;
-      pending[id] = { resolve: resolve, reject: reject };
-      parent.postMessage({ type: 'os.request', id: id, method: method, params: params }, '*');
-    });
-  }
-
-  window.addEventListener('message', function (ev) {
-    if (ev.source !== parent) return;
-    var m = ev.data;
-    if (!m || m.type !== 'os.response' || !pending[m.id]) return;
-    var p = pending[m.id];
-    delete pending[m.id];
-    if (m.ok) p.resolve(m.result); else p.reject(new Error(m.error));
-  });
-
   var statusEl = document.getElementById('status');
   var listEl = document.getElementById('hits');
   var inputEl = document.getElementById('q');
+  var busy = false;
 
-  function setStatus(text) { statusEl.textContent = text; }
+  function setStatus(text, kind) {
+    statusEl.textContent = text;
+    statusEl.className = 'status' + (kind ? ' ' + kind : '');
+  }
 
   function renderHits(hits) {
     listEl.textContent = '';
     hits.forEach(function (hit) {
       var li = document.createElement('li');
+      var thumb = document.createElement('div');
+      thumb.className = 'thumb';
+      thumb.textContent = '✨';
+      var meta = document.createElement('div');
+      meta.className = 'meta';
       var title = document.createElement('div');
       title.className = 'title';
       title.textContent = hit.title;
-      var artist = document.createElement('div');
-      artist.className = 'artist';
-      artist.textContent = hit.artist;
-      var row = document.createElement('div');
-      row.className = 'row';
+      var sub = document.createElement('div');
+      sub.className = 'sub';
+      sub.textContent = hit.artist;
+      meta.appendChild(title);
+      meta.appendChild(sub);
+      var badge = document.createElement('span');
+      badge.className = 'os-badge os-badge--accent';
+      badge.textContent = 'Genius';
+      var actions = document.createElement('div');
+      actions.className = 'actions';
       var add = document.createElement('button');
       add.type = 'button';
-      add.textContent = 'Import & add to schedule';
+      add.className = 'btn btn-sm btn-primary';
+      add.textContent = '📥 Import & stage';
       add.addEventListener('click', function () { importHit(hit, false); });
       var live = document.createElement('button');
       live.type = 'button';
+      live.className = 'btn btn-sm';
       live.textContent = 'Import & go live';
       live.addEventListener('click', function () { importHit(hit, true); });
-      row.appendChild(add);
-      row.appendChild(live);
-      li.appendChild(title);
-      li.appendChild(artist);
-      li.appendChild(row);
+      actions.appendChild(add);
+      actions.appendChild(live);
+      li.addEventListener('dblclick', function () { importHit(hit, false); });
+      li.appendChild(thumb);
+      li.appendChild(meta);
+      li.appendChild(badge);
+      li.appendChild(actions);
       listEl.appendChild(li);
     });
   }
@@ -62,41 +60,45 @@
   async function search(query) {
     var url = Genius.searchUrl(query);
     if (!url) return;
-    setStatus('Searching Genius…');
+    setStatus('✨ Searching Genius for Christian lyrics matching “' + query.trim() + '”…');
     listEl.textContent = '';
     try {
-      var res = await call('net.fetch', { url: url });
+      var res = await OS.call('net.fetch', { url: url });
       if (res.status !== 200) throw new Error('Genius answered ' + res.status);
       var hits = Genius.parseSearchResponse(res.body, query);
       renderHits(hits);
-      setStatus(hits.length ? hits.length + ' result' + (hits.length === 1 ? '' : 's') : 'No Christian lyrics found for “' + query + '”. Try another title or artist.');
+      setStatus(hits.length ? hits.length + ' result' + (hits.length === 1 ? '' : 's') : 'No Christian lyrics found for “' + query.trim() + '”. Try another title or artist.');
     } catch (e) {
-      setStatus('Search failed: ' + e.message);
+      setStatus('Search failed: ' + e.message, 'error');
     }
   }
 
   async function importHit(hit, goLive) {
+    if (busy) return;
+    busy = true;
     setStatus('Importing “' + hit.title + '”…');
     try {
       if (!Genius.isGeniusUrl(hit.url)) throw new Error('not a Genius page');
-      var page = await call('net.fetch', { url: hit.url });
+      var page = await OS.call('net.fetch', { url: hit.url });
       if (page.status !== 200) throw new Error('Genius answered ' + page.status);
       var song = Genius.pageToSong(page.body, hit.title, hit.artist);
       if (!song.slides.length) throw new Error('no lyrics found on that page');
-      var added = await call('library.addSong', { song: song });
+      var added = await OS.call('library.addSong', { song: song });
       var msg = 'Imported “' + song.title + '” with ' + song.slides.length + ' slides' +
         (song.ccli_number ? ' (CCLI #' + song.ccli_number + ')' : '') + '.';
       try {
-        await call('sendCommand', { command: { AddToSchedule: { item_type: 'song', item_id: added.id } } });
+        await OS.call('sendCommand', { command: { AddToSchedule: { item_type: 'song', item_id: added.id } } });
         if (goLive) {
-          await call('sendCommand', { command: { GoLive: { item_index: null, slide_index: 0 } } });
+          await OS.call('sendCommand', { command: { GoLive: { item_index: null, slide_index: 0 } } });
         }
       } catch (e) {
         msg += ' (Not added to the schedule: ' + e.message + ')';
       }
-      setStatus(msg);
+      setStatus(msg, 'ok');
     } catch (e) {
-      setStatus('Import failed: ' + e.message);
+      setStatus('Import failed: ' + e.message, 'error');
+    } finally {
+      busy = false;
     }
   }
 
@@ -104,6 +106,6 @@
   inputEl.addEventListener('keydown', function (ev) {
     if (ev.key === 'Enter') search(inputEl.value);
   });
-
-  call('ui.resize', { height: 360 }).catch(function () {});
+  if (OS.slot === 'dock') OS.call('ui.resize', { height: 380 }).catch(function () {});
+  inputEl.focus();
 })();
