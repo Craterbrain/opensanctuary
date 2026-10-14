@@ -171,7 +171,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 urlencoding = "2.1"
 base64 = "0.22"
 tempfile = "3.10"
-async-trait = "0.1"
 
 # Desktop Webview (Optional / Platform gated)
 tao = { version = "0.28", optional = true }

@@ -13,7 +13,6 @@ import {
   loadLibraryTab,
   renderCategoryTree,
   selectAndPreviewItem,
-  tryHandleOnlineImagesEnter,
   updateSearchModeUI,
   getActiveLibraryItems,
   getActiveResourceViewMode,
@@ -149,7 +148,6 @@ if (resourceSearchInput) {
         if (firstCard) firstCard.focus();
       }
     } else if (e.key === 'Enter') {
-      if (tryHandleOnlineImagesEnter()) return;
       const promptRow = catalogTableBody ? catalogTableBody.querySelector<HTMLElement>('.catalog-fetch-prompt-row') : null;
       if (promptRow) {
         promptRow.click();

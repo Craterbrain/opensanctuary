@@ -1,0 +1,53 @@
+{
+  "manifest_version": 1,
+  "id": "stock_media",
+  "name": "Stock Images (Pexels & Pixabay)",
+  "version": "1.0.0",
+  "publisher": "OpenSanctuary",
+  "description": "Search free Pexels and Pixabay photos and add them to your Media Library as backgrounds. You use your own free API key from each site; the keys are kept in your computer's secure storage.",
+  "web": {
+    "entry": "index.html",
+    "sandbox": true
+  },
+  "permissions": [
+    {
+      "id": "ui.panel",
+      "reason": "Appears in the Media library, where \"Online Images\" used to be"
+    },
+    {
+      "id": "network.outbound",
+      "hosts": [
+        "api.pexels.com",
+        "images.pexels.com",
+        "pixabay.com",
+        "cdn.pixabay.com"
+      ],
+      "reason": "The server searches Pexels and Pixabay and downloads the pictures you choose from these hosts, and from no others. The page also shows thumbnails from them"
+    },
+    {
+      "id": "keyring.own",
+      "reason": "Keeps your Pexels and Pixabay API keys in secure storage that only this plugin can read"
+    },
+    {
+      "id": "library.write",
+      "categories": [
+        "media"
+      ],
+      "reason": "Adds the pictures you choose to your Media Library"
+    },
+    {
+      "id": "notifications.post",
+      "optional": true,
+      "reason": "Tells you when a picture has been added"
+    }
+  ],
+  "ui": {
+    "placements": [
+      {
+        "slot": "library-source",
+        "tab": "media",
+        "label": "🌐 Online Images (Pexels/Pixabay)"
+      }
+    ]
+  }
+}

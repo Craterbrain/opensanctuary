@@ -96,6 +96,7 @@ pub(crate) fn needs_host_token(method: &axum::http::Method, path: &str) -> bool 
                 | "/api/plugin-host/songs"
                 | "/api/plugin-host/scriptures"
                 | "/api/plugin-host/media"
+                | "/api/plugin-host/media-url"
                 | "/api/plugin-host/process/start"
                 | "/api/plugin-host/process/poll"
                 | "/api/plugin-host/process/cancel"
@@ -116,7 +117,6 @@ pub(crate) fn needs_host_token(method: &axum::http::Method, path: &str) -> bool 
             | "/api/network/check-port"
             | "/api/network/check-hostname"
             | "/api/schedule/export"
-            | "/api/media/online/search"
     )
 }
 

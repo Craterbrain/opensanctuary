@@ -207,22 +207,6 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
     ],
   },
   {
-    key: 'pexelsApiKey',
-    label: 'Pexels API Key',
-    description: 'Enables searching Pexels for royalty-free background images and video from the Media Library.',
-    category: 'integrations',
-    control: 'password',
-    placeholder: 'Paste your Pexels API key...',
-  },
-  {
-    key: 'pixabayApiKey',
-    label: 'Pixabay API Key',
-    description: 'Enables searching Pixabay for royalty-free background images and video from the Media Library.',
-    category: 'integrations',
-    control: 'password',
-    placeholder: 'Paste your Pixabay API key...',
-  },
-  {
     key: 'ccliReport',
     label: 'CCLI Usage Report',
     description: 'Export a CSV of songs used in services for CCLI reporting. See docs/CCLI_REPORTING.md.',
