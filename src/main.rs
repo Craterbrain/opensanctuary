@@ -137,10 +137,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let plugin_dir = os_next::storage::paths::plugin_dir();
     let mut plugin_manager = os_next::core::plugins::PluginManager::new();
-    if let Err(e) = plugin_manager.load_plugins_from_dir(&plugin_dir) {
-        tracing::error!("Failed to load backend plugins: {}", e);
-    } else {
-        tracing::info!("Backend Plugin Manager initialized from {:?}", plugin_dir);
+    // ABI 2 plugins reach the server through a host handle; it needs the AppState (filled in
+    // below once it exists) and a queue their commands are run from.
+    let plugin_app_slot: os_next::api::plugin_host::AppSlot = Arc::new(std::sync::OnceLock::new());
+    let (plugin_command_tx, plugin_command_rx) = tokio::sync::mpsc::channel::<os_next::api::plugin_host::QueuedPluginCommand>(256);
+    {
+        // Only libraries the operator has approved, and whose files are unchanged since,
+        // are loaded (docs/PLUGIN_PERMISSIONS.md).
+        let web_plugins_dir = os_next::storage::paths::resolve_web_dir(args.web_dir.as_deref()).join("plugins");
+        let discovered = os_next::core::plugin_registry::discover(&plugin_dir, &web_plugins_dir, env!("CARGO_PKG_VERSION"));
+        os_next::core::plugin_registry::sync(&db, &discovered);
+        db.prune_plugin_audit(5000);
+        let factory = |id: &str, grants: std::sync::Arc<os_next::core::plugins::GrantCell>| -> Arc<dyn os_next::core::plugins::PluginHost> {
+            Arc::new(os_next::api::plugin_host::AppPluginHost::new(id, grants, plugin_app_slot.clone(), plugin_command_tx.clone()))
+        };
+        plugin_manager.load_approved(os_next::core::plugin_registry::approved_natives(&db, &discovered), Some(&factory));
+        tracing::info!("Backend Plugin Manager initialized from {:?} ({} loaded)", plugin_dir, plugin_manager.plugin_count());
     }
     let plugin_manager = Arc::new(plugin_manager);
 
@@ -322,6 +334,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         update_status: Arc::new(std::sync::Mutex::new(None)),
         ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
     };
+    // Native plugins' host handles can now reach the server.
+    let _ = plugin_app_slot.set(app_state.clone());
 
     let headless = args.headless;
     let no_open = args.no_open;
@@ -543,6 +557,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     *ytdlp_update_status_for_task.lock().unwrap_or_else(|e| e.into_inner()) = Some(outcome);
                 }
             });
+
+            // Runs commands native plugins queued through their host handle.
+            tokio::spawn(os_next::api::plugin_host::drain_plugin_commands(plugin_command_rx, plugin_app_slot.clone()));
 
             // Deletes pre-rendered background clips unused for 3 months (and stuck renders).
             tokio::spawn(os_next::storage::pattern_cache::maintenance_loop(app_state.media_dir.clone()));

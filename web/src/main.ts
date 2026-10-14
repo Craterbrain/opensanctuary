@@ -5,6 +5,8 @@ import { PluginManager } from "./core/plugins.ts";
 import { clock } from "./core/timesync.ts";
 import { VideoSyncController } from "./core/video_sync.ts";
 import { keyring } from "./core/keyring.ts";
+import { resolveHostSessionToken } from "./core/host_session.ts";
+import { startSandboxedPlugin } from "./core/plugin_bridge.ts";
 import { startEmojiIcons } from "./core/emoji_icons.ts";
 
 // 0. Swap emoji for the themed SVG icons (static markup now, rendered content as it appears)
@@ -30,6 +32,21 @@ clock.synchronize(5).then(async () => {
     await import("./app_ui.ts");
     (window as any).__APP_READY__ = true;
 
-    // 4. Load demo plugin to prove modular architecture works!
-    pluginManager.loadLocalPlugin("/plugins/hello_world.js");
+    // 4. Load only the web plugins the operator has approved (Settings > Plugins). The
+    //    server also refuses to serve any other file under /plugins/.
+    (async () => {
+        try {
+            await resolveHostSessionToken();
+            const res = await fetch("/api/plugins?kind=web&active=1");
+            if (!res.ok) return; // no console credential on this page (live/stage/remote)
+            const list = await res.json();
+            for (const p of Array.isArray(list) ? list : []) {
+                if (!p || typeof p.id !== "string") continue;
+                if (p.kind === "sandbox") startSandboxedPlugin(p);
+                else await pluginManager.loadLocalPlugin(`/plugins/${p.id}.js`, p.id);
+            }
+        } catch (e) {
+            console.warn("[Plugins] could not load approved plugins:", e);
+        }
+    })();
 });

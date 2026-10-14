@@ -64,12 +64,17 @@ export class PluginManager {
         this.plugins.clear();
     }
 
-    async loadLocalPlugin(path: string) {
+    /**
+     * `id` is the plugin's stable id (its manifest id / file stem). It names the plugin's
+     * keyring namespace, which the server matches against installed plugins -- the
+     * display name a plugin reports about itself is not an identity.
+     */
+    async loadLocalPlugin(path: string, id?: string) {
         try {
             const module = await import(path);
             if (module.default && typeof module.default.init === 'function') {
-                const name = module.default.name || path;
-                this.registerPlugin(name, module.default);
+                const stem = path.split('/').pop()!.replace(/\.js$/, '');
+                this.registerPlugin(id || stem, module.default);
             }
         } catch (e) {
             console.error(`[PluginManager] Failed to load plugin ${path}:`, e);

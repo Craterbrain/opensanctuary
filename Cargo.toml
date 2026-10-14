@@ -206,3 +206,10 @@ tokio-tungstenite = "0.24"
 panic = "abort"
 opt-level = 3
 lto = "thin"
+
+# A real native plugin (ABI 2) used as the plugin author's template and by the dlopen test in
+# tests/core_tests.rs. Build it with `cargo build --release --example plugin_observer`.
+[[example]]
+name = "plugin_observer"
+path = "examples/plugin_observer.rs"
+crate-type = ["cdylib"]

@@ -4810,7 +4810,22 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
         .send().await.unwrap();
     assert_eq!(fake_resp.status(), reqwest::StatusCode::NOT_FOUND);
 
-    // A real, installed plugin still gets a token.
+    // A real, installed plugin that nobody has approved yet gets no token...
+    let unapproved = client.post(format!("http://{}/api/keyring/plugin/token", addr))
+        .header("x-host-token", "test_host_session_plugin")
+        .json(&serde_json::json!({ "plugin_name": "hello_world" }))
+        .send().await.unwrap();
+    assert_eq!(unapproved.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // ...and once approved with keyring access it does.
+    let found = os_next::core::plugin_registry::discover(
+        &test_dir.path().join("native"), std::path::Path::new("web/plugins"), env!("CARGO_PKG_VERSION"));
+    os_next::core::plugin_registry::sync(&db, &found);
+    let row = db.get_plugin_grant("hello_world").unwrap().unwrap();
+    db.set_plugin_decision(
+        "hello_world", "approved", r#"[{"id":"keyring.own"}]"#,
+        row.observed_manifest_sha256.as_deref(), Some(&row.observed_digest), None, "test",
+    ).unwrap();
     let real_resp = client.post(format!("http://{}/api/keyring/plugin/token", addr))
         .header("x-host-token", "test_host_session_plugin")
         .json(&serde_json::json!({ "plugin_name": "hello_world" }))
@@ -5982,4 +5997,677 @@ async fn test_console_credential_survives_restart_and_is_revocable() {
         .header("x-host-token", &credential)
         .send().await.unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+/// Plugin dispatch honours grants: a hook is only called for a plugin granted it, and a
+/// revoke stops the plugin at once.
+#[test]
+fn test_plugin_dispatch_respects_grants_and_revocation() {
+    use os_next::core::plugin_permissions::{PermissionRequest, PermissionSet};
+    use os_next::core::plugins::{OsPlugin, PluginManager};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Counting {
+        commands: Arc<AtomicUsize>,
+        states: Arc<AtomicUsize>,
+        veto: bool,
+    }
+    impl OsPlugin for Counting {
+        fn name(&self) -> &'static str {
+            "counting"
+        }
+        fn on_state_change(&self, _s: &os_next::core::models::ShowState) {
+            self.states.fetch_add(1, Ordering::SeqCst);
+        }
+        fn on_command(&self, _c: &str) -> bool {
+            self.commands.fetch_add(1, Ordering::SeqCst);
+            !self.veto
+        }
+        fn provide_resources(&self, category: &str) -> Vec<serde_json::Value> {
+            vec![serde_json::json!({ "id": format!("x-{category}"), "title": "from plugin" })]
+        }
+    }
+
+    let (commands, states) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let mk = || Box::new(Counting { commands: commands.clone(), states: states.clone(), veto: true });
+    let state = os_next::core::models::ShowState::default();
+
+    // Granted nothing: never consulted, never vetoes, contributes nothing.
+    let mut pm = PluginManager::new();
+    pm.register_plugin_with_grants("counting".into(), mk(), PermissionSet::empty());
+    assert!(pm.check_command("NextSlide"));
+    pm.notify_state_change(&state);
+    assert!(pm.collect_resources("songs").is_empty());
+    assert_eq!((commands.load(Ordering::SeqCst), states.load(Ordering::SeqCst)), (0, 0));
+
+    // Granted exactly three things.
+    pm.set_grants(
+        "counting",
+        PermissionSet(vec![
+            PermissionRequest::simple("show.observe"),
+            PermissionRequest::with_categories("resources.provide", &["songs"]),
+        ]),
+    );
+    pm.notify_state_change(&state);
+    assert_eq!(states.load(Ordering::SeqCst), 1);
+    assert!(pm.check_command("NextSlide"), "observe/provide alone must not grant a veto");
+    assert_eq!(commands.load(Ordering::SeqCst), 0);
+    let songs = pm.collect_resources("songs");
+    assert_eq!(songs.len(), 1);
+    assert_eq!(songs[0]["_plugin"], "counting", "items are stamped with their source plugin");
+    assert!(pm.collect_resources("themes").is_empty(), "only the granted category");
+
+    // Intercept granted: it can veto -- but never an emergency command.
+    pm.set_grants("counting", PermissionSet(vec![PermissionRequest::simple("commands.intercept")]));
+    assert!(!pm.check_command(r#""NextSlide""#));
+    assert!(pm.check_command(r#""ToggleBlackout""#));
+    assert!(pm.check_command(r#"{"SetAlert":{"text":"fire"}}"#));
+    // A song titled like an emergency command does NOT get that bypass.
+    assert!(!pm.check_command(r#"{"AddToSchedule":{"title":"SetAlert ToggleBlackout"}}"#));
+
+    // Revoke: immediately inert.
+    assert!(pm.revoke("counting"));
+    let before = commands.load(Ordering::SeqCst);
+    assert!(pm.check_command(r#""NextSlide""#));
+    assert_eq!(commands.load(Ordering::SeqCst), before);
+    assert!(!pm.set_grants("not-loaded", PermissionSet::empty()));
+}
+
+/// The console's grant routes: who may call them, digest pinning, and that approval/
+/// change/revoke actually gate what the server will serve under /plugins/.
+#[tokio::test]
+async fn test_plugin_grant_routes_and_web_plugin_serving() {
+    let test_dir = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(test_dir.path().join("plugins.db").to_str().unwrap()).unwrap();
+    let web_dir = test_dir.path().join("web");
+    std::fs::create_dir_all(web_dir.join("plugins")).unwrap();
+    std::fs::write(web_dir.join("plugins/demo_gate.js"), b"export default { init() {} };").unwrap();
+
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        tx,
+        engine,
+        db: db.clone(),
+        asset_graph: Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media"))),
+        web_dir: web_dir.clone(),
+        media_dir: test_dir.path().join("media"),
+        data_dir: std::path::PathBuf::from("."),
+        skip_first_time_setup: true,
+        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
+        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
+        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "plugin_test_host_token".to_string(),
+        server_port: addr.port(),
+        https_port: None,
+        https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let app_for_plugin_token = app_state.clone();
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    let base = format!("http://{}", addr);
+    let client = reqwest::Client::new();
+    let host = "plugin_test_host_token";
+
+    // A paired remote, a persistent console credential and a plugin token.
+    let remote_token = "dev_tok_remote_for_plugin_test";
+    db.upsert_paired_device(&os_next::storage::PairedDevice {
+        id: "remote_x".into(), name: "Remote".into(), platform: "mobile-remote".into(),
+        paired_at: 0, last_seen: 0, token: remote_token.into(),
+    }).unwrap();
+    let console_cred = "console_tok_for_plugin_test";
+    db.upsert_paired_device(&os_next::storage::PairedDevice {
+        id: "console_x".into(), name: "Laptop".into(), platform: "console".into(),
+        paired_at: 0, last_seen: 0, token: os_next::storage::db::console_credential_hash(console_cred),
+    }).unwrap();
+    let plugin_token = app_for_plugin_token.issue_plugin_token("demo_gate").await;
+
+    // Only a console may list or decide: no credential, a remote's device token and a
+    // plugin token are all refused.
+    for headers in [vec![], vec![("x-device-token", remote_token)], vec![("x-host-token", remote_token)], vec![("x-plugin-token", plugin_token.as_str())]] {
+        let mut r = client.get(format!("{base}/api/plugins"));
+        for (k, v) in &headers { r = r.header(*k, *v); }
+        assert_eq!(r.send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED, "{headers:?}");
+    }
+    let resp = client.post(format!("{base}/api/plugins/demo_gate/approve")).header("x-plugin-token", &plugin_token)
+        .json(&serde_json::json!({ "digest": "x", "granted": [] })).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED, "a plugin must not approve itself");
+
+    // Discovered as pending and NOT served.
+    let list: serde_json::Value = client.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap().json().await.unwrap();
+    let demo = list.as_array().unwrap().iter().find(|p| p["id"] == "demo_gate").unwrap().clone();
+    assert_eq!(demo["state"], "pending");
+    assert_eq!(demo["kind"], "legacy-web");
+    let digest = demo["digest"].as_str().unwrap().to_string();
+    let served = |path: &'static str| {
+        let (client, base) = (client.clone(), base.clone());
+        async move { client.get(format!("{base}{path}")).send().await.unwrap().status() }
+    };
+    assert_eq!(served("/plugins/demo_gate.js").await, reqwest::StatusCode::NOT_FOUND);
+
+    // A stale digest is refused; a missing required permission is refused.
+    let approve = |token: &'static str, digest: String, granted: Vec<&'static str>| {
+        let (client, base) = (client.clone(), base.clone());
+        async move {
+            client.post(format!("{base}/api/plugins/demo_gate/approve")).header("x-host-token", token)
+                .json(&serde_json::json!({ "digest": digest, "granted": granted })).send().await.unwrap()
+        }
+    };
+    assert_eq!(approve(host, "stale".into(), vec!["ui.dom", "keyring.own"]).await.status(), reqwest::StatusCode::CONFLICT);
+    assert_eq!(approve(host, digest.clone(), vec!["ui.dom"]).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(served("/plugins/demo_gate.js").await, reqwest::StatusCode::NOT_FOUND);
+
+    // A console credential may approve; the audit trail says which console.
+    let resp = approve(console_cred, digest.clone(), vec!["ui.dom", "keyring.own"]).await;
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    assert_eq!(resp.json::<serde_json::Value>().await.unwrap()["state"], "active");
+    assert_eq!(served("/plugins/demo_gate.js").await, reqwest::StatusCode::OK);
+    // Nothing else under /plugins/ is reachable, manifests and unknown files included.
+    assert_eq!(served("/plugins/other.js").await, reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(served("/plugins/demo_gate.plugin.json").await, reqwest::StatusCode::NOT_FOUND);
+    let audit: serde_json::Value = client.get(format!("{base}/api/plugins/audit")).header("x-host-token", host).send().await.unwrap().json().await.unwrap();
+    assert!(audit.as_array().unwrap().iter().any(|a| a["action"] == "approved" && a["actor"] == "console:console_x"));
+
+    // Editing the script after approval stops it being served until it is reviewed again.
+    std::fs::write(web_dir.join("plugins/demo_gate.js"), b"export default { init() { /* swapped */ } };").unwrap();
+    assert_eq!(served("/plugins/demo_gate.js").await, reqwest::StatusCode::NOT_FOUND);
+    let list: serde_json::Value = client.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap().json().await.unwrap();
+    let demo = list.as_array().unwrap().iter().find(|p| p["id"] == "demo_gate").unwrap().clone();
+    assert_eq!(demo["state"], "changed");
+    let new_digest = demo["digest"].as_str().unwrap().to_string();
+    assert_ne!(new_digest, digest);
+    assert_eq!(approve(host, new_digest, vec!["ui.dom", "keyring.own"]).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(served("/plugins/demo_gate.js").await, reqwest::StatusCode::OK);
+
+    // Revoke stops it again.
+    let resp = client.post(format!("{base}/api/plugins/demo_gate/revoke")).header("x-host-token", host).send().await.unwrap();
+    assert_eq!(resp.json::<serde_json::Value>().await.unwrap()["state"], "revoked");
+    assert_eq!(served("/plugins/demo_gate.js").await, reqwest::StatusCode::NOT_FOUND);
+}
+
+/// Scoped plugin tokens: minted only by a console for an approved plugin, limited to what it was
+/// granted, checked against the live grant on every use, usable for commands and its keyring
+/// only within scope, and dead the moment the plugin is revoked.
+#[tokio::test]
+async fn test_scoped_plugin_tokens_for_commands_and_keyring() {
+    let test_dir = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(test_dir.path().join("scoped.db").to_str().unwrap()).unwrap();
+    let web_dir = test_dir.path().join("web");
+    std::fs::create_dir_all(web_dir.join("plugins")).unwrap();
+    std::fs::write(web_dir.join("plugins/scoped_demo.js"), b"export default {}").unwrap();
+    std::fs::write(
+        web_dir.join("plugins/scoped_demo.plugin.json"),
+        serde_json::json!({
+            "manifest_version": 1, "id": "scoped_demo", "name": "Scoped", "web": {"entry": "scoped_demo.js"},
+            "permissions": [
+                {"id": "keyring.own"},
+                {"id": "commands.send", "commands": ["NextSlide", "PrevSlide"], "optional": true}
+            ]
+        }).to_string(),
+    ).unwrap();
+
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        tx, engine, db: db.clone(),
+        asset_graph: Arc::new(os_next::media::AssetGraph::new(test_dir.path().join("media"))),
+        web_dir: web_dir.clone(), media_dir: test_dir.path().join("media"),
+        data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
+        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
+        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
+        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "scoped_host".to_string(), server_port: addr.port(),
+        https_port: None, https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{}", addr);
+    let c = reqwest::Client::new();
+    let host = "scoped_host";
+
+    let json = |r: reqwest::Response| async move { r.json::<serde_json::Value>().await.unwrap() };
+    let list = json(c.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap()).await;
+    let digest = list.as_array().unwrap().iter().find(|p| p["id"] == "scoped_demo").unwrap()["digest"].as_str().unwrap().to_string();
+
+    // Not approved yet: no token.
+    let mint = |body: serde_json::Value, token: &'static str| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugins/scoped_demo/token")).header("x-host-token", token).json(&body).send().await.unwrap() }
+    };
+    assert_eq!(mint(serde_json::json!({}), host).await.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // Approved with keyring.own only (the command permission is optional and declined).
+    let resp = c.post(format!("{base}/api/plugins/scoped_demo/approve")).header("x-host-token", host)
+        .json(&serde_json::json!({ "digest": digest, "granted": ["keyring.own"] })).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+    // Only a console can mint; a plugin token can't mint more.
+    assert_eq!(mint(serde_json::json!({}), "nope").await.status(), reqwest::StatusCode::UNAUTHORIZED);
+    // Asking for commands that weren't granted fails outright.
+    let cmd_scope = serde_json::json!({ "scopes": [{ "id": "commands.send", "commands": ["NextSlide"] }] });
+    assert_eq!(mint(cmd_scope.clone(), host).await.status(), reqwest::StatusCode::FORBIDDEN);
+    // A permission that can't ride a token is a 400.
+    assert_eq!(mint(serde_json::json!({ "scopes": [{ "id": "ui.dom" }] }), host).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    // The default token (keyring.own) works for the keyring but can't send commands.
+    let body = json(mint(serde_json::json!({}), host).await).await;
+    let kr_token = body["token"].as_str().unwrap().to_string();
+    let set = c.post(format!("{base}/api/keyring/set")).header("x-plugin-token", &kr_token)
+        .json(&serde_json::json!({ "service": "OpenSanctuary:Plugin:scoped_demo", "account": "a", "secret": "s" })).send().await.unwrap();
+    assert!(set.status().is_success() || set.status().is_server_error(), "keyring may be unavailable in CI, but must not be an auth error: {}", set.status());
+    assert_ne!(set.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let r = json(c.post(format!("{base}/api/command")).header("x-plugin-token", &kr_token).json(&serde_json::json!("NextSlide")).send().await.unwrap()).await;
+    assert_eq!(r["success"], false, "a keyring-only token must not send commands");
+
+    // Re-approve with the command permission, narrowed to NextSlide/PrevSlide.
+    let resp = c.post(format!("{base}/api/plugins/scoped_demo/approve")).header("x-host-token", host)
+        .json(&serde_json::json!({ "digest": digest, "granted": ["keyring.own", "commands.send"] })).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body = json(mint(cmd_scope, host).await).await;
+    let cmd_token = body["token"].as_str().unwrap().to_string();
+
+    // In scope: the command runs, with no console lock and no host token.
+    let r = json(c.post(format!("{base}/api/command")).header("x-plugin-token", &cmd_token).json(&serde_json::json!("NextSlide")).send().await.unwrap()).await;
+    assert_eq!(r["success"], true, "{r}");
+    // Out of scope (granted to the plugin? no -- and not on the token): refused, and audited once.
+    for _ in 0..3 {
+        let r = json(c.post(format!("{base}/api/command")).header("x-plugin-token", &cmd_token).json(&serde_json::json!({ "NewSchedule": null })).send().await.unwrap()).await;
+        assert_eq!(r["success"], false);
+    }
+    let audit = json(c.get(format!("{base}/api/plugins/audit")).header("x-host-token", host).send().await.unwrap()).await;
+    let denied_new_schedule = audit.as_array().unwrap().iter()
+        .filter(|a| a["action"] == "denied_call" && a["detail_json"].as_str().unwrap_or("").contains("NewSchedule"))
+        .count();
+    assert_eq!(denied_new_schedule, 1, "repeated denials of the same command are coalesced");
+
+    // A token narrows with the live grant: shrink the grant and the token loses the command.
+    let resp = c.post(format!("{base}/api/plugins/scoped_demo/approve")).header("x-host-token", host)
+        .json(&serde_json::json!({ "digest": digest, "granted": ["keyring.own"] })).send().await.unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let r = json(c.post(format!("{base}/api/command")).header("x-plugin-token", &cmd_token).json(&serde_json::json!("NextSlide")).send().await.unwrap()).await;
+    assert_eq!(r["success"], false, "shrinking the grant must shrink tokens already issued");
+
+    // Revoke kills every token at once.
+    c.post(format!("{base}/api/plugins/scoped_demo/revoke")).header("x-host-token", host).send().await.unwrap();
+    let r = json(c.post(format!("{base}/api/command")).header("x-plugin-token", &kr_token).json(&serde_json::json!("NextSlide")).send().await.unwrap()).await;
+    assert_eq!(r["success"], false);
+    let set = c.post(format!("{base}/api/keyring/get")).header("x-plugin-token", &kr_token)
+        .json(&serde_json::json!({ "service": "OpenSanctuary:Plugin:scoped_demo", "account": "a" })).send().await.unwrap();
+    assert_eq!(set.status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+/// Loads a real ABI 2 cdylib (`examples/plugin_observer.rs`) through the whole path: manifest
+/// discovery, digest pinning, approval, `dlopen`, the `PluginHost` handle, and per-call gating.
+/// Ignored by default because it builds the example; run with
+/// `cargo test --release --test core_tests real_cdylib -- --ignored`.
+#[tokio::test]
+#[ignore]
+async fn test_real_cdylib_plugin_abi2_end_to_end() {
+    use os_next::core::plugin_permissions::{platform_key, sha256_hex, PermissionRequest, PermissionSet};
+    use os_next::core::plugins::PluginManager;
+
+    // Build the example plugin in the profile this test runs under.
+    let mut build = std::process::Command::new(env!("CARGO"));
+    build.args(["build", "--example", "plugin_observer"]);
+    if !cfg!(debug_assertions) {
+        build.arg("--release");
+    }
+    assert!(build.status().expect("run cargo").success(), "building the example plugin failed");
+    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    let lib_name = format!("{}plugin_observer{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_SUFFIX);
+    let built = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(profile).join("examples").join(&lib_name);
+    let lib_bytes = std::fs::read(&built).unwrap_or_else(|e| panic!("{built:?}: {e}"));
+
+    // <plugins>/org.example.observer/{plugin.json, lib/<library>}
+    let tmp = tempfile::tempdir().unwrap();
+    let plugins = tmp.path().join("plugins");
+    let dir = plugins.join("org.example.observer");
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    std::fs::write(dir.join("lib").join(&lib_name), &lib_bytes).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(dir.join("lib").join(&lib_name), std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    std::fs::write(
+        dir.join("plugin.json"),
+        serde_json::json!({
+            "manifest_version": 1, "id": "org.example.observer", "name": "Observer", "version": "0.1.0",
+            "backend": {"abi": 2, "libraries": { platform_key(): {"path": format!("lib/{lib_name}"), "sha256": sha256_hex(&lib_bytes)} }},
+            "permissions": [
+                {"id": "show.observe"}, {"id": "filesystem.plugin_data"}, {"id": "keyring.own", "optional": true},
+                {"id": "commands.send", "commands": ["NextSlide"], "optional": true}
+            ]
+        }).to_string(),
+    ).unwrap();
+
+    let db = os_next::storage::Database::new(tmp.path().join("abi2.db").to_str().unwrap()).unwrap();
+    let found = os_next::core::plugin_registry::discover(&plugins, &tmp.path().join("web"), env!("CARGO_PKG_VERSION"));
+    os_next::core::plugin_registry::sync(&db, &found);
+    let d = found.iter().find(|d| d.id == "org.example.observer").unwrap();
+    assert!(d.error.is_none(), "{:?}", d.error);
+    assert_eq!(d.abi, 2);
+
+    // Unapproved: nothing loads.
+    assert!(os_next::core::plugin_registry::approved_natives(&db, &found).is_empty());
+    // Approve observe + data dir only.
+    let granted = vec![PermissionRequest::simple("show.observe"), PermissionRequest::simple("filesystem.plugin_data")];
+    let row = db.get_plugin_grant("org.example.observer").unwrap().unwrap();
+    db.set_plugin_decision("org.example.observer", "approved", &serde_json::to_string(&granted).unwrap(),
+        row.observed_manifest_sha256.as_deref(), Some(&row.observed_digest), None, "test").unwrap();
+    let approved = os_next::core::plugin_registry::approved_natives(&db, &found);
+    assert_eq!(approved.len(), 1);
+
+    // A server for the host handle to talk to.
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let data_dir = tmp.path().join("data");
+    let app_state = os_next::api::ws::AppState {
+        tx, engine, db: db.clone(),
+        asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
+        web_dir: std::path::PathBuf::from("web"), media_dir: tmp.path().join("media"),
+        data_dir: data_dir.clone(), skip_first_time_setup: true,
+        plugin_manager: Arc::new(PluginManager::new()),
+        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
+        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "abi2_host".to_string(), server_port: 0, https_port: None, https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let slot: os_next::api::plugin_host::AppSlot = Arc::new(std::sync::OnceLock::new());
+    slot.set(app_state.clone()).ok();
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel(8);
+    let factory = |id: &str, grants: Arc<os_next::core::plugins::GrantCell>| -> Arc<dyn os_next::core::plugins::PluginHost> {
+        Arc::new(os_next::api::plugin_host::AppPluginHost::new(id, grants, slot.clone(), cmd_tx.clone()))
+    };
+
+    // Without a host factory an ABI 2 plugin is refused rather than loaded half-working.
+    let mut refused = PluginManager::new();
+    refused.load_approved(os_next::core::plugin_registry::approved_natives(&db, &found), None);
+    assert_eq!(refused.plugin_count(), 0);
+
+    let mut pm = PluginManager::new();
+    pm.load_approved(approved, Some(&factory));
+    assert_eq!(pm.plugin_count(), 1, "the real library should load");
+    assert!(pm.is_loaded("org.example.observer"));
+
+    // The plugin's hook runs and records what the host let it do.
+    let observed = data_dir.join("plugin-data/org.example.observer/observed.txt");
+    pm.notify_state_change(&os_next::core::models::ShowState::default());
+    assert_eq!(std::fs::read_to_string(&observed).unwrap().trim(), "n=1 snapshot=ok keyring=denied send=denied");
+    assert!(cmd_rx.try_recv().is_err(), "nothing was granted to send");
+
+    // Grant it NextSlide: the command is queued, and only that command.
+    pm.set_grants("org.example.observer", PermissionSet(vec![
+        PermissionRequest::simple("show.observe"), PermissionRequest::simple("filesystem.plugin_data"),
+        PermissionRequest { id: "commands.send".into(), commands: vec!["NextSlide".into()], ..Default::default() },
+    ]));
+    pm.notify_state_change(&os_next::core::models::ShowState::default());
+    assert_eq!(std::fs::read_to_string(&observed).unwrap().trim(), "n=2 snapshot=ok keyring=denied send=ok");
+    let queued = cmd_rx.try_recv().expect("the granted command should be queued");
+    assert_eq!((queued.plugin_id.as_str(), queued.variant.as_str()), ("org.example.observer", "NextSlide"));
+    assert!(pm.command_allowed("org.example.observer", "NextSlide"));
+    assert!(!pm.command_allowed("org.example.observer", "NewSchedule"));
+
+    // Revoke: the hook is no longer even called, and a queued command would be dropped.
+    assert!(pm.revoke("org.example.observer"));
+    pm.notify_state_change(&os_next::core::models::ShowState::default());
+    assert_eq!(std::fs::read_to_string(&observed).unwrap().trim(), "n=2 snapshot=ok keyring=denied send=ok");
+    assert!(!pm.command_allowed("org.example.observer", "NextSlide"));
+
+    // Swap the binary on disk: it stops being loadable until it is reviewed again.
+    // (Replace the file, don't overwrite it in place: the loaded library is memory-mapped, and
+    // truncating a mapped file takes the whole process down with SIGBUS.)
+    std::fs::remove_file(dir.join("lib").join(&lib_name)).unwrap();
+    std::fs::write(dir.join("lib").join(&lib_name), b"swapped").unwrap();
+    let after = os_next::core::plugin_registry::discover(&plugins, &tmp.path().join("web"), env!("CARGO_PKG_VERSION"));
+    assert!(after.iter().find(|d| d.id == "org.example.observer").unwrap().error.is_some(), "digest/sha256 mismatch");
+    assert!(os_next::core::plugin_registry::approved_natives(&db, &after).is_empty());
+}
+
+/// Sandboxed web plugins are served from /plugin-frame/<id>/ only while approved and unchanged,
+/// with a CSP that allows nothing beyond what was granted, and nothing escapes the folder.
+#[tokio::test]
+async fn test_sandboxed_plugin_frame_serving_and_csp() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("sbx.db").to_str().unwrap()).unwrap();
+    let web_dir = tmp.path().join("web");
+    let pdir = web_dir.join("plugins/sbx_demo");
+    std::fs::create_dir_all(pdir.join("ui")).unwrap();
+    std::fs::write(pdir.join("plugin.json"), serde_json::json!({
+        "manifest_version": 1, "id": "sbx_demo", "name": "Sandboxed",
+        "web": {"entry": "index.html", "sandbox": true},
+        "permissions": [
+            {"id": "show.observe"},
+            {"id": "network.outbound", "hosts": ["192.168.1.50:6454", "evil.example/\"; script-src *"], "optional": true}
+        ]
+    }).to_string()).unwrap();
+    std::fs::write(pdir.join("index.html"), b"<script src=\"ui/app.js\"></script>").unwrap();
+    std::fs::write(pdir.join("ui/app.js"), b"parent.postMessage('hi','*')").unwrap();
+    std::fs::write(web_dir.join("plugins/secret.txt"), b"not part of any plugin").unwrap();
+
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        tx, engine, db: db.clone(),
+        asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
+        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"),
+        data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
+        plugin_manager: Arc::new(os_next::core::plugins::PluginManager::new()),
+        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
+        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "sbx_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{}", addr);
+    let c = reqwest::Client::new();
+    let host = "sbx_host";
+    let get = |path: &'static str| { let (c, base) = (c.clone(), base.clone()); async move { c.get(format!("{base}{path}")).send().await.unwrap() } };
+
+    // Discovered as a sandboxed plugin; not served until approved.
+    let list: serde_json::Value = c.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap().json().await.unwrap();
+    let p = list.as_array().unwrap().iter().find(|p| p["id"] == "sbx_demo").unwrap().clone();
+    assert_eq!(p["kind"], "sandbox");
+    assert_eq!(p["sandboxed"], true);
+    assert_eq!(p["entry"], "index.html");
+    assert_eq!(p["state"], "pending");
+    assert_eq!(get("/plugin-frame/sbx_demo/index.html").await.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // Approve observe only (the network permission is declined).
+    let digest = p["digest"].as_str().unwrap();
+    let r = c.post(format!("{base}/api/plugins/sbx_demo/approve")).header("x-host-token", host)
+        .json(&serde_json::json!({ "digest": digest, "granted": ["show.observe"] })).send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let r = get("/plugin-frame/sbx_demo/index.html").await;
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let csp = r.headers()["content-security-policy"].to_str().unwrap().to_string();
+    assert!(csp.contains("connect-src 'none'"), "no network without a grant: {csp}");
+    assert!(csp.contains("sandbox allow-scripts") && csp.contains("default-src 'none'"), "{csp}");
+    assert_eq!(r.headers()["x-frame-options"], "SAMEORIGIN");
+    assert_eq!(get("/plugin-frame/sbx_demo/ui/app.js").await.status(), reqwest::StatusCode::OK);
+
+    // Nothing outside the folder, and the raw folder isn't served as an ordinary static path.
+    for path in ["/plugin-frame/sbx_demo/../secret.txt", "/plugin-frame/sbx_demo/%2e%2e/secret.txt", "/plugin-frame/sbx_demo/..%2fsecret.txt",
+                 "/plugin-frame/nope/index.html", "/plugin-frame/sbx_demo/plugin.json.bak",
+                 "/plugins/sbx_demo/index.html", "/plugins/secret.txt"] {
+        let status = c.get(format!("{base}{path}")).send().await.unwrap().status();
+        assert_eq!(status, reqwest::StatusCode::NOT_FOUND, "{path}");
+    }
+
+    // Grant a network host: a well-formed one reaches the CSP, a malicious one is dropped.
+    let r = c.post(format!("{base}/api/plugins/sbx_demo/approve")).header("x-host-token", host)
+        .json(&serde_json::json!({ "digest": digest, "granted": ["show.observe", "network.outbound"] })).send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let csp = get("/plugin-frame/sbx_demo/index.html").await.headers()["content-security-policy"].to_str().unwrap().to_string();
+    assert!(csp.contains("https://192.168.1.50:6454"), "{csp}");
+    assert!(!csp.contains("evil.example") && !csp.contains("script-src *"), "a hostile host must not reach the CSP: {csp}");
+
+    // A symlink dropped into the folder after approval stops it being served at all (it could
+    // point anywhere), as does editing a file: the folder no longer matches what was reviewed.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("/etc/hostname", pdir.join("ui/link.txt")).unwrap();
+        assert_eq!(get("/plugin-frame/sbx_demo/index.html").await.status(), reqwest::StatusCode::NOT_FOUND);
+        assert_eq!(get("/plugin-frame/sbx_demo/ui/link.txt").await.status(), reqwest::StatusCode::NOT_FOUND);
+        std::fs::remove_file(pdir.join("ui/link.txt")).unwrap();
+        assert_eq!(get("/plugin-frame/sbx_demo/index.html").await.status(), reqwest::StatusCode::OK);
+    }
+    std::fs::write(pdir.join("ui/app.js"), b"alert('swapped')").unwrap();
+    assert_eq!(get("/plugin-frame/sbx_demo/index.html").await.status(), reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(get("/plugin-frame/sbx_demo/ui/app.js").await.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+/// REST and WebSocket run commands through one pipeline: the same plugin veto on the same bare
+/// command text, the same shorthand expansion, the same credential rules (including that a paired
+/// display can't send), and a plugin's queued command takes that path too.
+#[tokio::test]
+async fn test_rest_ws_and_plugin_commands_share_one_pipeline() {
+    use futures_util::{SinkExt, StreamExt};
+    use os_next::core::plugins::{OsPlugin, PluginManager};
+    use std::sync::Mutex;
+
+    struct Recorder(Arc<Mutex<Vec<String>>>, bool);
+    impl OsPlugin for Recorder {
+        fn name(&self) -> &'static str { "recorder" }
+        fn on_state_change(&self, _s: &os_next::core::models::ShowState) {}
+        fn on_command(&self, cmd: &str) -> bool {
+            self.0.lock().unwrap().push(cmd.to_string());
+            !self.1
+        }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("pipe.db").to_str().unwrap()).unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut pm = PluginManager::new();
+    pm.register_plugin(Box::new(Recorder(seen.clone(), false)));
+    let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
+    let engine = Arc::new(ShowEngine::new(event_log));
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        tx, engine: engine.clone(), db: db.clone(),
+        asset_graph: Arc::new(os_next::media::AssetGraph::new(tmp.path().join("media"))),
+        web_dir: std::path::PathBuf::from("web"), media_dir: tmp.path().join("media"),
+        data_dir: std::path::PathBuf::from("."), skip_first_time_setup: true,
+        plugin_manager: Arc::new(pm),
+        bible_providers: os_next::storage::BibleProviderRegistry::new_default(),
+        media_search: Arc::new(os_next::storage::MediaSearchRegistry::new_default()),
+        last_broadcast_schedule_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        display_manager: None,
+        plugin_tokens: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        host_session_token: "pipe_host".to_string(), server_port: addr.port(), https_port: None, https_enabled: false,
+        pairing_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        active_console: Arc::new(std::sync::Mutex::new(None)),
+        pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
+        update_status: Arc::new(std::sync::Mutex::new(None)),
+        ytdlp_update_status: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let app_for_direct = app_state.clone();
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+
+    db.upsert_paired_device(&os_next::storage::PairedDevice { id: "tv".into(), name: "TV".into(), platform: "android-tv".into(), paired_at: 0, last_seen: 0, token: "tv_tok".into() }).unwrap();
+    db.upsert_paired_device(&os_next::storage::PairedDevice { id: "rem".into(), name: "R".into(), platform: "mobile-remote".into(), paired_at: 0, last_seen: 0, token: "rem_tok".into() }).unwrap();
+
+    let blackout = || engine.snapshot().state.is_blackout;
+    let rest = |headers: Vec<(&'static str, &'static str)>, body: serde_json::Value| {
+        let (c, base) = (c.clone(), base.clone());
+        async move {
+            let mut r = c.post(format!("{base}/api/command"));
+            for (k, v) in headers { r = r.header(k, v); }
+            r.json(&body).send().await.unwrap().json::<serde_json::Value>().await.unwrap()
+        }
+    };
+    let console = vec![("x-host-token", "pipe_host"), ("x-console-session-id", "s1")];
+
+    // Credential rules, REST: a paired display can't send; a remote and the console can.
+    let r = rest(vec![("x-device-token", "tv_tok")], serde_json::json!("ToggleBlackout")).await;
+    assert_eq!((r["success"].as_bool(), r["error"].as_str()), (Some(false), Some("display_token_cannot_control")));
+    assert!(!blackout());
+    assert_eq!(rest(vec![("x-device-token", "nope")], serde_json::json!("ToggleBlackout")).await["success"], false);
+    assert_eq!(rest(vec![("x-device-token", "rem_tok")], serde_json::json!("ToggleBlackout")).await["success"], true);
+    assert!(blackout());
+    assert_eq!(rest(vec![("x-host-token", "pipe_host")], serde_json::json!("ToggleBlackout")).await["error"], "Missing x-console-session-id");
+    assert_eq!(rest(console.clone(), serde_json::json!("ToggleBlackout")).await["success"], true);
+    assert!(!blackout());
+    // A second console is locked out with its own reason.
+    assert_eq!(rest(vec![("x-host-token", "pipe_host"), ("x-console-session-id", "s2")], serde_json::json!("ToggleBlackout")).await["error"], "console_locked");
+
+    // The same command over WebSocket takes the same path (and the same plugin text).
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await.unwrap();
+    let _ = ws.next().await;
+    ws.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({ "cmd": "ToggleBlackout", "device_token": "rem_tok" }).to_string())).await.unwrap();
+    ws.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({ "cmd": "ToggleBlackout", "device_token": "tv_tok" }).to_string())).await.unwrap(); // display: ignored
+    for _ in 0..40 { if blackout() { break; } tokio::time::sleep(std::time::Duration::from_millis(25)).await; }
+    assert!(blackout(), "a paired remote's WS command ran");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(blackout(), "the display's WS command must not have toggled it back");
+
+    // Emergency commands are never shown to plugins for a veto; ordinary ones are, and every door
+    // hands them the identical bare text: REST, WebSocket and a plugin's own queued command.
+    assert!(seen.lock().unwrap().is_empty(), "ToggleBlackout can't be vetoed, so plugins aren't asked");
+    rest(console.clone(), serde_json::json!("NextSlide")).await;
+    ws.send(tokio_tungstenite::tungstenite::Message::Text(
+        serde_json::json!({ "cmd": "NextSlide", "device_token": "rem_tok" }).to_string())).await.unwrap();
+    let origin = os_next::api::command_pipeline::CommandOrigin::Plugin { id: "recorder".into() };
+    os_next::api::command_pipeline::run_command_pipeline(&app_for_direct, serde_json::json!("NextSlide"), &origin).unwrap();
+    for _ in 0..40 { if seen.lock().unwrap().len() >= 3 { break; } tokio::time::sleep(std::time::Duration::from_millis(25)).await; }
+    let log = seen.lock().unwrap().clone();
+    assert_eq!(log, vec!["\"NextSlide\"".to_string(); 3], "REST, WS and the plugin path all hand plugins the same text");
+    // And an unparseable payload is a rejection, not a crash.
+    assert!(os_next::api::command_pipeline::run_command_pipeline(&app_for_direct, serde_json::json!({"Nope": 1}), &origin).is_err());
 }

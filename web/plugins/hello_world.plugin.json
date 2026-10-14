@@ -1,0 +1,13 @@
+{
+  "manifest_version": 1,
+  "id": "hello_world",
+  "name": "Hello World Plugin",
+  "version": "1.0.0",
+  "publisher": "OpenSanctuary",
+  "description": "A demo plugin that adds a button to the console and stores a value in its private keyring namespace.",
+  "web": { "entry": "hello_world.js" },
+  "permissions": [
+    { "id": "ui.dom", "reason": "Adds a button to the console toolbar" },
+    { "id": "keyring.own", "reason": "Stores its own demo secret" }
+  ]
+}

@@ -20,6 +20,62 @@ extension point either.
 
 ---
 
+## Permissions (read this first)
+
+A plugin does nothing until the operator approves it in **Settings > Plugins**. The full
+design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_PERMISSIONS.md).
+
+- **What is enforced.** A backend plugin's hooks are only called if it was granted the
+  matching permission: `commands.intercept` (`on_command`), `show.observe`
+  (`on_state_change`), `resources.provide` for a category (`provide_resources`). A web
+  plugin script is only served from `/plugins/` while approved, and its keyring token is only
+  minted if it was granted `keyring.own`. Emergency commands (`ToggleBlackout`,
+  `ToggleClearText`, `ToggleLogo`, `SetAlert`) can never be vetoed, decided on the parsed
+  command, not on text that merely mentions them.
+- **What is not.** A native library runs inside the server with its full privileges, so
+  approving one is a trust decision: the list of permissions describes what the plugin
+  *says* it will do, and `network.*`, `filesystem.*` and `process.*` are shown as "declared,
+  not enforced". A web plugin that runs in the console page itself (`ui.dom`) has the same
+  access as the operator.
+- **Pinning.** Approval is pinned to a SHA-256 of what was reviewed. If the file changes it
+  stops running (`changed`) until it is reviewed again. Only a console (the host token or a
+  persistent console credential) can approve, deny or revoke; paired displays, remotes and
+  plugin tokens cannot. Every decision is recorded in the audit log.
+- **Manifest.** Put a `plugin.json` next to the plugin (see `web/plugins/hello_world.plugin.json`):
+  `manifest_version`, `id`, `name`, `permissions` (each with an optional `reason`), and a
+  `backend.libraries` map of `"<os>-<arch>"` to `{path, sha256}` for a native plugin, laid out as
+  `<plugins dir>/<id>/plugin.json` + the library, or a `web.entry` for a console script. Unknown
+  permissions are rejected, never ignored.
+- **ABI 2 (`PluginHost`).** A native plugin built with `os_next::export_plugin!` gets a host
+  handle in its constructor instead of reaching around the server. Each call is checked against
+  its live grant: `snapshot()` (`show.observe`), `send_command()` (`commands.send`, only the
+  granted command names, rate-limited, queued and run through the normal veto path, never
+  inline), `library_list()` (`library.read`), `keyring_*` (`keyring.own`), `data_dir()`
+  (`filesystem.plugin_data`). See `examples/plugin_observer.rs`, a real plugin used as the
+  template and by the dlopen test. The interface is a Rust trait object, so the plugin must be
+  built with the same compiler and OS-Next version as the host; the host refuses a library whose
+  `OS_PLUGIN_HOST_VERSION` differs. The frozen v1 `OsPlugin` trait never changes.
+  **Update a plugin by replacing the file, not overwriting it in place:** the loaded library is
+  memory-mapped, and truncating it crashes the server.
+- **Sandboxed web plugins** (`web.sandbox: true`, a folder `web/plugins/<id>/` with `plugin.json`
+  and an HTML entry page; see `web/plugins/sandbox_demo/`). The page runs in an iframe with
+  `sandbox="allow-scripts"` and no `allow-same-origin`, so it has an opaque origin: no access to the
+  console, its storage, the host token or the console credential. The server serves it from
+  `/plugin-frame/<id>/` only while approved and the whole folder still hashes to what was reviewed
+  (symlinks and oversized folders are refused), with a CSP that forbids everything except the
+  `network.outbound` hosts it was granted. It talks to the console only through `postMessage`
+  (`getState`, `sendCommand`, `keyring.*`, `ui.resize`, `log`, and a `state` event with
+  `show.observe`); the console's bridge checks each request against the grant and holds the
+  plugin's scoped token, and the server re-checks commands and keyring access against that token.
+  This is the only plugin type where the permission list is actually enforced end to end; prefer it
+  over a same-realm script (`ui.dom`) whenever the plugin only needs a panel and a few actions.
+- **Existing plugins.** Loose `.so`/`.dll`/`.dylib` files already installed when permissions
+  shipped are approved once with the legacy v1 permission set and flagged for review; anything
+  that appears afterwards starts as pending. A web script with no manifest is treated as asking
+  for full console access.
+
+---
+
 ## Backend plugins (Rust, native dynamic libraries)
 
 **What a plugin is:** a native shared library (`.so` on Linux, `.dll` on Windows, `.dylib` on

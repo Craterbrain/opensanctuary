@@ -435,8 +435,47 @@ impl Database {
                 last_seen INTEGER NOT NULL,
                 token TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_paired_devices_token ON paired_devices(token);",
+            CREATE INDEX IF NOT EXISTS idx_paired_devices_token ON paired_devices(token);
+
+            -- Plugin permission grants (docs/PLUGIN_PERMISSIONS.md). `observed_*` is what is on
+            -- disk now; `approved_*` is what the operator reviewed. A plugin is active only
+            -- while status = 'approved' AND observed_digest = approved_digest.
+            CREATE TABLE IF NOT EXISTS plugin_grants (
+                plugin_id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL CHECK (kind IN ('native','web','legacy-native','legacy-web','sandbox')),
+                name TEXT NOT NULL,
+                version TEXT,
+                source_path TEXT NOT NULL,
+                observed_manifest_sha256 TEXT,
+                observed_digest TEXT NOT NULL,
+                observed_signer TEXT,
+                approved_signer TEXT,
+                requested_json TEXT NOT NULL DEFAULT '[]',
+                error TEXT,
+                approved_manifest_sha256 TEXT,
+                approved_digest TEXT,
+                status TEXT NOT NULL CHECK (status IN ('pending','approved','denied','revoked')),
+                granted_json TEXT NOT NULL DEFAULT '[]',
+                decided_at INTEGER,
+                decided_by TEXT,
+                first_seen INTEGER NOT NULL,
+                last_seen INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS plugin_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts_ms INTEGER NOT NULL,
+                plugin_id TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                action TEXT NOT NULL,
+                detail_json TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_plugin_audit_plugin ON plugin_audit(plugin_id, ts_ms);",
         )?;
+
+        // Signer pinning columns for plugin grants (added after the table first shipped)
+        let _ = conn.execute("ALTER TABLE plugin_grants ADD COLUMN observed_signer TEXT", []);
+        let _ = conn.execute("ALTER TABLE plugin_grants ADD COLUMN approved_signer TEXT", []);
 
         // Ensure loop_playback exists on older databases
         let _ = conn.execute("ALTER TABLE media ADD COLUMN loop_playback INTEGER DEFAULT 0", []);

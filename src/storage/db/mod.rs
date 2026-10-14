@@ -9,10 +9,12 @@ mod settings;
 mod keyring;
 mod events;
 mod paired_devices;
+mod plugins;
 mod ccli;
 
 pub use core::Database;
 pub use bibles::InstalledBibleInfo;
+pub use plugins::{ObservedPlugin, PluginAuditRow, PluginGrantRow};
 pub use paired_devices::{console_credential_hash, PairedDevice, CONSOLE_PLATFORM, REMOTE_CONTROL_PLATFORM};
 pub use ccli::CcliUsageRow;
 

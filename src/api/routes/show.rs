@@ -6,10 +6,7 @@ use axum::{Json, Router};
 use serde::Serialize;
 
 use crate::api::ws::AppState;
-use crate::core::commands::ShowCommand;
-use crate::core::models::ToScheduleItem;
 
-use super::common::require_host_token_and_console_lock;
 
 pub(super) async fn get_state(State(app): State<AppState>) -> impl IntoResponse {
     Json(app.engine.snapshot())
@@ -67,134 +64,41 @@ pub(super) async fn post_command(
     // docs/CLIENT_PAIRING.md "Console (host) authentication" / "Remote
     // console access") — only the real operator console ever obtains the
     // host token, and the session id enforces "one console at a time."
-    if let Some(token_header) = headers.get("x-device-token") {
-        let token = token_header.to_str().unwrap_or("").trim();
-        match app.db.get_paired_device_by_token(token) {
-            Ok(Some(dev)) if dev.can_control_show() => {
-                let _ = app.db.touch_paired_device(&dev.id);
-            }
-            Ok(Some(_)) => {
-                tracing::warn!("REST command rejected: paired display tokens cannot send show commands");
-                return Json(CommandResponse {
-                    success: false,
-                    state: app.engine.snapshot(),
-                    events: vec![],
-                    error: Some("display_token_cannot_control".to_string()),
-                });
-            }
-            _ => {
-                tracing::warn!("REST command rejected: invalid/unknown device token");
-                return Json(CommandResponse {
-                    success: false,
-                    state: app.engine.snapshot(),
-                    events: vec![],
-                    error: None,
-                });
-            }
-        }
-    } else if let Err((_, Json(err_body))) = require_host_token_and_console_lock(&headers, &app) {
-        let reason = err_body.get("error").and_then(|v| v.as_str()).map(|s| s.to_string());
-        tracing::warn!("REST command rejected: {}", reason.as_deref().unwrap_or("missing/invalid host token"));
-        return Json(CommandResponse {
-            success: false,
-            state: app.engine.snapshot(),
-            events: vec![],
-            error: reason,
-        });
-    }
+    use crate::api::command_pipeline::{authenticate_command, run_command_pipeline, CommandCredential};
+    let header = |name: &str| headers.get(name).map(|v| v.to_str().unwrap_or("").to_string());
 
-    // Intercept frontend payload: { "AddToSchedule": { "item_type": "...", "item_id": "..." } }
-    if let Some(add_cmd) = value.get("AddToSchedule") {
-        if add_cmd.get("item_type").is_some() && add_cmd.get("item_id").is_some() {
-            let item_type = add_cmd["item_type"].as_str().unwrap_or("");
-            let item_id = add_cmd["item_id"].as_str().unwrap_or("");
+    // Which credential the caller presented. A request with no plugin or device token is
+    // required to present `x-host-token` plus `x-console-session-id` (docs/CLIENT_PAIRING.md
+    // "Console (host) authentication" / "Remote console access"): only the real operator console
+    // ever obtains the host token, and the session id enforces "one console at a time."
+    let plugin_token = header("x-plugin-token");
+    let device_token = header("x-device-token");
+    let host_token = header("x-host-token").unwrap_or_default();
+    let session_id = header("x-console-session-id").unwrap_or_default();
+    let credential = if let Some(t) = plugin_token.as_deref() {
+        CommandCredential::Plugin { token: t }
+    } else if let Some(t) = device_token.as_deref() {
+        CommandCredential::Device { token: t }
+    } else {
+        CommandCredential::Host { token: &host_token, session_id: &session_id }
+    };
 
-            let sched_item = match item_type {
-                "song" => app.db.get_song_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                "scripture" => app.db.get_scripture_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                "media" => app.db.get_media_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                "presentation" => app.db.get_presentation_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                _ => None,
-            };
+    let rejected = |app: &AppState, error: Option<String>| {
+        Json(CommandResponse { success: false, state: app.engine.snapshot(), events: vec![], error })
+    };
 
-            if let Some(mut item) = sched_item {
-                apply_default_theme_if_unset(&mut item, &app.db);
-                if let Ok(item_val) = serde_json::to_value(item) {
-                    let mut new_cmd = serde_json::Map::new();
-                    new_cmd.insert("AddToSchedule".to_string(), item_val);
-                    value = serde_json::Value::Object(new_cmd);
-                }
-            } else {
-                tracing::error!("Item not found in DB for AddToSchedule: {} {}", item_type, item_id);
-            }
-        }
-    }
-
-    // Intercept frontend payload: { "StageItem": { "item_type": "...", "item_id": "..." } }
-    // — a Library Preview click staging an item that isn't in the schedule
-    // yet, distinct from the real StageItem { item_index, slide_index } shape.
-    if let Some(stage_cmd) = value.get("StageItem") {
-        if stage_cmd.get("item_type").is_some() && stage_cmd.get("item_id").is_some() {
-            let item_type = stage_cmd["item_type"].as_str().unwrap_or("");
-            let item_id = stage_cmd["item_id"].as_str().unwrap_or("");
-
-            let sched_item = match item_type {
-                "song" => app.db.get_song_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                "scripture" => app.db.get_scripture_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                "media" => app.db.get_media_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                "presentation" => app.db.get_presentation_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-                _ => None,
-            };
-
-            if let Some(item) = sched_item {
-                if let Ok(item_val) = serde_json::to_value(item) {
-                    let mut new_cmd = serde_json::Map::new();
-                    new_cmd.insert("StageItemDirect".to_string(), item_val);
-                    value = serde_json::Value::Object(new_cmd);
-                }
-            } else {
-                tracing::error!("Item not found in DB for StageItem preview: {} {}", item_type, item_id);
-            }
-        }
-    }
-
-    let cmd_str = serde_json::to_string(&value).unwrap_or_default();
-    if !app.plugin_manager.check_command(&cmd_str) {
-        tracing::warn!("REST command blocked by plugin: {}", cmd_str);
-        return Json(CommandResponse {
-            success: false,
-            state: app.engine.snapshot(),
-            events: vec![],
-            error: None,
-        });
-    }
-
-    let cmd: ShowCommand = match serde_json::from_value(value.clone()) {
-        Ok(c) => c,
+    let origin = match authenticate_command(&app, &credential, &value).await {
+        Ok(o) => o,
         Err(e) => {
-            tracing::error!("Failed to parse command: {} (Payload: {})", e, value);
-            return Json(CommandResponse {
-                success: false,
-                state: app.engine.snapshot(),
-                events: vec![],
-                error: None,
-            });
+            tracing::warn!("REST command rejected: {}", e.log_line());
+            return rejected(&app, e.reason());
         }
     };
 
-    let events = app.engine.execute_command(cmd);
-    for env in &events {
-        if let Err(e) = app.db.save_event(env) {
-            tracing::warn!("Failed to persist event log entry #{}: {}", env.sequence_number, e);
-        }
+    match run_command_pipeline(&app, value, &origin) {
+        Ok(done) => Json(CommandResponse { success: true, state: done.state, events: done.events, error: None }),
+        Err(_) => rejected(&app, None),
     }
-    let state = crate::api::ws::broadcast_snapshot(&app);
-    Json(CommandResponse {
-        success: true,
-        state,
-        events,
-        error: None,
-    })
 }
 
 #[derive(Serialize)]
