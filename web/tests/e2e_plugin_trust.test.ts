@@ -44,7 +44,8 @@ describe.skipIf(!hasMinisign)("E2E: publisher trust, badges and revocation", () 
     await install(signedPackage(work, "acme1", "acme_one", { listFiles: true, keyName: "acme", publisher: "Acme Ltd" }));
     await card("acme_one").waitFor({ state: "visible", timeout: 10000 });
     expect(await badge("acme_one")).toBe("New publisher");
-    expect(await card("acme_one").locator(".plugin-id-line").innerText()).toContain("by Acme Ltd");
+    // A name the plugin wrote about itself is shown as a claim, never as fact.
+    expect(await card("acme_one").locator(".plugin-id-line").innerText()).toContain("says it is by Acme Ltd");
     // Built-ins offer no trust choice; a new signed publisher does.
     expect(await card("sandbox_demo").locator(".plugin-trust-box").count()).toBe(0);
     expect(await card("acme_one").locator(".plugin-trust-box").count()).toBe(1);
@@ -63,6 +64,8 @@ describe.skipIf(!hasMinisign)("E2E: publisher trust, badges and revocation", () 
     await install(signedPackage(work, "acme2", "acme_two", { listFiles: true, keyName: "acme", publisher: "Acme Ltd" }));
     await card("acme_two").waitFor({ state: "visible", timeout: 10000 });
     expect(await badge("acme_two")).toBe("Trusted publisher");
+    // Once you trusted the key, the name is the one you saw then.
+    expect(await card("acme_two").locator(".plugin-id-line").innerText()).toMatch(/ · by Acme Ltd/);
     await install(signedPackage(work, "rival", "rival_one", { listFiles: true, keyName: "rival", publisher: "Rival Co" }));
     await card("rival_one").waitFor({ state: "visible", timeout: 10000 });
     expect(await badge("rival_one")).toBe("New publisher");

@@ -44,10 +44,15 @@ fn trust_view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
     let publisher = row.observed_signer.as_deref().and_then(|k| app.db.get_publisher(k).ok().flatten());
     let builtin = is_builtin(app, row);
     let level = trust_level(row, builtin, publisher.as_ref(), &known_keys(app));
-    let name = read_manifest(row).map(|m| m.publisher).filter(|n| !n.is_empty()).or_else(|| publisher.as_ref().map(|p| p.name.clone()).filter(|n| !n.is_empty()));
+    // The manifest's `publisher` is just text the plugin wrote about itself. It is only vouched for when the plugin
+    // is built in, or the operator trusted this key (then it is the name they saw when they did).
+    let claimed = read_manifest(row).map(|m| m.publisher).filter(|n| !n.is_empty());
+    let vouched = matches!(level, TrustLevel::Builtin | TrustLevel::Trusted);
+    let name = if level == TrustLevel::Trusted { publisher.as_ref().map(|p| p.name.clone()).filter(|n| !n.is_empty()).or(claimed) } else { claimed };
     serde_json::json!({
         "level": level.as_str(),
         "publisher_name": name,
+        "name_is_claim": !vouched && name.is_some(),
         "key_id": row.observed_signer.as_deref().map(signer_id),
         // The operator can choose to trust a signed publisher that isn't built in, trusted already or revoked.
         "can_trust": matches!(level, TrustLevel::New | TrustLevel::Known),

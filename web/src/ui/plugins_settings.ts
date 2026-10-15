@@ -270,7 +270,7 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   }
   if (plugin.overridden) head.appendChild(el('span', 'os-badge plugin-state plugin-state--changed', 'Permissions overridden'));
   card.appendChild(head);
-  card.appendChild(el('div', 'settings-hint plugin-id-line', `id: ${plugin.id}${plugin.trust?.publisher_name ? ` · by ${plugin.trust.publisher_name}` : ''} · digest ${plugin.digest.slice(0, 12)}… · ${signatureLabel(plugin)}`));
+  card.appendChild(el('div', 'settings-hint plugin-id-line', `id: ${plugin.id}${plugin.trust?.publisher_name ? ` · ${plugin.trust.name_is_claim ? 'says it is by' : 'by'} ${plugin.trust.publisher_name}` : ''} · digest ${plugin.digest.slice(0, 12)}… · ${signatureLabel(plugin)}`));
   if (plugin.signature_weaker) {
     card.appendChild(el('div', 'plugin-warning', 'This plugin was fully signed when you approved it. Now the signature no longer covers all of its files. Treat this update with more suspicion.'));
   }

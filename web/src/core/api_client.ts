@@ -522,7 +522,7 @@ export interface PluginInfo {
   /** Installed by the operator (so it can be updated or removed), as opposed to shipping with the app. */
   removable?: boolean;
   /** How far the operator has reason to trust the publisher; display only, it never widens what a plugin may do. */
-  trust?: { level: PluginTrustLevel; publisher_name: string | null; key_id: string | null; can_trust: boolean };
+  trust?: { level: PluginTrustLevel; publisher_name: string | null; name_is_claim?: boolean; key_id: string | null; can_trust: boolean };
   /** For an approved plugin that has since changed: how it differs from the version you reviewed. */
   changes?: {
     from_version: string | null;

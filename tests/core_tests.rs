@@ -7155,7 +7155,7 @@ async fn test_publisher_trust_levels_and_revocation() {
     install(signed_package("a1", "Acme", &k1)).await;
     let (builtin, plain, a1) = (get("builtin_one").await, get("plain").await, get("a1").await);
     assert_eq!((builtin["trust"]["level"].as_str(), plain["trust"]["level"].as_str(), a1["trust"]["level"].as_str()), (Some("builtin"), Some("unsigned"), Some("new")), "{a1}");
-    assert_eq!((a1["trust"]["can_trust"].as_bool(), a1["trust"]["publisher_name"].as_str()), (Some(true), Some("Acme")));
+    assert_eq!((a1["trust"]["can_trust"].as_bool(), a1["trust"]["publisher_name"].as_str(), a1["trust"]["name_is_claim"].as_bool()), (Some(true), Some("Acme"), Some(true)), "a self-declared name is a claim");
     assert_eq!(builtin["trust"]["can_trust"], false);
     assert_eq!(plain["trust"]["can_trust"], false);
     let key_id = a1["trust"]["key_id"].as_str().unwrap().to_string();
@@ -7166,6 +7166,7 @@ async fn test_publisher_trust_levels_and_revocation() {
     install(signed_package("a2", "Acme", &k1)).await;
     install(signed_package("b1", "Other", &k2)).await;
     assert_eq!(get("a1").await["trust"]["level"], "trusted");
+    assert_eq!(get("a2").await["trust"]["name_is_claim"], false, "the trusted name is the one the operator saw");
     assert_eq!(get("a2").await["trust"]["level"], "trusted");
     assert_eq!(get("b1").await["trust"]["level"], "new");
     let pubs: serde_json::Value = c.get(format!("{base}/api/plugins/publishers")).header("x-host-token", h).send().await.unwrap().json().await.unwrap();
