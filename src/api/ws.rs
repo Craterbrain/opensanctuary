@@ -113,6 +113,9 @@ pub struct AppState {
     /// rather than hitting GitHub on every poll. `None` until the first
     /// check (kicked off in `main.rs` shortly after startup) completes.
     pub update_status: Arc<std::sync::Mutex<Option<crate::network::updater::UpdateCheckResult>>>,
+    /// The minisign public key (base64) that vouches for the app's own plugins and for the plugin revocation
+    /// list (docs/PLUGIN_SIGNING.md). The release key, except when started with `--test-release-key`.
+    pub plugin_release_key: String,
 }
 
 #[derive(Debug, Clone)]

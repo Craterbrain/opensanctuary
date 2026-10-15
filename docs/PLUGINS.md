@@ -312,6 +312,10 @@ Every plugin card shows a badge for how far its publisher (the minisign key that
 
 Tick **Trust everything this publisher signs** when you approve a signed plugin (or press **Trust publisher** later) to trust a key. **A badge is information, not permission.** Trust never approves anything and never skips the review screen: a trusted publisher's update still stops at "changed" and shows what changed, and a signature says who released a package, not that it is harmless.
 
+**Rotating your key.** If your signing key changes, ship `plugin.rotation.json` (`{ "old_key": "<old public key>", "new_key": "<new public key>" }`) in the plugin folder, signed by the **old** key (`minisign -Sm plugin.rotation.json -x plugin.rotation.json.minisig`), and sign `plugin.json` with the new one. Operators who trusted your old key then see no warning and their trust carries over. Without the statement, a key change is shown as a different publisher.
+
+**Revocation.** OpenSanctuary can be given a list of publisher keys to distrust (`revoked_keys.json`, signed by the OpenSanctuary release key). A revoked key's plugins stop, and approving one asks for confirmation. Only the release key can sign a list, the list can only move forward, and the release key itself can't be revoked.
+
 Under **Publishers** you can **Stop trusting** a key or **Revoke** it. Revoking stops every plugin that key signed (as if you had revoked each one), marks its other plugins "Revoked publisher", and makes approving one of them ask for an extra confirmation. Revoked keys can't be trusted again from the card. Everything here is console-only and in the audit log.
 
 ---

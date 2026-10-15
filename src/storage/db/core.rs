@@ -488,7 +488,7 @@ impl Database {
         let _ = conn.execute("ALTER TABLE plugin_grants ADD COLUMN observed_signer TEXT", []);
         let _ = conn.execute("ALTER TABLE plugin_grants ADD COLUMN approved_signer TEXT", []);
         // What the operator reviewed, so an update can be shown as a difference (version, files, permissions).
-        for col in ["observed_files_json", "approved_files_json", "approved_version", "approved_requested_json", "observed_signature_scope", "approved_signature_scope"] {
+        for col in ["observed_files_json", "approved_files_json", "approved_version", "approved_requested_json", "observed_signature_scope", "approved_signature_scope", "observed_rotation_from"] {
             let _ = conn.execute(&format!("ALTER TABLE plugin_grants ADD COLUMN {col} TEXT"), []);
         }
 

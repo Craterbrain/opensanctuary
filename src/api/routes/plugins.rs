@@ -24,6 +24,8 @@ fn err(status: StatusCode, msg: &str) -> ApiErr {
 }
 
 pub(super) fn rescan(app: &AppState) -> Vec<Discovered> {
+    // A newer signed revocation list takes effect here, before anything is judged by publisher.
+    crate::core::plugin_revocation::apply(&app.db, &app.plugin_release_key, &crate::core::plugin_revocation::list_paths(&app.web_dir, &app.data_dir));
     let found = discover_all(&app.web_dir.join("plugins"), Some(&user_plugins_dir(&app.data_dir)), env!("CARGO_PKG_VERSION"));
     sync(&app.db, &found);
     found
@@ -39,29 +41,54 @@ fn known_keys(app: &AppState) -> std::collections::HashSet<String> {
     app.db.list_plugin_grants().unwrap_or_default().into_iter().filter(|r| r.status == "approved").filter_map(|r| r.approved_signer).collect()
 }
 
+/// The key a plugin should be judged by: its own, or the key it proved it replaces (a rotation statement signed by
+/// that old key) unless the old key was revoked. Returns `(effective key, the old key if rotation is being honored)`.
+fn effective_signer(app: &AppState, row: &PluginGrantRow) -> (Option<String>, Option<String>) {
+    let Some(new_key) = row.observed_signer.clone() else { return (None, None) };
+    if let Some(old) = row.observed_rotation_from.clone() {
+        let old_revoked = app.db.get_publisher(&old).ok().flatten().is_some_and(|p| p.revoked);
+        if !old_revoked && old != new_key {
+            return (Some(old.clone()), Some(old));
+        }
+    }
+    (Some(new_key), None)
+}
+
 fn trust_view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
     use crate::core::plugin_trust::{trust_level, TrustLevel};
-    let publisher = row.observed_signer.as_deref().and_then(|k| app.db.get_publisher(k).ok().flatten());
+    let (effective, rotated_from) = effective_signer(app, row);
+    let publisher = effective.as_deref().and_then(|k| app.db.get_publisher(k).ok().flatten());
     let builtin = is_builtin(app, row);
-    let level = trust_level(row, builtin, publisher.as_ref(), &known_keys(app));
+    let level = trust_level(row, builtin, publisher.as_ref(), &known_keys(app), effective.as_deref(), &app.plugin_release_key);
+    let release_signed = row.observed_signer.as_deref() == Some(app.plugin_release_key.as_str()) && row.error.is_none();
     // The manifest's `publisher` is just text the plugin wrote about itself. It is only vouched for when the plugin
-    // is built in, or the operator trusted this key (then it is the name they saw when they did).
+    // is built in, signed by the release key, or the operator trusted this key (then it is the name they saw then).
     let claimed = read_manifest(row).map(|m| m.publisher).filter(|n| !n.is_empty());
-    let vouched = matches!(level, TrustLevel::Builtin | TrustLevel::Trusted);
-    let name = if level == TrustLevel::Trusted { publisher.as_ref().map(|p| p.name.clone()).filter(|n| !n.is_empty()).or(claimed) } else { claimed };
+    let vouched = matches!(level, TrustLevel::Builtin) || release_signed || level == TrustLevel::Trusted;
+    let name = if release_signed {
+        Some("OpenSanctuary".to_string())
+    } else if level == TrustLevel::Trusted {
+        publisher.as_ref().map(|p| p.name.clone()).filter(|n| !n.is_empty()).or(claimed)
+    } else {
+        claimed
+    };
+    let new_key_trusted = row.observed_signer.as_deref().and_then(|k| app.db.get_publisher(k).ok().flatten()).is_some_and(|p| p.trusted);
     serde_json::json!({
         "level": level.as_str(),
         "publisher_name": name,
         "name_is_claim": !vouched && name.is_some(),
         "key_id": row.observed_signer.as_deref().map(signer_id),
-        // The operator can choose to trust a signed publisher that isn't built in, trusted already or revoked.
-        "can_trust": matches!(level, TrustLevel::New | TrustLevel::Known),
+        "release_signed": release_signed,
+        // Signed by a key the publisher proved (with the old key's signature) it moved to: the old key's standing carries over.
+        "rotated_from_key_id": rotated_from.as_deref().map(signer_id),
+        // The operator can choose to trust a signed publisher that isn't the app's own, trusted already or revoked.
+        "can_trust": !release_signed && (matches!(level, TrustLevel::New | TrustLevel::Known) || (rotated_from.is_some() && !new_key_trusted)),
     })
 }
 
 /// Short, stable id for a publisher key, for display.
 fn signer_id(key: &str) -> String {
-    crate::core::plugin_permissions::sha256_hex(key.as_bytes())[..16].to_string()
+    crate::core::plugin_trust::key_id(key)
 }
 
 fn read_manifest(row: &PluginGrantRow) -> Option<crate::core::plugin_permissions::PluginManifest> {
@@ -164,7 +191,9 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         "signature_weaker": row.approved_signature_scope.as_deref() == Some("full") && row.observed_signature_scope.as_deref() != Some("full"),
         "signer_id": row.observed_signer.as_deref().map(signer_id),
         // Approved before under a different publisher key, or it used to be signed and now isn't.
-        "signer_changed": row.approved_signer.is_some() && row.approved_signer != row.observed_signer,
+        "signer_changed": row.approved_signer.is_some() && row.approved_signer != row.observed_signer
+            && !(row.observed_rotation_from.is_some() && row.observed_rotation_from == row.approved_signer
+                && !row.observed_rotation_from.as_deref().and_then(|k| app.db.get_publisher(k).ok().flatten()).is_some_and(|p| p.revoked)),
         "approved_digest": row.approved_digest,
         "requested": requested.iter().map(describe).collect::<Vec<_>>(),
         "granted": granted.iter().map(describe).collect::<Vec<_>>(),
@@ -309,6 +338,16 @@ pub(super) async fn approve_plugin(
         "approved",
         &serde_json::json!({ "granted": granted.iter().map(|p| &p.id).collect::<Vec<_>>(), "digest": row.observed_digest, "override": override_diff, "revoked_publisher_accepted": revoked_publisher }).to_string(),
     );
+    // A publisher that proved it moved from a key you trusted (the old key signed the statement) keeps your trust.
+    if let (Some(new_key), Some(old_key)) = (row.observed_signer.as_deref(), row.observed_rotation_from.as_deref()) {
+        let old = app.db.get_publisher(old_key).ok().flatten();
+        if old.as_ref().is_some_and(|p| p.trusted && !p.revoked) && !app.db.get_publisher(new_key).ok().flatten().is_some_and(|p| p.revoked) {
+            let name = old.map(|p| p.name).unwrap_or_default();
+            if app.db.trust_publisher(new_key, &name, &actor).is_ok() {
+                app.db.add_plugin_audit(&id, &actor, "key_rotated", &serde_json::json!({ "from_key_id": signer_id(old_key), "to_key_id": signer_id(new_key) }).to_string());
+            }
+        }
+    }
     if req.trust_publisher {
         if let Some(key) = row.observed_signer.as_deref() {
             let name = read_manifest(&row).map(|m| m.publisher).filter(|n| !n.is_empty()).unwrap_or_else(|| row.name.clone());
@@ -1446,12 +1485,25 @@ pub(super) async fn list_publishers(State(app): State<AppState>, headers: Header
     let out: Vec<_> = rows
         .iter()
         .map(|p| serde_json::json!({
-            "key_id": signer_id(&p.key), "name": p.name, "trusted": p.trusted, "revoked": p.revoked,
-            "added_at": p.added_at, "added_by": p.added_by,
+            "key_id": signer_id(&p.key), "name": if p.name.is_empty() { publisher_name_for(&app, &p.key) } else { p.name.clone() }, "trusted": p.trusted, "revoked": p.revoked,
+            "added_at": p.added_at, "added_by": p.added_by, "note": p.note,
             "plugins": app.db.plugins_signed_by(&p.key).unwrap_or_default(),
         }))
         .collect();
     Ok(Json(out))
+}
+
+/// GET /api/plugins/revocations -- what the signed revocation list has done, and any list file that couldn't be used.
+pub(super) async fn revocation_status(State(app): State<AppState>, headers: HeaderMap) -> Result<impl IntoResponse, ApiErr> {
+    require_host_token(&headers, &app)?;
+    let paths = crate::core::plugin_revocation::list_paths(&app.web_dir, &app.data_dir);
+    let (newest, problems) = crate::core::plugin_revocation::newest_valid(&paths, &app.plugin_release_key);
+    Ok(Json(serde_json::json!({
+        "applied_sequence": crate::core::plugin_revocation::applied_sequence(&app.db),
+        "newest_valid_sequence": newest.as_ref().map(|l| l.sequence),
+        "listed_keys": newest.map(|l| l.revoked.len()).unwrap_or(0),
+        "problems": problems,
+    })))
 }
 
 /// POST /api/plugins/publishers/:key_id/trust
@@ -1483,9 +1535,12 @@ pub(super) async fn untrust_publisher(State(app): State<AppState>, headers: Head
 pub(super) async fn revoke_publisher(State(app): State<AppState>, headers: HeaderMap, AxumPath(key_id): AxumPath<String>) -> Result<impl IntoResponse, ApiErr> {
     require_host_token(&headers, &app)?;
     let key = key_for_id(&app, &key_id).ok_or_else(|| err(StatusCode::NOT_FOUND, "no such publisher"))?;
+    if key == app.plugin_release_key {
+        return Err(err(StatusCode::CONFLICT, "the release key is the app's own and can't be revoked"));
+    }
     let actor = actor_of(&headers, &app);
     let name = publisher_name_for(&app, &key);
-    app.db.revoke_publisher(&key, &name, &actor).map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    app.db.revoke_publisher(&key, &name, &actor, "").map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
     let mut stopped = Vec::new();
     for id in app.db.plugins_signed_by(&key).unwrap_or_default() {
         let Some(row) = app.db.get_plugin_grant(&id).ok().flatten() else { continue };
@@ -1507,6 +1562,7 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/plugins/audit", get(plugin_audit))
         .route("/api/plugins/permissions", get(permission_catalog))
         .route("/api/plugins/publishers", get(list_publishers))
+        .route("/api/plugins/revocations", get(revocation_status))
         .route("/api/plugins/publishers/:key_id/trust", post(trust_publisher))
         .route("/api/plugins/publishers/:key_id/untrust", post(untrust_publisher))
         .route("/api/plugins/publishers/:key_id/revoke", post(revoke_publisher))

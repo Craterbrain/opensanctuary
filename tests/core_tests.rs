@@ -43,6 +43,7 @@ fn base_app_state(db: Database) -> os_next::api::ws::AppState {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(Default::default())),
         update_status: Arc::new(std::sync::Mutex::new(None)),
+        plugin_release_key: os_next::network::updater::RELEASE_PUBLIC_KEY_B64.to_string(),
     }
 }
 
@@ -7210,4 +7211,250 @@ async fn test_publisher_trust_levels_and_revocation() {
         assert_eq!(req.send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED, "{path}");
     }
     assert_eq!(post("/api/plugins/publishers/0000000000000000/trust".to_string()).await.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Plugin signing phase 3: the release key, the revocation list, key rotation
+// (uses the throwaway keys in testdata/signing/, see its README)
+// ---------------------------------------------------------------------------------------------
+
+struct TestKey {
+    sk: minisign::SecretKey,
+    b64: String,
+}
+
+fn test_key(name: &str) -> TestKey {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/signing");
+    let sk = minisign::SecretKeyBox::from_string(&std::fs::read_to_string(dir.join(format!("{name}.key"))).unwrap()).unwrap().into_unencrypted_secret_key().unwrap();
+    let pk_text = std::fs::read_to_string(dir.join(format!("{name}.pub"))).unwrap();
+    let b64 = pk_text.lines().nth(1).unwrap().trim().to_string();
+    TestKey { sk, b64 }
+}
+
+fn sign_bytes(key: &TestKey, data: &[u8]) -> String {
+    minisign::sign(None, &key.sk, data, None, None).unwrap().into_string()
+}
+
+/// A plugin package signed by `key` (manifest lists every file), plus any extra entries (e.g. a rotation statement).
+fn signed_zip(id: &str, version: &str, key: &TestKey, page: &str, extra: &[(&str, &[u8])]) -> Vec<u8> {
+    let manifest = serde_json::json!({
+        "manifest_version": 1, "id": id, "name": format!("Plugin {id}"), "version": version, "publisher": "Whoever",
+        "publisher_key": key.b64, "web": {"entry": "index.html", "sandbox": true},
+        "permissions": [{"id": "ui.panel", "reason": "x"}], "ui": {"placements": [{"slot": "dock"}]},
+        "files": { "index.html": os_next::core::plugin_permissions::sha256_hex(page.as_bytes()) }
+    }).to_string();
+    let sig = sign_bytes(key, manifest.as_bytes());
+    let mut entries: Vec<(&str, &[u8])> = vec![("plugin.json", manifest.as_bytes()), ("plugin.json.minisig", sig.as_bytes()), ("index.html", page.as_bytes())];
+    entries.extend_from_slice(extra);
+    make_zip(&entries)
+}
+
+fn write_revocation_list(dir: &std::path::Path, signer: &TestKey, sequence: u64, revoke: &[(&str, &str)]) {
+    let list = serde_json::json!({ "sequence": sequence, "revoked": revoke.iter().map(|(k, r)| serde_json::json!({ "key": k, "reason": r, "since": "2026-10-14" })).collect::<Vec<_>>() }).to_string();
+    std::fs::write(dir.join("revoked_keys.json"), &list).unwrap();
+    std::fs::write(dir.join("revoked_keys.json.minisig"), sign_bytes(signer, list.as_bytes())).unwrap();
+}
+
+struct Harness {
+    base: String,
+    c: reqwest::Client,
+    web_dir: std::path::PathBuf,
+    data_dir: std::path::PathBuf,
+    db: os_next::storage::Database,
+    _tmp: tempfile::TempDir,
+}
+
+const H: &str = "sig3_host";
+
+impl Harness {
+    async fn start(release: &TestKey) -> Harness {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = os_next::storage::Database::new(tmp.path().join("sig3.db").to_str().unwrap()).unwrap();
+        let web_dir = tmp.path().join("web");
+        let data_dir = tmp.path().join("data");
+        std::fs::create_dir_all(web_dir.join("plugins")).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app_state = os_next::api::ws::AppState {
+            web_dir: web_dir.clone(), media_dir: tmp.path().join("media"), data_dir: data_dir.clone(),
+            host_session_token: H.to_string(), server_port: addr.port(), plugin_release_key: release.b64.clone(),
+            ..base_app_state(db.clone())
+        };
+        let router = os_next::api::create_router(app_state);
+        tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+        Harness { base: format!("http://{addr}"), c: reqwest::Client::new(), web_dir, data_dir, db, _tmp: tmp }
+    }
+    async fn install(&self, pkg: Vec<u8>, replace: bool) -> reqwest::Response {
+        self.c.post(format!("{}/api/plugins/install{}", self.base, if replace { "?replace=true" } else { "" })).header("x-host-token", H).body(pkg).send().await.unwrap()
+    }
+    async fn plugin(&self, id: &str) -> serde_json::Value {
+        let list: serde_json::Value = self.c.get(format!("{}/api/plugins", self.base)).header("x-host-token", H).send().await.unwrap().json().await.unwrap();
+        list.as_array().unwrap().iter().find(|p| p["id"] == id).cloned().unwrap_or_else(|| panic!("{id} missing"))
+    }
+    async fn approve(&self, id: &str, extra: serde_json::Value) -> reqwest::StatusCode {
+        let p = self.plugin(id).await;
+        let mut body = serde_json::json!({ "digest": p["digest"], "granted": ["ui.panel"] });
+        for (k, v) in extra.as_object().unwrap() { body[k] = v.clone(); }
+        self.c.post(format!("{}/api/plugins/{id}/approve", self.base)).header("x-host-token", H).json(&body).send().await.unwrap().status()
+    }
+    async fn post(&self, path: &str) -> reqwest::Response {
+        self.c.post(format!("{}{path}", self.base)).header("x-host-token", H).send().await.unwrap()
+    }
+    async fn revocations(&self) -> serde_json::Value {
+        self.c.get(format!("{}/api/plugins/revocations", self.base)).header("x-host-token", H).send().await.unwrap().json().await.unwrap()
+    }
+}
+
+#[tokio::test]
+async fn test_revocation_list_is_signed_ordered_and_cannot_touch_the_release_key() {
+    let (release, acme, rival) = (test_key("release"), test_key("acme"), test_key("rival"));
+    let h = Harness::start(&release).await;
+    assert_eq!(h.install(signed_zip("acme_one", "1.0.0", &acme, "<html>a</html>", &[]), false).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(h.install(signed_zip("rival_one", "1.0.0", &rival, "<html>r</html>", &[]), false).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(h.approve("acme_one", serde_json::json!({ "trust_publisher": true })).await, reqwest::StatusCode::OK);
+    assert_eq!(h.approve("rival_one", serde_json::json!({})).await, reqwest::StatusCode::OK);
+    assert_eq!(h.plugin("rival_one").await["state"], "active");
+
+    // A list signed by the wrong key (a publisher, not the release key) does nothing, and says why.
+    write_revocation_list(&h.web_dir, &acme, 1, &[(&rival.b64, "forged")]);
+    assert_eq!(h.plugin("rival_one").await["state"], "active");
+    let st = h.revocations().await;
+    assert_eq!((st["applied_sequence"].as_u64(), st["newest_valid_sequence"].is_null()), (Some(0), true), "{st}");
+    assert!(st["problems"][0].as_str().unwrap().contains("revoked_keys.json"), "{st}");
+
+    // A list edited after it was signed is no better.
+    write_revocation_list(&h.web_dir, &release, 1, &[(&rival.b64, "real")]);
+    let text = std::fs::read_to_string(h.web_dir.join("revoked_keys.json")).unwrap().replace(&rival.b64, &acme.b64);
+    std::fs::write(h.web_dir.join("revoked_keys.json"), text).unwrap();
+    assert_eq!(h.plugin("acme_one").await["state"], "active");
+    assert_eq!(h.plugin("acme_one").await["trust"]["level"], "trusted");
+
+    // A genuine list: the key is revoked and what it signed stops; the other publisher is untouched.
+    write_revocation_list(&h.web_dir, &release, 1, &[(&rival.b64, "key leaked"), (&release.b64, "try to revoke the release key"), ("not a key", "junk")]);
+    assert_eq!(h.plugin("rival_one").await["state"], "revoked");
+    assert_eq!(h.plugin("rival_one").await["trust"]["level"], "revoked");
+    assert_eq!(h.plugin("acme_one").await["state"], "active");
+    assert_eq!(h.revocations().await["applied_sequence"], 1);
+    let publishers = h.db.list_publishers().unwrap();
+    let rival_row = publishers.iter().find(|p| p.key == rival.b64).expect("rival is on record as revoked");
+    assert!(rival_row.revoked && rival_row.note.contains("revocation list #1: key leaked"), "{rival_row:?}");
+    assert!(publishers.iter().all(|p| p.key != release.b64 && p.key != "not a key"), "the release key and junk are skipped");
+    let audit = h.db.list_plugin_audit(100).unwrap();
+    assert!(audit.iter().any(|a| a.plugin_id == "rival_one" && a.action == "revoked" && a.actor == "revocation list"));
+
+    // Approving it again needs the explicit confirmation, exactly as for a manual revoke.
+    assert_eq!(h.approve("rival_one", serde_json::json!({})).await, reqwest::StatusCode::CONFLICT);
+
+    // A newer list in the data directory wins over the shipped one.
+    write_revocation_list(&h.data_dir, &release, 5, &[(&acme.b64, "later news")]);
+    assert_eq!(h.plugin("acme_one").await["state"], "revoked");
+    assert_eq!(h.revocations().await["applied_sequence"], 5);
+
+    // An older (validly signed) list can't undo anything: sequence only goes up.
+    std::fs::remove_file(h.data_dir.join("revoked_keys.json")).unwrap();
+    std::fs::remove_file(h.data_dir.join("revoked_keys.json.minisig")).unwrap();
+    write_revocation_list(&h.web_dir, &release, 3, &[]);
+    assert_eq!(h.plugin("acme_one").await["state"], "revoked");
+    assert_eq!(h.revocations().await["applied_sequence"], 5);
+    assert!(h.db.get_publisher(&acme.b64).unwrap().unwrap().revoked);
+
+    // The release key can't be revoked by hand either.
+    let id = os_next::core::plugin_trust::key_id(&release.b64);
+    h.install(signed_zip("rel_one", "1.0.0", &release, "<html>rel</html>", &[]), false).await;
+    assert_eq!(h.post(&format!("/api/plugins/publishers/{id}/revoke")).await.status(), reqwest::StatusCode::CONFLICT);
+    // Console-only.
+    assert_eq!(h.c.get(format!("{}/api/plugins/revocations", h.base)).send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_release_signed_plugins_are_the_apps_own_and_names_cannot_be_forged() {
+    let (release, acme) = (test_key("release"), test_key("acme"));
+    let h = Harness::start(&release).await;
+    // A bundled plugin signed by the release key, and one that is bundled but unsigned (a dev build).
+    for (id, key) in [("bundled_signed", Some(&release)), ("bundled_dev", None)] {
+        let dir = h.web_dir.join("plugins").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.html"), "<html></html>").unwrap();
+        std::fs::write(dir.join("plugin.json"), serde_json::json!({
+            "manifest_version": 1, "id": id, "name": id, "version": "1.0.0", "publisher": "OpenSanctuary",
+            "web": {"entry": "index.html", "sandbox": true}, "permissions": [{"id": "ui.panel", "reason": "x"}]
+        }).to_string()).unwrap();
+        if let Some(k) = key {
+            os_next::core::plugin_registry::write_file_list(&dir, Some(&k.b64)).unwrap();
+            let bytes = std::fs::read(dir.join("plugin.json")).unwrap();
+            std::fs::write(dir.join("plugin.json.minisig"), sign_bytes(k, &bytes)).unwrap();
+        }
+    }
+    let (signed, dev) = (h.plugin("bundled_signed").await, h.plugin("bundled_dev").await);
+    assert_eq!((signed["trust"]["level"].as_str(), signed["trust"]["release_signed"].as_bool(), signed["signature_scope"].as_str()), (Some("builtin"), Some(true), Some("full")), "{signed}");
+    assert_eq!((dev["trust"]["level"].as_str(), dev["trust"]["release_signed"].as_bool()), (Some("builtin"), Some(false)));
+    assert_eq!(signed["trust"]["publisher_name"], "OpenSanctuary");
+
+    // An installed plugin signed by the release key is the app's own: trusted, name vouched for, nothing to choose.
+    assert_eq!(h.install(signed_zip("official_extra", "1.0.0", &release, "<html>x</html>", &[]), false).await.status(), reqwest::StatusCode::OK);
+    let official = h.plugin("official_extra").await;
+    assert_eq!((official["trust"]["level"].as_str(), official["trust"]["name_is_claim"].as_bool(), official["trust"]["can_trust"].as_bool(), official["trust"]["publisher_name"].as_str()), (Some("trusted"), Some(false), Some(false), Some("OpenSanctuary")), "{official}");
+
+    // Anyone else who writes "OpenSanctuary" in their manifest is only claiming it.
+    let mut fake = signed_zip("fake_official", "1.0.0", &acme, "<html>x</html>", &[]);
+    let _ = &mut fake;
+    h.install(fake, false).await;
+    let fake = h.plugin("fake_official").await;
+    assert_eq!((fake["trust"]["level"].as_str(), fake["trust"]["name_is_claim"].as_bool(), fake["trust"]["release_signed"].as_bool()), (Some("new"), Some(true), Some(false)));
+}
+
+#[tokio::test]
+async fn test_key_rotation_needs_the_old_keys_signature() {
+    let (release, acme, rival) = (test_key("release"), test_key("acme"), test_key("rival"));
+    let statement = |old: &TestKey, new: &TestKey| serde_json::json!({ "old_key": old.b64, "new_key": new.b64 }).to_string();
+    let rotation = |old: &TestKey, new: &TestKey, signed_by: &TestKey| {
+        let st = statement(old, new);
+        let sig = sign_bytes(signed_by, st.as_bytes());
+        (st, sig)
+    };
+
+    let h = Harness::start(&release).await;
+    // v1 is signed by `acme`, approved, and `acme` is trusted.
+    assert_eq!(h.install(signed_zip("moving", "1.0.0", &acme, "<html>v1</html>", &[]), false).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(h.approve("moving", serde_json::json!({ "trust_publisher": true })).await, reqwest::StatusCode::OK);
+
+    // v2 is signed by a different key with no statement: a different publisher, loudly.
+    h.install(signed_zip("moving", "2.0.0", &rival, "<html>v2</html>", &[]), true).await;
+    let p = h.plugin("moving").await;
+    assert_eq!((p["signer_changed"].as_bool(), p["trust"]["level"].as_str(), p["trust"]["rotated_from_key_id"].is_null()), (Some(true), Some("new"), true), "{p}");
+
+    // A statement signed by the NEW key itself proves nothing (anyone can say "I am the old publisher").
+    let (st, sig) = rotation(&acme, &rival, &rival);
+    h.install(signed_zip("moving", "2.0.0", &rival, "<html>v2</html>", &[("plugin.rotation.json", st.as_bytes()), ("plugin.rotation.json.minisig", sig.as_bytes())]), true).await;
+    let p = h.plugin("moving").await;
+    assert_eq!((p["signer_changed"].as_bool(), p["trust"]["level"].as_str()), (Some(true), Some("new")), "forged: {p}");
+
+    // A statement for some other new key doesn't apply either.
+    let (st, sig) = rotation(&acme, &release, &acme);
+    h.install(signed_zip("moving", "2.0.0", &rival, "<html>v2</html>", &[("plugin.rotation.json", st.as_bytes()), ("plugin.rotation.json.minisig", sig.as_bytes())]), true).await;
+    assert_eq!(h.plugin("moving").await["signer_changed"], true);
+
+    // The real thing: the old key signed "new_key is me". No warning, the old key's standing carries over,
+    // and approving moves the trust to the new key.
+    let (st, sig) = rotation(&acme, &rival, &acme);
+    let good = signed_zip("moving", "2.0.0", &rival, "<html>v2</html>", &[("plugin.rotation.json", st.as_bytes()), ("plugin.rotation.json.minisig", sig.as_bytes())]);
+    assert_eq!(h.install(good.clone(), true).await.status(), reqwest::StatusCode::OK, "the statement files are allowed next to a fully signed manifest");
+    let p = h.plugin("moving").await;
+    assert_eq!((p["signer_changed"].as_bool(), p["trust"]["level"].as_str(), p["state"].as_str()), (Some(false), Some("trusted"), Some("changed")), "{p}");
+    assert_eq!(p["trust"]["rotated_from_key_id"], os_next::core::plugin_trust::key_id(&acme.b64));
+    assert_eq!(p["trust"]["can_trust"], true, "the new key isn't trusted in its own right yet");
+    assert_eq!(h.approve("moving", serde_json::json!({})).await, reqwest::StatusCode::OK);
+    assert!(h.db.get_publisher(&rival.b64).unwrap().is_some_and(|p| p.trusted), "trust moved to the new key");
+    assert!(h.db.list_plugin_audit(100).unwrap().iter().any(|a| a.action == "key_rotated"));
+    assert_eq!(h.plugin("moving").await["trust"]["can_trust"], false);
+
+    // If the old key was revoked, a rotation from it is not honored.
+    let h2 = Harness::start(&release).await;
+    h2.install(signed_zip("moving", "1.0.0", &acme, "<html>v1</html>", &[]), false).await;
+    assert_eq!(h2.approve("moving", serde_json::json!({})).await, reqwest::StatusCode::OK);
+    write_revocation_list(&h2.web_dir, &release, 1, &[(&acme.b64, "leaked")]);
+    h2.install(good, true).await;
+    let p = h2.plugin("moving").await;
+    assert_eq!((p["signer_changed"].as_bool(), p["trust"]["level"].as_str()), (Some(true), Some("new")), "{p}");
 }

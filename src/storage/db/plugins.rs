@@ -36,12 +36,16 @@ pub struct PluginGrantRow {
     /// `unsigned`, `manifest` or `full`: what the signature covered when seen / when approved (None = not recorded).
     pub observed_signature_scope: Option<String>,
     pub approved_signature_scope: Option<String>,
+    /// The key this plugin's signer says it replaces, when the plugin carries a rotation statement signed by that old key.
+    pub observed_rotation_from: Option<String>,
 }
 
 /// A publisher key the operator has trusted or revoked.
 #[derive(Debug, Clone, Serialize)]
 pub struct PublisherRow {
     pub key: String,
+    /// Why it was revoked or trusted, when known (e.g. the revocation list's reason).
+    pub note: String,
     pub name: String,
     pub trusted: bool,
     pub revoked: bool,
@@ -87,7 +91,7 @@ pub struct PluginAuditRow {
 
 const GRANT_COLS: &str = "plugin_id, kind, name, version, source_path, observed_manifest_sha256, observed_digest, \
      observed_signer, approved_signer, requested_json, error, approved_manifest_sha256, approved_digest, status, granted_json, decided_at, decided_by, \
-     first_seen, last_seen, observed_files_json, approved_files_json, approved_version, approved_requested_json, observed_signature_scope, approved_signature_scope";
+     first_seen, last_seen, observed_files_json, approved_files_json, approved_version, approved_requested_json, observed_signature_scope, approved_signature_scope, observed_rotation_from";
 
 fn grant_from_row(row: &rusqlite::Row<'_>) -> Result<PluginGrantRow> {
     Ok(PluginGrantRow {
@@ -116,6 +120,7 @@ fn grant_from_row(row: &rusqlite::Row<'_>) -> Result<PluginGrantRow> {
         approved_requested_json: row.get(22)?,
         observed_signature_scope: row.get(23)?,
         approved_signature_scope: row.get(24)?,
+        observed_rotation_from: row.get(25)?,
     })
 }
 
@@ -133,6 +138,7 @@ pub struct ObservedPlugin<'a> {
     pub error: Option<&'a str>,
     pub files_json: &'a str,
     pub signature_scope: &'a str,
+    pub rotation_from: Option<&'a str>,
 }
 
 impl Database {
@@ -176,8 +182,8 @@ impl Database {
         conn.execute(
             "INSERT INTO plugin_grants (plugin_id, kind, name, version, source_path, observed_manifest_sha256, \
                  observed_digest, requested_json, error, approved_manifest_sha256, approved_digest, status, \
-                 granted_json, decided_at, decided_by, first_seen, last_seen, observed_signer, approved_signer, observed_files_json, observed_signature_scope)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, NULL, NULL, 'pending', '[]', NULL, NULL, ?10, ?10, ?11, NULL, ?12, ?13)
+                 granted_json, decided_at, decided_by, first_seen, last_seen, observed_signer, approved_signer, observed_files_json, observed_signature_scope, observed_rotation_from)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, NULL, NULL, 'pending', '[]', NULL, NULL, ?10, ?10, ?11, NULL, ?12, ?13, ?14)
              ON CONFLICT(plugin_id) DO UPDATE SET
                  kind = excluded.kind, name = excluded.name, version = excluded.version,
                  source_path = excluded.source_path,
@@ -188,6 +194,7 @@ impl Database {
                  error = excluded.error,
                  observed_files_json = excluded.observed_files_json,
                  observed_signature_scope = excluded.observed_signature_scope,
+                 observed_rotation_from = excluded.observed_rotation_from,
                  last_seen = excluded.last_seen",
             params![
                 o.plugin_id,
@@ -203,6 +210,7 @@ impl Database {
                 o.signer,
                 o.files_json,
                 o.signature_scope,
+                o.rotation_from,
             ],
         )?;
         Ok(())
@@ -280,9 +288,9 @@ impl Database {
 
     pub fn list_publishers(&self) -> Result<Vec<PublisherRow>> {
         let conn = self.conn();
-        let mut stmt = conn.prepare("SELECT key, name, trusted, revoked, added_at, added_by FROM plugin_publishers ORDER BY name, key")?;
+        let mut stmt = conn.prepare("SELECT key, name, trusted, revoked, added_at, added_by, note FROM plugin_publishers ORDER BY name, key")?;
         let rows = stmt.query_map([], |r| {
-            Ok(PublisherRow { key: r.get(0)?, name: r.get(1)?, trusted: r.get::<_, i64>(2)? != 0, revoked: r.get::<_, i64>(3)? != 0, added_at: r.get(4)?, added_by: r.get(5)? })
+            Ok(PublisherRow { key: r.get(0)?, name: r.get(1)?, trusted: r.get::<_, i64>(2)? != 0, revoked: r.get::<_, i64>(3)? != 0, added_at: r.get(4)?, added_by: r.get(5)?, note: r.get(6)? })
         })?;
         rows.collect()
     }
@@ -312,13 +320,13 @@ impl Database {
         Ok(())
     }
 
-    pub fn revoke_publisher(&self, key: &str, name: &str, actor: &str) -> Result<()> {
+    pub fn revoke_publisher(&self, key: &str, name: &str, actor: &str, note: &str) -> Result<()> {
         let now = chrono::Utc::now().timestamp_millis();
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO plugin_publishers (key, name, trusted, revoked, added_at, added_by) VALUES (?1, ?2, 0, 1, ?3, ?4)
-             ON CONFLICT(key) DO UPDATE SET trusted = 0, revoked = 1",
-            params![key, name, now, actor],
+            "INSERT INTO plugin_publishers (key, name, trusted, revoked, added_at, added_by, note) VALUES (?1, ?2, 0, 1, ?3, ?4, ?5)
+             ON CONFLICT(key) DO UPDATE SET trusted = 0, revoked = 1, note = CASE WHEN excluded.note <> '' THEN excluded.note ELSE note END",
+            params![key, name, now, actor, note],
         )?;
         Ok(())
     }

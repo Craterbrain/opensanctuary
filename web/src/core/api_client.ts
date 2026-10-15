@@ -334,6 +334,10 @@ export const api = {
         digest, granted, trust_publisher: !!opts.trustPublisher, confirm_revoked_publisher: !!opts.confirmRevokedPublisher,
       }, { headers: hostTokenHeader() });
     },
+    revocations: async () => {
+      await resolveHostSessionToken();
+      return api.get<{ applied_sequence: number; newest_valid_sequence: number | null; listed_keys: number; problems: string[] }>('/api/plugins/revocations', { headers: hostTokenHeader() });
+    },
     publishers: async () => {
       await resolveHostSessionToken();
       return api.get<PluginPublisher[]>('/api/plugins/publishers', { headers: hostTokenHeader() });
@@ -510,6 +514,8 @@ export interface PluginPublisher {
   added_at: number;
   added_by: string;
   plugins: string[];
+  /** Why it was revoked (e.g. the revocation list's reason). */
+  note?: string;
 }
 
 export interface PluginInfo {
@@ -522,7 +528,7 @@ export interface PluginInfo {
   /** Installed by the operator (so it can be updated or removed), as opposed to shipping with the app. */
   removable?: boolean;
   /** How far the operator has reason to trust the publisher; display only, it never widens what a plugin may do. */
-  trust?: { level: PluginTrustLevel; publisher_name: string | null; name_is_claim?: boolean; key_id: string | null; can_trust: boolean };
+  trust?: { level: PluginTrustLevel; publisher_name: string | null; name_is_claim?: boolean; release_signed?: boolean; rotated_from_key_id?: string | null; key_id: string | null; can_trust: boolean };
   /** For an approved plugin that has since changed: how it differs from the version you reviewed. */
   changes?: {
     from_version: string | null;
