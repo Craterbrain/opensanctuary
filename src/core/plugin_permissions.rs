@@ -203,6 +203,19 @@ impl PermissionSet {
     }
 }
 
+/// What changed between two permission lists: ids only in `b` (`added`), only in `a` (`removed`), and ids in both
+/// whose scope (categories, commands, keys, hosts, paths, ports) differs (`changed`).
+pub fn permission_diff(a: &[PermissionRequest], b: &[PermissionRequest]) -> serde_json::Value {
+    let same_scope = |x: &PermissionRequest, y: &PermissionRequest| {
+        (&x.categories, &x.commands, &x.keys, &x.hosts, &x.paths, &x.ports, &x.services, &x.access)
+            == (&y.categories, &y.commands, &y.keys, &y.hosts, &y.paths, &y.ports, &y.services, &y.access)
+    };
+    let added: Vec<&String> = b.iter().filter(|g| !a.iter().any(|r| r.id == g.id)).map(|g| &g.id).collect();
+    let removed: Vec<&String> = a.iter().filter(|r| !b.iter().any(|g| g.id == r.id)).map(|r| &r.id).collect();
+    let changed: Vec<&String> = b.iter().filter(|g| a.iter().any(|r| r.id == g.id && !same_scope(r, g))).map(|g| &g.id).collect();
+    serde_json::json!({ "added": added, "removed": removed, "changed": changed })
+}
+
 /// Which scope list a permission takes: `categories`, `commands`, `hosts`, `paths`, `ports`,
 /// `keys` or `none`.
 pub fn scope_kind(id: &str) -> &'static str {
@@ -640,6 +653,9 @@ impl PluginManifest {
 
     pub fn validate(&self, host_version: &str) -> Result<(), ManifestError> {
         let bad = |m: String| Err(ManifestError::Invalid(m));
+        if !self.version.is_empty() && semver::Version::parse(&self.version).is_err() {
+            return bad(format!("version '{}' isn't a semantic version like 1.2.3", self.version));
+        }
         if self.manifest_version != MANIFEST_VERSION {
             return bad(format!("manifest_version must be {MANIFEST_VERSION}"));
         }

@@ -6172,3 +6172,5 @@ video {
 #plugin-safe-mode span { flex: 1 1 320px; }
 .plugin-install-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0 12px; }
 .plugin-install-row .settings-hint { flex: 1 1 260px; margin: 0; }
+.plugin-changes { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--accent-warning, #e8a33d); background: rgba(255,255,255,0.04); border-radius: 4px; }
+.plugin-changes > * + * { margin-top: 4px; }

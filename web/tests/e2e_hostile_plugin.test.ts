@@ -78,7 +78,7 @@ describe("E2E Red Team: hostile plugin cannot break out or take the console down
     const base = { manifest_version: 1, version: "1.0.0", publisher: "x", description: "x", web: { entry: "index.html", sandbox: true }, permissions: [{ id: "ui.panel", reason: "x" }] };
     bad("bad_traverse_id", { "plugin.json": JSON.stringify({ ...base, id: "../../evil", name: "t" }), "index.html": "<p>x" });
     bad("bad_reserved_id", { "plugin.json": JSON.stringify({ ...base, id: "__os", name: "t" }), "index.html": "<p>x" });
-    bad("bad_dupe_id", { "plugin.json": JSON.stringify({ ...base, id: "sandbox_demo", name: "IMPOSTOR" }), "index.html": "<p>x" });
+    bad("bad_dupe_id", { "plugin.json": JSON.stringify({ ...base, id: "genius_lyrics", name: "IMPOSTOR" }), "index.html": "<p>x" });
     bad("bad_html_name", { "plugin.json": JSON.stringify({ ...base, id: "bad_html_name", name: "<img src=x onerror=window.__pwn=1>", description: "<script>window.__pwn=1</script>", publisher: "<b onmouseover=window.__pwn=1>p</b>" }), "index.html": "<p>x" });
     bad("bad_entry_escape", { "plugin.json": JSON.stringify({ ...base, id: "bad_entry_escape", name: "t", web: { entry: "../../index.html", sandbox: true } }) });
     bad("bad_entry_abs", { "plugin.json": JSON.stringify({ ...base, id: "bad_entry_abs", name: "t", web: { entry: "/etc/passwd", sandbox: true } }) });
@@ -118,8 +118,9 @@ describe("E2E Red Team: hostile plugin cannot break out or take the console down
     for (const p of list) if (p.error || p.problem || p.invalid) note(`rejected ${p.id}`, JSON.stringify(p.error ?? p.problem ?? p.invalid));
     expect(ids).toContain("sandbox_demo");
     expect(ids).toContain(HOSTILE_ID);
-    expect(ids.filter((i) => i === "sandbox_demo").length).toBe(1);
-    expect(list.find((p) => p.id === "sandbox_demo").name).not.toBe("IMPOSTOR");
+    // An impostor with a bundled plugin's id: both copies are flagged (ambiguous), neither may run.
+    note("impostor vs bundled", JSON.stringify(list.filter((p) => p.id === "genius_lyrics").map((p) => [p.name, p.error])));
+    expect(list.filter((p) => p.id === "genius_lyrics").every((p) => p.error)).toBe(true);
     for (const forbidden of ["../../evil", "__os", "bad_backend", "bad_entry_escape", "bad_entry_abs", "bad_json", "bad_many_perms", "bad_symlink"]) {
       const rec = list.find((p) => p.id === forbidden); // rejected ones are listed, flagged with their error
       if (rec) expect(rec.error ?? rec.problem ?? rec.invalid).toBeTruthy();
@@ -297,6 +298,34 @@ describe("E2E Red Team: hostile plugin cannot break out or take the console down
     }, 90000);
     if (attack === "spin") recovery(); // right after the hang, before anything clears the marker
   }
+
+  test("load shedding: busy timers in a shared-thread browser switch off the culprit, not the innocent plugin", async () => {
+    await freshPage();
+    await openFresh();
+    // A well-behaved plugin runs alongside the hostile one.
+    await page.keyboard.press("F2");
+    await page.waitForSelector("#options-modal", { state: "visible", timeout: 5000 });
+    await page.locator(".settings-category-btn:has-text('Plugins')").click();
+    const demo = page.locator('.plugin-card[data-plugin-id="sandbox_demo"]');
+    await demo.waitFor({ state: "visible", timeout: 10000 });
+    await demo.locator("button:has-text('Approve')").first().click();
+    await page.waitForSelector('iframe[data-plugin-id="sandbox_demo"]', { timeout: 10000 });
+    await page.keyboard.press("Escape");
+    expect(await page.locator(`iframe[data-plugin-id="${HOSTILE_ID}"]`).count()).toBeGreaterThan(0);
+
+    const t0 = Date.now();
+    const out = await run("spinTimers", 15000); note("shed: spinTimers", out);
+    await page.waitForFunction((id) => !document.querySelector(`iframe[data-plugin-id="${id}"]`), HOSTILE_ID, { timeout: 90000, polling: 500 });
+    note("shed: culprit removed after", `${Math.round((Date.now() - t0) / 1000)}s`);
+    // The innocent one is back (or never left) and the console is quick again.
+    await page.waitForSelector('iframe[data-plugin-id="sandbox_demo"]', { timeout: 30000 });
+    await page.waitForTimeout(2000);
+    const t1 = Date.now();
+    await page.evaluate(() => 1);
+    expect(Date.now() - t1).toBeLessThan(1000);
+    expect(await page.locator(".toast, #os-toast-container").first().innerText().catch(() => "")).toContain("slowing the console down");
+    expect(await page.locator(`iframe[data-plugin-id="${HOSTILE_ID}"]`).count()).toBe(0);
+  }, 180000);
 
   test("watchdog: with an isolated frame, a spinning plugin is switched off and the console stays usable", async () => {
     const c = await isolated.newContext({ viewport: { width: 1280, height: 900 } });

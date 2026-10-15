@@ -119,6 +119,7 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         "name": row.name,
         "version": row.version,
         "sandboxed": row.kind == "sandbox",
+        "changes": crate::core::plugin_registry::describe_update(row),
         "removable": row.kind == "sandbox" && is_installed_folder(app, std::path::Path::new(&row.source_path)),
         "state": state,
         "status": row.status,
@@ -267,17 +268,7 @@ pub(super) async fn approve_plugin(
 
 /// What an Advanced override changed relative to what the plugin asked for.
 fn override_summary(requested: &[PermissionRequest], granted: &[PermissionRequest]) -> serde_json::Value {
-    let same_scope = |a: &PermissionRequest, b: &PermissionRequest| {
-        (&a.categories, &a.commands, &a.keys, &a.hosts, &a.paths, &a.ports) == (&b.categories, &b.commands, &b.keys, &b.hosts, &b.paths, &b.ports)
-    };
-    let added: Vec<&String> = granted.iter().filter(|g| !requested.iter().any(|r| r.id == g.id)).map(|g| &g.id).collect();
-    let removed: Vec<&String> = requested.iter().filter(|r| !granted.iter().any(|g| g.id == r.id)).map(|r| &r.id).collect();
-    let changed: Vec<&String> = granted
-        .iter()
-        .filter(|g| requested.iter().any(|r| r.id == g.id && !same_scope(r, g)))
-        .map(|g| &g.id)
-        .collect();
-    serde_json::json!({ "added": added, "removed": removed, "changed": changed })
+    crate::core::plugin_permissions::permission_diff(requested, granted)
 }
 
 /// GET /api/plugins/permissions -- every permission the host knows, for the Advanced override.

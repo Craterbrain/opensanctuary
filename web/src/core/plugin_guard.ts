@@ -103,3 +103,89 @@ export function showSafeModeBanner(onResume: () => void, onReview: () => void): 
   document.body.appendChild(bar);
   return remove;
 }
+
+// ---- Load shedding: finding the plugin that is slowing the console down -----------------------------
+//
+// A frame that runs a lot of work in small slices keeps answering pings (so the watchdog above never fires)
+// while the console, which shares its thread, crawls. The console can't ask a frame how busy it is (they all
+// lag together), so it finds the culprit by elimination: while the console's own timer is running late, switch
+// plugins off one at a time until the lag clears. The last one switched off is blamed and stays off for the
+// session; the innocent ones are started again.
+
+/** A 1-second console tick that arrives this late counts as lag. */
+export const LAG_MS = 1000;
+/** Lag means this many late ticks out of the last LAG_WINDOW. */
+const LAG_TICKS = 3;
+const LAG_WINDOW = 4;
+/** After switching one off, ticks to wait before asking "did that clear it?" (lets the window refill). */
+const SETTLE_TICKS = 4;
+/** When switching every plugin off didn't help, the plugins weren't the cause; leave them alone this long. */
+const COOLDOWN_TICKS = 60;
+
+export type ShedAction =
+  | { kind: 'suspend'; id: string }
+  | { kind: 'restore'; ids: string[] }
+  | { kind: 'blame'; id: string };
+
+export class LoadShedder {
+  private drifts: number[] = [];
+  private suspended: string[] = [];
+  private testing = false;
+  private settle = 0;
+  private cooldownUntil = 0;
+  private tickNo = 0;
+  private blamed = new Set<string>();
+
+  /**
+   * One call per console tick. `driftMs` is how late the tick was; `running` lists the plugin ids that are
+   * running now, oldest first. Returns what the caller should do.
+   */
+  tick(driftMs: number, running: string[]): ShedAction[] {
+    this.tickNo++;
+    this.drifts.push(driftMs);
+    if (this.drifts.length > LAG_WINDOW) this.drifts.shift();
+    const candidates = () => running.filter((id) => !this.blamed.has(id) && !this.suspended.includes(id)).reverse(); // newest first
+
+    if (!this.testing) {
+      const lagging = this.drifts.filter((d) => d > LAG_MS).length >= LAG_TICKS;
+      if (!lagging || this.tickNo < this.cooldownUntil) return [];
+      const next = candidates()[0];
+      if (!next) return [];
+      return [this.suspend(next)];
+    }
+
+    this.settle++;
+    if (this.settle < SETTLE_TICKS) return [];
+    const stillLagging = this.drifts.slice(-SETTLE_TICKS).some((d) => d > LAG_MS);
+    if (!stillLagging) {
+      // Switching off the most recent one cleared it: that's the culprit.
+      const culprit = this.suspended[this.suspended.length - 1];
+      const innocents = this.suspended.slice(0, -1);
+      this.blamed.add(culprit);
+      this.reset();
+      return [{ kind: 'blame', id: culprit }, ...(innocents.length ? [{ kind: 'restore', ids: innocents } as ShedAction] : [])];
+    }
+    const next = candidates()[0];
+    if (next) return [this.suspend(next)];
+    // Nobody left to try and it's still slow: not the plugins' doing.
+    const all = this.suspended;
+    this.cooldownUntil = this.tickNo + COOLDOWN_TICKS;
+    this.reset();
+    return [{ kind: 'restore', ids: all }];
+  }
+
+  private suspend(id: string): ShedAction {
+    this.suspended.push(id);
+    this.testing = true;
+    this.settle = 0;
+    this.drifts = [];
+    return { kind: 'suspend', id };
+  }
+
+  private reset() {
+    this.suspended = [];
+    this.testing = false;
+    this.settle = 0;
+    this.drifts = [];
+  }
+}

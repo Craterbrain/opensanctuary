@@ -476,6 +476,10 @@ impl Database {
         // Signer pinning columns for plugin grants (added after the table first shipped)
         let _ = conn.execute("ALTER TABLE plugin_grants ADD COLUMN observed_signer TEXT", []);
         let _ = conn.execute("ALTER TABLE plugin_grants ADD COLUMN approved_signer TEXT", []);
+        // What the operator reviewed, so an update can be shown as a difference (version, files, permissions).
+        for col in ["observed_files_json", "approved_files_json", "approved_version", "approved_requested_json"] {
+            let _ = conn.execute(&format!("ALTER TABLE plugin_grants ADD COLUMN {col} TEXT"), []);
+        }
 
         // Ensure loop_playback exists on older databases
         let _ = conn.execute("ALTER TABLE media ADD COLUMN loop_playback INTEGER DEFAULT 0", []);

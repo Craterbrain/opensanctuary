@@ -6995,6 +6995,10 @@ async fn test_plugin_install_and_uninstall() {
     let after: serde_json::Value = c.get(format!("{base}/api/plugins")).header("x-host-token", "inst_host").send().await.unwrap().json().await.unwrap();
     let state = after.as_array().unwrap().iter().find(|p| p["id"] == "hello_pkg").unwrap()["state"].clone();
     assert_eq!(state, "changed");
+    // The review says what changed: one file edited, no new permissions, same version number.
+    let changes = after.as_array().unwrap().iter().find(|p| p["id"] == "hello_pkg").unwrap()["changes"].clone();
+    assert_eq!(changes["files"]["modified"], serde_json::json!(["index.html"]), "{changes}");
+    assert_eq!((changes["files"]["added"].as_array().map(Vec::len), changes["permissions"]["added"].as_array().map(Vec::len), changes["direction"].as_str()), (Some(0), Some(0), Some("same")));
     assert_eq!(c.get(format!("{base}/plugin-frame/hello_pkg/index.html")).send().await.unwrap().status(), reqwest::StatusCode::NOT_FOUND);
 
     // Hostile or broken packages are refused, and leave nothing behind.

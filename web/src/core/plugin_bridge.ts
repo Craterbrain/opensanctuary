@@ -36,7 +36,7 @@ import { api, type PluginInfo } from "./api_client.ts";
 import { getCurrentIconSet } from "./icon_sets.ts";
 import { registerLibrarySource, unregisterLibrarySource } from "../ui/library_panel.ts";
 import { addToolbarItems, removeToolbarItems, updateToolbarItem } from "./plugin_toolbar.ts";
-import { silentFrames, PING_EVERY_MS, type Watched } from "./plugin_guard.ts";
+import { silentFrames, PING_EVERY_MS, LoadShedder, type Watched } from "./plugin_guard.ts";
 import { showToast } from "./ui_utils.ts";
 
 interface Running {
@@ -55,9 +55,38 @@ const running = new Map<Window, Running>();
 /** Liveness of each running frame, for the watchdog (plugin_guard.ts). */
 const watched = new Map<Window, Watched>();
 let watchdogTimer: number | null = null;
+const shedder = new LoadShedder();
+/** Plugins the shedder switched off to test them, so the innocent ones can be started again. */
+const shedPlugins = new Map<string, PluginInfo>();
+
+/** Once a second: is the console running late, and if so which plugin is the cause (see LoadShedder)? */
+function startLoadShedding() {
+  let expected = Date.now() + 1000;
+  window.setInterval(() => {
+    const now = Date.now();
+    const drift = Math.max(0, now - expected);
+    expected = now + 1000;
+    const order: string[] = [];
+    const info = new Map<string, PluginInfo>();
+    for (const r of running.values()) if (!info.has(r.plugin.id)) { info.set(r.plugin.id, r.plugin); order.push(r.plugin.id); }
+    for (const act of shedder.tick(drift, order)) {
+      if (act.kind === 'suspend') {
+        const plugin = info.get(act.id);
+        if (plugin) { shedPlugins.set(act.id, plugin); stopSandboxedPlugin(act.id); }
+      } else if (act.kind === 'restore') {
+        for (const id of act.ids) { const plugin = shedPlugins.get(id); shedPlugins.delete(id); if (plugin && !isSandboxedPluginRunning(id)) startSandboxedPlugin(plugin); }
+      } else if (act.kind === 'blame') {
+        const name = shedPlugins.get(act.id)?.name ?? act.id;
+        shedPlugins.delete(act.id);
+        showToast(`Plugin "${name}" was slowing the console down and was turned off for this session. It is still approved; reload to start it again.`, 'error', 15000);
+      }
+    }
+  }, 1000);
+}
 
 function startWatchdog() {
   if (watchdogTimer !== null) return;
+  startLoadShedding();
   let expected = Date.now() + PING_EVERY_MS;
   watchdogTimer = window.setInterval(() => {
     const now = Date.now();

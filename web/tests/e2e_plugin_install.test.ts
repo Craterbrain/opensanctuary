@@ -73,6 +73,11 @@ describe("E2E: install, review, update and remove a plugin from a package", () =
     const [chooser] = await Promise.all([page.waitForEvent("filechooser"), card().locator(".plugin-update").click()]);
     await chooser.setFiles(zipOf(work, "v2", { "plugin.json": manifest("pkg_hello"), "index.html": html.replace("hello from", "UPDATED hello from") }));
     await page.waitForFunction(() => document.querySelector('.plugin-card[data-plugin-id="pkg_hello"] .plugin-state')?.textContent?.includes("Changed"), null, { timeout: 10000 });
+    // The review says what is different from the version you approved.
+    const changes = await card().locator(".plugin-changes").innerText();
+    expect(changes).toContain("edited: index.html");
+    expect(changes).toContain("No new permissions");
+    expect(changes).toContain("version number didn't change");
 
     // Remove: the files, the card and the running frame all go.
     page.once("dialog", (d) => d.accept());

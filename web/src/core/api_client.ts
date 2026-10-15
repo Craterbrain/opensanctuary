@@ -490,6 +490,14 @@ export interface PluginInfo {
   sandboxed?: boolean;
   /** Installed by the operator (so it can be updated or removed), as opposed to shipping with the app. */
   removable?: boolean;
+  /** For an approved plugin that has since changed: how it differs from the version you reviewed. */
+  changes?: {
+    from_version: string | null;
+    to_version: string | null;
+    direction: 'upgrade' | 'downgrade' | 'same' | 'unknown';
+    files: { added: string[]; removed: string[]; modified: string[] } | null;
+    permissions: { added: string[]; removed: string[]; changed: string[]; added_tiers: Array<{ id: string; tier: string }> };
+  } | null;
   entry?: string | null;
   name: string;
   version: string | null;
