@@ -7557,13 +7557,32 @@ async fn test_add_media_from_a_process_job_is_checked_against_its_actual_bytes_n
     let body2: serde_json::Value = add2.json().await.unwrap();
     assert_eq!(body2["item"]["file_path"], "/media/videos/real.webm");
     assert!(tmp.path().join("media/videos/real.webm").exists());
+
+    // The same for audio: a 4-byte MPEG sync pattern in front of HTML is not a stream (nothing real
+    // follows it), but a genuine one -- here, an actual encoder's output, not hand-built bytes -- passes.
+    std::fs::write(job_dir.join("evil.mp3"), [0xFF, 0xFB, 0x90, 0x00].iter().chain(b"<html><script>alert(1)</script>").copied().collect::<Vec<u8>>()).unwrap();
+    let bad_audio = c.post(format!("{base}/api/plugin-host/media")).header("x-plugin-token", pt)
+        .json(&serde_json::json!({ "job": job, "file": "evil.mp3", "media_type": "audio", "title": "Evil" }))
+        .send().await.unwrap();
+    assert_ne!(bad_audio.status(), reqwest::StatusCode::OK, "a sync pattern in front of HTML, with nothing real following, must be refused");
+    assert!(!tmp.path().join("media/audio/evil.mp3").exists());
+
+    let real_mp3 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/media/bare_real.mp3")).unwrap();
+    std::fs::write(job_dir.join("real.mp3"), &real_mp3).unwrap();
+    let add3 = c.post(format!("{base}/api/plugin-host/media")).header("x-plugin-token", pt)
+        .json(&serde_json::json!({ "job": job, "file": "real.mp3", "media_type": "audio", "title": "Real Audio" }))
+        .send().await.unwrap();
+    assert_eq!(add3.status(), reqwest::StatusCode::OK, "{}", add3.text().await.unwrap());
+    assert!(tmp.path().join("media/audio/real.mp3").exists());
 }
 
 #[test]
 fn test_sniff_audio_ext_recognizes_real_audio_and_rejects_impostors() {
     use os_next::storage::media_sniff::sniff_audio_ext;
     assert_eq!(sniff_audio_ext(b"ID3\x03\x00\x00\x00\x00\x00\x00"), Some("mp3"));
-    assert_eq!(sniff_audio_ext(&[0xFF, 0xFB, 0x90, 0x00]), Some("mp3"));
+    // A bare mp3 stream (no ID3 tag) is only recognized by a real, frame-chaining MPEG bitstream
+    // (src/storage/media_sniff.rs's own tests cover this in depth); 4 bytes of sync pattern alone is not enough.
+    assert_eq!(sniff_audio_ext(&[0xFF, 0xFB, 0x90, 0x00]), None, "a lone header with nothing real following it must not pass");
     assert_eq!(sniff_audio_ext(b"RIFF\0\0\0\0WAVEfmt "), Some("wav"));
     assert_eq!(sniff_audio_ext(b"fLaC\0\0\0\"xxxx"), Some("flac"));
     assert_eq!(sniff_audio_ext(b"OggS\0\x02\0\0\0\0\0\0\0\0OpusHead\x01\x02"), Some("opus"));

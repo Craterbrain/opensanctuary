@@ -1,6 +1,6 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { mkdtempSync, writeFileSync, chmodSync } from "fs";
+import { mkdtempSync, writeFileSync, chmodSync, copyFileSync } from "fs";
 import { Buffer } from "buffer";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -42,7 +42,9 @@ describe("E2E Live Test: Video Downloader plugin (yt-dlp) downloads through the 
     const seedWebm = join(toolsDir, "seed.webm");
     const seedMp3 = join(toolsDir, "seed.mp3");
     writeFileSync(seedWebm, Buffer.from([0x1a, 0x45, 0xdf, 0xa3, ...Buffer.from("fake webm bytes")]));
-    writeFileSync(seedMp3, Buffer.from([0xff, 0xfb, 0x90, 0x00, ...Buffer.from("fake mp3 bytes")]));
+    // A real MPEG frame (not just a 4-byte sync pattern): library.addMedia now checks that a second
+    // frame follows (src/storage/media_sniff.rs), which a hand-written prefix can't satisfy for free.
+    copyFileSync(join(import.meta.dir, "../../testdata/media/bare_real.mp3"), seedMp3);
     const mediaDir = mkdtempSync(join(tmpdir(), "os-next-ytdlp-media-"));
     server = await spawnTestServer({
       port: PORT, tempPrefix: "os-next-ytdlp-plugin-e2e-",
