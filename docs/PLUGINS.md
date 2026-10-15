@@ -288,6 +288,8 @@ Every install, update and removal is in the audit log. The API is `POST /api/plu
 
 To make a package: `cd my_plugin && zip -r ../my_plugin.zip .`
 
+**Check a plugin before you ship it:** `os-next --check-plugin path/to/my_plugin` runs the checks the app runs on install (manifest, entry file, icons, permission names and scopes) and prints what the operator would be asked to approve, with each permission's risk level. It exits 0 if the plugin would load. The folder's name must be the plugin's id.
+
 ---
 
 ## When a plugin misbehaves

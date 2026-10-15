@@ -28,8 +28,6 @@ const KNOWN: &[(&str, Tier, &str)] = &[
     ("commands.send", Tier::Medium, "enforced"),
     ("keyring.own", Tier::Medium, "enforced"),
     ("keyring.service", Tier::Critical, "enforced"),
-    ("settings.read", Tier::Medium, "reserved"),
-    ("settings.write", Tier::High, "reserved"),
     ("network.outbound", Tier::Medium, "enforced"),
     ("process.run", Tier::Critical, "enforced"),
     ("ui.panel", Tier::Medium, "enforced"),
@@ -212,7 +210,6 @@ pub fn scope_kind(id: &str) -> &'static str {
         "library.write" => "categories",
         "commands.send" | "process.run" => "commands",
         "network.outbound" => "hosts",
-        "settings.read" | "settings.write" => "keys",
         "keyring.service" => "services",
         _ => "none",
     }
@@ -1081,7 +1078,7 @@ mod tests {
         // A plugin needs a web section at all.
         assert!(manifest(r#"{"manifest_version":1,"id":"nothing","name":"N","permissions":[]}"#).is_err());
         // The permissions only a native library could hold are unknown now.
-        for id in ["native.code", "commands.intercept", "commands.modify", "resources.provide", "library.read", "filesystem.plugin_data", "filesystem.read", "filesystem.write", "network.listen", "process.spawn"] {
+        for id in ["native.code", "commands.intercept", "commands.modify", "resources.provide", "library.read", "settings.read", "settings.write", "filesystem.plugin_data", "filesystem.read", "filesystem.write", "network.listen", "process.spawn"] {
             let m = GOOD.replace(r#"{"id": "show.observe", "reason": "follow blackout"}"#, &format!(r#"{{"id": "{id}"}}"#));
             assert!(manifest(&m).is_err(), "{id} must not be accepted");
             assert!(validate_grant(&PermissionRequest::simple(id), "sandbox").is_err(), "{id} must not be grantable by hand either");

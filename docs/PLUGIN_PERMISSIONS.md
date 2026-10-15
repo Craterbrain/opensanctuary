@@ -4,7 +4,7 @@ Status: **implemented.** This began as a design (written by an Opus design pass)
 
 - **Manifest, grants, digest pinning, signer pinning, audit log, scoped plugin tokens**, and a console review screen (Settings > Plugins) where only the console can approve, deny, revoke or **override** (an Advanced mode that grants exactly the permissions the operator picks, behind a warning; see section 4).
 - **Two kinds of plugin:** *sandboxed web* (an isolated frame behind a permission-checked bridge: the recommended kind) and *console script* (`ui.dom`: runs in the console page, Critical). **There are no native plugins:** loading compiled libraries into the server (the `OsPlugin` trait, the ABI 2 `PluginHost` API, `commands.intercept`, `commands.modify`, `resources.provide`, `native.code` and the filesystem/process/listen permissions that only made sense for them) was removed, as were the pre-manifest forms before it. A manifest with a `backend` section is refused.
-- **Permissions in force:** every id in the table in section 2 marked enforced. `settings.read` and `settings.write` are accepted in a manifest and shown at review, but the host does not (yet) act on them.
+- **Permissions in force:** every id in the table in section 2 marked enforced. (`settings.read` and `settings.write` were reserved ids that nothing ever acted on; they were removed rather than left looking like real grants.)
 - **Features built on it:** placements (`ui.placements`) and ribbon buttons (`ui.toolbar`), `net.fetch` with limited headers, `library.addSong/addScriptures/addMedia/addMediaUrl`, `process.run` with host-managed signed tools, `notifications.post` and shared keyring namespaces (`keyring.service`). The bundled plugins (`web/plugins/`) are the worked examples. The guide for writing a plugin is `docs/PLUGINS.md`; this document is the permission model behind it.
 - **Commands** from REST, WebSocket and a sandboxed plugin's `sendCommand` all go through `src/api/command_pipeline.rs`: shorthand expansion, parse, execute, persist, broadcast.
 ---
@@ -72,8 +72,6 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 | `commands.send` | `commands[]`: ShowCommand variant names, or `"*"` | Medium if every listed variant is navigation (`NextSlide`, `PrevSlide`, `NextItem`, `PrevItem`, `JumpSlide`, `JumpSection`, `GoLive`, `StageItem`); otherwise High; `"*"` is High | **E** | `host.send_command()`, `/api/command` and `/ws` with a plugin credential. |
 | `keyring.own` | — | Medium | **E** | The `OpenSanctuary:Plugin:<id>` namespace only. |
 | `keyring.service` | `services[]` (`OpenSanctuary:Shared:<name>`), `access` (`read`\|`write`) | Critical | **E** | Shared keyring namespaces; owner rules in PLUGINS.md. Only the `Shared:` prefix is grantable, never System, another plugin's namespace or a host service. |
-| `settings.read` | `keys[]` | Medium | reserved | Accepted and shown, not acted on yet. |
-| `settings.write` | `keys[]` | High | reserved | Accepted and shown, not acted on yet. If it is ever implemented it must never cover `csp_mode`, `frame_mode`, `cors_mode` or TLS settings. |
 | `network.outbound` | `hosts[]` | Medium | **E** (iframe CSP) | |
 | `process.run` | `commands[]` (ids of commands declared in the manifest) | Critical | **E** | Sandboxed plugins only: the host runs exactly the manifest's declared command templates, no shell, throwaway job folders, with host-managed signed tools. See PLUGINS.md. |
 | `ui.panel` | — | Medium | **E** (slots) | |
