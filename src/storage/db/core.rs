@@ -462,6 +462,17 @@ impl Database {
                 last_seen INTEGER NOT NULL
             );
 
+            -- Publishers (minisign keys) the operator has trusted, or revoked (docs/PLUGIN_SIGNING.md).
+            CREATE TABLE IF NOT EXISTS plugin_publishers (
+                key TEXT PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT '',
+                trusted INTEGER NOT NULL DEFAULT 0,
+                revoked INTEGER NOT NULL DEFAULT 0,
+                added_at INTEGER NOT NULL,
+                added_by TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT ''
+            );
+
             CREATE TABLE IF NOT EXISTS plugin_audit (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts_ms INTEGER NOT NULL,

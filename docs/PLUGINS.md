@@ -292,7 +292,27 @@ A signature tells the operator *who* released a package and that no file was cha
 4. `cd my_plugin && minisign -Sm plugin.json` writes `plugin.json.minisig`. (`plugin.json` is signed byte for byte, so don't reformat it afterwards.)
 5. `os-next --check-plugin my_plugin` should say **fully signed**.
 
-The review screen then says *signed, covers every file*. A signed `plugin.json` that doesn't list `files` says *manifest signed; the other files aren't covered*, and a package whose files differ from the list (edited, missing, or an extra file) is refused outright, signed or not. Design and what comes next: [PLUGIN_SIGNING.md](PLUGIN_SIGNING.md).
+The review screen then says *signed, covers every file*, with the publisher's name from `publisher` in `plugin.json`. A signed `plugin.json` that doesn't list `files` says *manifest signed; the other files aren't covered*, and a package whose files differ from the list (edited, missing, or an extra file) is refused outright, signed or not. Design and what comes next: [PLUGIN_SIGNING.md](PLUGIN_SIGNING.md).
+
+---
+
+## Publishers and trust
+
+Every plugin card shows a badge for how far its publisher (the minisign key that signed it) is known to you:
+
+| Badge | Meaning |
+|---|---|
+| **Built-in** | Ships with OpenSanctuary |
+| **Trusted publisher** | Signed by a key you chose to trust |
+| **Known publisher** | Signed by a key you have approved a plugin from before, but never chose to trust |
+| **New publisher** | Signed by a key you haven't seen before |
+| **Unsigned** | Nothing says who released it |
+| **Invalid signature** | The signature doesn't verify; it can't be installed or run |
+| **Revoked publisher** | Signed by a key you revoked |
+
+Tick **Trust everything this publisher signs** when you approve a signed plugin (or press **Trust publisher** later) to trust a key. **A badge is information, not permission.** Trust never approves anything and never skips the review screen: a trusted publisher's update still stops at "changed" and shows what changed, and a signature says who released a package, not that it is harmless.
+
+Under **Publishers** you can **Stop trusting** a key or **Revoke** it. Revoking stops every plugin that key signed (as if you had revoked each one), marks its other plugins "Revoked publisher", and makes approving one of them ask for an extra confirmation. Revoked keys can't be trusted again from the card. Everything here is console-only and in the audit log.
 
 ---
 

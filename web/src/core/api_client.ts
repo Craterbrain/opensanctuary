@@ -328,9 +328,27 @@ export const api = {
       await resolveHostSessionToken();
       return api.get<PluginInfo[]>('/api/plugins', { headers: hostTokenHeader() });
     },
-    approve: async (id: string, digest: string, granted: string[]) => {
+    approve: async (id: string, digest: string, granted: string[], opts: { trustPublisher?: boolean; confirmRevokedPublisher?: boolean } = {}) => {
       await resolveHostSessionToken();
-      return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/approve`, { digest, granted }, { headers: hostTokenHeader() });
+      return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/approve`, {
+        digest, granted, trust_publisher: !!opts.trustPublisher, confirm_revoked_publisher: !!opts.confirmRevokedPublisher,
+      }, { headers: hostTokenHeader() });
+    },
+    publishers: async () => {
+      await resolveHostSessionToken();
+      return api.get<PluginPublisher[]>('/api/plugins/publishers', { headers: hostTokenHeader() });
+    },
+    trustPublisher: async (keyId: string) => {
+      await resolveHostSessionToken();
+      return api.post<{ success: boolean }>(`/api/plugins/publishers/${encodeURIComponent(keyId)}/trust`, {}, { headers: hostTokenHeader() });
+    },
+    untrustPublisher: async (keyId: string) => {
+      await resolveHostSessionToken();
+      return api.post<{ success: boolean }>(`/api/plugins/publishers/${encodeURIComponent(keyId)}/untrust`, {}, { headers: hostTokenHeader() });
+    },
+    revokePublisher: async (keyId: string) => {
+      await resolveHostSessionToken();
+      return api.post<{ success: boolean; stopped: string[] }>(`/api/plugins/publishers/${encodeURIComponent(keyId)}/revoke`, {}, { headers: hostTokenHeader() });
     },
     /** The Advanced override: grant exactly these permissions instead of what the plugin asked for. */
     approveOverride: async (id: string, digest: string, grants: PluginGrantInput[]) => {
@@ -481,6 +499,19 @@ export interface PluginCatalogEntry {
   categories: string[];
 }
 
+export type PluginTrustLevel = 'builtin' | 'trusted' | 'known' | 'new' | 'unsigned' | 'invalid' | 'revoked';
+
+/** A publisher (signing key) the operator trusted or revoked. */
+export interface PluginPublisher {
+  key_id: string;
+  name: string;
+  trusted: boolean;
+  revoked: boolean;
+  added_at: number;
+  added_by: string;
+  plugins: string[];
+}
+
 export interface PluginInfo {
   shared_with?: Array<{ service: string; plugins: Array<{ id: string; name: string; access: string; state: string }> }>;
   overridden?: boolean;
@@ -490,6 +521,8 @@ export interface PluginInfo {
   sandboxed?: boolean;
   /** Installed by the operator (so it can be updated or removed), as opposed to shipping with the app. */
   removable?: boolean;
+  /** How far the operator has reason to trust the publisher; display only, it never widens what a plugin may do. */
+  trust?: { level: PluginTrustLevel; publisher_name: string | null; name_is_claim?: boolean; key_id: string | null; can_trust: boolean };
   /** For an approved plugin that has since changed: how it differs from the version you reviewed. */
   changes?: {
     from_version: string | null;
