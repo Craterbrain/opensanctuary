@@ -274,6 +274,22 @@ runs after the app has booted.
 
 ---
 
+## Installing and removing plugins
+
+**Settings → Plugins → Install plugin…** takes a **package**: a `.zip` holding the plugin's files, with `plugin.json` at the top (or inside one wrapping folder, which is stripped). Installed plugins live in `<data dir>/plugins/<id>/`, so they survive app updates and work when the app itself is installed read-only. The ones that ship with the app are in `web/plugins/`.
+
+- **Installing grants nothing.** The plugin appears as "needs review" and does not run until you approve it, like any other.
+- **The package is not trusted.** It is checked before anything is kept: no paths that leave the folder, no symbolic links, at most 300 files and 25 MB once unpacked (counted as written, so a zip bomb that lies about its size is stopped), and the result must pass the same checks as a plugin found on disk. A failed install leaves nothing behind.
+- **Built-in plugins can't be shadowed.** A package whose id belongs to a bundled plugin is refused, and an installed folder with such an id is ignored.
+- **Update…** on an installed plugin replaces its files. The new files hash differently, so the plugin shows "changed" and stays off until you review it.
+- **Remove** deletes the files, the approval, the plugin's downloaded tools and the secrets it saved in the keyring (so a different plugin installed later under the same id can't read them). Bundled plugins can only be revoked.
+
+Every install, update and removal is in the audit log. The API is `POST /api/plugins/install` (body: the zip; `?replace=true` to update) and `DELETE /api/plugins/:id`, both console-only.
+
+To make a package: `cd my_plugin && zip -r ../my_plugin.zip .`
+
+---
+
 ## When a plugin misbehaves
 
 A plugin page runs in its own frame, but some browsers run that frame on the console's own thread, so a page stuck in an endless loop can freeze the whole tab. The console defends against this without trusting the plugin:

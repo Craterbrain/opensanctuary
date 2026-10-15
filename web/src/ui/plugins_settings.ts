@@ -184,6 +184,15 @@ function buildAdvanced(plugin: PluginInfo, onChange: (on: boolean) => void): { r
   return { root, collect, isOn: () => toggle.checked };
 }
 
+/** Opens the file chooser for a plugin package and hands the chosen .zip over. */
+function pickPackage(onFile: (file: File) => void): void {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.zip,application/zip';
+  input.addEventListener('change', () => { const f = input.files?.[0]; if (f) onFile(f); });
+  input.click();
+}
+
 function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   const card = el('div', 'network-card plugin-card');
   card.dataset.pluginId = plugin.id;
@@ -349,6 +358,20 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
     revoke.addEventListener('click', () => void act(() => api.plugins.revoke(plugin.id), `${plugin.name} revoked`));
     actions.appendChild(revoke);
   }
+  if (plugin.removable) {
+    const update = el('button', 'btn btn-secondary plugin-update', 'Update…');
+    update.addEventListener('click', () => pickPackage((file) => void act(() => api.plugins.install(file, true), `${plugin.name} updated: review it before it runs again`)));
+    actions.appendChild(update);
+    const remove = el('button', 'btn btn-danger plugin-remove', 'Remove');
+    remove.addEventListener('click', () => {
+      if (!window.confirm(`Remove "${plugin.name}"?\n\nIts files, its approval and any secrets it saved are deleted. This can't be undone.`)) return;
+      void act(async () => {
+        await api.plugins.uninstall(plugin.id);
+        return { id: plugin.id, kind: 'sandbox', state: 'revoked' };
+      }, `${plugin.name} removed`);
+    });
+    actions.appendChild(remove);
+  }
   if (advanced && plugin.state !== 'incompatible' && !plugin.error) {
     const apply = el('button', 'btn btn-danger', 'Apply override');
     apply.hidden = true;
@@ -418,6 +441,19 @@ export function renderPluginsSettings(content: HTMLElement) {
       content.appendChild(el('div', 'settings-group-header', 'Plugins'));
       content.appendChild(el('div', 'settings-hint',
         'A plugin does nothing until you approve it. Only this console can grant permissions, and a plugin whose files change is stopped until you review it again.'));
+      const install = el('div', 'plugin-install-row');
+      const installBtn = el('button', 'btn btn-secondary plugin-install', 'Install plugin…');
+      installBtn.addEventListener('click', () => pickPackage(async (file) => {
+        try {
+          const p = await api.plugins.install(file);
+          showToast(`${p.name} installed. Review its permissions below before it can run.`);
+          refresh();
+        } catch (e: any) {
+          showToast(`Couldn't install: ${e?.message ?? e}`);
+        }
+      }));
+      install.append(installBtn, el('span', 'settings-hint', 'A plugin package is a .zip with a plugin.json. Only install plugins from people you trust: it stays switched off until you approve it.'));
+      content.appendChild(install);
       if (!plugins.length) {
         content.appendChild(el('div', 'settings-empty', 'No plugins installed.'));
       }

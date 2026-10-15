@@ -139,7 +139,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Record what plugins are installed (web/plugins): nothing runs until the operator approves it
         // (docs/PLUGIN_PERMISSIONS.md).
         let web_plugins_dir = os_next::storage::paths::resolve_web_dir(args.web_dir.as_deref()).join("plugins");
-        let discovered = os_next::core::plugin_registry::discover(&web_plugins_dir, env!("CARGO_PKG_VERSION"));
+        let user_plugins_dir = os_next::core::plugin_registry::user_plugins_dir(&resolved_paths.data_dir());
+        let discovered = os_next::core::plugin_registry::discover_all(&web_plugins_dir, Some(&user_plugins_dir), env!("CARGO_PKG_VERSION"));
         os_next::core::plugin_registry::sync(&db, &discovered);
         db.prune_plugin_audit(5000);
     }

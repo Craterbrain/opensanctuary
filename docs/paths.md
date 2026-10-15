@@ -17,7 +17,7 @@ While functional for portable zip distributions where the binary and assets resi
 To resolve this, OS-Next cleanly separates:
 - **Install Directory**: The executable, libraries, and static UI assets (`web/`). Treated as read-only.
 - **Config Directory**: Small pointer file (`install.json`).
-- **Data Directory**: The database (`library.db`), Bible translation databases (`bibles/`), song databases (`songs/`), and background media cache (`media/`).
+- **Data Directory**: The database (`library.db`), Bible translation databases (`bibles/`), song databases (`songs/`), background media cache (`media/`), and plugins the operator installed (`plugins/`; see docs/PLUGINS.md).
 
 ---
 

@@ -62,20 +62,18 @@ fn failed(id: String, kind: &'static str, source: &Path, msg: String) -> Discove
     }
 }
 
-fn discover_web(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
-    // Ribbon-button icons are names of files in the app's icon set, `web/icons/crimson/` next to the plugins folder.
-    let icons_dir = web_plugins_dir.parent().map(|w| w.join("icons").join("crimson"));
+fn discover_web(web_plugins_dir: &Path, host_version: &str, icons_dir: Option<&Path>, folders_only: bool) -> Vec<Discovered> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(web_plugins_dir) else { return out };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            if let Some(d) = discover_sandbox(&path, host_version, icons_dir.as_deref()) {
+            if let Some(d) = discover_sandbox(&path, host_version, icons_dir) {
                 out.push(d);
             }
             continue;
         }
-        if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("js") {
+        if folders_only || !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("js") {
             continue;
         }
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string()) else { continue };
@@ -229,12 +227,19 @@ fn discover_sandbox(dir: &Path, host_version: &str, icons_dir: Option<&Path>) ->
 }
 
 /// Scans the web plugins folder.
+/// Where plugins the operator installs live: under the data directory, never the (read-only) install.
+pub fn user_plugins_dir(data_dir: &Path) -> std::path::PathBuf {
+    data_dir.join("plugins")
+}
+
 pub fn discover(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
-    let mut out = Vec::new();
-    out.extend(discover_web(web_plugins_dir, host_version));
+    discover_all(web_plugins_dir, None, host_version)
+}
+
+fn flag_duplicates(out: &mut [Discovered]) {
     // A duplicate id is ambiguous; neither copy may run.
     let mut counts = std::collections::HashMap::new();
-    for d in &out {
+    for d in out.iter() {
         *counts.entry(d.id.clone()).or_insert(0usize) += 1;
     }
     for d in out.iter_mut() {
@@ -242,7 +247,40 @@ pub fn discover(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
             d.error = Some(format!("another plugin also uses the id '{}'", d.id));
         }
     }
+}
+
+/// The plugins that ship with the app (`web/plugins/`) plus those the operator installed
+/// (`<data dir>/plugins/`, sandboxed folders only). A built-in plugin always wins an id clash: an
+/// installed folder can never shadow, replace or break one that shipped.
+pub fn discover_all(web_plugins_dir: &Path, user_plugins_dir: Option<&Path>, host_version: &str) -> Vec<Discovered> {
+    // Ribbon-button icons are names of files in the app's icon set, `web/icons/crimson/` next to the plugins folder.
+    let icons_dir = web_plugins_dir.parent().map(|w| w.join("icons").join("crimson"));
+    let mut out = discover_web(web_plugins_dir, host_version, icons_dir.as_deref(), false);
+    flag_duplicates(&mut out);
+    if let Some(user) = user_plugins_dir {
+        let mut installed = discover_web(user, host_version, icons_dir.as_deref(), true);
+        flag_duplicates(&mut installed);
+        for d in installed {
+            if out.iter().any(|b| b.id == d.id) {
+                tracing::warn!("ignoring installed plugin folder {:?}: '{}' is the id of a built-in plugin", d.source_path, d.id);
+                continue;
+            }
+            out.push(d);
+        }
+    }
     out
+}
+
+/// Checks one extracted plugin folder the way discovery would, returning the reason it can't be
+/// installed. The folder's name must be the plugin's id.
+pub fn check_plugin_folder(dir: &Path, host_version: &str, icons_dir: Option<&Path>) -> Result<Discovered, String> {
+    match discover_sandbox(dir, host_version, icons_dir) {
+        None => Err("there is no plugin.json in the package".to_string()),
+        Some(d) => match &d.error {
+            Some(e) => Err(e.clone()),
+            None => Ok(d),
+        },
+    }
 }
 
 fn requested_json(d: &Discovered) -> String {

@@ -115,6 +115,13 @@ impl Database {
         Ok(conn.execute("DELETE FROM plugin_grants WHERE kind IN ('native', 'legacy-native', 'legacy-web')", [])?)
     }
 
+    /// Forgets a plugin that was uninstalled. The audit log is history, so it keeps its entries.
+    pub fn delete_plugin_grant(&self, plugin_id: &str) -> Result<()> {
+        let conn = self.conn();
+        conn.execute("DELETE FROM plugin_grants WHERE plugin_id = ?1", params![plugin_id])?;
+        Ok(())
+    }
+
     pub fn get_plugin_grant(&self, plugin_id: &str) -> Result<Option<PluginGrantRow>> {
         let conn = self.conn();
         let mut stmt = conn.prepare_cached(&format!("SELECT {GRANT_COLS} FROM plugin_grants WHERE plugin_id = ?1"))?;

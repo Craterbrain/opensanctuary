@@ -6908,3 +6908,139 @@ async fn test_shared_keyring_namespaces_between_plugins() {
         let _ = os_next::storage::KeyringService::delete_secret(svc, acct);
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Installing and removing plugins from a package (POST /api/plugins/install, DELETE /api/plugins/:id)
+// ---------------------------------------------------------------------------------------------
+
+fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::Write;
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in entries {
+            w.start_file(*name, opts).unwrap();
+            w.write_all(data).unwrap();
+        }
+        w.finish().unwrap();
+    }
+    buf.into_inner()
+}
+
+fn plugin_manifest_json(id: &str) -> String {
+    serde_json::json!({
+        "manifest_version": 1, "id": id, "name": format!("Plugin {id}"), "version": "1.0.0",
+        "web": {"entry": "index.html", "sandbox": true},
+        "permissions": [{"id": "ui.panel", "reason": "x"}, {"id": "keyring.own", "reason": "x"}],
+        "ui": {"placements": [{"slot": "dock"}]}
+    }).to_string()
+}
+
+#[tokio::test]
+async fn test_plugin_install_and_uninstall() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("inst.db").to_str().unwrap()).unwrap();
+    let web_dir = tmp.path().join("web");
+    std::fs::create_dir_all(web_dir.join("plugins/builtin_one")).unwrap();
+    std::fs::write(web_dir.join("plugins/builtin_one/plugin.json"), plugin_manifest_json("builtin_one")).unwrap();
+    std::fs::write(web_dir.join("plugins/builtin_one/index.html"), "<html></html>").unwrap();
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"), data_dir: data_dir.clone(),
+        host_session_token: "inst_host".to_string(), server_port: addr.port(),
+        ..base_app_state(db.clone())
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+    let post = |query: &'static str, body: Vec<u8>| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.post(format!("{base}/api/plugins/install{query}")).header("x-host-token", "inst_host").body(body).send().await.unwrap() }
+    };
+    let ok_pkg = make_zip(&[("plugin.json", plugin_manifest_json("hello_pkg").as_bytes()), ("index.html", b"<html>v1</html>")]);
+
+    // Console only.
+    let anon = c.post(format!("{base}/api/plugins/install")).body(ok_pkg.clone()).send().await.unwrap();
+    assert_eq!(anon.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // Installing grants nothing: the plugin shows up as needing review, with files under the data dir.
+    let r = post("", ok_pkg.clone()).await;
+    assert_eq!(r.status(), reqwest::StatusCode::OK, "{}", r.text().await.unwrap());
+    let list: serde_json::Value = c.get(format!("{base}/api/plugins")).header("x-host-token", "inst_host").send().await.unwrap().json().await.unwrap();
+    let p = list.as_array().unwrap().iter().find(|p| p["id"] == "hello_pkg").expect("installed plugin is listed").clone();
+    assert_eq!((p["state"].as_str(), p["removable"].as_bool(), p["error"].is_null()), (Some("pending"), Some(true), true), "{p}");
+    assert!(data_dir.join("plugins/hello_pkg/index.html").is_file());
+    let builtin = list.as_array().unwrap().iter().find(|p| p["id"] == "builtin_one").unwrap();
+    assert_eq!(builtin["removable"], false);
+    // Not served until approved.
+    assert_eq!(c.get(format!("{base}/plugin-frame/hello_pkg/index.html")).send().await.unwrap().status(), reqwest::StatusCode::NOT_FOUND);
+
+    // Approve it, then it is served.
+    let digest = p["digest"].clone();
+    let a = c.post(format!("{base}/api/plugins/hello_pkg/approve")).header("x-host-token", "inst_host")
+        .json(&serde_json::json!({ "digest": digest, "granted": ["ui.panel", "keyring.own"] })).send().await.unwrap();
+    assert_eq!(a.status(), reqwest::StatusCode::OK);
+    let served = c.get(format!("{base}/plugin-frame/hello_pkg/index.html")).send().await.unwrap();
+    assert_eq!((served.status().as_u16(), served.text().await.unwrap().as_str()), (200, "<html>v1</html>"));
+
+    // Same id again needs to say it is an update; an update drops the approval back to review.
+    assert_eq!(post("", ok_pkg.clone()).await.status(), reqwest::StatusCode::CONFLICT);
+    let v2 = make_zip(&[("hello_pkg/plugin.json", plugin_manifest_json("hello_pkg").as_bytes()), ("hello_pkg/index.html", b"<html>v2</html>")]);
+    assert_eq!(post("?replace=true", v2).await.status(), reqwest::StatusCode::OK); // one wrapping folder is fine
+    let after: serde_json::Value = c.get(format!("{base}/api/plugins")).header("x-host-token", "inst_host").send().await.unwrap().json().await.unwrap();
+    let state = after.as_array().unwrap().iter().find(|p| p["id"] == "hello_pkg").unwrap()["state"].clone();
+    assert_eq!(state, "changed");
+    assert_eq!(c.get(format!("{base}/plugin-frame/hello_pkg/index.html")).send().await.unwrap().status(), reqwest::StatusCode::NOT_FOUND);
+
+    // Hostile or broken packages are refused, and leave nothing behind.
+    let big = vec![b'a'; 30 * 1024 * 1024];
+    let bomb = make_zip(&[("plugin.json", plugin_manifest_json("bomb").as_bytes()), ("index.html", b"<html></html>"), ("big.bin", &big)]);
+    let many: Vec<(String, Vec<u8>)> = (0..350).map(|i| (format!("f{i}.txt"), vec![b'x'])).collect();
+    let mut many_entries: Vec<(&str, &[u8])> = many.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    many_entries.push(("plugin.json", b"{}"));
+    let hostile: Vec<(&str, Vec<u8>)> = vec![
+        ("not a zip", b"hello".to_vec()),
+        ("path traversal", make_zip(&[("plugin.json", plugin_manifest_json("evil1").as_bytes()), ("../../escape.txt", b"x")])),
+        ("absolute path", make_zip(&[("plugin.json", plugin_manifest_json("evil2").as_bytes()), ("/tmp/escape.txt", b"x")])),
+        ("backslash path", make_zip(&[("plugin.json", plugin_manifest_json("evil3").as_bytes()), ("a\\..\\..\\x.txt", b"x")])),
+        ("no manifest", make_zip(&[("index.html", b"<html></html>")])),
+        ("bad manifest", make_zip(&[("plugin.json", b"{ nope"), ("index.html", b"<html></html>")])),
+        ("native plugin", make_zip(&[("plugin.json", serde_json::json!({"manifest_version":1,"id":"nat","name":"n","backend":{"library":"x.so"}}).to_string().as_bytes()), ("index.html", b"x")])),
+        ("clashes with a built-in", make_zip(&[("plugin.json", plugin_manifest_json("builtin_one").as_bytes()), ("index.html", b"<html>fake</html>")])),
+        ("reserved id", make_zip(&[("plugin.json", plugin_manifest_json("__os").as_bytes()), ("index.html", b"x")])),
+        ("entry missing", make_zip(&[("plugin.json", plugin_manifest_json("noentry").as_bytes())])),
+        ("zip bomb", bomb),
+        ("too many files", make_zip(&many_entries)),
+    ];
+    for (why, pkg) in hostile {
+        let r = post("?replace=true", pkg).await;
+        assert!(r.status().is_client_error(), "{why}: {}", r.status());
+    }
+    assert!(!data_dir.join("escape.txt").exists() && !tmp.path().join("escape.txt").exists() && !std::path::Path::new("/tmp/escape.txt").exists());
+    assert_eq!(std::fs::read_to_string(web_dir.join("plugins/builtin_one/index.html")).unwrap(), "<html></html>", "a built-in is never overwritten");
+    let names: Vec<String> = std::fs::read_dir(data_dir.join("plugins")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+    assert_eq!(names, ["hello_pkg"], "failed installs leave nothing behind: {names:?}");
+    let staging_left = std::fs::read_dir(data_dir.join("plugins-staging")).map(|d| d.count()).unwrap_or(0);
+    assert_eq!(staging_left, 0, "staging is cleaned up");
+
+    // Removal: built-ins refuse, an installed plugin goes completely, and its id is free again.
+    let del = |id: &'static str| {
+        let (c, base) = (c.clone(), base.clone());
+        async move { c.delete(format!("{base}/api/plugins/{id}")).header("x-host-token", "inst_host").send().await.unwrap() }
+    };
+    assert_eq!(del("builtin_one").await.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(del("nope").await.status(), reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(c.delete(format!("{base}/api/plugins/hello_pkg")).send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(del("hello_pkg").await.status(), reqwest::StatusCode::OK);
+    assert!(!data_dir.join("plugins/hello_pkg").exists());
+    assert!(db.get_plugin_grant("hello_pkg").unwrap().is_none());
+    let audit = db.list_plugin_audit(50).unwrap();
+    assert!(audit.iter().any(|a| a.plugin_id == "hello_pkg" && a.action == "uninstalled"));
+    assert!(audit.iter().any(|a| a.plugin_id == "hello_pkg" && a.action == "installed"));
+    assert_eq!(post("", ok_pkg).await.status(), reqwest::StatusCode::OK);
+}
