@@ -7943,3 +7943,55 @@ async fn test_export_odp_route_is_console_only_and_downloads_a_real_file() {
     let os_next::core::models::SlideElement::TextBlock { block, .. } = &reimported.slides[0].elements[0] else { panic!() };
     assert_eq!(block.runs[0].text, "Hi");
 }
+
+#[test]
+fn test_odp_export_omits_this_apps_own_placeholder_color_and_font_so_other_tools_dont_render_it_invisible() {
+    use os_next::core::models::*;
+    let tmp = tempfile::tempdir().unwrap();
+    let never_styled = SlideElement::TextBlock {
+        id: "el_1".to_string(),
+        transform: ElementTransform { z_index: 0, ..ElementTransform::default() },
+        block: TextBlock { runs: vec![TextRun { text: "plain".to_string(), ..Default::default() }], paragraph_style: TextParagraphStyle::default(), effects: ElementEffects::default(), autofit: false },
+    };
+    let explicitly_white = SlideElement::TextBlock {
+        id: "el_2".to_string(),
+        transform: ElementTransform { z_index: 1, ..ElementTransform::default() },
+        block: TextBlock {
+            runs: vec![TextRun { text: "x".to_string(), color: "#ffffff".to_string(), font_family: "Comic Sans MS".to_string(), ..Default::default() }],
+            paragraph_style: TextParagraphStyle::default(), effects: ElementEffects::default(), autofit: false,
+        },
+    };
+    let pres = Presentation {
+        id: "p".to_string(), title: "t".to_string(), author: String::new(), theme_name: None,
+        slides: vec![Slide { elements: vec![never_styled, explicitly_white], slide_document_version: 1, ..Default::default() }],
+    };
+    let bytes = os_next::storage::OdpExporter::export_presentation(&pres, tmp.path()).unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+    let mut content = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("content.xml").unwrap(), &mut content).unwrap();
+
+    // A run never styled beyond this struct's own defaults doesn't force this app's placeholder
+    // color/font into the file at all -- so a real ODF tool's own default (black on white) shows,
+    // instead of white-on-white (this exact bug was found by hand: import testdata/odp/fixture.odp
+    // through the real app, export it back out, and open the result in real LibreOffice -- "Hello "
+    // visibly disappeared).
+    let t_styles: Vec<&str> = content.match_indices("style:family=\"text\"").map(|(i, _)| {
+        let start = content[..i].rfind("<style:style").unwrap();
+        let end = content[i..].find("</style:style>").unwrap() + i + "</style:style>".len();
+        &content[start..end]
+    }).collect();
+    assert_eq!(t_styles.len(), 2, "{t_styles:?}");
+    assert!(!t_styles[0].contains("fo:color"), "{}", t_styles[0]);
+    assert!(!t_styles[0].contains("style:font-name"), "{}", t_styles[0]);
+    // ...but a run that happens to ask for white explicitly, alongside a real/different font,
+    // keeps its color -- only the exact (default color, default font) pair together is omitted.
+    assert!(t_styles[1].contains("fo:color=\"#ffffff\""), "{}", t_styles[1]);
+    assert!(t_styles[1].contains("style:font-name=\"Comic Sans MS\""), "{}", t_styles[1]);
+
+    // Re-importing it still reconstructs this app's own white/default-font look, since the model's
+    // own Default is exactly those values -- nothing is lost for a document that stays inside this app.
+    let reimported = os_next::storage::OdpImporter::import_odp_bytes(&bytes, "x", &tmp.path().join("images")).unwrap();
+    let SlideElement::TextBlock { block, .. } = &reimported.slides[0].elements[0] else { panic!() };
+    assert_eq!(block.runs[0].color, TextRun::default().color);
+    assert_eq!(block.runs[0].font_family, TextRun::default().font_family);
+}

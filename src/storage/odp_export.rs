@@ -237,15 +237,26 @@ fn odf_align(p: &TextParagraphStyle) -> &'static str {
 
 fn run_span(run: &TextRun, text_styles: &mut String, fresh_id: &mut impl FnMut() -> usize) -> String {
     let name = format!("T{}", fresh_id());
+    // A `TextRun` has no way to tell "explicitly set to white" apart from "never styled, so it's
+    // sitting at this struct's own default" (`models::default_text_color`/`default_font_family`,
+    // chosen for this app's own usual case of text over a dark background/video). Writing that
+    // placeholder color and a CSS font *stack* ("Inter, sans-serif", not a real, single font name)
+    // into a real ODF file is actively wrong: opened in an ODF tool, which defaults an unstyled
+    // page to white, white-on-white text becomes invisible -- a document that round-tripped
+    // through this app would visibly lose text a human never asked to hide. Since a run that is
+    // at *both* app defaults at once is the only case this module can tell apart with any real
+    // confidence, that one case omits `fo:color`/`style:font-name` entirely instead, so the
+    // opening application's own default (a real font, black-on-white) applies.
+    let at_app_defaults = run.color == crate::core::models::default_text_color() && run.font_family == crate::core::models::default_font_family();
+    let color_attr = if at_app_defaults { String::new() } else { format!(r#" fo:color="{}""#, encode_xml_text(&run.color)) };
+    let font_attr = if at_app_defaults { String::new() } else { format!(r#" style:font-name="{}""#, encode_xml_text(&run.font_family)) };
     text_styles.push_str(&format!(
-        r#"<style:style style:name="{name}" style:family="text"><style:text-properties fo:font-weight="{weight}" fo:font-style="{style}" style:text-underline-style="{underline}" style:text-line-through-style="{strike}" fo:color="{color}" style:font-name="{font}" fo:font-size="{size}pt"/></style:style>"#,
+        r#"<style:style style:name="{name}" style:family="text"><style:text-properties fo:font-weight="{weight}" fo:font-style="{style}" style:text-underline-style="{underline}" style:text-line-through-style="{strike}"{color_attr}{font_attr} fo:font-size="{size}pt"/></style:style>"#,
         name = name,
         weight = if run.bold { "bold" } else { "normal" },
         style = if run.italic { "italic" } else { "normal" },
         underline = if run.underline { "solid" } else { "none" },
         strike = if run.strike { "solid" } else { "none" },
-        color = encode_xml_text(&run.color),
-        font = encode_xml_text(&run.font_family),
         size = run.font_size_pt,
     ));
     format!(r#"<text:span text:style-name="{name}">{text}</text:span>"#, text = encode_xml_text(&run.text))

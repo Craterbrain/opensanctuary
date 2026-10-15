@@ -74,7 +74,7 @@ pub struct TextRun {
     pub baseline_shift: String, // "normal", "super", "sub"
 }
 
-fn default_text_color() -> String { "#ffffff".to_string() }
+pub(crate) fn default_text_color() -> String { "#ffffff".to_string() }
 fn default_font_size_pt() -> f64 { 36.0 }
 fn default_baseline_shift() -> String { "normal".to_string() }
 
@@ -765,7 +765,7 @@ impl Default for Theme {
 }
 
 fn default_bg() -> String { "#102027".to_string() }
-fn default_font_family() -> String { "Inter, sans-serif".to_string() }
+pub(crate) fn default_font_family() -> String { "Inter, sans-serif".to_string() }
 fn default_font_size() -> String { "48px".to_string() }
 fn default_font_color() -> String { "#ffffff".to_string() }
 fn default_alignment() -> String { "center".to_string() }

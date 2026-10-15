@@ -84,6 +84,28 @@ import, and so are never written by the exporter either -- nothing is exported t
 own importer couldn't read back. Export always writes a fixed 28cm x 15.75cm (16:9) page, since
 `ElementTransform` only stores relative coordinates, never an authored absolute canvas size.
 
+**A real round trip was actually driven through the running app** (not just tested at the data
+layer) to answer "does an imported .odp look the same, and does it still look the same after
+exporting again": a Playwright session imported `testdata/odp/fixture.odp` through the real
+Import modal, opened the result in the real Slide Editor and screenshotted it, exported it back
+out through the real "Export as ODP…" menu item, and handed the result to real LibreOffice
+headless. This caught a real bug `odp_export.rs`'s own tests hadn't: a run with no explicit color
+(this app's own placeholder default, white, since slides are normally shown over a dark
+background/video) was written into the file as a literal `fo:color="#ffffff"`. Re-opened in a
+real ODF tool, which defaults an unstyled page to white, that text was invisible --
+white-on-white. Fixed by omitting `fo:color`/`style:font-name` entirely when a run sits at *both*
+of this app's own placeholder defaults at once (the one case the exporter can tell apart from "the
+source explicitly asked for white" with any real confidence), so the opening tool's own default
+(black, a real font) applies instead. Confirmed fixed by redoing the same live round trip:
+the text is visible again in LibreOffice's own render.
+
+Two things observed along the way that are not bugs, worth recording so they aren't rediscovered
+as if they were: a shape this importer intentionally drops (the out-of-scope rectangle) is of
+course genuinely absent from the app's render, not just hidden; and the same text can wrap
+differently in the app's own canvas versus LibreOffice's renderer at the same box width, since
+browser and LibreOffice layout engines use different font metrics for the same font name/fallback
+-- an inherent cross-renderer difference, not a position or size that failed to round-trip.
+
 ## What determines how a slide actually displays
 
 Traced through `renderSlideVisual` (`web/src/app_core.ts:2769`, mirrored in `live_output.ts`):
