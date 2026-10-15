@@ -7887,3 +7887,59 @@ fn test_odp_export_is_a_real_file_real_libreoffice_accepts() {
     assert!(pdf_bytes.starts_with(b"%PDF"), "not a real PDF");
     assert!(pdf_bytes.len() > 1000, "suspiciously small PDF ({} bytes): real LibreOffice couldn't have rendered real content", pdf_bytes.len());
 }
+
+#[tokio::test]
+async fn test_export_odp_route_is_console_only_and_downloads_a_real_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("export.db").to_str().unwrap()).unwrap();
+    let media_dir = tmp.path().join("media");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        media_dir: media_dir.clone(), host_session_token: "export_host".to_string(), server_port: addr.port(),
+        ..base_app_state(db.clone())
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+    let h = "export_host";
+
+    let pres = os_next::core::models::Presentation {
+        id: "pres_export_route_test".to_string(),
+        title: "Route Test".to_string(),
+        author: String::new(),
+        theme_name: None,
+        slides: vec![os_next::core::models::Slide {
+            label: Some("Slide 1".to_string()),
+            elements: vec![os_next::core::models::SlideElement::TextBlock {
+                id: "el_1".to_string(),
+                transform: os_next::core::models::ElementTransform::default(),
+                block: os_next::core::models::TextBlock {
+                    runs: vec![os_next::core::models::TextRun { text: "Hi".to_string(), ..Default::default() }],
+                    paragraph_style: Default::default(), effects: Default::default(), autofit: false,
+                },
+            }],
+            slide_document_version: 1,
+            ..Default::default()
+        }],
+    };
+    db.insert_presentation(&pres).unwrap();
+
+    // Console-only, whatever the id.
+    assert_eq!(c.get(format!("{base}/api/export/odp/{}", pres.id)).send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(c.get(format!("{base}/api/export/odp/nope")).header("x-host-token", h).send().await.unwrap().status(), reqwest::StatusCode::NOT_FOUND);
+
+    let r = c.get(format!("{base}/api/export/odp/{}", pres.id)).header("x-host-token", h).send().await.unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    assert_eq!(r.headers().get("content-type").unwrap(), "application/vnd.oasis.opendocument.presentation");
+    assert!(r.headers().get("content-disposition").unwrap().to_str().unwrap().contains("Route Test.odp"));
+    let bytes = r.bytes().await.unwrap();
+    assert!(bytes.len() > 100);
+
+    // It's genuinely importable -- the route isn't just handing back some placeholder.
+    let reimported = os_next::storage::OdpImporter::import_odp_bytes(&bytes, "x", &media_dir.join("images")).unwrap();
+    assert_eq!(reimported.title, "Route Test");
+    let os_next::core::models::SlideElement::TextBlock { block, .. } = &reimported.slides[0].elements[0] else { panic!() };
+    assert_eq!(block.runs[0].text, "Hi");
+}

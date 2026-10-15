@@ -206,6 +206,30 @@ pub(super) async fn delete_presentation(
     Ok(Json(serde_json::json!({ "deleted": id })))
 }
 
+/// GET /api/export/odp/:id -- a presentation as a real `.odp` package for the browser's Save
+/// dialog to download directly, same shape as `/api/schedule/export`'s EWSX download.
+pub(super) async fn export_presentation_odp(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    require_host_token(&headers, &app).map_err(|(status, body)| (status, body.0["error"].as_str().unwrap_or("unauthorized").to_string()))?;
+    let pres = app
+        .db
+        .get_presentation_by_id(&id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "no such presentation".to_string()))?;
+    let bytes = crate::storage::OdpExporter::export_presentation(&pres, &app.media_dir).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let filename = super::schedule::sanitize_download_filename(&pres.title);
+
+    axum::http::Response::builder()
+        .status(StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, "application/vnd.oasis.opendocument.presentation")
+        .header(axum::http::header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}.odp\"", filename))
+        .body(axum::body::Body::from(bytes))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
 pub(super) fn router() -> Router<AppState> {
     use axum::routing::delete;
     use axum::routing::get;
@@ -221,6 +245,7 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/themes/default", axum::routing::post(set_default_theme))
         .route("/api/presentations", get(get_presentations).post(create_presentation))
         .route("/api/presentations/:id", delete(delete_presentation))
+        .route("/api/export/odp/:id", get(export_presentation_odp))
         .route("/api/slide-templates", get(get_slide_templates).post(create_slide_template))
         .route("/api/slide-templates/:id", delete(delete_slide_template))
 }

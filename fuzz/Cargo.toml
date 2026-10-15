@@ -26,6 +26,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "odp_import"
+path = "fuzz_targets/odp_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "ewsx_import"
 path = "fuzz_targets/ewsx_import.rs"
 test = false

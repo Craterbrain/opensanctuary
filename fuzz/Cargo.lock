@@ -2699,16 +2699,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libloading"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
-dependencies = [
- "cfg-if",
- "windows-link",
-]
-
-[[package]]
 name = "libredox"
 version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3290,20 +3280,17 @@ dependencies = [
 name = "os-next"
 version = "0.2.0"
 dependencies = [
- "async-trait",
  "axum",
  "axum-server",
  "base64 0.22.1",
  "chrono",
  "clap",
  "dirs",
- "flate2",
  "futures-util",
  "get_if_addrs",
  "gpgrv",
  "image",
  "keyring",
- "libloading 0.9.0",
  "mdns-sd",
  "minisign-verify",
  "open",
@@ -3327,7 +3314,6 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
- "urlencoding",
  "uuid",
  "wgpu",
  "wry",
@@ -5202,12 +5188,6 @@ dependencies = [
  "percent-encoding",
  "serde",
 ]
-
-[[package]]
-name = "urlencoding"
-version = "2.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "utf-8"

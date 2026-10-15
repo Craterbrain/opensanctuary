@@ -20,9 +20,10 @@ see "Import fidelity findings" below for what's actually built and what's still 
 | `freeshow_import.rs` / `freeshow_show_import.rs` | FreeShow | 872 / 746 |
 | `pptx_import.rs` | PowerPoint (.pptx) | 444 |
 | `ewsx.rs` | EasyWorship | 1554 |
+| `odp_import.rs` / `odp_export.rs` | OpenDocument Presentation (.odp) | see below |
 
-All are one-directional (pull data *in* from a format being migrated away from), except the
-proposed ODP idea below, which would need both directions.
+All the migration-only ones are one-directional (pull data *in* from a format being migrated
+away from); ODP is bidirectional -- the idea below, now implemented.
 
 ## Should importers be split into a plugin?
 
@@ -52,20 +53,36 @@ plus inheriting its migrations forever. Recommendation: keep `openlp_import.rs` 
 always-compiled-in importer (most common migration source), everything else optional via feature
 flag — but OS-Next's own model stays the source of truth.
 
-## ODF/ODP as an interchange format
+## ODF/ODP as an interchange format -- **implemented** (2026-10-14)
 
-More promising, and partially already true without any work: `ODP` (ISO/IEC 26300,
+Was "more promising, and partially already true without any work": `ODP` (ISO/IEC 26300,
 OpenDocument Presentation) is a real open standard, and OS-Next's own rich slide model
 (`ElementTransform` with normalized x/y/w/h/rotation/z-index, `SlideElement` union of
-TextBlock/Image/Video/Shape/Line/Table/Group, `TextRun`/`TextParagraphStyle`) is **already
-structurally close** to ODP's `draw:frame` / `text:p` / `text:span` shape model. Modeling the
-internal structs *more* like ODF would be low-value — the gap isn't the data model, it's that
-the importers don't fully use the model they already have (see below).
+TextBlock/Image/Video/Shape/Line/Table/Group, `TextRun`/`TextParagraphStyle`) was already
+structurally close to ODP's `draw:frame` / `text:p` / `text:span` shape model, confirmed once
+`odp_import.rs` was actually written: no model changes were needed, same conclusion the PPTX
+fidelity work below already reached.
 
-If pursued: treat as a bidirectional adapter (import .odp → native model, export native model →
-.odp), same `Importer` trait slot as the others plus an `export()` method. This would be the
-first adapter needing real export correctness (round-tripping matters, unlike a one-time
-migration import).
+A library search came first (an MIT Rust crate to adopt, or at least reference): no crate cleared
+the bar. The closest fit, `libreoffice-rs`/`lo_impress`, is MIT and genuinely reads/writes ODP
+in pure Rust, but is self-described as "not recommended for production" (19% documented, 36
+stars). Built against the OASIS spec instead, the same `next_tag`/`extract_attr` hand-rolled XML
+scanning `pptx_import.rs` already used (pulled out into `storage::xml_scan` once both needed it),
+validated against a real presentation built and saved by actual LibreOffice via its `pyuno`
+scripting bridge (`testdata/odp/`), not just hand-authored XML believed to match the spec.
+
+`odp_export.rs` is the first adapter that needed real export correctness, and is checked two
+ways: round-tripped through `odp_import.rs`, and -- the stronger check -- handed to real
+LibreOffice headless (`soffice --convert-to pdf`), confirmed by eye once via a throwaway debug
+render (`docs/` doesn't keep the image; see the commit that added `odp_export.rs`).
+
+`POST /api/import/odp` and `GET /api/export/odp/:id` (console-only, mirroring `/api/schedule/export`'s
+EWSX download) are wired into the Import modal and the library's item context menu
+("Export as ODP…", presentations only) respectively. Scope matches PPTX's own documented gaps:
+basic shapes/lines/tables/groups and a rotated frame (`draw:transform`) aren't reconstructed on
+import, and so are never written by the exporter either -- nothing is exported that this app's
+own importer couldn't read back. Export always writes a fixed 28cm x 15.75cm (16:9) page, since
+`ElementTransform` only stores relative coordinates, never an authored absolute canvas size.
 
 ## What determines how a slide actually displays
 

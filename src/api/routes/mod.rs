@@ -110,6 +110,11 @@ pub(crate) fn needs_host_token(method: &axum::http::Method, path: &str) -> bool 
     if path == "/api/plugins" || path.starts_with("/api/plugins/") {
         return true;
     }
+    // Exporting a presentation to a file (like /api/schedule/export below, just parameterized
+    // by id) is console-only, same reasoning as plugin management above.
+    if path.starts_with("/api/export/") {
+        return true;
+    }
     matches!(
         path,
         "/api/network/interfaces"
@@ -340,6 +345,18 @@ mod gate_tests {
             assert!(needs_host_token(&Method::GET, p), "GET {p}");
             assert!(needs_host_token(&Method::POST, p), "POST {p}");
         }
+    }
+
+    #[test]
+    fn export_routes_are_console_only_whatever_the_id() {
+        for p in ["/api/export/odp/pres_abc123", "/api/export/odp/anything-at-all"] {
+            assert!(needs_host_token(&Method::GET, p), "GET {p}");
+        }
+    }
+
+    #[test]
+    fn import_pptx_and_odp_need_a_host_token_the_same_way() {
+        assert_eq!(needs_host_token(&Method::POST, "/api/import/odp"), needs_host_token(&Method::POST, "/api/import/pptx"));
     }
 
     #[test]

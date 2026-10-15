@@ -72,7 +72,7 @@ pub(super) async fn export_schedule_ewsx(
 /// Strips characters that are unsafe in a filename (path separators, quotes,
 /// control characters) so a user-supplied schedule title can't inject an
 /// unexpected path or break the Content-Disposition header.
-fn sanitize_download_filename(title: &str) -> String {
+pub(super) fn sanitize_download_filename(title: &str) -> String {
     let cleaned: String = title
         .chars()
         .map(|c| if c.is_control() || "\"/\\:*?<>|".contains(c) { '_' } else { c })

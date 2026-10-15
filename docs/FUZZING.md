@@ -23,6 +23,7 @@ one target per hand-rolled parser.
 | Target | Parser | Input shape |
 |---|---|---|
 | `pptx_import` | `PptxImporter::import_pptx_bytes` | raw `.pptx` (zip) bytes |
+| `odp_import` | `OdpImporter::import_odp_bytes` | raw `.odp` (zip) bytes |
 | `ewsx_import` | `EwsxManager::load_schedule_from_bytes` | raw `.ewsx`/`.osz`/`.ewpx` bytes |
 | `openlp_service_json` | `OpenLPImporter::import_openlp_service_json` | JSON text |
 | `openlp_theme` | `parse_openlp_theme_json` + `parse_openlp_theme_xml` | JSON or XML text |
@@ -72,7 +73,7 @@ cargo +nightly fuzz run pptx_import -- -max_total_time=120
 Run every target for a fixed budget each:
 
 ```sh
-for t in pptx_import ewsx_import openlp_service_json openlp_theme \
+for t in pptx_import odp_import ewsx_import openlp_service_json openlp_theme \
          openlp_otz freeshow_show_import freeshow_fsb scripture_ref \
          rtf_parse; do
   cargo +nightly fuzz run "$t" -- -max_total_time=120 || break
@@ -130,7 +131,7 @@ which can't drive a real browser or a native window.
 - Whether to wire a short (`-max_total_time=60`-per-target) fuzz pass into
   CI as a standing regression gate, versus leaving this as a manual,
   occasional tool run before a release. Not decided yet.
-- `pptx_import`/`freeshow_show_import`'s shared `media_dir` approach means
-  two importers that both extract referenced media share one target's
+- `pptx_import`/`odp_import`/`freeshow_show_import`'s shared `media_dir` approach means
+  three importers that all extract referenced media share one target's
   disk-growth tradeoff; revisit if that becomes a real problem running
   long fuzz sessions.
