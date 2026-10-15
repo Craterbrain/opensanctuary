@@ -3694,6 +3694,34 @@ on('ctx-lib-copy', 'click', () => {
   }
   hideAllContextMenus();
 });
+// Shown on every library item's context menu (same pattern as "Add Dual Comparison" above), but
+// only meaningful for a presentation; a click from any other tab is a silent no-op.
+on('ctx-lib-export-odp', 'click', async () => {
+  const target = currentContextMenuTarget;
+  hideAllContextMenus();
+  if (!target || target.tab !== 'presentations' || !target.item) return;
+  const pres = target.item;
+  const title = pres.title || 'Presentation';
+  try {
+    const res = await fetch(`/api/export/odp/${encodeURIComponent(pres.id)}`);
+    if (!res.ok) {
+      showToast(`Export failed: ${await res.text()}`, 'error');
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title}.odp`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast(`✓ Exported "${title}" (.odp)`, 'success');
+  } catch (e: any) {
+    showToast(`Export failed: ${e?.message ?? e}`, 'error');
+  }
+});
 on('ctx-lib-delete', 'click', () => {
   if (currentContextMenuTarget && currentContextMenuTarget.item) {
     const target = currentContextMenuTarget;

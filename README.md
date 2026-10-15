@@ -18,8 +18,9 @@ multi-display story, and formats that don't talk to each other. OpenSanctuary is
   server.
 - **Your existing library should still work.** Real import support for
   EasyWorship (`.ewsx`), OpenLP (`.sqlite`/`.osj`/`.osz`), FreeShow
-  (`.show`/`.project`), and PowerPoint (`.pptx`) — moving to OpenSanctuary
-  shouldn't mean rebuilding years of songs and slides by hand.
+  (`.show`/`.project`), PowerPoint (`.pptx`), and OpenDocument Presentation
+  (`.odp`) — moving to OpenSanctuary shouldn't mean rebuilding years of songs
+  and slides by hand. `.odp` also exports, so a presentation can leave again.
 - **Cross-platform, not Windows-only.** One Rust binary; Linux, Windows, and (maybe eventually) macOS from the same codebase.
 - **No per-seat licensing.** MIT-licensed. Run it on as many machines as
   your church has.
@@ -62,8 +63,10 @@ The operator console (library, schedule, preview and live panes) and the slide b
   Live Output page directly — see `docs/BROADCASTING.md`.
 
 **Content & import**
-- Real importers for EasyWorship, OpenLP, FreeShow, and PowerPoint — not
-  just "read the text," but slides, backgrounds, and arrangements. YMMV
+- Real importers for EasyWorship, OpenLP, FreeShow, PowerPoint, and
+  OpenDocument Presentation (`.odp`) — not just "read the text," but slides,
+  backgrounds, and arrangements. YMMV. `.odp` round-trips: export a
+  presentation back out, e.g. to hand to someone using LibreOffice Impress.
 - Bible translations you own work out of the box (point at your own `.db`
   files); downloading public-domain translations and looking up passages
   online is the **Online Bibles** plugin.

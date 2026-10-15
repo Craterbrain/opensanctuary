@@ -2229,6 +2229,58 @@ on('file-pptx-import', 'change', async (e: Event) => {
   }
 });
 
+// OpenDocument Presentation (.odp) Import
+on('file-odp-import', 'change', async (e: Event) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  const statusEl = document.getElementById('odp-import-status');
+  if (statusEl) {
+    statusEl.style.display = 'block';
+    statusEl.style.color = 'var(--text-dim)';
+    statusEl.textContent = `Reading ${file.name}...`;
+  }
+  showToast(`Reading OpenDocument Presentation ${file.name}...`, 'info');
+
+  try {
+    const b64 = await fileToBase64(file);
+    if (statusEl) statusEl.textContent = `Extracting slides from ${file.name}...`;
+    const res = await fetch('/api/import/odp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_name: file.name, file_data_base64: b64 })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const msg = `✓ ${data.message || `Imported '${data.title}' (${data.slide_count} slides)`}`;
+      if (statusEl) {
+        statusEl.style.display = 'block';
+        statusEl.style.color = 'var(--os-success-text)';
+        statusEl.textContent = msg;
+      }
+      showToast(msg, 'success');
+      loadLibraryTab('presentations');
+    } else {
+      const err = await res.text();
+      if (statusEl) {
+        statusEl.style.display = 'block';
+        statusEl.style.color = 'var(--os-danger-text)';
+        statusEl.textContent = `Import error: ${err}`;
+      }
+      showToast(`OpenDocument Presentation import error: ${err}`, 'error');
+    }
+  } catch (err: any) {
+    if (statusEl) {
+      statusEl.style.display = 'block';
+      statusEl.style.color = 'var(--os-danger-text)';
+      statusEl.textContent = `Error: ${err.message}`;
+    }
+    showToast(`OpenDocument Presentation import failed: ${err.message}`, 'error');
+  } finally {
+    (e.target as HTMLInputElement).value = '';
+  }
+});
+
 // OpenLP Auto-Detect Local DB
 on('btn-openlp-autodetect', 'click', async () => {
   const statusEl = document.getElementById('openlp-import-status');
