@@ -6288,7 +6288,7 @@ dir=$(dirname "$out")
 ext=webm; [ $audio = 1 ] && ext=mp3
 echo "[download]   0.0% of 1.00MiB at Unknown ETA Unknown"
 echo "[download]  50.0% of 1.00MiB at 2.00MiB/s ETA 00:01"
-printf 'fake media bytes' > "$dir/Fake Title [abc123].$ext"
+if [ $audio = 1 ]; then printf '\377\373\220\000fake mp3 bytes' > "$dir/Fake Title [abc123].$ext"; else printf '\032\105\337\243fake webm bytes' > "$dir/Fake Title [abc123].$ext"; fi
 printf 'junk' > "$dir/Fake Title [abc123].f137.mp4.part"
 echo "[download] 100% of 1.00MiB at 2.00MiB/s ETA 00:00"
 echo "{\"id\":\"abc123\",\"title\":\"Fake Title\",\"duration\":12.5,\"thumbnail\":\"https://img.example/t.jpg\",\"_filename\":\"$dir/Fake Title [abc123].webm\",\"ext\":\"webm\",\"url\":\"$url\"}"
@@ -6406,7 +6406,7 @@ echo "{\"id\":\"abc123\",\"title\":\"Fake Title\",\"duration\":12.5,\"thumbnail\
     assert_eq!(added["id"], "plugin_ytdlp_ytdlp_abc123");
     let item = db.get_media_by_id("plugin_ytdlp_ytdlp_abc123").unwrap().expect("media item stored");
     assert_eq!((item.name.as_str(), item.file_path.as_str(), item.duration_seconds), ("Fake Title", "/media/videos/Fake Title [abc123].webm", Some(12.5)));
-    assert_eq!(std::fs::read(media_dir.join("videos/Fake Title [abc123].webm")).unwrap(), b"fake media bytes");
+    assert_eq!(std::fs::read(media_dir.join("videos/Fake Title [abc123].webm")).unwrap(), b"\x1a\x45\xdf\xa3fake webm bytes");
     assert!(!data_dir.join("plugin-jobs/ytdlp").join(&job).join("Fake Title [abc123].webm").exists(), "the file was moved, not copied");
 
     // The job folder is the host's to clean up.
@@ -7457,4 +7457,117 @@ async fn test_key_rotation_needs_the_old_keys_signature() {
     h2.install(good, true).await;
     let p = h2.plugin("moving").await;
     assert_eq!((p["signer_changed"].as_bool(), p["trust"]["level"].as_str()), (Some(true), Some("new")), "{p}");
+// ---------------------------------------------------------------------------------------------
+// library.addMedia (a file from a plugin's own process job, as opposed to addMediaUrl's download):
+// does the host trust the claimed extension, or check what the bytes actually are?
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_add_media_from_a_process_job_is_checked_against_its_actual_bytes_not_just_its_extension() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("media_sniff.db").to_str().unwrap()).unwrap();
+    let web_dir = tmp.path().join("web");
+    let data_dir = tmp.path().join("data");
+    let plugin_id = "fake_tool_plugin";
+    let dir = web_dir.join("plugins").join(plugin_id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("index.html"), "<html></html>").unwrap();
+    std::fs::write(dir.join("plugin.json"), serde_json::json!({
+        "manifest_version": 1, "id": plugin_id, "name": "Fake Tool", "web": {"entry": "index.html", "sandbox": true},
+        "permissions": [{"id": "process.run", "commands": ["make"], "reason": "x"}, {"id": "library.write", "categories": ["media"], "reason": "x"}],
+        "commands": [{"id": "make", "tool": "faketool", "args": ["{output_dir}", "{name}"], "params": {"name": {"type": "string"}}}],
+        "tools": [{"id": "faketool", "github": "nobody/nothing", "assets": {"linux": "a", "windows": "a.exe", "macos": "a"}, "checksums": "SHA2-256SUMS", "signature": {"asset": "SHA2-256SUMS.sig", "key_file": "k.pub"}}]
+    }).to_string()).unwrap();
+
+    // The host's "managed" copy of the tool: a tiny real script. Whatever bytes it writes is exactly
+    // what a compromised or dishonest plugin's own declared tool could write -- the host only ever
+    // runs *this exact, operator-reviewed command line*, never anything else.
+    let tools_dir = data_dir.join("tools");
+    let tool_dir = tools_dir.join("plugins").join(plugin_id);
+    std::fs::create_dir_all(&tool_dir).unwrap();
+    let tool_path = tool_dir.join(format!("faketool{}", std::env::consts::EXE_SUFFIX));
+    std::fs::write(&tool_path, "#!/bin/sh\nprintf '<html><script>alert(document.domain)</script></html>' > \"$1/$2\"\n").unwrap();
+    #[cfg(unix)]
+    { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&tool_path, std::fs::Permissions::from_mode(0o755)).unwrap(); }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"), data_dir: data_dir.clone(),
+        host_session_token: "sniff_host".to_string(), server_port: addr.port(),
+        ..base_app_state(db.clone())
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+    let h = "sniff_host";
+
+    let list: serde_json::Value = c.get(format!("{base}/api/plugins")).header("x-host-token", h).send().await.unwrap().json().await.unwrap();
+    let p = list.as_array().unwrap().iter().find(|p| p["id"] == plugin_id).unwrap().clone();
+    assert_eq!(p["error"], serde_json::Value::Null, "{p}");
+    let a = c.post(format!("{base}/api/plugins/{plugin_id}/approve")).header("x-host-token", h)
+        .json(&serde_json::json!({ "digest": p["digest"], "granted": ["process.run", "library.write"] })).send().await.unwrap();
+    assert_eq!(a.status(), reqwest::StatusCode::OK, "{}", a.text().await.unwrap());
+
+    let token: serde_json::Value = c.post(format!("{base}/api/plugins/{plugin_id}/token")).header("x-host-token", h)
+        .json(&serde_json::json!({ "scopes": [{"id": "process.run", "commands": ["make"]}, {"id": "library.write", "categories": ["media"]}] }))
+        .send().await.unwrap().json().await.unwrap();
+    let pt = token["token"].as_str().unwrap_or_else(|| panic!("{token}"));
+
+    // Run the "tool": it writes HTML+script to a file it (truthfully, as far as the host checks) calls "evil.mp4".
+    let started: serde_json::Value = c.post(format!("{base}/api/plugin-host/process/start")).header("x-plugin-token", pt)
+        .json(&serde_json::json!({ "command": "make", "params": { "name": "evil.mp4" } })).send().await.unwrap().json().await.unwrap();
+    assert_eq!(started["success"], true, "{started}");
+    let job = started["job"].as_str().unwrap().to_string();
+    let mut tries = 0;
+    loop {
+        let poll: serde_json::Value = c.post(format!("{base}/api/plugin-host/process/poll")).header("x-plugin-token", pt).json(&serde_json::json!({ "job": job })).send().await.unwrap().json().await.unwrap();
+        if poll["status"] != "running" { assert_eq!(poll["status"], "exited", "{poll}"); break; }
+        tries += 1;
+        assert!(tries < 100, "job never finished");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    // Sanity: the file really is HTML, not a video, sitting right where addMedia will look for it.
+    let job_dir = data_dir.join("plugin-jobs").join(plugin_id).join(&job);
+    let written = std::fs::read_to_string(job_dir.join("evil.mp4")).unwrap();
+    assert!(written.contains("<script>"), "{written}");
+
+    let add = c.post(format!("{base}/api/plugin-host/media")).header("x-plugin-token", pt)
+        .json(&serde_json::json!({ "job": job, "file": "evil.mp4", "media_type": "video", "title": "Evil" }))
+        .send().await.unwrap();
+    let status = add.status();
+    let body: serde_json::Value = add.json().await.unwrap_or(serde_json::json!({}));
+    // The real content must be checked, exactly as library.addMediaUrl already does with sniff_media_ext:
+    // an extension on a file name is not evidence of what the file contains.
+    assert_ne!(status, reqwest::StatusCode::OK, "HTML masquerading as a .mp4 (right extension, wrong bytes) must be refused: {body}");
+    assert!(body["error"].as_str().unwrap_or("").contains("evil.mp4"), "{body}");
+    assert!(!tmp.path().join("media/videos/evil.mp4").exists(), "the impostor file must not have been moved into the library");
+
+    // A genuine video, named honestly, still goes through -- this isn't a ban on the extension, it's a
+    // check that the bytes back it up.
+    std::fs::write(job_dir.join("real.webm"), [0x1A, 0x45, 0xDF, 0xA3, 0, 0, 0, 0, b'x', b'x', b'x', b'x']).unwrap();
+    let add2 = c.post(format!("{base}/api/plugin-host/media")).header("x-plugin-token", pt)
+        .json(&serde_json::json!({ "job": job, "file": "real.webm", "media_type": "video", "title": "Real" }))
+        .send().await.unwrap();
+    assert_eq!(add2.status(), reqwest::StatusCode::OK);
+    let body2: serde_json::Value = add2.json().await.unwrap();
+    assert_eq!(body2["item"]["file_path"], "/media/videos/real.webm");
+    assert!(tmp.path().join("media/videos/real.webm").exists());
+}
+
+#[test]
+fn test_sniff_audio_ext_recognizes_real_audio_and_rejects_impostors() {
+    use os_next::storage::media_sniff::sniff_audio_ext;
+    assert_eq!(sniff_audio_ext(b"ID3\x03\x00\x00\x00\x00\x00\x00"), Some("mp3"));
+    assert_eq!(sniff_audio_ext(&[0xFF, 0xFB, 0x90, 0x00]), Some("mp3"));
+    assert_eq!(sniff_audio_ext(b"RIFF\0\0\0\0WAVEfmt "), Some("wav"));
+    assert_eq!(sniff_audio_ext(b"fLaC\0\0\0\"xxxx"), Some("flac"));
+    assert_eq!(sniff_audio_ext(b"OggS\0\x02\0\0\0\0\0\0\0\0OpusHead\x01\x02"), Some("opus"));
+    assert_eq!(sniff_audio_ext(b"OggS\0\x02\0\0\0\0\0\0\0\0\x01vorbis"), Some("ogg"));
+    assert_eq!(sniff_audio_ext(b"\0\0\0\x18ftypM4A \0\0\0\0"), Some("m4a"));
+    assert_eq!(sniff_audio_ext(b"<html><script>alert(1)</script></html>"), None);
+    assert_eq!(sniff_audio_ext(b"GIF89a"), None, "an image is not audio, even if someone names it x.mp3");
+    assert_eq!(sniff_audio_ext(b""), None);
 }
