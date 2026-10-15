@@ -51,7 +51,10 @@ pub fn sniff_audio_ext(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"ID3") {
         Some("mp3")
     } else if bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0 {
-        // MPEG audio frame sync (11 set bits); covers a bare .mp3/.aac stream with no ID3 tag.
+        // MPEG audio frame sync (11 set bits); covers a bare .mp3/.aac stream with no ID3 tag. Only
+        // 2 bytes, unlike the other signatures here, so it is the weakest of this module's gates on
+        // its own -- the same Content-Type-by-extension + global nosniff that backs every sniffed
+        // format is what actually stops this one from being exploitable, not the magic bytes alone.
         Some("mp3")
     } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE" {
         Some("wav")
