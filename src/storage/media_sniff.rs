@@ -50,11 +50,9 @@ pub fn sniff_media_ext(bytes: &[u8]) -> Option<&'static str> {
 pub fn sniff_audio_ext(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"ID3") {
         Some("mp3")
-    } else if bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0 {
-        // MPEG audio frame sync (11 set bits); covers a bare .mp3/.aac stream with no ID3 tag. Only
-        // 2 bytes, unlike the other signatures here, so it is the weakest of this module's gates on
-        // its own -- the same Content-Type-by-extension + global nosniff that backs every sniffed
-        // format is what actually stops this one from being exploitable, not the magic bytes alone.
+    } else if mpeg_audio_frame_len(bytes).is_some() {
+        // A bare .mp3/.aac stream with no ID3 tag: no container magic exists for this, so the check
+        // is the MPEG audio frame header itself -- see mpeg_audio_frame_len below.
         Some("mp3")
     } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE" {
         Some("wav")
@@ -71,6 +69,76 @@ pub fn sniff_audio_ext(bytes: &[u8]) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// MPEG-1/2/2.5 Audio bitrate tables in kbps, by layer, indexed 1..=14 (index 0 is "free" bitrate --
+/// legal in the format but its frame length can't be computed without decoding, so this module
+/// can't confirm a second frame follows it; treated as not recognized). Reserved rows for layers
+/// that don't apply to a given version are unused. ISO/IEC 11172-3, table B.1/B.2.
+const BITRATE_V1_L1: [u16; 15] = [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448];
+const BITRATE_V1_L2: [u16; 15] = [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384];
+const BITRATE_V1_L3: [u16; 15] = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+const BITRATE_V2_L1: [u16; 15] = [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256];
+const BITRATE_V2_L23: [u16; 15] = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+
+/// Sample rates in Hz, indexed 0..=2 by the header's 2-bit sampling-rate field, per MPEG version.
+const SAMPLE_RATE_V1: [u32; 3] = [44100, 48000, 32000];
+const SAMPLE_RATE_V2: [u32; 3] = [22050, 24000, 16000];
+const SAMPLE_RATE_V25: [u32; 3] = [11025, 12000, 8000];
+
+/// Decodes one 4-byte MPEG audio frame header at the start of `bytes` and returns its frame length
+/// in bytes, or `None` if the header is structurally invalid (bad sync, a reserved field, or a
+/// "free" bitrate whose length isn't derivable from the header alone). Does not decode any audio.
+fn decode_mpeg_header(bytes: &[u8]) -> Option<(usize, u8, u8, u32)> {
+    if bytes.len() < 4 || bytes[0] != 0xFF || (bytes[1] & 0xE0) != 0xE0 {
+        return None;
+    }
+    let version_bits = (bytes[1] >> 3) & 0x3;
+    let layer_bits = (bytes[1] >> 1) & 0x3;
+    if version_bits == 0b01 || layer_bits == 0b00 {
+        return None; // reserved
+    }
+    let bitrate_idx = (bytes[2] >> 4) & 0xF;
+    let samplerate_idx = (bytes[2] >> 2) & 0x3;
+    if bitrate_idx == 0 || bitrate_idx == 0xF || samplerate_idx == 0b11 {
+        return None; // free (unknowable length), bad, or reserved
+    }
+    let padding = u32::from((bytes[2] >> 1) & 0x1);
+    let sample_rate = match version_bits {
+        0b11 => SAMPLE_RATE_V1[samplerate_idx as usize],
+        0b10 => SAMPLE_RATE_V2[samplerate_idx as usize],
+        _ => SAMPLE_RATE_V25[samplerate_idx as usize], // 0b00
+    };
+    let bitrate_kbps = u32::from(match (version_bits, layer_bits) {
+        (0b11, 0b11) => BITRATE_V1_L1[bitrate_idx as usize],
+        (0b11, 0b10) => BITRATE_V1_L2[bitrate_idx as usize],
+        (0b11, 0b01) => BITRATE_V1_L3[bitrate_idx as usize],
+        (_, 0b11) => BITRATE_V2_L1[bitrate_idx as usize],
+        _ => BITRATE_V2_L23[bitrate_idx as usize],
+    });
+    let len = if layer_bits == 0b11 {
+        (12 * bitrate_kbps * 1000 / sample_rate + padding) * 4 // Layer I
+    } else {
+        144 * bitrate_kbps * 1000 / sample_rate + padding // Layer II/III
+    };
+    // Smallest real frame is well over this; guards the division results above from being used as
+    // a 0 or absurd length if a future table edit introduces a typo.
+    if !(16..=8192).contains(&len) {
+        return None;
+    }
+    Some((len as usize, version_bits, layer_bits, sample_rate))
+}
+
+/// Whether `bytes` begins with a real MPEG audio bitstream: a structurally valid frame header whose
+/// declared length lands on a second frame header agreeing on version, layer and sample rate (a
+/// plain two-byte sync-pattern match, which is all the header-only check above gives by itself,
+/// costs an attacker nothing -- this is what actually distinguishes a genuine stream from a crafted
+/// prefix in front of arbitrary bytes). Bitrate may differ frame to frame (that's normal for VBR).
+pub fn mpeg_audio_frame_len(bytes: &[u8]) -> Option<usize> {
+    let (len, version, layer, rate) = decode_mpeg_header(bytes)?;
+    let next = bytes.get(len..)?;
+    let (_, version2, layer2, rate2) = decode_mpeg_header(next)?;
+    (version == version2 && layer == layer2 && rate == rate2).then_some(len)
 }
 
 /// Writes `bytes` into `dir` as `<prefix>_<uuid>.<sniffed ext>` and returns
@@ -109,6 +177,59 @@ mod tests {
         assert_eq!(sniff_media_ext(b"<svg xmlns='http://www.w3.org/2000/svg' onload='x()'/>"), None);
         assert_eq!(sniff_media_ext(b"root:x:0:0:root:/root:/bin/bash\n"), None);
         assert_eq!(sniff_media_ext(b""), None);
+    }
+
+    /// Builds one structurally valid MPEG-1 Layer III frame: a real header plus exactly enough
+    /// filler payload bytes to reach its declared length, so the next frame lands correctly.
+    fn build_frame(bitrate_idx: u8, samplerate_idx: u8, fill: u8) -> Vec<u8> {
+        const BITRATE_V1_L3: [u32; 15] = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+        const SR_V1: [u32; 3] = [44100, 48000, 32000];
+        let b1 = 0xE0 | (0b11 << 3) | (0b01 << 1) | 1; // MPEG1, Layer III, no CRC
+        let b2 = (bitrate_idx << 4) | (samplerate_idx << 2);
+        let mut frame = vec![0xFF, b1, b2, 0x00];
+        let len = 144 * BITRATE_V1_L3[bitrate_idx as usize] * 1000 / SR_V1[samplerate_idx as usize];
+        frame.resize(len as usize, fill);
+        frame
+    }
+
+    #[test]
+    fn mpeg_frame_chaining_tells_a_real_stream_from_a_crafted_prefix() {
+        // Two real, valid frames (a bitrate change, as in a VBR stream) chain and are accepted.
+        let first = build_frame(5, 0, b'a'); // 64kbps/44100
+        let first_len = first.len();
+        let mut vbr = first;
+        vbr.extend(build_frame(9, 0, b'b')); // 128kbps/44100, same version/layer/samplerate
+        assert_eq!(mpeg_audio_frame_len(&vbr), Some(first_len));
+        assert_eq!(sniff_audio_ext(&vbr), Some("mp3"));
+
+        // The genuine encoder-produced fixture (testdata/media/bare_real.mp3, no ID3 tag) passes too.
+        let real = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/media/bare_real.mp3")).unwrap();
+        assert!(mpeg_audio_frame_len(&real).is_some(), "a real encoder's bare MP3 stream must be recognized");
+        assert_eq!(sniff_audio_ext(&real), Some("mp3"));
+        let synthetic = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/media/synthetic_vbr.bin")).unwrap();
+        assert!(mpeg_audio_frame_len(&synthetic).is_some());
+
+        // A single valid-looking header with no real second frame following -- exactly what a two-byte
+        // sync-pattern attack can produce for free -- is refused: nothing says what follows is a frame.
+        let mut lone = build_frame(5, 0, b'a');
+        lone.truncate(lone.len() - 4); // cut short: the next "header" is garbage/EOF, not a real frame
+        lone.extend_from_slice(b"\xFF\xFB\x90\x00<html><script>alert(document.domain)</script>");
+        assert_eq!(mpeg_audio_frame_len(&lone), None);
+        assert_eq!(sniff_audio_ext(&lone), None);
+
+        // The classic attack this replaces: 2 bytes of sync pattern, then arbitrary script.
+        let mut prefixed = vec![0xFF, 0xFB];
+        prefixed.extend_from_slice(b"<html><script>alert(document.domain)</script></html>");
+        assert_eq!(sniff_audio_ext(&prefixed), None, "a bare sync pattern in front of HTML must not pass as mp3");
+
+        // Reserved/invalid header fields are refused outright (no frame-2 lookup needed).
+        assert_eq!(decode_mpeg_header(&[0xFF, 0xEB, 0x00, 0x00]), None, "version 01 is reserved");
+        assert_eq!(decode_mpeg_header(&[0xFF, 0xF9, 0x00, 0x00]), None, "layer 00 is reserved");
+        assert_eq!(decode_mpeg_header(&[0xFF, 0xFB, 0xF0, 0x00]), None, "bitrate index 15 (0xF) is bad");
+        assert_eq!(decode_mpeg_header(&[0xFF, 0xFB, 0x00, 0x00]), None, "bitrate index 0 (free) can't be length-checked");
+        assert_eq!(decode_mpeg_header(&[0xFF, 0xFB, 0x0C, 0x00]), None, "sample-rate index 3 is reserved");
+        assert_eq!(decode_mpeg_header(b"<htm"), None);
+        assert_eq!(decode_mpeg_header(&[0xFF]), None, "too short");
     }
 }
 
