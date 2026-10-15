@@ -580,10 +580,14 @@ pub struct PluginManifest {
     #[serde(default)]
     pub description: String,
     /// The publisher's minisign public key (base64). Only meaningful together with a detached
-    /// `plugin.json.minisig` over the manifest bytes; the manifest pins every artifact hash, so
-    /// that one signature covers the binaries too. Pinned on first approval (trust on first use).
+    /// `plugin.json.minisig` over the manifest bytes. Pinned on first approval (trust on first use).
     #[serde(default)]
     pub publisher_key: Option<String>,
+    /// `{ "<relative path>": "<sha256 hex>" }` for every file in a sandboxed plugin's folder except `plugin.json`
+    /// and its signature. With these listed, the one signature over `plugin.json` covers the whole package
+    /// (docs/PLUGIN_SIGNING.md). Without them a signature covers the manifest only.
+    #[serde(default)]
+    pub files: Option<std::collections::BTreeMap<String, String>>,
     /// semver requirement against the running OS-Next version, e.g. ">=0.2.0, <0.3.0".
     #[serde(default)]
     pub host_api: String,

@@ -184,6 +184,16 @@ function buildAdvanced(plugin: PluginInfo, onChange: (on: boolean) => void): { r
   return { root, collect, isOn: () => toggle.checked };
 }
 
+/** What the signature proves, in words: "signed" is only said when the signature covers every file. */
+function signatureLabel(plugin: PluginInfo): string {
+  const key = plugin.signer_id ? ` (publisher key ${plugin.signer_id})` : '';
+  switch (plugin.signature_scope ?? (plugin.signed ? 'manifest' : 'unsigned')) {
+    case 'full': return `signed${key}, covers every file`;
+    case 'manifest': return `manifest signed${key}; the other files aren't covered by the signature`;
+    default: return 'unsigned';
+  }
+}
+
 /** "What changed" for an approved plugin whose files differ from what was reviewed. */
 function renderChanges(plugin: PluginInfo): HTMLElement | null {
   const c = plugin.changes;
@@ -235,7 +245,10 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   head.appendChild(el('span', 'os-badge os-badge--neutral', plugin.kind === 'sandbox' ? 'Sandboxed page' : 'Console script'));
   if (plugin.overridden) head.appendChild(el('span', 'os-badge plugin-state plugin-state--changed', 'Permissions overridden'));
   card.appendChild(head);
-  card.appendChild(el('div', 'settings-hint', `id: ${plugin.id} · digest ${plugin.digest.slice(0, 12)}… · ${plugin.signed ? `manifest signed (publisher key ${plugin.signer_id}; the plugin's other files aren't covered by the signature)` : 'unsigned'}`));
+  card.appendChild(el('div', 'settings-hint plugin-id-line', `id: ${plugin.id} · digest ${plugin.digest.slice(0, 12)}… · ${signatureLabel(plugin)}`));
+  if (plugin.signature_weaker) {
+    card.appendChild(el('div', 'plugin-warning', 'This plugin was fully signed when you approved it. Now the signature no longer covers all of its files. Treat this update with more suspicion.'));
+  }
   const changes = renderChanges(plugin);
   if (changes) card.appendChild(changes);
   if (plugin.signer_changed) {

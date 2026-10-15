@@ -30,6 +30,8 @@ pub struct Discovered {
     pub error: Option<String>,
     /// `(path, sha256)` of every file the digest covers (empty when the plugin failed to load).
     pub files: Vec<(String, String)>,
+    /// What the signature, if any, covers: `unsigned`, `manifest` (only plugin.json) or `full` (every file).
+    pub signature_scope: &'static str,
 }
 
 /// Checks the detached signature next to a manifest, if there is one. `Ok(None)` = unsigned.
@@ -62,6 +64,7 @@ fn failed(id: String, kind: &'static str, source: &Path, msg: String) -> Discove
         requested: Vec::new(),
         error: Some(msg),
         files: Vec::new(),
+        signature_scope: "unsigned",
     }
 }
 
@@ -120,6 +123,8 @@ fn discover_web(web_plugins_dir: &Path, host_version: &str, icons_dir: Option<&P
                         requested: m.permissions.clone(),
                         error: problem,
                         files: vec![(file_name.clone(), file_sha)],
+                        // One script file: there are no other files, and `files` doesn't apply.
+                        signature_scope: if signer.is_some() { "manifest" } else { "unsigned" },
                     });
                 }
             }
@@ -165,6 +170,47 @@ pub fn sandbox_dir_files(dir: &Path) -> Result<Vec<(String, String)>, String> {
     Ok(out)
 }
 
+/// Files that are never listed in a manifest's `files`: the manifest itself (the signature covers its bytes)
+/// and the signature.
+pub const UNLISTED: [&str; 2] = ["plugin.json", "plugin.json.minisig"];
+
+/// When a manifest lists its files, the folder must hold exactly those, with exactly those hashes: a
+/// listed file that is missing, an unlisted file, a different hash, or a path that could escape the folder
+/// is an error. (An unlisted file next to a signed manifest is how a signature gets laundered.)
+pub fn check_listed_files(listed: Option<&std::collections::BTreeMap<String, String>>, actual: &[(String, String)]) -> Result<(), String> {
+    let Some(listed) = listed else { return Ok(()) };
+    let few = |v: Vec<&str>| {
+        let mut s = v.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+        if v.len() > 3 {
+            s.push_str(&format!(" and {} more", v.len() - 3));
+        }
+        s
+    };
+    for (path, hash) in listed {
+        if !crate::core::plugin_permissions::relative_path_is_contained(path) || path.contains('\\') || UNLISTED.contains(&path.as_str()) {
+            return Err(format!("'{path}' can't be listed in files"));
+        }
+        if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!("the hash listed for '{path}' isn't a SHA-256"));
+        }
+    }
+    let actual_map: std::collections::BTreeMap<&str, &str> =
+        actual.iter().filter(|(p, _)| !UNLISTED.contains(&p.as_str())).map(|(p, h)| (p.as_str(), h.as_str())).collect();
+    let missing: Vec<&str> = listed.keys().filter(|k| !actual_map.contains_key(k.as_str())).map(|k| k.as_str()).collect();
+    if !missing.is_empty() {
+        return Err(format!("listed but missing: {}", few(missing)));
+    }
+    let extra: Vec<&str> = actual_map.keys().filter(|k| !listed.contains_key(**k)).copied().collect();
+    if !extra.is_empty() {
+        return Err(format!("not listed in files: {}", few(extra)));
+    }
+    let different: Vec<&str> = listed.iter().filter(|(k, h)| !actual_map[k.as_str()].eq_ignore_ascii_case(h)).map(|(k, _)| k.as_str()).collect();
+    if !different.is_empty() {
+        return Err(format!("different from what was signed or listed: {}", few(different)));
+    }
+    Ok(())
+}
+
 /// A manifest is a few KB; anything this big is hostile or broken, and is never parsed.
 const MAX_MANIFEST_BYTES: usize = 256 * 1024;
 
@@ -197,6 +243,7 @@ fn discover_sandbox(dir: &Path, host_version: &str, icons_dir: Option<&Path>) ->
         requested: manifest.permissions.clone(),
         error: None,
         files: Vec::new(),
+        signature_scope: "unsigned",
     };
     let fail = |mut d: Discovered, msg: String| {
         d.digest = sha256_hex(format!("{manifest_sha}{msg}").as_bytes());
@@ -225,6 +272,15 @@ fn discover_sandbox(dir: &Path, host_version: &str, icons_dir: Option<&Path>) ->
             if !files.iter().any(|(rel, _)| *rel == web.entry) {
                 return Some(fail(d, format!("entry page '{}' is missing", web.entry)));
             }
+            if let Err(e) = check_listed_files(manifest.files.as_ref(), &files) {
+                let why = if d.signer.is_some() { "this signed package doesn't match its manifest" } else { "the files don't match the hashes in plugin.json" };
+                return Some(fail(d, format!("{why}: {e}")));
+            }
+            d.signature_scope = match (&d.signer, &manifest.files) {
+                (None, _) => "unsigned",
+                (Some(_), None) => "manifest",
+                (Some(_), Some(_)) => "full",
+            };
             d.digest = artifact_digest(&files);
             d.files = files;
             Some(d)
@@ -311,6 +367,7 @@ pub fn sync(db: &Database, discovered: &[Discovered]) {
             requested_json: &requested_json(d),
             error: d.error.as_deref(),
             files_json: &serde_json::to_string(&d.files).unwrap_or_else(|_| "[]".to_string()),
+            signature_scope: d.signature_scope,
         };
         if db.upsert_observed_plugin(&observed).is_err() {
             continue;
@@ -424,7 +481,7 @@ mod tests {
         for (id, kind) in [("legacy.old_plugin", "legacy-native"), ("demo", "legacy-web"), ("org.example.observer", "native")] {
             let observed = ObservedPlugin {
                 plugin_id: id, kind, name: id, version: None, source_path: "x", manifest_sha256: None, digest: "d",
-                signer: None, requested_json: "[]", error: None, files_json: "[]",
+                signer: None, requested_json: "[]", error: None, files_json: "[]", signature_scope: "unsigned",
             };
             db.upsert_observed_plugin(&observed).unwrap();
         }
@@ -523,6 +580,114 @@ mod tests {
         let d = describe_update(&db.get_plugin_grant("np").unwrap().unwrap()).unwrap();
         assert_eq!(d["permissions"]["added"], serde_json::json!(["keyring.own"]), "{d}");
         assert_eq!(d["permissions"]["added_tiers"], serde_json::json!([{"id": "keyring.own", "tier": "medium"}]));
+    }
+
+    /// A sandboxed plugin folder, optionally listing its files in the manifest and signing the manifest.
+    /// Returns the folder. `after_signing` runs last, to tamper.
+    fn write_package(web: &Path, list_files: bool, sign: bool, after_signing: impl Fn(&Path)) -> std::path::PathBuf {
+        let dir = web.join("pkg");
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("index.html"), "<html>page</html>").unwrap();
+        std::fs::write(dir.join("sub/app.js"), "var a = 1;").unwrap();
+        let kp = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let mut manifest = serde_json::json!({
+            "manifest_version": 1, "id": "pkg", "name": "Pkg", "version": "1.0.0",
+            "web": {"entry": "index.html", "sandbox": true}, "permissions": [{"id": "ui.panel"}]
+        });
+        if sign {
+            manifest["publisher_key"] = serde_json::json!(kp.pk.to_base64());
+        }
+        if list_files {
+            let hash = |name: &str| sha256_file(&dir.join(name)).unwrap();
+            manifest["files"] = serde_json::json!({ "index.html": hash("index.html"), "sub/app.js": hash("sub/app.js") });
+        }
+        let text = manifest.to_string();
+        std::fs::write(dir.join("plugin.json"), &text).unwrap();
+        if sign {
+            let sig = minisign::sign(None, &kp.sk, text.as_bytes(), None, None).unwrap().into_string();
+            std::fs::write(dir.join("plugin.json.minisig"), sig).unwrap();
+        }
+        after_signing(&dir);
+        dir
+    }
+
+    fn scope_and_error(web: &Path) -> (&'static str, Option<String>) {
+        let found = discover(web, "0.2.0");
+        let d = found.iter().find(|d| d.id == "pkg").unwrap();
+        (d.signature_scope, d.error.clone())
+    }
+
+    #[test]
+    fn what_a_signature_covers_is_unsigned_manifest_only_or_full() {
+        for (list, sign, expected) in [(false, false, "unsigned"), (false, true, "manifest"), (true, true, "full"), (true, false, "unsigned")] {
+            let tmp = tempfile::tempdir().unwrap();
+            let web = tmp.path().join("plugins");
+            write_package(&web, list, sign, |_| {});
+            assert_eq!(scope_and_error(&web), (expected, None), "files listed: {list}, signed: {sign}");
+        }
+    }
+
+    #[test]
+    fn a_fully_signed_package_that_was_tampered_with_is_refused_not_downgraded() {
+        let cases: Vec<(&str, Box<dyn Fn(&Path)>, &str)> = vec![
+            ("a file swapped after signing", Box::new(|d| std::fs::write(d.join("sub/app.js"), "steal();").unwrap()), "different from what was signed"),
+            ("an extra file dropped in", Box::new(|d| std::fs::write(d.join("evil.js"), "x").unwrap()), "not listed in files: evil.js"),
+            ("a listed file deleted", Box::new(|d| std::fs::remove_file(d.join("sub/app.js")).unwrap()), "listed but missing: sub/app.js"),
+            ("a file in a new subfolder", Box::new(|d| { std::fs::create_dir_all(d.join("x")).unwrap(); std::fs::write(d.join("x/y.js"), "x").unwrap(); }), "not listed in files: x/y.js"),
+        ];
+        for (why, tamper, expect) in cases {
+            let tmp = tempfile::tempdir().unwrap();
+            let web = tmp.path().join("plugins");
+            write_package(&web, true, true, tamper);
+            let (_, err) = scope_and_error(&web);
+            let err = err.unwrap_or_else(|| panic!("{why}: must be refused"));
+            assert!(err.contains("doesn't match its manifest") && err.contains(expect), "{why}: {err}");
+        }
+    }
+
+    #[test]
+    fn the_signature_and_manifest_files_are_never_listed_and_listed_paths_are_contained() {
+        let h = "a".repeat(64);
+        let actual = vec![("index.html".to_string(), h.clone()), ("plugin.json".to_string(), "x".into()), ("plugin.json.minisig".to_string(), "y".into())];
+        let listed = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<std::collections::BTreeMap<_, _>>();
+        // The manifest and its signature are outside the list, so a correct list passes.
+        assert!(check_listed_files(Some(&listed(&[("index.html", &h)])), &actual).is_ok());
+        assert!(check_listed_files(None, &actual).is_ok(), "no list, nothing to check");
+        for bad in ["../x", "/etc/passwd", "a\\b", "plugin.json", "plugin.json.minisig", ""] {
+            let err = check_listed_files(Some(&listed(&[("index.html", &h), (bad, &h)])), &actual).unwrap_err();
+            assert!(err.contains("can't be listed"), "{bad}: {err}");
+        }
+        assert!(check_listed_files(Some(&listed(&[("index.html", "nothex")])), &actual).unwrap_err().contains("isn't a SHA-256"));
+        // Hash case doesn't matter.
+        assert!(check_listed_files(Some(&listed(&[("index.html", &h.to_uppercase())])), &actual).is_ok());
+    }
+
+    #[test]
+    fn listed_hashes_are_checked_even_without_a_signature() {
+        let tmp = tempfile::tempdir().unwrap();
+        let web = tmp.path().join("plugins");
+        write_package(&web, true, false, |d| std::fs::write(d.join("index.html"), "<html>corrupted</html>").unwrap());
+        let (_, err) = scope_and_error(&web);
+        assert!(err.unwrap().contains("don't match the hashes"));
+    }
+
+    #[test]
+    fn a_signature_is_only_as_strong_as_its_scope_when_it_comes_to_the_review_screen() {
+        // Approved fully signed, then re-released as manifest-only signed: flagged as weaker.
+        let tmp = tempfile::tempdir().unwrap();
+        let web = tmp.path().join("plugins");
+        let db = temp_db(tmp.path());
+        write_package(&web, true, true, |_| {});
+        sync(&db, &discover(&web, "0.2.0"));
+        let row = db.get_plugin_grant("pkg").unwrap().unwrap();
+        assert_eq!(row.observed_signature_scope.as_deref(), Some("full"));
+        db.set_plugin_decision("pkg", "approved", &row.requested_json, row.observed_manifest_sha256.as_deref(), Some(&row.observed_digest), row.observed_signer.as_deref(), "t").unwrap();
+        assert_eq!(db.get_plugin_grant("pkg").unwrap().unwrap().approved_signature_scope.as_deref(), Some("full"));
+        std::fs::remove_dir_all(web.join("pkg")).unwrap();
+        write_package(&web, false, true, |_| {});
+        sync(&db, &discover(&web, "0.2.0"));
+        let row = db.get_plugin_grant("pkg").unwrap().unwrap();
+        assert_eq!((row.approved_signature_scope.as_deref(), row.observed_signature_scope.as_deref()), (Some("full"), Some("manifest")));
     }
 
     #[test]
