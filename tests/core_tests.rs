@@ -7457,6 +7457,8 @@ async fn test_key_rotation_needs_the_old_keys_signature() {
     h2.install(good, true).await;
     let p = h2.plugin("moving").await;
     assert_eq!((p["signer_changed"].as_bool(), p["trust"]["level"].as_str()), (Some(true), Some("new")), "{p}");
+}
+
 // ---------------------------------------------------------------------------------------------
 // library.addMedia (a file from a plugin's own process job, as opposed to addMediaUrl's download):
 // does the host trust the claimed extension, or check what the bytes actually are?
