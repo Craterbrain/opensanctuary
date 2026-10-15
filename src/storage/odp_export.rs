@@ -401,10 +401,10 @@ fn shape_enhanced_path(kind: &str) -> &'static str {
         // same outline as right-arrow.
         "striped-right-arrow" => "M 5 30 L 65 30 L 65 10 L 95 50 L 65 90 L 65 70 L 5 70 Z N",
         "triangle-down" => "M 5 5 L 95 5 L 50 95 Z N",
-        // A plain octagon outline (an approximate circle) -- "ring" is handled as a special
-        // case in render_element (unfilled, thick-stroked), not through the usual fill path, so
-        // this entry is only reached if that special case is ever bypassed; kept as a reasonable
-        // outline rather than the generic rect fallback.
+        // A plain octagon outline (an approximate circle) -- this is the shape every "ring"
+        // export actually uses (render_element's "ring" special case only changes fill_attr/
+        // stroke_attr to unfilled+thick-stroked; the path still comes from here, same as every
+        // other custom-shape kind).
         "ring" => "M 50 5 L 82 18 L 95 50 L 82 82 L 50 95 L 18 82 L 5 50 L 18 18 Z N",
         _ => "M 5 5 L 95 5 L 95 95 L 5 95 Z N",
     }

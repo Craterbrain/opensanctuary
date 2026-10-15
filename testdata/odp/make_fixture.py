@@ -1,11 +1,31 @@
+import os
+import struct
+import zlib
 import uno
 from com.sun.star.beans import PropertyValue
+
+# This directory (not a hardcoded path from whatever machine/session last ran this script),
+# so it's actually re-runnable by anyone, including the original author later.
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 def pv(name, value):
     p = PropertyValue()
     p.Name = name
     p.Value = value
     return p
+
+def write_red_png(path, size=4):
+    """A minimal, dependency-free (no PIL) solid-red PNG, written with the stdlib alone."""
+    def chunk(tag, data):
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
+    row = b"\x00" + b"\xff\x00\x00" * size  # filter byte + RGB pixels
+    raw = row * size
+    png = b"\x89PNG\r\n\x1a\n"
+    png += chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+    png += chunk(b"IDAT", zlib.compress(raw))
+    png += chunk(b"IEND", b"")
+    with open(path, "wb") as f:
+        f.write(png)
 
 localContext = uno.getComponentContext()
 resolver = localContext.ServiceManager.createInstanceWithContext('com.sun.star.bridge.UnoUrlResolver', localContext)
@@ -74,7 +94,9 @@ s2.add(img)
 img.Position = Point(3000, 2000)
 img.Size = Size(4000, 4000)
 graphic_provider = smgr.createInstanceWithContext('com.sun.star.graphic.GraphicProvider', ctx)
-img_url = 'file:///home/jasonb/.claude/jobs/0e8fb149/tmp/odp/test.png'
+img_path = os.path.join(HERE, 'test.png')
+write_red_png(img_path)
+img_url = 'file://' + img_path
 graphic = graphic_provider.queryGraphic((pv('URL', img_url),))
 img.Graphic = graphic
 
@@ -85,7 +107,8 @@ tb2.Position = Point(500, 500)
 tb2.Size = Size(8000, 1500)
 tb2.getText().setString("Second slide title")
 
-out_url = 'file:///home/jasonb/.claude/jobs/0e8fb149/tmp/odp/fixture.odp'
+out_url = 'file://' + os.path.join(HERE, 'fixture.odp')
 doc.storeToURL(out_url, (pv('FilterName', 'impress8'),))
 doc.close(False)
+os.remove(img_path)  # was only ever a scratch input for the GraphicObjectShape above
 print("DONE")
