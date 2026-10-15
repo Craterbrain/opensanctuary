@@ -29,6 +29,31 @@ pub(super) fn rescan(app: &AppState) -> Vec<Discovered> {
     found
 }
 
+/// Is this plugin's folder one that ships with the app (rather than one the operator installed)?
+fn is_builtin(app: &AppState, row: &PluginGrantRow) -> bool {
+    !is_installed_folder(app, std::path::Path::new(&row.source_path))
+}
+
+/// The keys of every plugin the operator has approved: a signature by one of these is a "known" publisher.
+fn known_keys(app: &AppState) -> std::collections::HashSet<String> {
+    app.db.list_plugin_grants().unwrap_or_default().into_iter().filter(|r| r.status == "approved").filter_map(|r| r.approved_signer).collect()
+}
+
+fn trust_view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
+    use crate::core::plugin_trust::{trust_level, TrustLevel};
+    let publisher = row.observed_signer.as_deref().and_then(|k| app.db.get_publisher(k).ok().flatten());
+    let builtin = is_builtin(app, row);
+    let level = trust_level(row, builtin, publisher.as_ref(), &known_keys(app));
+    let name = read_manifest(row).map(|m| m.publisher).filter(|n| !n.is_empty()).or_else(|| publisher.as_ref().map(|p| p.name.clone()).filter(|n| !n.is_empty()));
+    serde_json::json!({
+        "level": level.as_str(),
+        "publisher_name": name,
+        "key_id": row.observed_signer.as_deref().map(signer_id),
+        // The operator can choose to trust a signed publisher that isn't built in, trusted already or revoked.
+        "can_trust": matches!(level, TrustLevel::New | TrustLevel::Known),
+    })
+}
+
 /// Short, stable id for a publisher key, for display.
 fn signer_id(key: &str) -> String {
     crate::core::plugin_permissions::sha256_hex(key.as_bytes())[..16].to_string()
@@ -120,6 +145,7 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         "version": row.version,
         "sandboxed": row.kind == "sandbox",
         "changes": crate::core::plugin_registry::describe_update(row),
+        "trust": trust_view(app, row),
         "removable": row.kind == "sandbox" && is_installed_folder(app, std::path::Path::new(&row.source_path)),
         "state": state,
         "status": row.status,
@@ -184,6 +210,12 @@ pub(super) struct ApproveReq {
     /// never asked for. When present, `granted` is ignored. The console shows a warning first.
     #[serde(default, rename = "override")]
     override_grants: Option<Vec<PermissionRequest>>,
+    /// Also trust this plugin's publisher (its signing key) from now on. Needs a signed plugin.
+    #[serde(default)]
+    trust_publisher: bool,
+    /// Required to approve a plugin signed by a publisher the operator revoked.
+    #[serde(default)]
+    confirm_revoked_publisher: bool,
 }
 
 fn actor_of(headers: &HeaderMap, app: &AppState) -> String {
@@ -221,6 +253,14 @@ pub(super) async fn approve_plugin(
     }
     if req.digest != row.observed_digest {
         return Err(err(StatusCode::CONFLICT, "the plugin changed since it was reviewed; reload and review again"));
+    }
+    let publisher = row.observed_signer.as_deref().and_then(|k| app.db.get_publisher(k).ok().flatten());
+    let revoked_publisher = publisher.as_ref().is_some_and(|p| p.revoked);
+    if revoked_publisher && !req.confirm_revoked_publisher {
+        return Err(err(StatusCode::CONFLICT, "this plugin is signed by a publisher you revoked; confirm to approve it anyway"));
+    }
+    if req.trust_publisher && (row.observed_signer.is_none() || revoked_publisher) {
+        return Err(err(StatusCode::BAD_REQUEST, "only a signed plugin from a publisher you haven't revoked can be trusted"));
     }
     let requested: Vec<PermissionRequest> = serde_json::from_str(&row.requested_json).unwrap_or_default();
     let mut override_diff = None;
@@ -262,8 +302,16 @@ pub(super) async fn approve_plugin(
         &id,
         &actor,
         "approved",
-        &serde_json::json!({ "granted": granted.iter().map(|p| &p.id).collect::<Vec<_>>(), "digest": row.observed_digest, "override": override_diff }).to_string(),
+        &serde_json::json!({ "granted": granted.iter().map(|p| &p.id).collect::<Vec<_>>(), "digest": row.observed_digest, "override": override_diff, "revoked_publisher_accepted": revoked_publisher }).to_string(),
     );
+    if req.trust_publisher {
+        if let Some(key) = row.observed_signer.as_deref() {
+            let name = read_manifest(&row).map(|m| m.publisher).filter(|n| !n.is_empty()).unwrap_or_else(|| row.name.clone());
+            if app.db.trust_publisher(key, &name, &actor).is_ok() {
+                app.db.add_plugin_audit(&id, &actor, "publisher_trusted", &serde_json::json!({ "publisher_key_id": signer_id(key), "name": name }).to_string());
+            }
+        }
+    }
     if override_diff.is_some() {
         tracing::warn!("plugin '{id}' was approved with an operator override of its requested permissions");
     }
@@ -1366,12 +1414,97 @@ pub(super) async fn uninstall_plugin(
     Ok(Json(serde_json::json!({ "success": true, "secrets_deleted": secrets })))
 }
 
+/// Finds the full key for a publisher's short id among the keys on record (a plugin's, or a saved publisher).
+fn key_for_id(app: &AppState, key_id: &str) -> Option<String> {
+    let mut keys: Vec<String> = app.db.list_plugin_grants().unwrap_or_default().into_iter().flat_map(|r| [r.observed_signer, r.approved_signer]).flatten().collect();
+    keys.extend(app.db.list_publishers().unwrap_or_default().into_iter().map(|p| p.key));
+    keys.into_iter().find(|k| signer_id(k) == key_id)
+}
+
+fn publisher_name_for(app: &AppState, key: &str) -> String {
+    for r in app.db.list_plugin_grants().unwrap_or_default() {
+        if r.observed_signer.as_deref() == Some(key) || r.approved_signer.as_deref() == Some(key) {
+            if let Some(m) = read_manifest(&r) {
+                if !m.publisher.is_empty() {
+                    return m.publisher;
+                }
+            }
+        }
+    }
+    app.db.get_publisher(key).ok().flatten().map(|p| p.name).unwrap_or_default()
+}
+
+/// GET /api/plugins/publishers -- the keys the operator trusted or revoked, and which plugins each signs.
+pub(super) async fn list_publishers(State(app): State<AppState>, headers: HeaderMap) -> Result<impl IntoResponse, ApiErr> {
+    require_host_token(&headers, &app)?;
+    let rows = app.db.list_publishers().map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    let out: Vec<_> = rows
+        .iter()
+        .map(|p| serde_json::json!({
+            "key_id": signer_id(&p.key), "name": p.name, "trusted": p.trusted, "revoked": p.revoked,
+            "added_at": p.added_at, "added_by": p.added_by,
+            "plugins": app.db.plugins_signed_by(&p.key).unwrap_or_default(),
+        }))
+        .collect();
+    Ok(Json(out))
+}
+
+/// POST /api/plugins/publishers/:key_id/trust
+pub(super) async fn trust_publisher(State(app): State<AppState>, headers: HeaderMap, AxumPath(key_id): AxumPath<String>) -> Result<impl IntoResponse, ApiErr> {
+    require_host_token(&headers, &app)?;
+    let key = key_for_id(&app, &key_id).ok_or_else(|| err(StatusCode::NOT_FOUND, "no plugin is signed by that publisher"))?;
+    if app.db.get_publisher(&key).ok().flatten().is_some_and(|p| p.revoked) {
+        return Err(err(StatusCode::CONFLICT, "that publisher is revoked"));
+    }
+    let actor = actor_of(&headers, &app);
+    let name = publisher_name_for(&app, &key);
+    app.db.trust_publisher(&key, &name, &actor).map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    app.db.add_plugin_audit("*", &actor, "publisher_trusted", &serde_json::json!({ "publisher_key_id": key_id, "name": name }).to_string());
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// POST /api/plugins/publishers/:key_id/untrust
+pub(super) async fn untrust_publisher(State(app): State<AppState>, headers: HeaderMap, AxumPath(key_id): AxumPath<String>) -> Result<impl IntoResponse, ApiErr> {
+    require_host_token(&headers, &app)?;
+    let key = key_for_id(&app, &key_id).ok_or_else(|| err(StatusCode::NOT_FOUND, "no such publisher"))?;
+    let actor = actor_of(&headers, &app);
+    app.db.untrust_publisher(&key).map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    app.db.add_plugin_audit("*", &actor, "publisher_untrusted", &serde_json::json!({ "publisher_key_id": key_id }).to_string());
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// POST /api/plugins/publishers/:key_id/revoke -- distrusts a key: every plugin it signed that was approved stops,
+/// exactly as if the operator had revoked each one, and approving one again needs a confirmation.
+pub(super) async fn revoke_publisher(State(app): State<AppState>, headers: HeaderMap, AxumPath(key_id): AxumPath<String>) -> Result<impl IntoResponse, ApiErr> {
+    require_host_token(&headers, &app)?;
+    let key = key_for_id(&app, &key_id).ok_or_else(|| err(StatusCode::NOT_FOUND, "no such publisher"))?;
+    let actor = actor_of(&headers, &app);
+    let name = publisher_name_for(&app, &key);
+    app.db.revoke_publisher(&key, &name, &actor).map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    let mut stopped = Vec::new();
+    for id in app.db.plugins_signed_by(&key).unwrap_or_default() {
+        let Some(row) = app.db.get_plugin_grant(&id).ok().flatten() else { continue };
+        if row.status == "approved" && row.approved_signer.as_deref() == Some(key.as_str()) {
+            let _ = app.db.set_plugin_decision(&id, "revoked", "[]", None, None, None, &actor);
+            app.db.add_plugin_audit(&id, &actor, "revoked", &serde_json::json!({ "reason": "publisher revoked", "publisher_key_id": key_id }).to_string());
+            app.revoke_plugin_tokens(&id).await;
+            stopped.push(id);
+        }
+    }
+    app.db.add_plugin_audit("*", &actor, "publisher_revoked", &serde_json::json!({ "publisher_key_id": key_id, "name": name, "stopped": stopped }).to_string());
+    Ok(Json(serde_json::json!({ "success": true, "stopped": stopped })))
+}
+
 pub(super) fn router() -> Router<AppState> {
     use axum::routing::{get, post};
     Router::new()
         .route("/api/plugins", get(list_plugins))
         .route("/api/plugins/audit", get(plugin_audit))
         .route("/api/plugins/permissions", get(permission_catalog))
+        .route("/api/plugins/publishers", get(list_publishers))
+        .route("/api/plugins/publishers/:key_id/trust", post(trust_publisher))
+        .route("/api/plugins/publishers/:key_id/untrust", post(untrust_publisher))
+        .route("/api/plugins/publishers/:key_id/revoke", post(revoke_publisher))
         .route("/api/plugins/install", post(install_plugin).layer(axum::extract::DefaultBodyLimit::max(MAX_PACKAGE_BYTES + 1024)))
         .route("/api/plugins/:id", axum::routing::delete(uninstall_plugin))
         .route("/api/plugins/:id/approve", post(approve_plugin))

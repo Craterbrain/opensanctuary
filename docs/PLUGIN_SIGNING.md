@@ -1,6 +1,6 @@
 # Plugin signing: design (not implemented)
 
-_Status: **phase 1 is implemented** (section 10); phases 2 to 5 are design only. Section 0 describes what the code does now. Written 2026-10-14, updated with phase 1._
+_Status: **phases 1 and 2 are implemented** (section 10); phases 3 to 5 are design only. Section 0 describes what the code does now. Written 2026-10-14, updated with phase 1._
 
 ## 0. Today (after phase 1)
 
@@ -39,7 +39,9 @@ Non-goals
 |---|---|---|
 | **Built-in** | Ships with the app | The folder is in the install's `web/plugins/` **and** its package signature verifies against the app's release key (the key the updater already trusts). |
 | **Trusted publisher** | A publisher the operator chose to trust | The signing key is in the operator's trust list (section 4). |
-| **Known publisher** | Signed; key pinned on first approval of some plugin, never explicitly trusted | Today's TOFU behavior. |
+| **Known publisher** | Signed; the operator has approved a plugin from this key before, but never explicitly trusted it | Today's TOFU behavior. |
+| **New publisher** | Signed by a key the app has never seen approved | Added in phase 2: the first sight of a key, which deserves more care than a known one. |
+| **Revoked publisher** | Signed by a key the operator revoked | Phase 2. |
 | **Unsigned** | No signature | Allowed unless policy forbids it (section 6). |
 | **Invalid** | A signature is present and fails (bad, wrong key, files don't match) | Refused to load, with the reason. Never downgraded to "unsigned". |
 
@@ -106,7 +108,7 @@ A catalog is a signed index of packages: `{ "plugins": [{ "id", "version", "min_
 ## 10. Implementation phases
 
 1. **Honest labels and `files` verification** (section 3) — **done**: `files` in the manifest; discovery and install refuse a package whose files differ, are missing, or aren't listed (signed or not); `signature_scope` is recorded (`unsigned` / `manifest` / `full`) and shown; a plugin approved as fully signed that later isn't gets a warning; `--hash-plugin` and `--check-plugin` for authors. Built-in plugins are not signed yet (that belongs with the release key in phase 2).
-2. **Trust store and display** (section 4, 9): table, badges, trust checkbox, Publishers list.
+2. **Trust store and display** (section 4, 9) — **done**: `plugin_publishers` table; trust levels Built-in / Trusted / Known / New / Unsigned / Invalid / Revoked, shown as a badge with the publisher's name; "Trust everything this publisher signs" at approval (and a Trust publisher button later); a Publishers list with Stop trusting and Revoke; revoking stops every plugin that key signed and makes approving another need a confirmation; all of it console-only and audited (`publisher_trusted`, `publisher_untrusted`, `publisher_revoked`). Trust is display and policy only: it never skips the review screen or approves anything (approving an update was already one click). **Deviation from section 2:** *Built-in* means "the folder ships with the app", decided by location, not by a signature verifying against the release key. Signing the bundled plugins with the release key needs the release pipeline's secret and comes with phase 3's revocation list, which uses the same key.
 3. **Revocation list and rotation** (section 5).
 4. **Policy setting** (section 6) and downgrade memory (section 7).
 5. **Catalog** (section 8), only if there is demand and a place to host it.

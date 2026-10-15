@@ -6174,3 +6174,11 @@ video {
 .plugin-install-row .settings-hint { flex: 1 1 260px; margin: 0; }
 .plugin-changes { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--accent-warning, #e8a33d); background: rgba(255,255,255,0.04); border-radius: 4px; }
 .plugin-changes > * + * { margin-top: 4px; }
+.plugin-trust--builtin { background: rgba(88, 166, 255, 0.22); color: #79c0ff; }
+.plugin-trust--trusted { background: rgba(46, 160, 67, 0.25); color: #7ee787; }
+.plugin-trust--known { background: rgba(88, 166, 255, 0.22); color: #79c0ff; }
+.plugin-trust--new, .plugin-trust--unsigned { background: rgba(210, 153, 34, 0.25); color: #e3b341; }
+.plugin-trust--invalid, .plugin-trust--revoked { background: rgba(248, 81, 73, 0.25); color: #ff7b72; }
+.plugin-trust-choice { display: block; margin: 8px 0; font-size: 13px; }
+.plugin-publisher { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+.plugin-publisher .settings-hint { flex: 1 1 200px; margin: 0; }

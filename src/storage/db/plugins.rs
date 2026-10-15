@@ -38,6 +38,17 @@ pub struct PluginGrantRow {
     pub approved_signature_scope: Option<String>,
 }
 
+/// A publisher key the operator has trusted or revoked.
+#[derive(Debug, Clone, Serialize)]
+pub struct PublisherRow {
+    pub key: String,
+    pub name: String,
+    pub trusted: bool,
+    pub revoked: bool,
+    pub added_at: i64,
+    pub added_by: String,
+}
+
 impl PluginGrantRow {
     /// `active` only while approved and the files on disk still match what was reviewed.
     pub fn effective_state(&self) -> &'static str {
@@ -263,5 +274,60 @@ impl Database {
             "DELETE FROM plugin_audit WHERE id <= (SELECT COALESCE(MAX(id), 0) FROM plugin_audit) - ?1",
             params![keep],
         );
+    }
+
+    // --- Publishers (docs/PLUGIN_SIGNING.md) ---
+
+    pub fn list_publishers(&self) -> Result<Vec<PublisherRow>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT key, name, trusted, revoked, added_at, added_by FROM plugin_publishers ORDER BY name, key")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(PublisherRow { key: r.get(0)?, name: r.get(1)?, trusted: r.get::<_, i64>(2)? != 0, revoked: r.get::<_, i64>(3)? != 0, added_at: r.get(4)?, added_by: r.get(5)? })
+        })?;
+        rows.collect()
+    }
+
+    pub fn get_publisher(&self, key: &str) -> Result<Option<PublisherRow>> {
+        Ok(self.list_publishers()?.into_iter().find(|p| p.key == key))
+    }
+
+    /// Trusts a key (never un-revokes one: a revoked key stays revoked until the operator removes it deliberately).
+    pub fn trust_publisher(&self, key: &str, name: &str, actor: &str) -> Result<()> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO plugin_publishers (key, name, trusted, revoked, added_at, added_by) VALUES (?1, ?2, 1, 0, ?3, ?4)
+             ON CONFLICT(key) DO UPDATE SET trusted = CASE WHEN revoked = 1 THEN 0 ELSE 1 END,
+                 name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE name END",
+            params![key, name, now, actor],
+        )?;
+        Ok(())
+    }
+
+    /// Stops trusting a key. A revoked key keeps its row (so it stays revoked); otherwise the row goes.
+    pub fn untrust_publisher(&self, key: &str) -> Result<()> {
+        let conn = self.conn();
+        conn.execute("UPDATE plugin_publishers SET trusted = 0 WHERE key = ?1", params![key])?;
+        conn.execute("DELETE FROM plugin_publishers WHERE key = ?1 AND revoked = 0", params![key])?;
+        Ok(())
+    }
+
+    pub fn revoke_publisher(&self, key: &str, name: &str, actor: &str) -> Result<()> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO plugin_publishers (key, name, trusted, revoked, added_at, added_by) VALUES (?1, ?2, 0, 1, ?3, ?4)
+             ON CONFLICT(key) DO UPDATE SET trusted = 0, revoked = 1",
+            params![key, name, now, actor],
+        )?;
+        Ok(())
+    }
+
+    /// Ids of plugins whose approved or observed signature is by `key`.
+    pub fn plugins_signed_by(&self, key: &str) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT plugin_id FROM plugin_grants WHERE observed_signer = ?1 OR approved_signer = ?1 ORDER BY plugin_id")?;
+        let rows = stmt.query_map(params![key], |r| r.get(0))?;
+        rows.collect()
     }
 }

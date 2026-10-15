@@ -7099,3 +7099,114 @@ fn test_plugin_author_workflow_hash_sign_check() {
     let o = run("--check-plugin");
     assert!(!o.status.success() && text(&o).contains("signature"), "a re-hashed manifest no longer matches its signature: {}", text(&o));
 }
+
+fn signed_package(id: &str, publisher: &str, kp: &minisign::KeyPair) -> Vec<u8> {
+    let manifest = serde_json::json!({
+        "manifest_version": 1, "id": id, "name": format!("Plugin {id}"), "version": "1.0.0", "publisher": publisher,
+        "publisher_key": kp.pk.to_base64(), "web": {"entry": "index.html", "sandbox": true},
+        "permissions": [{"id": "ui.panel", "reason": "x"}], "ui": {"placements": [{"slot": "dock"}]}
+    }).to_string();
+    let sig = minisign::sign(None, &kp.sk, manifest.as_bytes(), None, None).unwrap().into_string();
+    make_zip(&[("plugin.json", manifest.as_bytes()), ("plugin.json.minisig", sig.as_bytes()), ("index.html", b"<html></html>")])
+}
+
+#[tokio::test]
+async fn test_publisher_trust_levels_and_revocation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("trust.db").to_str().unwrap()).unwrap();
+    let web_dir = tmp.path().join("web");
+    std::fs::create_dir_all(web_dir.join("plugins/builtin_one")).unwrap();
+    std::fs::write(web_dir.join("plugins/builtin_one/plugin.json"), plugin_manifest_json("builtin_one")).unwrap();
+    std::fs::write(web_dir.join("plugins/builtin_one/index.html"), "<html></html>").unwrap();
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"), data_dir: data_dir.clone(),
+        host_session_token: "trust_host".to_string(), server_port: addr.port(),
+        ..base_app_state(db.clone())
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+    let h = "trust_host";
+    let install = |pkg: Vec<u8>| { let (c, base) = (c.clone(), base.clone()); async move {
+        let r = c.post(format!("{base}/api/plugins/install")).header("x-host-token", h).body(pkg).send().await.unwrap();
+        assert_eq!(r.status(), reqwest::StatusCode::OK);
+        r.json::<serde_json::Value>().await.unwrap()
+    } };
+    let get = |id: &str| { let (c, base, id) = (c.clone(), base.clone(), id.to_string()); async move {
+        let list: serde_json::Value = c.get(format!("{base}/api/plugins")).header("x-host-token", h).send().await.unwrap().json().await.unwrap();
+        list.as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).cloned().unwrap_or_else(|| panic!("{id} missing"))
+    } };
+    let approve = |id: &str, digest: serde_json::Value, extra: serde_json::Value| { let (c, base, id) = (c.clone(), base.clone(), id.to_string()); async move {
+        let mut body = serde_json::json!({ "digest": digest, "granted": ["ui.panel"] });
+        for (k, v) in extra.as_object().unwrap() { body[k] = v.clone(); }
+        c.post(format!("{base}/api/plugins/{id}/approve")).header("x-host-token", h).json(&body).send().await.unwrap()
+    } };
+    let post = |path: String| { let (c, base) = (c.clone(), base.clone()); async move { c.post(format!("{base}{path}")).header("x-host-token", h).send().await.unwrap() } };
+    let k1 = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+    let k2 = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+
+    // Levels at first sight: built-in, unsigned, and a signer nobody has met.
+    install(make_zip(&[("plugin.json", plugin_manifest_json("plain").as_bytes()), ("index.html", b"<html></html>")])).await;
+    install(signed_package("a1", "Acme", &k1)).await;
+    let (builtin, plain, a1) = (get("builtin_one").await, get("plain").await, get("a1").await);
+    assert_eq!((builtin["trust"]["level"].as_str(), plain["trust"]["level"].as_str(), a1["trust"]["level"].as_str()), (Some("builtin"), Some("unsigned"), Some("new")), "{a1}");
+    assert_eq!((a1["trust"]["can_trust"].as_bool(), a1["trust"]["publisher_name"].as_str()), (Some(true), Some("Acme")));
+    assert_eq!(builtin["trust"]["can_trust"], false);
+    assert_eq!(plain["trust"]["can_trust"], false);
+    let key_id = a1["trust"]["key_id"].as_str().unwrap().to_string();
+
+    // Approving with "trust this publisher" trusts the key; another plugin from it is then trusted, a different key isn't.
+    assert_eq!(approve("plain", plain["digest"].clone(), serde_json::json!({ "trust_publisher": true })).await.status(), reqwest::StatusCode::BAD_REQUEST, "unsigned plugins have no publisher to trust");
+    assert_eq!(approve("a1", a1["digest"].clone(), serde_json::json!({ "trust_publisher": true })).await.status(), reqwest::StatusCode::OK);
+    install(signed_package("a2", "Acme", &k1)).await;
+    install(signed_package("b1", "Other", &k2)).await;
+    assert_eq!(get("a1").await["trust"]["level"], "trusted");
+    assert_eq!(get("a2").await["trust"]["level"], "trusted");
+    assert_eq!(get("b1").await["trust"]["level"], "new");
+    let pubs: serde_json::Value = c.get(format!("{base}/api/plugins/publishers")).header("x-host-token", h).send().await.unwrap().json().await.unwrap();
+    assert_eq!(pubs.as_array().unwrap().len(), 1);
+    assert_eq!((pubs[0]["key_id"].as_str(), pubs[0]["trusted"].as_bool(), pubs[0]["name"].as_str()), (Some(key_id.as_str()), Some(true), Some("Acme")));
+    assert_eq!(pubs[0]["plugins"], serde_json::json!(["a1", "a2"]));
+
+    // Approving without trusting makes the key "known" (not trusted) for its other plugins.
+    let b1 = get("b1").await;
+    assert_eq!(approve("b1", b1["digest"].clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::OK);
+    install(signed_package("b2", "Other", &k2)).await;
+    assert_eq!(get("b2").await["trust"]["level"], "known");
+    // ... and the operator can then trust it by hand, and undo that.
+    let b_id = get("b2").await["trust"]["key_id"].as_str().unwrap().to_string();
+    assert_eq!(post(format!("/api/plugins/publishers/{b_id}/trust")).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(get("b2").await["trust"]["level"], "trusted");
+    assert_eq!(post(format!("/api/plugins/publishers/{b_id}/untrust")).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(get("b2").await["trust"]["level"], "known");
+
+    // Revoking the first publisher stops what it signed and was approved, and marks the rest.
+    let r: serde_json::Value = post(format!("/api/plugins/publishers/{key_id}/revoke")).await.json().await.unwrap();
+    assert_eq!(r["stopped"], serde_json::json!(["a1"]));
+    assert_eq!(get("a1").await["state"], "revoked");
+    let a2 = get("a2").await;
+    assert_eq!(a2["trust"]["level"], "revoked");
+    assert_eq!(get("builtin_one").await["trust"]["level"], "builtin", "built-ins are unaffected");
+    // Approving something it signed needs an explicit confirmation, and "trust" can't be combined with it.
+    assert_eq!(approve("a2", a2["digest"].clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::CONFLICT);
+    assert_eq!(approve("a2", a2["digest"].clone(), serde_json::json!({ "confirm_revoked_publisher": true, "trust_publisher": true })).await.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(post(format!("/api/plugins/publishers/{key_id}/trust")).await.status(), reqwest::StatusCode::CONFLICT);
+    assert_eq!(approve("a2", a2["digest"].clone(), serde_json::json!({ "confirm_revoked_publisher": true })).await.status(), reqwest::StatusCode::OK);
+    let audit = db.list_plugin_audit(100).unwrap();
+    assert!(audit.iter().any(|a| a.plugin_id == "a2" && a.action == "approved" && a.detail_json.contains("\"revoked_publisher_accepted\":true")));
+    for action in ["publisher_trusted", "publisher_untrusted", "publisher_revoked"] {
+        assert!(audit.iter().any(|a| a.action == action), "{action} is audited");
+    }
+
+    // Everything here is console-only.
+    for (method, path) in [("GET", "/api/plugins/publishers".to_string()), ("POST", format!("/api/plugins/publishers/{b_id}/trust")), ("POST", format!("/api/plugins/publishers/{b_id}/untrust")), ("POST", format!("/api/plugins/publishers/{b_id}/revoke"))] {
+        let req = if method == "GET" { c.get(format!("{base}{path}")) } else { c.post(format!("{base}{path}")) };
+        assert_eq!(req.send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED, "{path}");
+    }
+    assert_eq!(post("/api/plugins/publishers/0000000000000000/trust".to_string()).await.status(), reqwest::StatusCode::NOT_FOUND);
+}

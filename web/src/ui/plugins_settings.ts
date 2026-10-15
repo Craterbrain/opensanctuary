@@ -5,7 +5,7 @@
  * Everything below comes from a plugin's own manifest, which is untrusted input: it is
  * only ever inserted with textContent, never innerHTML.
  */
-import { api, type PluginAuditEntry, type PluginCatalogEntry, type PluginGrantInput, type PluginInfo, type PluginPermissionInfo } from "../core/api_client.ts";
+import { api, type PluginAuditEntry, type PluginPublisher, type PluginTrustLevel, type PluginCatalogEntry, type PluginGrantInput, type PluginInfo, type PluginPermissionInfo } from "../core/api_client.ts";
 import { showToast } from "../core/ui_utils.ts";
 import { getCurrentIconSet, iconUrl } from "../core/icon_sets.ts";
 
@@ -184,6 +184,25 @@ function buildAdvanced(plugin: PluginInfo, onChange: (on: boolean) => void): { r
   return { root, collect, isOn: () => toggle.checked };
 }
 
+const TRUST_LABEL: Record<PluginTrustLevel, string> = {
+  builtin: 'Built-in',
+  trusted: 'Trusted publisher',
+  known: 'Known publisher',
+  new: 'New publisher',
+  unsigned: 'Unsigned',
+  invalid: 'Invalid signature',
+  revoked: 'Revoked publisher',
+};
+const TRUST_HINT: Record<PluginTrustLevel, string> = {
+  builtin: 'Ships with OpenSanctuary.',
+  trusted: 'Signed by a publisher you chose to trust.',
+  known: 'Signed by a publisher you have approved a plugin from before, but not one you chose to trust.',
+  new: 'Signed by a publisher you have not seen before. A signature says who released it, not that it is safe: read what it asks for.',
+  unsigned: 'Not signed, so nothing says who released it.',
+  invalid: 'Its signature does not verify, so it cannot be installed or run.',
+  revoked: 'Signed by a publisher you revoked.',
+};
+
 /** What the signature proves, in words: "signed" is only said when the signature covers every file. */
 function signatureLabel(plugin: PluginInfo): string {
   const key = plugin.signer_id ? ` (publisher key ${plugin.signer_id})` : '';
@@ -207,6 +226,7 @@ function renderChanges(plugin: PluginInfo): HTMLElement | null {
     box.appendChild(el('div', 'plugin-warning', "The version number didn't change, but the files did."));
   }
   const p = c.permissions;
+  if (plugin.trust?.level === 'trusted') box.appendChild(el('div', 'settings-hint', 'Signed by a publisher you trust. That never skips this review.'));
   if (p.added.length) {
     const tiers = new Map(p.added_tiers.map((t) => [t.id, t.tier]));
     box.appendChild(el('div', 'plugin-warning plugin-changes-perms', `New permissions requested: ${p.added.map((id) => `${id} (${tiers.get(id) ?? 'unknown risk'})`).join(', ')}.`));
@@ -243,9 +263,14 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   if (plugin.version) head.appendChild(el('span', 'plugin-version', ` v${plugin.version}`));
   head.appendChild(el('span', `os-badge plugin-state plugin-state--${plugin.state}`, STATE_LABEL[plugin.state] ?? plugin.state));
   head.appendChild(el('span', 'os-badge os-badge--neutral', plugin.kind === 'sandbox' ? 'Sandboxed page' : 'Console script'));
+  if (plugin.trust) {
+    const t = el('span', `os-badge plugin-trust plugin-trust--${plugin.trust.level}`, TRUST_LABEL[plugin.trust.level]);
+    t.title = TRUST_HINT[plugin.trust.level];
+    head.appendChild(t);
+  }
   if (plugin.overridden) head.appendChild(el('span', 'os-badge plugin-state plugin-state--changed', 'Permissions overridden'));
   card.appendChild(head);
-  card.appendChild(el('div', 'settings-hint plugin-id-line', `id: ${plugin.id} · digest ${plugin.digest.slice(0, 12)}… · ${signatureLabel(plugin)}`));
+  card.appendChild(el('div', 'settings-hint plugin-id-line', `id: ${plugin.id}${plugin.trust?.publisher_name ? ` · by ${plugin.trust.publisher_name}` : ''} · digest ${plugin.digest.slice(0, 12)}… · ${signatureLabel(plugin)}`));
   if (plugin.signature_weaker) {
     card.appendChild(el('div', 'plugin-warning', 'This plugin was fully signed when you approved it. Now the signature no longer covers all of its files. Treat this update with more suspicion.'));
   }
@@ -385,11 +410,25 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
       showToast(`Plugin action failed: ${e?.message ?? e}`);
     }
   };
+  let trustBox: HTMLInputElement | null = null;
+  if (plugin.state !== 'active' && !plugin.error && plugin.trust?.can_trust) {
+    const label = el('label', 'plugin-trust-choice');
+    trustBox = document.createElement('input');
+    trustBox.type = 'checkbox';
+    trustBox.className = 'plugin-trust-box';
+    label.append(trustBox, document.createTextNode(` Trust everything ${plugin.trust.publisher_name ? `"${plugin.trust.publisher_name}" ` : ''}signs from now on (key ${plugin.trust.key_id}). It never skips this review.`));
+    card.appendChild(label);
+  }
   if (plugin.state !== 'active' && !plugin.error) {
     const approve = el('button', 'btn btn-primary', plugin.state === 'changed' ? 'Approve changes' : 'Approve');
     approve.addEventListener('click', () => {
       const granted = checks.filter(c => c.box.checked).map(c => c.id);
-      void act(() => api.plugins.approve(plugin.id, plugin.digest, granted), `${plugin.name} approved`);
+      let confirmRevokedPublisher = false;
+      if (plugin.trust?.level === 'revoked') {
+        if (!window.confirm(`"${plugin.name}" is signed by a publisher you revoked.\n\nApprove it anyway?`)) return;
+        confirmRevokedPublisher = true;
+      }
+      void act(() => api.plugins.approve(plugin.id, plugin.digest, granted, { trustPublisher: !!trustBox?.checked, confirmRevokedPublisher }), `${plugin.name} approved`);
     });
     actions.appendChild(approve);
     normalApprove = approve;
@@ -398,6 +437,12 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
       deny.addEventListener('click', () => void act(() => api.plugins.deny(plugin.id), `${plugin.name} denied`));
       actions.appendChild(deny);
     }
+  }
+  if (plugin.state === 'active' && plugin.trust?.can_trust) {
+    const trust = el('button', 'btn btn-secondary plugin-trust-now', 'Trust publisher');
+    trust.title = `Trust everything this publisher signs (key ${plugin.trust.key_id}). It never skips a review.`;
+    trust.addEventListener('click', () => void act(async () => { await api.plugins.trustPublisher(plugin.trust!.key_id!); return plugin; }, 'Publisher trusted'));
+    actions.appendChild(trust);
   }
   if (plugin.state === 'active') {
     const revoke = el('button', 'btn btn-secondary', 'Revoke');
@@ -474,6 +519,47 @@ async function renderSharedSecrets(content: HTMLElement, refresh: () => void): P
   } catch { /* not a console page, or the list isn't available: nothing to show */ }
 }
 
+/** Publishers the operator trusted or revoked. */
+async function renderPublishers(content: HTMLElement, refresh: () => void): Promise<void> {
+  try {
+    const list: PluginPublisher[] = await api.plugins.publishers();
+    const wrap = el('details', 'plugin-publishers');
+    wrap.open = list.length > 0;
+    wrap.appendChild(el('summary', undefined, `Publishers (${list.length})`));
+    if (!list.length) {
+      wrap.appendChild(el('div', 'settings-hint', 'No publishers trusted or revoked. Tick "Trust everything … signs" when you approve a signed plugin to add one.'));
+    }
+    for (const p of list) {
+      const row = el('div', 'plugin-publisher');
+      row.dataset.keyId = p.key_id;
+      row.appendChild(el('strong', undefined, p.name || 'Unnamed publisher'));
+      row.appendChild(el('span', `os-badge plugin-trust plugin-trust--${p.revoked ? 'revoked' : 'trusted'}`, p.revoked ? 'Revoked' : 'Trusted'));
+      row.appendChild(el('span', 'settings-hint', ` key ${p.key_id} · ${p.plugins.length ? p.plugins.join(', ') : 'no plugins'}`));
+      const doIt = async (fn: () => Promise<unknown>, done: string) => {
+        try { await fn(); showToast(done); refresh(); } catch (e: any) { showToast(`Couldn't do that: ${e?.message ?? e}`); }
+      };
+      if (p.trusted) {
+        const stop = el('button', 'btn btn-secondary btn-sm plugin-publisher-untrust', 'Stop trusting');
+        stop.addEventListener('click', () => void doIt(() => api.plugins.untrustPublisher(p.key_id), 'No longer trusted'));
+        row.appendChild(stop);
+      }
+      if (!p.revoked) {
+        const revoke = el('button', 'btn btn-danger btn-sm plugin-publisher-revoke', 'Revoke');
+        revoke.addEventListener('click', () => {
+          if (!window.confirm(`Revoke "${p.name || p.key_id}"?\n\nEvery plugin it signed stops running, and approving one again needs an extra confirmation.`)) return;
+          void doIt(async () => {
+            const r = await api.plugins.revokePublisher(p.key_id);
+            for (const id of r.stopped) window.dispatchEvent(new CustomEvent('os-plugin-changed', { detail: { plugin: { id, kind: 'sandbox', state: 'revoked' } } }));
+          }, 'Publisher revoked');
+        });
+        row.appendChild(revoke);
+      }
+      wrap.appendChild(row);
+    }
+    content.appendChild(wrap);
+  } catch { /* not a console page */ }
+}
+
 export function renderPluginsSettings(content: HTMLElement) {
   content.innerHTML = '';
   content.classList.add('network-panel');
@@ -504,6 +590,7 @@ export function renderPluginsSettings(content: HTMLElement) {
         content.appendChild(el('div', 'settings-empty', 'No plugins installed.'));
       }
       for (const p of plugins) content.appendChild(renderPlugin(p, refresh));
+      void renderPublishers(content, refresh);
       void renderSharedSecrets(content, refresh);
       content.appendChild(renderAudit(audit));
     })
