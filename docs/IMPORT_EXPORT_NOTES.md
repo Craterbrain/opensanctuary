@@ -258,13 +258,57 @@ this, not just flattened. `z_index` is assigned in real document/paint order. Th
 flat `text` field is kept correct via `Slide::project_text_from_elements()` instead of a
 separately-tracked flat run list, now that a slide can carry more than one `TextBlock`.
 
-Still explicitly out of scope, same as before: `Shape`/`Line`/`Table` elements (a slide with
-an authored shape, connector, or table just silently drops that one shape, as it always
-has — a scan it doesn't recognize, not a crash), a grouped shape's position (`<p:grpSp>`'s
-child coordinate space isn't composed with the group's own transform, so a shape inside a
-group gets a position computed as if it weren't grouped — wrong, but no worse than the old
-behavior of dropping it into the shared flattened blob), layout/master-inherited
-backgrounds, and speaker notes.
+### Shapes, lines, connectors, tables, and groups — **added** (2026-10-15), ported from ODP
+
+The gap directly above (`Shape`/`Line`/`Table` elements silently dropped, a grouped shape's
+position read as if it weren't grouped) was fixed the same way the identical ODP gap was: a
+non-text `<p:sp>` with its own `<a:prstGeom>` becomes a `Shape`; a plain `<p:sp>` with
+`prst="line"` (how LibreOffice's own OOXML export represents a simple line, confirmed
+against real output) or an actual `<p:cxnSp>` connector becomes a `Line` (`line_kind` from
+the connector's own preset family — `straightConnector1`/`bentConnectorN`/
+`curvedConnectorN`, Microsoft's own published vocabulary); a `<p:graphicFrame>` wrapping an
+`<a:tbl>` becomes a `Table`; a `<p:grpSp>` becomes a `Group`, recursing to any depth via
+`xml_scan::extract_balanced_tag` (a group can nest inside itself) and remapping each child's
+local coordinates through the group's own `<a:off>`/`<a:ext>`/`<a:chOff>`/`<a:chExt>`
+(`GroupRemap`) — a step ODF's `draw:g` never needed, since an ODF group's children are
+already in absolute page coordinates, but OOXML's aren't. A nested group's own off/ext are
+themselves in the *outer* group's local space and must be remapped through it before
+building its own children's remap — caught and fixed via a hand-authored two-level-nested-
+group test, not assumed correct.
+
+An OOXML preset shape name (`<a:prstGeom prst="...">`) is translated to this app's
+`shape_kind` vocabulary via `map_prst_geom_type`, every entry taken verbatim from
+Microsoft's own published `ShapeTypeValues` enumeration (the exact serialized string each
+member documents) — not guessed from memory and not copied from ODF's equivalent mapping,
+since the two vocabularies genuinely diverge for the same shape (`donut` not `ring`, `plus`
+not `cross`, `lightningBolt` not `lightning`, `flowChartInputOutput` not the ODF-side
+`flowchart-data`) — getting any of these wrong from memory would have silently mis-bucketed
+real shapes, so each one was checked against that primary source before being written down.
+
+Two deliberate, documented simplifications surfaced by this work, not oversights:
+- **Only explicit, literal color is ever read**, never a theme color (`<a:schemeClr>`) and
+  never a shape's `<p:style>`/`<a:fillRef>` reference into the theme's format scheme (same
+  "explicit values only" policy text-run colors already used). This is a real, *common* gap,
+  confirmed by research into real-world OOXML parsing pain points, not a rare corner case: a
+  shape inserted via the authoring tool's UI without manually overriding its fill very often
+  has *no* explicit `<a:solidFill>` at all, only a `fillRef` — such a shape imports with this
+  app's own default (no color resolved), not a crash and not a guessed color. Covered by a
+  dedicated test (`test_pptx_import_theme_colored_shape_has_no_crash_and_no_guessed_color`).
+- **A rotated group's children are not re-composed around the rotation** — `GroupRemap` only
+  applies the group's own linear offset/scale; a `<p:grpSpPr>`'s own `rot` isn't read at all.
+  This is a genuinely hard problem (even mature implementations have long-standing open bugs
+  about rotated+grouped shape positions), and an unrotated group — the overwhelmingly common
+  case — is unaffected.
+
+Validated against a real fixture (`testdata/pptx/fixture.pptx`, produced by actual
+LibreOffice's OOXML export, not hand-authored XML — see that directory's `README.md`), which
+confirmed two structural facts before any code was written against them: a table's
+`<p:xfrm>` sits directly under `<p:graphicFrame>`, not nested in a `<p:spPr>` like every
+other shape's transform; and an untouched group's `<a:off>`/`<a:ext>` exactly equal its own
+`<a:chOff>`/`<a:chExt>`, making `GroupRemap`'s general formula reduce to the identity in
+that common case.
+
+Still out of scope: layout/master-inherited backgrounds, and speaker notes.
 
 **EasyWorship** (`ewsx.rs`): already emits one positioned `TextBlock` per source shape
 (real `x`/`y`/`width`/`height`/`order_index` columns in EasyWorship's own `element` table) —
