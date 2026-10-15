@@ -7642,21 +7642,29 @@ fn test_odp_import_against_a_real_libreoffice_fixture() {
     assert_eq!(transform.z_index, 0);
     assert!(s1.text.contains("Hello World plain"), "{}", s1.text);
 
-    // Slide 2: the rectangle is skipped (out of scope, like PPTX's own shape gap), the image and
-    // the second text box both come through, each at its own position, document order preserved.
+    // Slide 2: the green rectangle (a bare `draw:rect`, not a `draw:frame`), the image, and the
+    // second text box all come through now, each at its own position, document order preserved.
     let s2 = &pres.slides[1];
-    assert_eq!(s2.elements.len(), 2, "{:?}", s2.elements.iter().map(|e| e.id()).collect::<Vec<_>>());
-    let os_next::core::models::SlideElement::Image { transform: img_t, file_path, .. } = &s2.elements[0] else { panic!("expected an Image first (document order)") };
+    assert_eq!(s2.elements.len(), 3, "{:?}", s2.elements.iter().map(|e| e.id()).collect::<Vec<_>>());
+
+    let os_next::core::models::SlideElement::Shape { transform: shp_t, shape_kind, fill_color, .. } = &s2.elements[0] else { panic!("expected the rectangle first (document order)") };
+    assert_eq!(shape_kind, "rect");
+    assert_eq!(fill_color.to_lowercase(), "#00aa00");
+    assert_eq!(shp_t.z_index, 0);
+    assert!((shp_t.x - 1.0 / 28.0).abs() < 0.001, "{}", shp_t.x);
+    assert!((shp_t.w - 5.0 / 28.0).abs() < 0.001, "{}", shp_t.w);
+
+    let os_next::core::models::SlideElement::Image { transform: img_t, file_path, .. } = &s2.elements[1] else { panic!("expected the image second (document order)") };
     assert!(file_path.starts_with("/media/images/odp_"), "{file_path}");
-    assert_eq!(img_t.z_index, 0);
+    assert_eq!(img_t.z_index, 1);
     assert!((img_t.x - 3.0 / 28.0).abs() < 0.001);
     let saved = media_dir.join(file_path.trim_start_matches("/media/images/"));
     assert!(saved.is_file(), "the embedded PNG must actually be written to media_dir");
     assert_eq!(std::fs::metadata(&saved).unwrap().len() > 0, true);
 
-    let os_next::core::models::SlideElement::TextBlock { transform: t2, block: b2, .. } = &s2.elements[1] else { panic!("expected the second text box") };
+    let os_next::core::models::SlideElement::TextBlock { transform: t2, block: b2, .. } = &s2.elements[2] else { panic!("expected the second text box third") };
     assert_eq!(b2.runs[0].text, "Second slide title");
-    assert_eq!(t2.z_index, 1);
+    assert_eq!(t2.z_index, 2);
 }
 
 #[test]
@@ -7742,6 +7750,130 @@ fn test_odp_import_backgrounds_notes_bare_text_and_error_cases() {
     assert!(os_next::storage::OdpImporter::import_odp_bytes(&no_pages, "x", &media_dir).is_err());
 }
 
+#[test]
+fn test_odp_import_reconstructs_shapes_lines_tables_and_groups() {
+    let tmp = tempfile::tempdir().unwrap();
+    let media_dir = tmp.path().join("media/images");
+
+    let content_xml = r##"<?xml version="1.0"?>
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"
+  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+  xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+  xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"
+  xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"
+  xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0">
+<office:automatic-styles>
+  <style:style style:name="grEllipse" style:family="graphic"><style:graphic-properties draw:fill-color="#ff0000" draw:stroke="none"/></style:style>
+  <style:style style:name="grTri" style:family="graphic"><style:graphic-properties draw:fill-color="#00ff00" draw:stroke="none"/></style:style>
+  <style:style style:name="grLine" style:family="graphic"><style:graphic-properties draw:stroke="solid" svg:stroke-color="#0000ff" svg:stroke-width="0.05cm" draw:marker-end="Arrow"/></style:style>
+  <style:style style:name="grElbow" style:family="graphic"><style:graphic-properties draw:stroke="solid" svg:stroke-color="#123456" svg:stroke-width="0.03cm"/></style:style>
+  <style:style style:name="grCurve" style:family="graphic"><style:graphic-properties draw:stroke="solid" svg:stroke-color="#654321" svg:stroke-width="0.03cm"/></style:style>
+  <style:style style:name="grRect" style:family="graphic"><style:graphic-properties draw:fill-color="#abcdef"/></style:style>
+</office:automatic-styles>
+<office:body><office:presentation>
+  <draw:page draw:name="page1" draw:style-name="dp1" draw:master-page-name="Default">
+    <draw:ellipse draw:style-name="grEllipse" svg:x="1cm" svg:y="1cm" svg:width="4cm" svg:height="3cm"/>
+    <draw:custom-shape draw:style-name="grTri" svg:x="6cm" svg:y="1cm" svg:width="4cm" svg:height="3cm">
+      <draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:type="isosceles-triangle" draw:enhanced-path="M 10800 0 L 21600 21600 0 21600 Z N"/>
+    </draw:custom-shape>
+    <draw:line draw:style-name="grLine" svg:x1="1cm" svg:y1="6cm" svg:x2="6cm" svg:y2="7cm"/>
+    <draw:polyline draw:style-name="grElbow" svg:x="8cm" svg:y="6cm" svg:width="4cm" svg:height="3cm" svg:viewBox="0 0 100 100" draw:points="5,5 50,5 50,95 95,95"/>
+    <draw:path draw:style-name="grCurve" svg:x="13cm" svg:y="6cm" svg:width="4cm" svg:height="3cm" svg:viewBox="0 0 100 100" svg:d="M 5 5 C 35 65 65 80 95 50"/>
+    <draw:g draw:style-name="grp1">
+      <draw:rect draw:style-name="grRect" svg:x="20cm" svg:y="1cm" svg:width="2cm" svg:height="1cm"/>
+      <draw:rect draw:style-name="grRect" svg:x="23cm" svg:y="2cm" svg:width="2cm" svg:height="1cm"/>
+    </draw:g>
+  </draw:page>
+</office:presentation></office:body>
+</office:document-content>"##;
+    let styles_xml = r##"<?xml version="1.0"?>
+<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">
+  <office:master-styles><style:master-page style:name="Default" style:page-layout-name="PM1"/></office:master-styles>
+  <office:automatic-styles>
+    <style:page-layout style:name="PM1"><style:page-layout-properties fo:page-width="28cm" fo:page-height="15.75cm"/></style:page-layout>
+  </office:automatic-styles>
+</office:document-styles>"##;
+    let zip_bytes = make_zip(&[
+        ("mimetype", b"application/vnd.oasis.opendocument.presentation"),
+        ("content.xml", content_xml.as_bytes()),
+        ("styles.xml", styles_xml.as_bytes()),
+    ]);
+    let pres = os_next::storage::OdpImporter::import_odp_bytes(&zip_bytes, "Stem", &media_dir).unwrap();
+    let els = &pres.slides[0].elements;
+    assert_eq!(els.len(), 6, "{:?}", els.iter().map(|e| e.id()).collect::<Vec<_>>());
+
+    use os_next::core::models::SlideElement;
+    let SlideElement::Shape { shape_kind, fill_color, .. } = &els[0] else { panic!("expected ellipse: {:?}", els[0]) };
+    assert_eq!(shape_kind, "ellipse");
+    assert_eq!(fill_color.to_lowercase(), "#ff0000");
+
+    let SlideElement::Shape { shape_kind, fill_color, .. } = &els[1] else { panic!("expected a custom shape (triangle): {:?}", els[1]) };
+    assert_eq!(shape_kind, "triangle", "ODF's 'isosceles-triangle' preset name maps to this app's 'triangle'");
+    assert_eq!(fill_color.to_lowercase(), "#00ff00");
+
+    let SlideElement::Line { line_kind: _, color, end_arrow, start_arrow, .. } = &els[2] else { panic!("expected a straight line: {:?}", els[2]) };
+    assert_eq!(color.to_lowercase(), "#0000ff");
+    assert!(*end_arrow, "draw:marker-end means an arrowhead regardless of line_kind");
+    assert!(!*start_arrow);
+
+    let SlideElement::Line { line_kind, color, .. } = &els[3] else { panic!("expected an elbow polyline: {:?}", els[3]) };
+    assert_eq!(line_kind, "elbow", "4 points -> elbow, not straight");
+    assert_eq!(color.to_lowercase(), "#123456");
+
+    let SlideElement::Line { line_kind, color, .. } = &els[4] else { panic!("expected a curved path: {:?}", els[4]) };
+    assert_eq!(line_kind, "curved");
+    assert_eq!(color.to_lowercase(), "#654321");
+
+    let SlideElement::Group { children, .. } = &els[5] else { panic!("expected a group: {:?}", els[5]) };
+    assert_eq!(children.len(), 2);
+    for child in children {
+        let SlideElement::Shape { fill_color, .. } = child else { panic!("expected rects inside the group: {:?}", child) };
+        assert_eq!(fill_color.to_lowercase(), "#abcdef");
+    }
+}
+
+#[test]
+fn test_odp_import_reconstructs_a_table_with_a_merged_cell_padded_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let media_dir = tmp.path().join("media/images");
+    let content_xml = r##"<?xml version="1.0"?>
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+  xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+  xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0">
+<office:body><office:presentation>
+  <draw:page draw:name="page1">
+    <draw:frame svg:x="1cm" svg:y="1cm" svg:width="8cm" svg:height="3cm">
+      <table:table>
+        <table:table-column/><table:table-column/>
+        <table:table-row>
+          <table:table-cell table:number-columns-spanned="2"><text:p>Spans both</text:p></table:table-cell>
+          <table:covered-table-cell/>
+        </table:table-row>
+        <table:table-row>
+          <table:table-cell><text:p>A</text:p></table:table-cell>
+          <table:table-cell><text:p>B</text:p></table:table-cell>
+        </table:table-row>
+      </table:table>
+    </draw:frame>
+  </draw:page>
+</office:presentation></office:body>
+</office:document-content>"##;
+    let zip_bytes = make_zip(&[
+        ("mimetype", b"application/vnd.oasis.opendocument.presentation"),
+        ("content.xml", content_xml.as_bytes()),
+    ]);
+    let pres = os_next::storage::OdpImporter::import_odp_bytes(&zip_bytes, "Stem", &media_dir).unwrap();
+    let os_next::core::models::SlideElement::Table { rows, cols, cells, .. } = &pres.slides[0].elements[0] else { panic!() };
+    assert_eq!(*rows, 2);
+    assert_eq!(*cols, 2);
+    assert_eq!(cells[0], vec!["Spans both".to_string(), String::new()], "the covered cell is padded back in as empty, not left short");
+    assert_eq!(cells[1], vec!["A".to_string(), "B".to_string()]);
+}
+
 // ---------------------------------------------------------------------------------------------
 // ODP export: the write side. Validated two ways -- round-tripped through this app's own
 // importer, and (if `soffice` is on PATH) handed to real LibreOffice to open/convert, which is a
@@ -7786,6 +7918,69 @@ fn sample_presentation_for_export(media_root: &std::path::Path, image_bytes: &[u
         alt_text: None,
     };
 
+    let shape_rect = SlideElement::Shape {
+        id: "el_5".to_string(),
+        transform: ElementTransform { x: 0.05, y: 0.1, w: 0.2, h: 0.15, z_index: 1, ..Default::default() },
+        shape_kind: "rect".to_string(),
+        fill_color: "#aabbcc".to_string(),
+        stroke_color: Some("#112233".to_string()),
+        stroke_width: 4.0,
+    };
+    let shape_triangle = SlideElement::Shape {
+        id: "el_6".to_string(),
+        transform: ElementTransform { x: 0.3, y: 0.1, w: 0.2, h: 0.15, z_index: 2, ..Default::default() },
+        shape_kind: "triangle".to_string(),
+        fill_color: "#00ff00".to_string(),
+        stroke_color: None,
+        stroke_width: 0.0,
+    };
+    let line_arrow = SlideElement::Line {
+        id: "el_7".to_string(),
+        transform: ElementTransform { x: 0.05, y: 0.4, w: 0.3, h: 0.1, z_index: 3, ..Default::default() },
+        line_kind: "straight".to_string(),
+        color: "#ff8800".to_string(),
+        stroke_width: 2.0,
+        start_arrow: false,
+        end_arrow: true,
+    };
+    let line_elbow = SlideElement::Line {
+        id: "el_8".to_string(),
+        transform: ElementTransform { x: 0.4, y: 0.4, w: 0.3, h: 0.2, z_index: 4, ..Default::default() },
+        line_kind: "elbow".to_string(),
+        color: "#00aaff".to_string(),
+        stroke_width: 1.5,
+        start_arrow: false,
+        end_arrow: false,
+    };
+    let table = SlideElement::Table {
+        id: "el_9".to_string(),
+        transform: ElementTransform { x: 0.05, y: 0.6, w: 0.4, h: 0.3, z_index: 5, ..Default::default() },
+        rows: 2,
+        cols: 2,
+        cells: vec![vec!["R0C0".to_string(), "R0C1".to_string()], vec!["R1C0".to_string(), "R1C1".to_string()]],
+    };
+    let grouped_a = SlideElement::Shape {
+        id: "el_10a".to_string(),
+        transform: ElementTransform { x: 0.6, y: 0.1, w: 0.1, h: 0.1, z_index: 0, ..Default::default() },
+        shape_kind: "ellipse".to_string(),
+        fill_color: "#ff00ff".to_string(),
+        stroke_color: None,
+        stroke_width: 0.0,
+    };
+    let grouped_b = SlideElement::Shape {
+        id: "el_10b".to_string(),
+        transform: ElementTransform { x: 0.75, y: 0.15, w: 0.1, h: 0.1, z_index: 0, ..Default::default() },
+        shape_kind: "ellipse".to_string(),
+        fill_color: "#ffff00".to_string(),
+        stroke_color: None,
+        stroke_width: 0.0,
+    };
+    let group = SlideElement::Group {
+        id: "el_10".to_string(),
+        transform: ElementTransform { x: 0.6, y: 0.1, w: 0.25, h: 0.15, z_index: 6, ..Default::default() },
+        children: vec![grouped_a, grouped_b],
+    };
+
     Presentation {
         id: "pres_export_test".to_string(),
         title: "Export <Test> & \"Quotes\"".to_string(),
@@ -7793,10 +7988,24 @@ fn sample_presentation_for_export(media_root: &std::path::Path, image_bytes: &[u
         theme_name: None,
         slides: vec![
             Slide { label: Some("Slide 1".to_string()), background_v2: Some(SlideBackground::Solid("#123456".to_string())), elements: vec![text_block, image, missing_image], slide_document_version: 1, ..Default::default() },
-            Slide { label: Some("Slide 2".to_string()), elements: vec![SlideElement::TextBlock {
-                id: "el_4".to_string(), transform: ElementTransform::default(),
-                block: TextBlock { runs: vec![TextRun { text: "Second slide".to_string(), ..Default::default() }], paragraph_style: TextParagraphStyle::default(), effects: ElementEffects::default(), autofit: false },
-            }], slide_document_version: 1, ..Default::default() },
+            Slide {
+                label: Some("Slide 2".to_string()),
+                elements: vec![
+                    SlideElement::TextBlock {
+                        id: "el_4".to_string(),
+                        transform: ElementTransform { z_index: 0, ..Default::default() },
+                        block: TextBlock { runs: vec![TextRun { text: "Second slide".to_string(), ..Default::default() }], paragraph_style: TextParagraphStyle::default(), effects: ElementEffects::default(), autofit: false },
+                    },
+                    shape_rect,
+                    shape_triangle,
+                    line_arrow,
+                    line_elbow,
+                    table,
+                    group,
+                ],
+                slide_document_version: 1,
+                ..Default::default()
+            },
         ],
     }
 }
@@ -7851,8 +8060,39 @@ fn test_odp_export_round_trips_through_this_apps_own_importer() {
     assert_eq!(std::fs::read(&saved).unwrap(), png);
 
     let s2 = &reimported.slides[1];
+    assert_eq!(s2.elements.len(), 7, "{:?}", s2.elements.iter().map(|e| e.id()).collect::<Vec<_>>());
     let os_next::core::models::SlideElement::TextBlock { block, .. } = &s2.elements[0] else { panic!() };
     assert_eq!(block.runs[0].text, "Second slide");
+
+    let os_next::core::models::SlideElement::Shape { shape_kind, fill_color, stroke_color, stroke_width, .. } = &s2.elements[1] else { panic!("expected the rect shape: {:?}", s2.elements[1]) };
+    assert_eq!(shape_kind, "rect");
+    assert_eq!(fill_color.to_lowercase(), "#aabbcc");
+    assert_eq!(stroke_color.as_deref().map(str::to_lowercase).as_deref(), Some("#112233"));
+    assert!((stroke_width - 4.0).abs() < 0.5, "relative stroke width must survive the cm round trip within rounding: {stroke_width}");
+
+    let os_next::core::models::SlideElement::Shape { shape_kind, fill_color, .. } = &s2.elements[2] else { panic!("expected the triangle: {:?}", s2.elements[2]) };
+    assert_eq!(shape_kind, "triangle", "this app's own shape_kind strings pass through draw:type unchanged");
+    assert_eq!(fill_color.to_lowercase(), "#00ff00");
+
+    let os_next::core::models::SlideElement::Line { color, end_arrow, start_arrow, .. } = &s2.elements[3] else { panic!("expected the arrow line: {:?}", s2.elements[3]) };
+    assert_eq!(color.to_lowercase(), "#ff8800");
+    assert!(*end_arrow && !*start_arrow);
+
+    let os_next::core::models::SlideElement::Line { line_kind, color, .. } = &s2.elements[4] else { panic!("expected the elbow line: {:?}", s2.elements[4]) };
+    assert_eq!(line_kind, "elbow");
+    assert_eq!(color.to_lowercase(), "#00aaff");
+
+    let os_next::core::models::SlideElement::Table { rows, cols, cells, .. } = &s2.elements[5] else { panic!("expected the table: {:?}", s2.elements[5]) };
+    assert_eq!(*rows, 2);
+    assert_eq!(*cols, 2);
+    assert_eq!(cells[0], vec!["R0C0".to_string(), "R0C1".to_string()]);
+    assert_eq!(cells[1], vec!["R1C0".to_string(), "R1C1".to_string()]);
+
+    let os_next::core::models::SlideElement::Group { children, .. } = &s2.elements[6] else { panic!("expected the group: {:?}", s2.elements[6]) };
+    assert_eq!(children.len(), 2);
+    let os_next::core::models::SlideElement::Shape { fill_color: c0, .. } = &children[0] else { panic!() };
+    let os_next::core::models::SlideElement::Shape { fill_color: c1, .. } = &children[1] else { panic!() };
+    assert_eq!([c0.to_lowercase(), c1.to_lowercase()], ["#ff00ff", "#ffff00"]);
 }
 
 #[test]
@@ -7994,4 +8234,218 @@ fn test_odp_export_omits_this_apps_own_placeholder_color_and_font_so_other_tools
     let SlideElement::TextBlock { block, .. } = &reimported.slides[0].elements[0] else { panic!() };
     assert_eq!(block.runs[0].color, TextRun::default().color);
     assert_eq!(block.runs[0].font_family, TextRun::default().font_family);
+}
+
+/// A real-world ODP, authored by hand in actual LibreOffice Impress using its "Basic Shapes"/
+/// "Symbol Shapes"/"Arrows" gallery (not built via `pyuno` like `testdata/odp/fixture.odp`, and
+/// not committed to the repo -- a human's own test file, not ours to redistribute), via the same
+/// `$OS_TEST_DOCS` convention `docs/workflow.md` already documents for real EasyWorship fixtures:
+/// skip quietly if it isn't present on this machine. Its 9 shapes (a callout, a diamond, an
+/// MSO-imported blob shape, a trapezoid, a heart, a brace pair, a left-right arrow, a 5-point
+/// star, and a "bang"/explosion) all leave fill/stroke *unset on their own style* and inherit
+/// from a shared parent style (almost universal real-producer behavior for a shape gallery, not
+/// the simpler single-style-no-inheritance case `test_odp_import_reconstructs_shapes_lines_tables_
+/// and_groups`'s hand-written XML covers) -- this is what caught `resolve_graphic_style` not
+/// walking `style:parent-style-name` before this test was added. It also has a `dr3d:scene`
+/// (a real extruded-cube 3D shape, from Impress's "3D Objects" gallery) alongside the 2D shapes,
+/// genuinely out of scope (this app's `SlideElement` has no 3D concept at all) and confirmed here
+/// to not confuse the page-shape scanner into misparsing anything around it.
+#[test]
+fn test_odp_import_against_a_real_world_shape_gallery_file() {
+    let docs_dir = std::env::var("OS_TEST_DOCS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(std::env::var("HOME").unwrap()).join("Documents/OpenSanctuary-test-docs"));
+    let path = docs_dir.join("shape-test.odp");
+    if !path.exists() {
+        eprintln!("skipping: {} not present (see docs/workflow.md's $OS_TEST_DOCS)", path.display());
+        return;
+    }
+    let bytes = std::fs::read(&path).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let pres = os_next::storage::OdpImporter::import_odp_bytes(&bytes, "shape-test", &tmp.path().join("media")).expect("a real human-authored file must import");
+
+    let els = &pres.slides[0].elements;
+    assert_eq!(els.len(), 9, "all 9 gallery shapes must survive, and the dr3d:scene cube must not be mistaken for one: {:?}", els.iter().map(|e| e.id()).collect::<Vec<_>>());
+
+    use os_next::core::models::SlideElement;
+    let expected_kinds = ["callout", "diamond", "mso-spt100", "trapezoid", "heart", "brace-pair", "left-right-arrow", "star", "bang"];
+    for (el, expected_kind) in els.iter().zip(expected_kinds) {
+        let SlideElement::Shape { shape_kind, fill_color, .. } = el else { panic!("expected a Shape: {el:?}") };
+        assert_eq!(shape_kind, expected_kind);
+        // Every shape here leaves fill unset on its own style and inherits from a shared parent
+        // ("standard", #18a303) -- except the brace pair, which really is an explicit outline-only
+        // shape (its own style sets draw:fill="none" directly, which must win over the parent's
+        // fill rather than being treated as "unset" and inherited through).
+        if expected_kind == "brace-pair" {
+            assert_eq!(fill_color, "none", "the brace pair's own explicit draw:fill=\"none\" must stop inheritance, not fall through to the parent's fill");
+        } else {
+            assert_eq!(fill_color.to_lowercase(), "#18a303", "{shape_kind} must inherit the parent style's fill, not come up empty");
+        }
+    }
+}
+
+/// The full round trip for the same real-world file `test_odp_import_against_a_real_world_shape_
+/// gallery_file` imports: import it, export this app's own result, and hand *that* to real
+/// LibreOffice -- covering something the synthetic `sample_presentation_for_export` data doesn't
+/// (every one of its `Shape`s has an explicit literal color; these 9 only have one because
+/// `resolve_graphic_style`'s inheritance walk resolved it, and 5 of the 9 are exotic preset types
+/// this app doesn't natively render, falling back to `shape_enhanced_path`'s plain-rect glyph).
+/// Same `$OS_TEST_DOCS` skip-if-missing convention as that test.
+#[test]
+fn test_odp_export_of_a_real_world_shape_gallery_file_is_accepted_by_real_libreoffice() {
+    if std::process::Command::new("soffice").arg("--version").output().is_err() {
+        eprintln!("skipping: no `soffice` on PATH");
+        return;
+    }
+    let docs_dir = std::env::var("OS_TEST_DOCS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(std::env::var("HOME").unwrap()).join("Documents/OpenSanctuary-test-docs"));
+    let path = docs_dir.join("shape-test.odp");
+    if !path.exists() {
+        eprintln!("skipping: {} not present (see docs/workflow.md's $OS_TEST_DOCS)", path.display());
+        return;
+    }
+    let bytes = std::fs::read(&path).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let pres = os_next::storage::OdpImporter::import_odp_bytes(&bytes, "shape-test", &tmp.path().join("media")).unwrap();
+    let out_bytes = os_next::storage::OdpExporter::export_presentation(&pres, &tmp.path().join("media")).unwrap();
+    let odp_path = tmp.path().join("roundtrip.odp");
+    std::fs::write(&odp_path, &out_bytes).unwrap();
+
+    let profile = tmp.path().join("lo_profile");
+    std::fs::create_dir_all(&profile).unwrap();
+    let out = std::process::Command::new("soffice")
+        .arg("--headless")
+        .arg("--invisible")
+        .arg("--norestore")
+        .arg(format!("-env:UserInstallation=file://{}", profile.display()))
+        .arg("--convert-to")
+        .arg("png")
+        .arg("--outdir")
+        .arg(tmp.path())
+        .arg(&odp_path)
+        .output()
+        .expect("soffice must run");
+    assert!(out.status.success(), "soffice failed: {}", String::from_utf8_lossy(&out.stderr));
+    let png = tmp.path().join("roundtrip.png");
+    assert!(png.is_file(), "no PNG produced: {}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(std::fs::metadata(&png).unwrap().len() > 1000, "suspiciously small PNG: real LibreOffice couldn't have rendered real shapes");
+}
+
+/// Every `shape_kind` this app's own editor (`web/src/editor/shape_library.ts`) can draw, placed
+/// on one slide, exported, and checked two ways: (1) re-imported by this app's own importer, so a
+/// typo in either `shape_enhanced_path` (export) or `map_custom_shape_type` (import) that broke
+/// the round trip for any one kind -- most likely to slip in when adding a new one, since they're
+/// hand-kept in sync across three files, not generated from one shared list -- shows up as a
+/// mismatch here; (2) handed to real LibreOffice, which must still accept the file and render
+/// something (confirmed visually when this test was written: every shape distinct and
+/// recognizable, see docs/IMPORT_EXPORT_NOTES.md).
+#[test]
+fn test_every_known_shape_kind_round_trips_and_is_accepted_by_real_libreoffice() {
+    use os_next::core::models::*;
+    let kinds = [
+        "rect", "rounded_rect", "ellipse", "triangle", "diamond", "star", "callout", "trapezoid",
+        "left-right-arrow", "parallelogram", "hexagon", "octagon", "cross", "pentagon", "heart",
+        "lightning", "left-arrow", "right-arrow", "up-arrow", "down-arrow", "up-down-arrow",
+        "quad-arrow", "chevron", "notched-right-arrow", "striped-right-arrow", "triangle-down", "ring",
+    ];
+    let mut elements = Vec::new();
+    for (i, kind) in kinds.iter().enumerate() {
+        let col = i % 6;
+        let row = i / 6;
+        elements.push(SlideElement::Shape {
+            id: format!("el_{i}"),
+            transform: ElementTransform { x: 0.02 + col as f64 * 0.16, y: 0.03 + row as f64 * 0.2, w: 0.13, h: 0.15, z_index: i as i32, ..Default::default() },
+            shape_kind: kind.to_string(),
+            fill_color: "#2a7a2a".to_string(),
+            stroke_color: None,
+            stroke_width: 0.0,
+        });
+    }
+    let pres = Presentation {
+        id: "pres_shapes".to_string(),
+        title: "Shapes".to_string(),
+        author: String::new(),
+        theme_name: None,
+        slides: vec![Slide { label: Some("Shapes".to_string()), elements, slide_document_version: 1, ..Default::default() }],
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let bytes = os_next::storage::OdpExporter::export_presentation(&pres, tmp.path()).unwrap();
+
+    let reimported = os_next::storage::OdpImporter::import_odp_bytes(&bytes, "shapes", &tmp.path().join("media")).unwrap();
+    assert_eq!(reimported.slides[0].elements.len(), kinds.len(), "{:?}", reimported.slides[0].elements.iter().map(|e| e.id()).collect::<Vec<_>>());
+    for (el, expected_kind) in reimported.slides[0].elements.iter().zip(kinds) {
+        let SlideElement::Shape { shape_kind, fill_color, .. } = el else { panic!("expected a Shape: {el:?}") };
+        assert_eq!(shape_kind, expected_kind, "round trip must reconstruct the exact original shape_kind");
+        assert_eq!(fill_color.to_lowercase(), "#2a7a2a");
+    }
+
+    if std::process::Command::new("soffice").arg("--version").output().is_err() {
+        eprintln!("skipping the real-LibreOffice half: no `soffice` on PATH");
+        return;
+    }
+    let odp_path = tmp.path().join("all_shapes.odp");
+    std::fs::write(&odp_path, &bytes).unwrap();
+    let profile = tmp.path().join("lo_profile");
+    std::fs::create_dir_all(&profile).unwrap();
+    let out = std::process::Command::new("soffice")
+        .arg("--headless")
+        .arg("--invisible")
+        .arg("--norestore")
+        .arg(format!("-env:UserInstallation=file://{}", profile.display()))
+        .arg("--convert-to")
+        .arg("png")
+        .arg("--outdir")
+        .arg(tmp.path())
+        .arg(&odp_path)
+        .output()
+        .expect("soffice must run");
+    assert!(out.status.success(), "soffice failed: {}", String::from_utf8_lossy(&out.stderr));
+    let png = tmp.path().join("all_shapes.png");
+    assert!(png.is_file(), "no PNG produced: {}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(std::fs::metadata(&png).unwrap().len() > 2000, "suspiciously small PNG: real LibreOffice couldn't have rendered 27 real shapes");
+}
+
+/// A `Shape` with `shape_kind: "ring"` must come out as *unfilled* -- the one case where this
+/// app's own `fill_color` becomes a stroke, not a fill (see `render_element`'s doc comment on why:
+/// real LibreOffice renders two opposite-wound `draw:enhanced-path` subpaths as a solid union, not
+/// a hole with a nonzero fill rule, confirmed by actually rendering one). The round-trip-identity
+/// test above would not have caught a regression back to a filled ring (fill_color/shape_kind
+/// would still match after re-import even if the exported XML made it render solid), so this
+/// checks the XML directly instead of only the re-imported model.
+#[test]
+fn test_ring_shape_exports_as_unfilled_not_a_solid_blob() {
+    use os_next::core::models::*;
+    let pres = Presentation {
+        id: "p".to_string(),
+        title: "t".to_string(),
+        author: String::new(),
+        theme_name: None,
+        slides: vec![Slide {
+            label: Some("S".to_string()),
+            elements: vec![SlideElement::Shape {
+                id: "e1".to_string(),
+                transform: ElementTransform { x: 0.1, y: 0.1, w: 0.3, h: 0.3, z_index: 0, ..Default::default() },
+                shape_kind: "ring".to_string(),
+                fill_color: "#cc2222".to_string(),
+                stroke_color: None,
+                stroke_width: 0.0,
+            }],
+            slide_document_version: 1,
+            ..Default::default()
+        }],
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let bytes = os_next::storage::OdpExporter::export_presentation(&pres, tmp.path()).unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+    let mut content = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("content.xml").unwrap(), &mut content).unwrap();
+    assert!(content.contains(r#"draw:fill="none""#), "a ring's graphic style must be unfilled: {content}");
+    assert!(content.contains(r##"svg:stroke-color="#cc2222""##), "the ring's color must come through as the stroke color: {content}");
+    assert!(content.contains(r#"draw:type="ring""#), "draw:type must still identify this as a ring for re-import: {content}");
+
+    // And the re-imported color must come from that stroke, round-tripping the original fill_color.
+    let reimported = os_next::storage::OdpImporter::import_odp_bytes(&bytes, "ring", &tmp.path().join("media")).unwrap();
+    let SlideElement::Shape { fill_color, .. } = &reimported.slides[0].elements[0] else { panic!() };
+    assert_eq!(fill_color.to_lowercase(), "#cc2222");
 }

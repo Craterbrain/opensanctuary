@@ -13,11 +13,29 @@
 //! read. Real producer output was used to build this against (`testdata/odp/fixture.odp`, built
 //! by actual LibreOffice, not hand-authored XML), not just what the spec says is legal.
 //!
-//! Out of scope, matching PPTX's own documented gaps: `draw:rect`/`draw:ellipse`/`draw:line`/
-//! `draw:custom-shape`/tables, a shape inside `draw:g` (group) at its grouped position, rotated
-//! shapes (`draw:transform`'s `rotate()` replaces `svg:x`/`svg:y` entirely per spec -- treated as
-//! unrotated/un-positioned rather than guessed), gradient/bitmap slide backgrounds (solid only),
-//! and master-page-inherited content other than page size.
+//! Basic shapes/lines/tables/groups ARE reconstructed -- this app's own `SlideElement` model
+//! supports them (`Shape`, `Line`, `Table`, `Group`), so dropping one on import would make a
+//! round trip silently lossy for something this app can otherwise render and re-export fine.
+//! `draw:rect`/`draw:ellipse` map directly to `Shape`; other preset/custom shapes (`draw:custom-
+//! shape`'s `draw:enhanced-geometry draw:type="..."`) carry that type name through as `shape_kind`
+//! (translated to this app's own vocabulary -- see `map_custom_shape_type` -- for the handful of
+//! ODF preset names that mean the same thing under a different spelling), independent of whatever
+//! exact glyph `draw:enhanced-path` describes: this importer does not evaluate that path, so an
+//! exotic preset this app can't render natively (anything `shape_library.ts`'s own switch doesn't
+//! recognize) still keeps its position/size/color, falling back to that renderer's default (plain
+//! rect) glyph rather than disappearing. `draw:line`/`draw:polyline`/`draw:path` map to `Line`;
+//! `draw:g` maps to `Group` (recurses into this same element-scanning logic, any depth, via
+//! `xml_scan::extract_balanced_tag` since `draw:g` can nest inside itself); a `<table:table>`
+//! inside a `draw:frame` maps to `Table` (a cell's own run formatting isn't kept -- `Table`'s cells
+//! are plain strings -- and a merged/covered cell, `table:covered-table-cell`, is simply not counted
+//! as a cell, same "skip rather than mis-parse" rule as everything else undocumented here).
+//!
+//! Out of scope: rotated shapes (`draw:transform`'s `rotate()` replaces `svg:x`/`svg:y` entirely
+//! per spec -- treated as unrotated/un-positioned rather than guessed; unlike PPTX, which carries
+//! an `a:xfrm`'s `rot` straight into `ElementTransform::rotation_deg`, this is a real gap here, not
+//! parity), `draw:connector` (an anchored connector between two other shapes by ID, which this
+//! app's `Line` has no equivalent for), gradient/bitmap slide backgrounds (solid only), and
+//! master-page-inherited content other than page size.
 
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -27,7 +45,7 @@ use zip::ZipArchive;
 use crate::core::models::{
     CropRect, ElementEffects, ElementTransform, Presentation, Slide, SlideBackground, SlideElement, TextBlock, TextParagraphStyle, TextRun,
 };
-use crate::storage::xml_scan::{decode_xml_entities, extract_attr, find_tag_open_pos, next_tag, next_tag_content};
+use crate::storage::xml_scan::{decode_xml_entities, extract_attr, extract_balanced_tag, find_all_tag_attrs, find_tag_open_pos, next_tag, next_tag_content};
 
 pub struct OdpImporter;
 
@@ -53,11 +71,48 @@ struct PageStyle {
     fill_image_name: Option<String>,
 }
 
+/// A `style:family="graphic"` style's own (not inherited) drawing fill/stroke, for
+/// `Shape`/`Line`/`draw:custom-shape`. A real producer's shape gallery (confirmed against an
+/// actual user-authored file, see `testdata/odp/README.md`) routinely leaves fill/stroke
+/// completely unset on the shape's own `draw:style-name` and relies on `style:parent-style-name`
+/// (almost always `"standard"`) for the actual color -- `resolve_graphic_style` walks that chain;
+/// this struct only holds what one single named style itself says.
+#[derive(Default, Clone)]
+struct GraphicStyle {
+    /// `Some` when this style has an explicit `draw:fill-color` and `draw:fill` isn't `"none"`
+    /// (a `draw:fill-color` with no `draw:fill` attribute at all -- the common real-producer case
+    /// -- is still treated as solid-filled with that color, same as every ODF-compliant reader).
+    fill_color: Option<String>,
+    /// `draw:fill="none"` was explicit at this level -- stops inheritance from the parent, unlike
+    /// `fill_color: None`, which just means this level didn't say anything either way.
+    fill_none: bool,
+    stroke_color: Option<String>,
+    stroke_width_cm: Option<f64>,
+    /// `draw:stroke="none"` was explicit at this level -- same role as `fill_none`.
+    stroke_none: bool,
+    marker_start: bool,
+    marker_end: bool,
+    /// `style:parent-style-name`, if any -- the next link `resolve_graphic_style` follows.
+    parent: Option<String>,
+}
+
+/// A `GraphicStyle` already resolved up its full `style:parent-style-name` chain -- what callers
+/// actually want (see `resolve_graphic_style`).
+#[derive(Default)]
+struct ResolvedGraphicStyle {
+    fill_color: Option<String>,
+    stroke_color: Option<String>,
+    stroke_width_cm: Option<f64>,
+    marker_start: bool,
+    marker_end: bool,
+}
+
 #[derive(Default)]
 struct Styles {
     text: HashMap<String, TextStyle>,
     para: HashMap<String, ParaStyle>,
     page: HashMap<String, PageStyle>,
+    graphic: HashMap<String, GraphicStyle>,
     /// `draw:fill-image` definitions: name -> the `Pictures/...` path in `xlink:href`.
     fill_images: HashMap<String, String>,
     /// `style:page-layout` name -> (width_cm, height_cm).
@@ -211,6 +266,9 @@ fn collect_styles(xml: &str, out: &mut Styles) {
                 Some("drawing-page") => {
                     out.page.entry(name.to_string()).or_insert_with(|| parse_page_style(content));
                 }
+                Some("graphic") => {
+                    out.graphic.entry(name.to_string()).or_insert_with(|| parse_graphic_style(attrs, content));
+                }
                 _ => {}
             }
         }
@@ -272,6 +330,25 @@ fn parse_para_style(content: &str) -> ParaStyle {
     p
 }
 
+fn parse_graphic_style(style_attrs: &str, content: &str) -> GraphicStyle {
+    let mut g = GraphicStyle { parent: extract_attr(style_attrs, "style:parent-style-name").map(|v| v.to_string()), ..Default::default() };
+    let Some((attrs, _, _)) = next_tag(content, "style:graphic-properties") else { return g };
+    if extract_attr(attrs, "draw:fill") == Some("none") {
+        g.fill_none = true;
+    } else {
+        g.fill_color = extract_attr(attrs, "draw:fill-color").map(|v| v.to_lowercase());
+    }
+    if extract_attr(attrs, "draw:stroke") == Some("none") {
+        g.stroke_none = true;
+    } else {
+        g.stroke_color = extract_attr(attrs, "svg:stroke-color").map(|v| v.to_lowercase());
+        g.stroke_width_cm = extract_attr(attrs, "svg:stroke-width").and_then(length_cm);
+    }
+    g.marker_start = extract_attr(attrs, "draw:marker-start").is_some();
+    g.marker_end = extract_attr(attrs, "draw:marker-end").is_some();
+    g
+}
+
 fn parse_page_style(content: &str) -> PageStyle {
     let mut p = PageStyle::default();
     if let Some((attrs, _, _)) = next_tag(content, "style:drawing-page-properties") {
@@ -295,12 +372,48 @@ fn page_dimensions(page_attrs: &str, styles: &Styles) -> (f64, f64) {
         .unwrap_or((28.0, 15.75))
 }
 
+/// The page-level shape tags this importer recognizes, as returned by `next_page_shape` --
+/// `draw:frame` holds text/image/table content, the rest are direct page-level drawing shapes.
+enum PageShapeXml<'a> {
+    Frame(&'a str, &'a str),
+    Rect(&'a str),
+    Ellipse(&'a str),
+    Line(&'a str),
+    Polyline(&'a str),
+    Path(&'a str),
+    CustomShape(&'a str, &'a str),
+    /// A `draw:g`'s own attributes carry nothing this importer uses (see `extract_group_element`),
+    /// so only its already-isolated inner span is kept.
+    Group(&'a str),
+}
+
+/// Finds whichever of the recognized page-level shape tags occurs earliest in `xml` (so document
+/// order -- and therefore z-index and paint order -- is preserved across different tag kinds),
+/// same "pick the earliest candidate" dispatch `pptx_import.rs`'s `next_slide_shape` uses. A
+/// `draw:g`'s own opening tag always sorts before anything nested inside it, so this never
+/// "sees into" a group's children early; they're only reached once the caller recurses into the
+/// group's own already-isolated inner span.
+fn next_page_shape<'a>(xml: &'a str) -> Option<(PageShapeXml<'a>, &'a str)> {
+    const CANDIDATES: [&str; 8] = ["draw:frame", "draw:rect", "draw:ellipse", "draw:line", "draw:polyline", "draw:path", "draw:custom-shape", "draw:g"];
+    let tag = CANDIDATES.into_iter().filter_map(|t| find_tag_open_pos(xml, t).map(|p| (p, t))).min_by_key(|(p, _)| *p)?.1;
+    match tag {
+        "draw:frame" => next_tag(xml, "draw:frame").map(|(a, c, r)| (PageShapeXml::Frame(a, c), r)),
+        "draw:rect" => next_tag(xml, "draw:rect").map(|(a, _, r)| (PageShapeXml::Rect(a), r)),
+        "draw:ellipse" => next_tag(xml, "draw:ellipse").map(|(a, _, r)| (PageShapeXml::Ellipse(a), r)),
+        "draw:line" => next_tag(xml, "draw:line").map(|(a, _, r)| (PageShapeXml::Line(a), r)),
+        "draw:polyline" => next_tag(xml, "draw:polyline").map(|(a, _, r)| (PageShapeXml::Polyline(a), r)),
+        "draw:path" => next_tag(xml, "draw:path").map(|(a, _, r)| (PageShapeXml::Path(a), r)),
+        "draw:custom-shape" => next_tag(xml, "draw:custom-shape").map(|(a, c, r)| (PageShapeXml::CustomShape(a, c), r)),
+        "draw:g" => extract_balanced_tag(xml, "draw:g").map(|(_, c, r)| (PageShapeXml::Group(c), r)),
+        _ => unreachable!(),
+    }
+}
+
 /// Walks a page's own content (notes already excluded by the caller) in document order, emitting
-/// one positioned `SlideElement` per `draw:frame` that holds either a `draw:image` or a
-/// `draw:text-box` -- a shape kind this importer doesn't handle (`draw:rect`/`draw:ellipse`/
-/// `draw:custom-shape`/`draw:line`/`draw:g`, see module doc) is simply never matched by
-/// `next_tag(.., "draw:frame")`'s target, so it's skipped rather than mis-parsed, same as PPTX's
-/// own gaps. `z_index` is assigned densely over only the shapes that actually produced an element.
+/// one positioned `SlideElement` per recognized shape (see module doc for the full list and the
+/// remaining gaps). `z_index` is assigned densely over only the shapes that actually produced an
+/// element -- a tag this importer still doesn't recognize at all is simply never matched by
+/// `next_page_shape`, so it's skipped rather than mis-parsed, same as PPTX's own gaps.
 fn extract_page_elements(
     archive: &mut ZipArchive<Cursor<&[u8]>>,
     body: &str,
@@ -312,24 +425,109 @@ fn extract_page_elements(
     let mut elements = Vec::new();
     let mut rest = body;
     let mut z = 0i32;
-    while let Some((attrs, inner, remainder)) = next_tag(rest, "draw:frame") {
+    let push = |el: Option<SlideElement>, elements: &mut Vec<SlideElement>, z: &mut i32| {
+        if let Some(mut el) = el {
+            el.transform_mut().z_index = *z;
+            elements.push(el);
+            *z += 1;
+        }
+    };
+    while let Some((shape, remainder)) = next_page_shape(rest) {
         rest = remainder;
-        let transform = frame_transform(attrs, page_w, page_h);
-        if let Some((img_attrs, _, _)) = next_tag(inner, "draw:image") {
-            if let Some(mut el) = extract_image_element(archive, img_attrs, transform, media_dir) {
-                el.transform_mut().z_index = z;
-                elements.push(el);
-                z += 1;
+        match shape {
+            PageShapeXml::Frame(attrs, inner) => {
+                let transform = frame_transform(attrs, page_w, page_h);
+                if let Some((img_attrs, _, _)) = next_tag(inner, "draw:image") {
+                    push(extract_image_element(archive, img_attrs, transform, media_dir), &mut elements, &mut z);
+                } else if let Some((_, box_inner, _)) = next_tag(inner, "draw:text-box") {
+                    push(extract_text_element(box_inner, transform, styles), &mut elements, &mut z);
+                } else if let Some((_, table_inner, _)) = next_tag(inner, "table:table") {
+                    push(extract_table_element(table_inner, transform), &mut elements, &mut z);
+                }
             }
-        } else if let Some((_, box_inner, _)) = next_tag(inner, "draw:text-box") {
-            if let Some(mut el) = extract_text_element(box_inner, transform, styles) {
-                el.transform_mut().z_index = z;
-                elements.push(el);
-                z += 1;
+            PageShapeXml::Rect(attrs) => {
+                let transform = frame_transform(attrs, page_w, page_h);
+                push(Some(extract_shape_element("rect", attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
+            }
+            PageShapeXml::Ellipse(attrs) => {
+                let transform = frame_transform(attrs, page_w, page_h);
+                push(Some(extract_shape_element("ellipse", attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
+            }
+            PageShapeXml::CustomShape(attrs, inner) => {
+                let transform = frame_transform(attrs, page_w, page_h);
+                let kind = next_tag(inner, "draw:enhanced-geometry")
+                    .and_then(|(geo_attrs, _, _)| extract_attr(geo_attrs, "draw:type"))
+                    .map(map_custom_shape_type)
+                    .unwrap_or_else(|| "rect".to_string());
+                push(Some(extract_shape_element(&kind, attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
+            }
+            PageShapeXml::Line(attrs) => {
+                push(Some(extract_line_element(attrs, page_w, page_h, styles)), &mut elements, &mut z);
+            }
+            PageShapeXml::Polyline(attrs) => {
+                let transform = frame_transform(attrs, page_w, page_h);
+                let point_count = extract_attr(attrs, "draw:points").map(|p| p.split_whitespace().count()).unwrap_or(2);
+                let kind = if point_count > 2 { "elbow" } else { "straight" };
+                push(Some(extract_line_shape(kind, attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
+            }
+            PageShapeXml::Path(attrs) => {
+                let transform = frame_transform(attrs, page_w, page_h);
+                push(Some(extract_line_shape("curved", attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
+            }
+            PageShapeXml::Group(inner) => {
+                push(extract_group_element(archive, inner, page_w, page_h, styles, media_dir)?, &mut elements, &mut z);
             }
         }
     }
     Ok(elements)
+}
+
+/// ODF preset/custom-shape type names that mean something this app's own `shape_kind` vocabulary
+/// (`web/src/editor/shape_library.ts`) already has a name for, translated to that name; anything
+/// else (including this app's own round-tripped `shape_kind` strings, which are never one of these
+/// ODF spellings) passes through unchanged, so re-importing this app's own export reconstructs the
+/// exact original `shape_kind`, not just a visually-similar one.
+/// Every ODF preset/custom-shape type name mapped here was confirmed against real LibreOffice
+/// Impress itself (not guessed from the spec or from memory): a probe `.odp` naming each candidate
+/// via `draw:type` with no `draw:enhanced-path` at all was handed to real `soffice --convert-to`,
+/// and only a name Impress itself renders a distinct default glyph for (proving it's one its own
+/// shape gallery actually produces) is treated as confirmed here -- see
+/// `docs/IMPORT_EXPORT_NOTES.md` for the full method and the complete confirmed/not-yet-confirmed
+/// list. A handful of flowchart presets (`flowchart-data`, `-decision`, `-manual-operation`,
+/// `-connector`, `-extract`, `-preparation`) turned out to be exactly this app's own
+/// parallelogram/diamond/trapezoid/ellipse/triangle/hexagon shapes under ANSI flowchart names, so
+/// they're mapped straight to those instead of carrying the flowchart name through.
+fn map_custom_shape_type(t: &str) -> String {
+    match t.to_ascii_lowercase().as_str() {
+        "rectangle" | "square" | "flowchart-process" => "rect".to_string(),
+        "round-rectangle" | "flowchart-alternate-process" => "rounded_rect".to_string(),
+        "ellipse" | "circle" | "flowchart-connector" => "ellipse".to_string(),
+        "diamond" | "flowchart-decision" => "diamond".to_string(),
+        "triangle" | "isosceles-triangle" | "right-triangle" | "flowchart-extract" => "triangle".to_string(),
+        "star4" | "star5" | "star6" | "star8" | "star10" | "star12" | "star24" => "star".to_string(),
+        "rectangular-callout" | "round-rectangular-callout" | "oval-callout" | "line-callout-1" | "line-callout-2" => "callout".to_string(),
+        "trapezoid" | "flowchart-manual-operation" => "trapezoid".to_string(),
+        "left-right-arrow" => "left-right-arrow".to_string(),
+        "parallelogram" | "flowchart-data" => "parallelogram".to_string(),
+        "hexagon" | "flowchart-preparation" => "hexagon".to_string(),
+        "octagon" => "octagon".to_string(),
+        "cross" => "cross".to_string(),
+        "pentagon" => "pentagon".to_string(),
+        "heart" => "heart".to_string(),
+        "lightning" => "lightning".to_string(),
+        "left-arrow" => "left-arrow".to_string(),
+        "right-arrow" => "right-arrow".to_string(),
+        "up-arrow" => "up-arrow".to_string(),
+        "down-arrow" => "down-arrow".to_string(),
+        "up-down-arrow" => "up-down-arrow".to_string(),
+        "quad-arrow" => "quad-arrow".to_string(),
+        "chevron" => "chevron".to_string(),
+        "notched-right-arrow" => "notched-right-arrow".to_string(),
+        "striped-right-arrow" => "striped-right-arrow".to_string(),
+        "ring" => "ring".to_string(),
+        "flowchart-merge" => "triangle-down".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn frame_transform(attrs: &str, page_w: f64, page_h: f64) -> ElementTransform {
@@ -467,6 +665,211 @@ fn extract_image_element(
         mask_shape: None,
         alt_text: None,
     })
+}
+
+/// Resolves `draw:style-name` against `styles.graphic`, defaulting to an unfilled, unstroked
+/// shape when the style is missing or unrecognized (never a guessed color).
+/// Resolves `draw:style-name` against `styles.graphic`, walking `style:parent-style-name` (a real
+/// producer's shape gallery routinely leaves fill/stroke unset on the shape's own style and
+/// relies entirely on its parent, almost always named `"standard"`, for the actual color -- see
+/// `GraphicStyle`'s doc) until a level settles each property (an explicit `draw:fill="none"`/
+/// `draw:stroke="none"` also settles it, at whatever `none` value that level means) or the chain
+/// runs out. A cycle (a style naming itself, directly or indirectly, as its own ancestor -- never
+/// legal ODF, but not this importer's job to assume) stops the walk rather than looping forever.
+fn resolve_graphic_style(attrs: &str, styles: &Styles) -> ResolvedGraphicStyle {
+    let mut resolved = ResolvedGraphicStyle::default();
+    let mut fill_settled = false;
+    let mut stroke_settled = false;
+    let mut current = extract_attr(attrs, "draw:style-name").map(|s| s.to_string());
+    let mut seen = std::collections::HashSet::new();
+    while let Some(name) = current {
+        if !seen.insert(name.clone()) {
+            break;
+        }
+        let Some(s) = styles.graphic.get(&name) else { break };
+        if !fill_settled {
+            if s.fill_none {
+                fill_settled = true;
+            } else if s.fill_color.is_some() {
+                resolved.fill_color = s.fill_color.clone();
+                fill_settled = true;
+            }
+        }
+        if !stroke_settled {
+            if s.stroke_none {
+                stroke_settled = true;
+            } else if s.stroke_color.is_some() || s.stroke_width_cm.is_some() {
+                resolved.stroke_color = s.stroke_color.clone();
+                resolved.stroke_width_cm = s.stroke_width_cm;
+                stroke_settled = true;
+            }
+        }
+        resolved.marker_start = resolved.marker_start || s.marker_start;
+        resolved.marker_end = resolved.marker_end || s.marker_end;
+        current = s.parent.clone();
+    }
+    resolved
+}
+
+/// `Shape`/`Line`'s `stroke_width` is not a physical unit -- `shape_library.ts`/`line_tool.ts`
+/// both draw into a fixed `0 0 100 100` SVG viewBox and pass `stroke_width` straight through as
+/// that viewBox's own `stroke-width`, so it's really "percent of the shape's own box" (its
+/// shorter side, since the box is rarely square and the viewBox is stretched to fit both
+/// dimensions independently). Converts a real stroke width in cm to that same relative unit,
+/// using the shape's own box (in cm, on this page) as the reference.
+fn cm_to_relative_stroke(stroke_cm: f64, box_w_cm: f64, box_h_cm: f64) -> f64 {
+    let base = box_w_cm.min(box_h_cm);
+    if base <= 0.0 {
+        return 0.0;
+    }
+    (stroke_cm / base) * 100.0
+}
+
+/// A `draw:rect`/`draw:ellipse`/`draw:custom-shape` as this app's `Shape`. `kind` is already this
+/// app's own `shape_kind` vocabulary (the caller resolves `rect`/`ellipse` from the tag name itself,
+/// or a custom shape's `draw:type` via `map_custom_shape_type`); the exact `draw:enhanced-path` a
+/// custom shape carries is never evaluated -- this app renders by `shape_kind` alone (see module
+/// doc), so an exotic preset still keeps its position/size/color even if its precise outline isn't
+/// reproduced.
+fn extract_shape_element(kind: &str, attrs: &str, transform: ElementTransform, page_w: f64, page_h: f64, styles: &Styles) -> SlideElement {
+    let style = resolve_graphic_style(attrs, styles);
+    // A "ring" (see odp_export.rs's render_element) has no fill at all -- it's exported as an
+    // unfilled, thick-stroked outline with fill_color repurposed as the stroke's own color, so
+    // reading it back takes the ring's color from the stroke instead of the (always empty) fill.
+    let (fill_color, stroke_color, stroke_width) = if kind == "ring" {
+        (style.stroke_color.unwrap_or_else(|| "none".to_string()), None, 0.0)
+    } else {
+        (
+            style.fill_color.unwrap_or_else(|| "none".to_string()),
+            style.stroke_color,
+            style.stroke_width_cm.map(|cm| cm_to_relative_stroke(cm, transform.w * page_w, transform.h * page_h)).unwrap_or(0.0),
+        )
+    };
+    SlideElement::Shape {
+        id: format!("el_{}", uuid::Uuid::new_v4()),
+        transform,
+        shape_kind: kind.to_string(),
+        fill_color,
+        stroke_color,
+        stroke_width,
+    }
+}
+
+/// A `draw:line` -- the only page-level shape whose position comes from two absolute endpoints
+/// (`svg:x1/y1/x2/y2`) rather than a `svg:x/y/width/height` box -- as this app's `Line` (always
+/// `line_kind: "straight"`; `Line`'s rendering of "arrow" is driven by `start_arrow`/`end_arrow`,
+/// not the kind string, see `web/src/editor/line_tool.ts`). A perfectly horizontal or vertical
+/// line has a zero-width or zero-height bounding box, which this app's `ElementTransform` can't
+/// represent as a selectable element, so it's floored to a thin sliver instead of collapsing to
+/// nothing.
+fn extract_line_element(attrs: &str, page_w: f64, page_h: f64, styles: &Styles) -> SlideElement {
+    let (x1, y1, x2, y2) = (
+        extract_attr(attrs, "svg:x1").and_then(length_cm).unwrap_or(0.0),
+        extract_attr(attrs, "svg:y1").and_then(length_cm).unwrap_or(0.0),
+        extract_attr(attrs, "svg:x2").and_then(length_cm).unwrap_or(0.0),
+        extract_attr(attrs, "svg:y2").and_then(length_cm).unwrap_or(0.0),
+    );
+    let mut transform = ElementTransform::default();
+    if page_w > 0.0 && page_h > 0.0 {
+        transform.x = (x1.min(x2)) / page_w;
+        transform.y = (y1.min(y2)) / page_h;
+        transform.w = ((x1 - x2).abs() / page_w).max(0.01);
+        transform.h = ((y1 - y2).abs() / page_h).max(0.01);
+    }
+    extract_line_shape("straight", attrs, transform.normalized(), page_w, page_h, styles)
+}
+
+/// A `draw:polyline`/`draw:path` already placed via a `svg:x/y/width/height` box (`kind` already
+/// decided by the caller from the point count or tag), or a `draw:line`'s computed box (via
+/// `extract_line_element`), as this app's `Line`.
+fn extract_line_shape(kind: &str, attrs: &str, transform: ElementTransform, page_w: f64, page_h: f64, styles: &Styles) -> SlideElement {
+    let style = resolve_graphic_style(attrs, styles);
+    let color = style.stroke_color.unwrap_or_else(|| "#000000".to_string());
+    let stroke_width = style.stroke_width_cm.map(|cm| cm_to_relative_stroke(cm, transform.w * page_w, transform.h * page_h)).unwrap_or(3.0);
+    let (start_arrow, end_arrow) = (style.marker_start, style.marker_end);
+    SlideElement::Line {
+        id: format!("el_{}", uuid::Uuid::new_v4()),
+        transform,
+        line_kind: kind.to_string(),
+        color,
+        stroke_width,
+        start_arrow,
+        end_arrow,
+    }
+}
+
+/// A `<table:table>` (already unwrapped from its `draw:frame`) as this app's `Table`. A cell's own
+/// run formatting is not kept (`Table::cells` is plain strings, see module doc); a merged cell's
+/// `table:covered-table-cell` placeholder is a different tag name than `table:table-cell`, so it's
+/// simply not counted as a cell -- the row is padded back out to the table's column count with
+/// empty strings afterward, rather than left short.
+fn extract_table_element(table_inner: &str, transform: ElementTransform) -> Option<SlideElement> {
+    let cols = find_all_tag_attrs(table_inner, "table:table-column").len().max(1);
+    let mut cells: Vec<Vec<String>> = Vec::new();
+    let mut rest = table_inner;
+    while let Some((_, row_inner, remainder)) = next_tag(rest, "table:table-row") {
+        rest = remainder;
+        let mut row = Vec::new();
+        let mut r2 = row_inner;
+        while let Some((_, cell_inner, rem2)) = next_tag(r2, "table:table-cell") {
+            r2 = rem2;
+            row.push(cell_text(cell_inner));
+        }
+        row.resize(cols, String::new());
+        cells.push(row);
+    }
+    if cells.is_empty() {
+        return None;
+    }
+    let rows = cells.len();
+    Some(SlideElement::Table { id: format!("el_{}", uuid::Uuid::new_v4()), transform, rows, cols, cells })
+}
+
+fn cell_text(cell_inner: &str) -> String {
+    let mut paras = Vec::new();
+    let mut rest = cell_inner;
+    while let Some((_, p_inner, remainder)) = next_tag(rest, "text:p") {
+        rest = remainder;
+        paras.push(plain_text_of(p_inner));
+    }
+    paras.join("\n")
+}
+
+/// A `draw:g`'s already-isolated inner span (see `extract_balanced_tag`) as this app's `Group`:
+/// its children keep their own absolute (page-relative) positions -- real producer output doesn't
+/// apply an extra offset/scale at the group level for the common case this was built against (see
+/// `testdata/odp/README.md`), matching how this app's own grouping (`group_elements` in
+/// `src/core/engine/elements.rs`) already treats a group's children -- and the group's own
+/// `transform` is purely their bounding box, used for selection, never applied to render them
+/// (see `createElementNode`'s `'Group'` case in `web/src/core/slide_render.ts`).
+fn extract_group_element(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    inner: &str,
+    page_w: f64,
+    page_h: f64,
+    styles: &Styles,
+    media_dir: &Path,
+) -> Result<Option<SlideElement>, Box<dyn std::error::Error>> {
+    let children = extract_page_elements(archive, inner, page_w, page_h, styles, media_dir)?;
+    if children.is_empty() {
+        return Ok(None);
+    }
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (1.0f64, 1.0f64, 0.0f64, 0.0f64);
+    for child in &children {
+        let t = child.transform();
+        min_x = min_x.min(t.x);
+        min_y = min_y.min(t.y);
+        max_x = max_x.max(t.x + t.w);
+        max_y = max_y.max(t.y + t.h);
+    }
+    let transform = ElementTransform {
+        x: min_x.clamp(0.0, 1.0),
+        y: min_y.clamp(0.0, 1.0),
+        w: (max_x - min_x).clamp(0.0, 1.0),
+        h: (max_y - min_y).clamp(0.0, 1.0),
+        ..Default::default()
+    };
+    Ok(Some(SlideElement::Group { id: format!("el_{}", uuid::Uuid::new_v4()), transform, children }))
 }
 
 fn extract_page_background(

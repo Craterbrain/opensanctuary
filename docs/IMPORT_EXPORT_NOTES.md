@@ -78,11 +78,90 @@ render (`docs/` doesn't keep the image; see the commit that added `odp_export.rs
 
 `POST /api/import/odp` and `GET /api/export/odp/:id` (console-only, mirroring `/api/schedule/export`'s
 EWSX download) are wired into the Import modal and the library's item context menu
-("Export as ODP…", presentations only) respectively. Scope matches PPTX's own documented gaps:
-basic shapes/lines/tables/groups and a rotated frame (`draw:transform`) aren't reconstructed on
-import, and so are never written by the exporter either -- nothing is exported that this app's
-own importer couldn't read back. Export always writes a fixed 28cm x 15.75cm (16:9) page, since
-`ElementTransform` only stores relative coordinates, never an authored absolute canvas size.
+("Export as ODP…", presentations only) respectively. Export always writes a fixed 28cm x 15.75cm
+(16:9) page, since `ElementTransform` only stores relative coordinates, never an authored absolute
+canvas size. Still out of scope: a rotated frame (`draw:transform`), `draw:connector` (an anchored
+connector between two other shapes by ID, which this app's `Line` has no equivalent for),
+gradient/bitmap slide backgrounds (solid only), and master-page-inherited content other than page
+size.
+
+### Shapes, lines, tables, and groups -- **added** (2026-10-15), after a real gap was reported
+
+The first version of this importer/exporter (above) deliberately dropped `Shape`/`Line`/`Table`/
+`Group` elements, on the reasoning that PPTX's own importer has the same gap. That reasoning didn't
+hold up: this app's own model and editor *do* support all four (`web/src/editor/shape_library.ts`,
+`line_tool.ts`, `table.ts`), so dropping them on an ODP round trip was a real fidelity bug, not
+parity with an existing limitation -- caught when a live import → app → export round trip (the
+same kind of check that found the white-on-white bug above) was redone against a real fixture with
+an actual rectangle on it and the rectangle came back missing.
+
+`odp_import.rs` now reconstructs: `draw:rect`/`draw:ellipse`/`draw:custom-shape` → `Shape`,
+`draw:line`/`draw:polyline`/`draw:path` → `Line`, a `<table:table>` inside a `draw:frame` →
+`Table`, and `draw:g` → `Group` (recursing to any depth via a new `xml_scan::extract_balanced_tag`,
+since a same-named tag can nest inside itself -- the existing `next_tag` helper can't handle that,
+only ever having been asked to handle non-self-nesting shapes before). A `draw:custom-shape`'s
+`draw:type` (its ODF preset name) is translated to this app's own `shape_kind` vocabulary via
+`map_custom_shape_type`; `odp_export.rs` writes it back out the same way, so this app's own
+`shape_kind` strings round-trip exactly, and a real producer's preset shapes come through as the
+closest equivalent this app can render.
+
+**The preset name list was verified against real LibreOffice, not guessed or copied from its
+source.** LibreOffice's own shape-gallery toolbar resource files (`/usr/lib/libreoffice/share/
+config/soffice.cfg/modules/simpress/toolbar/*.xml`) list every `.uno:XShapes.y` command the
+Basic/Symbol/Arrow/Star/Callout/Flowchart galleries expose; for each one, a probe `.odp` naming a
+`draw:custom-shape` with only `draw:type="<candidate>"` and no `draw:enhanced-path` at all was
+handed to real `soffice --convert-to pdf`, and only a name Impress itself filled in a distinct
+default glyph for was treated as confirmed (a blank render just means Impress has no built-in
+default geometry for that name without a path -- not proof the name is wrong, since a real producer
+file always carries an explicit path anyway -- so this is a strong *positive* signal and a weak
+negative one; unconfirmed names were left out rather than guessed). All 28 `flowchart-*` names
+confirmed this way. The shape names themselves, and which gallery they live in, are plain facts
+about a public, standardized vocabulary (the same hyphenated-preset convention is shared across
+ODF and OOXML interchange) -- not copyrightable expression -- and every outline this app actually
+draws for them (`shape_library.ts`'s new `case` arms, mirrored in `odp_export.rs`'s
+`shape_enhanced_path`) is a clean-room fixed-point polygon designed from scratch, not traced from
+any other application's asset or source.
+
+Two real mistakes this verification process itself caught, worth recording:
+- **`draw:enhanced-path`'s two-subpath "hole" trick doesn't work.** The "ring" shape was first
+  implemented as two opposite-wound octagon subpaths in one `draw:enhanced-path`/SVG `<path>`,
+  expecting a nonzero/even-odd fill rule to render the gap as a hole, the same way SVG would. Real
+  LibreOffice rendered it as a *solid* filled blob instead -- it does not apply a hole-by-winding
+  rule to `draw:enhanced-path`'s "N"-terminated subpaths the way SVG does for its own path data.
+  Found by actually rendering one and looking, not by the round-trip-identity test (which only
+  checks `shape_kind`/`fill_color` string equality after re-import, and would have stayed green
+  even with a solid blob). Fixed by drawing "ring" as a single unfilled, thick-stroked octagon
+  outline instead (`fill_color` becomes the stroke's color, a documented special case in both
+  `render_element` and `extract_shape_element`), and a dedicated regression test now asserts the
+  exported XML is actually unfilled (`test_ring_shape_exports_as_unfilled_not_a_solid_blob`),
+  rather than trusting the round-trip test alone.
+- **`Shape`/`Line`'s `stroke_width` is not a physical unit.** Both `shape_library.ts` and
+  `line_tool.ts` draw into a fixed `0 0 100 100` SVG viewBox and pass `stroke_width` straight
+  through as that viewBox's own `stroke-width` -- so it's really "percent of the shape's own box"
+  (its shorter side), not points or any other absolute unit. The first version of this importer
+  converted a real `svg:stroke-width` (in cm) to points, which is the wrong unit entirely; fixed by
+  converting to/from that same relative-to-box percentage instead
+  (`cm_to_relative_stroke`/`relative_stroke_to_cm`).
+
+Exotic preset shapes this app's own editor still can't draw a real outline for (confirmed in the
+real-world `shape-test.odp` fixture below: a heart, a Pac-Man-style pie shape, a trapezoid-cup, a
+brace pair, and an MS-Office-imported blob) fall back to a plain rectangle glyph -- position, size,
+and fill/stroke-none are still preserved exactly, only the precise outline is approximated, the
+same honest degrade this importer already used for anything it doesn't recognize at all. A 3D
+shape (`dr3d:scene`, e.g. an extruded cube) is genuinely out of scope -- this app's model has no 3D
+concept at all -- and confirmed (via that same real fixture) to not confuse the page-shape scanner
+into misparsing anything around it.
+
+`testdata/odp/README.md`'s fixture doesn't exercise any of this (it predates it); a second,
+real-world fixture does: `shape-test.odp`, hand-authored in actual LibreOffice Impress's shape
+gallery by a human (not `pyuno`), referenced via the same `$OS_TEST_DOCS` convention
+`docs/workflow.md` already documents for EasyWorship fixtures (not committed to the repo -- a
+human's own test file). It's what caught `resolve_graphic_style` not walking
+`style:parent-style-name`: every one of its 9 shapes leaves fill/stroke completely unset on its own
+style and inherits from a shared parent (`"standard"`, almost universal real-producer behavior for
+a shape gallery) -- the first version of `resolve_graphic_style` only looked at one named style in
+isolation, so every shape in that file came back unfilled (`fill_color: "none"`) until the
+inheritance walk was added.
 
 **A real round trip was actually driven through the running app** (not just tested at the data
 layer) to answer "does an imported .odp look the same, and does it still look the same after
@@ -99,12 +178,12 @@ source explicitly asked for white" with any real confidence), so the opening too
 (black, a real font) applies instead. Confirmed fixed by redoing the same live round trip:
 the text is visible again in LibreOffice's own render.
 
-Two things observed along the way that are not bugs, worth recording so they aren't rediscovered
-as if they were: a shape this importer intentionally drops (the out-of-scope rectangle) is of
-course genuinely absent from the app's render, not just hidden; and the same text can wrap
-differently in the app's own canvas versus LibreOffice's renderer at the same box width, since
-browser and LibreOffice layout engines use different font metrics for the same font name/fallback
--- an inherent cross-renderer difference, not a position or size that failed to round-trip.
+One thing observed along the way that is not a bug, worth recording so it isn't rediscovered as if
+it were: the same text can wrap differently in the app's own canvas versus LibreOffice's renderer
+at the same box width, since browser and LibreOffice layout engines use different font metrics for
+the same font name/fallback -- an inherent cross-renderer difference, not a position or size that
+failed to round-trip. (This fixture's rectangle, mentioned as a dropped shape in an earlier version
+of this note, is no longer dropped -- see "Shapes, lines, tables, and groups" above.)
 
 ## What determines how a slide actually displays
 
@@ -155,8 +234,10 @@ didn't touch this importer.
 
 **Conclusion (historical, now acted on):** the model didn't need to change to fix PPTX
 fidelity — the fix was having the importer emit one positioned element per source shape
-instead of flattening to one TextBlock, the same way `ewsx.rs` already did. This is also
-the shape a future ODP importer would need, if that's ever built.
+instead of flattening to one TextBlock, the same way `ewsx.rs` already did. `odp_import.rs`
+(see above) was built the same way, and went further: `Shape`/`Line`/`Table`/`Group` too, not
+just `TextBlock`/`Image` -- PPTX's own shape/table/group gap (just above) is still real and
+unfixed, tracked here as a known follow-on, not parity to preserve.
 
 ## Follow-on decision: autofit checkbox (presentations only) — **implemented**
 

@@ -85,6 +85,47 @@ pub fn find_tag_open_pos(xml: &str, tag: &str) -> Option<usize> {
     }
 }
 
+/// Like `next_tag`, but correct when `tag` nests inside itself (e.g. ODP's `draw:g`, which can
+/// contain another `draw:g`) -- `next_tag` finds the *first* closing tag, which for nested same-
+/// named tags is the wrong one (the inner group's close, not the outer one's). This instead walks
+/// forward counting nested opens/closes (skipping self-closing `<tag/>` opens, which never need a
+/// matching close), so it returns the whole outer span even when it contains further nesting.
+pub fn extract_balanced_tag<'a>(xml: &'a str, tag: &str) -> Option<(&'a str, &'a str, &'a str)> {
+    let open_pos = find_tag_open_pos(xml, tag)?;
+    let open_needle = format!("<{}", tag);
+    let after_tag_name = open_pos + open_needle.len();
+    let first_gt = open_pos + xml[open_pos..].find('>')?;
+    let attrs = &xml[after_tag_name..first_gt];
+    if xml[..first_gt].ends_with('/') {
+        let attrs = attrs.strip_suffix('/').unwrap_or(attrs);
+        return Some((attrs, "", &xml[first_gt + 1..]));
+    }
+    let close_needle = format!("</{}>", tag);
+    let mut depth = 1i32;
+    let mut pos = first_gt + 1;
+    loop {
+        let next_open_abs = find_tag_open_pos(&xml[pos..], tag).map(|p| pos + p);
+        let next_close_abs = xml[pos..].find(&close_needle).map(|p| pos + p);
+        match (next_open_abs, next_close_abs) {
+            (Some(o), Some(c)) if o < c => {
+                let gt = o + xml[o..].find('>')?;
+                if !xml[..gt].ends_with('/') {
+                    depth += 1;
+                }
+                pos = gt + 1;
+            }
+            (_, Some(c)) => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((attrs, &xml[first_gt + 1..c], &xml[c + close_needle.len()..]));
+                }
+                pos = c + close_needle.len();
+            }
+            _ => return None, // unbalanced/malformed -- bail rather than guess
+        }
+    }
+}
+
 pub fn extract_attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
     let needle = format!("{}=\"", name);
     let start = attrs.find(&needle)? + needle.len();
@@ -135,6 +176,27 @@ mod tests {
         assert_eq!(extract_attr(attrs[0], "foo"), Some("1"));
         assert_eq!(extract_attr(attrs[1], "bar"), Some("x"));
         assert_eq!(extract_attr(attrs[1], "missing"), None);
+    }
+
+    #[test]
+    fn extract_balanced_tag_handles_nesting_self_closing_and_siblings() {
+        // A nested same-named tag: next_tag would wrongly stop at the inner </draw:g>.
+        let xml = r#"<draw:g a="1"><draw:rect/><draw:g a="2"><draw:rect/></draw:g><draw:rect/></draw:g><draw:rect id="after"/>"#;
+        let (attrs, inner, remainder) = extract_balanced_tag(xml, "draw:g").unwrap();
+        assert_eq!(attrs, r#" a="1""#);
+        assert_eq!(inner, r#"<draw:rect/><draw:g a="2"><draw:rect/></draw:g><draw:rect/>"#);
+        assert_eq!(remainder, r#"<draw:rect id="after"/>"#);
+
+        // Self-closing: no content, remainder starts right after.
+        assert_eq!(extract_balanced_tag(r#"<draw:g/> rest"#, "draw:g"), Some(("", "", " rest")));
+
+        // A self-closing same-named tag inside must not be treated as an unmatched open.
+        let xml2 = r#"<draw:g><draw:g/><draw:rect/></draw:g>tail"#;
+        let (_, inner2, remainder2) = extract_balanced_tag(xml2, "draw:g").unwrap();
+        assert_eq!(inner2, r#"<draw:g/><draw:rect/>"#);
+        assert_eq!(remainder2, "tail");
+
+        assert_eq!(extract_balanced_tag("no tag here", "draw:g"), None);
     }
 
     #[test]
