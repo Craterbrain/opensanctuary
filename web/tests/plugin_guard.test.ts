@@ -26,12 +26,18 @@ describe("plugin guard: safe mode marker", () => {
     markPluginsStarting(1_000_000, s);
     expect(previousSessionHung(1_000_000 + 16 * 60 * 1000, s)).toBe(false);
   });
+  test("a fresh marker is a tab that is alive right now, not a hang", () => {
+    const s = memory();
+    markPluginsStarting(1_000_000, s);
+    expect(previousSessionHung(1_001_000, s)).toBe(false); // a second console window opened a second later
+    expect(previousSessionHung(1_004_000, s)).toBe(true); // nobody refreshed it: that tab is hung or gone
+  });
   test("garbage, a future time, and blocked storage never throw or pause plugins", () => {
     const s = memory();
     s.setItem("os.pluginGuard.pending", "not a number");
     expect(previousSessionHung(1, s)).toBe(false);
     markPluginsStarting(9_000_000, s);
-    expect(previousSessionHung(1_000, s)).toBe(false);
+    expect(previousSessionHung(1_000, s)).toBe(false); // marker from the future (clock moved)
     const broken: GuardStorage = { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); }, removeItem() { throw new Error("blocked"); } };
     expect(previousSessionHung(1, broken)).toBe(false);
     expect(() => { markPluginsStarting(1, broken); clearPluginMarker(broken); }).not.toThrow();

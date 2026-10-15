@@ -33,13 +33,19 @@ function defaultStorage(): GuardStorage | null {
   try { return window.localStorage; } catch { return null; }
 }
 
-/** True when the previous session ended without ever becoming healthy (and the marker is recent). */
+/**
+ * A healthy console refreshes the marker every half second until it clears it, so a marker younger than this
+ * belongs to a tab that is alive right now (a second console window opened during its first seconds), not to one that hung.
+ */
+const LIVE_MS = 3000;
+
+/** True when a previous session ended without ever becoming healthy (and the marker is recent). */
 export function previousSessionHung(now = Date.now(), store: GuardStorage | null = defaultStorage()): boolean {
   try {
     const raw = store?.getItem(KEY);
     if (!raw) return false;
     const at = Number(raw);
-    return Number.isFinite(at) && now - at < MAX_AGE_MS && now >= at - 1000;
+    return Number.isFinite(at) && now - at >= LIVE_MS && now - at < MAX_AGE_MS;
   } catch { return false; }
 }
 
@@ -58,8 +64,9 @@ export function watchConsoleHealth(): void {
   const began = last;
   const timer = window.setInterval(() => {
     const now = Date.now();
-    if (now - last > STALL_MS) { last = now; return; } // stalled: start the clock over (marker stays set)
+    if (now - last > STALL_MS) { last = now; return; } // stalled: start the clock over (the marker goes stale)
     last = now;
+    markPluginsStarting(now); // still alive: keep the marker fresh so another tab doesn't mistake us for a hang
     if (now - began >= HEALTHY_AFTER_MS) { clearPluginMarker(); window.clearInterval(timer); }
   }, 500);
 }
