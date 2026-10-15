@@ -33,6 +33,9 @@ pub struct PluginGrantRow {
     pub approved_version: Option<String>,
     /// The permissions the plugin asked for when it was approved (granted_json is only what was granted).
     pub approved_requested_json: Option<String>,
+    /// `unsigned`, `manifest` or `full`: what the signature covered when seen / when approved (None = not recorded).
+    pub observed_signature_scope: Option<String>,
+    pub approved_signature_scope: Option<String>,
 }
 
 impl PluginGrantRow {
@@ -73,7 +76,7 @@ pub struct PluginAuditRow {
 
 const GRANT_COLS: &str = "plugin_id, kind, name, version, source_path, observed_manifest_sha256, observed_digest, \
      observed_signer, approved_signer, requested_json, error, approved_manifest_sha256, approved_digest, status, granted_json, decided_at, decided_by, \
-     first_seen, last_seen, observed_files_json, approved_files_json, approved_version, approved_requested_json";
+     first_seen, last_seen, observed_files_json, approved_files_json, approved_version, approved_requested_json, observed_signature_scope, approved_signature_scope";
 
 fn grant_from_row(row: &rusqlite::Row<'_>) -> Result<PluginGrantRow> {
     Ok(PluginGrantRow {
@@ -100,6 +103,8 @@ fn grant_from_row(row: &rusqlite::Row<'_>) -> Result<PluginGrantRow> {
         approved_files_json: row.get(20)?,
         approved_version: row.get(21)?,
         approved_requested_json: row.get(22)?,
+        observed_signature_scope: row.get(23)?,
+        approved_signature_scope: row.get(24)?,
     })
 }
 
@@ -116,6 +121,7 @@ pub struct ObservedPlugin<'a> {
     pub requested_json: &'a str,
     pub error: Option<&'a str>,
     pub files_json: &'a str,
+    pub signature_scope: &'a str,
 }
 
 impl Database {
@@ -159,8 +165,8 @@ impl Database {
         conn.execute(
             "INSERT INTO plugin_grants (plugin_id, kind, name, version, source_path, observed_manifest_sha256, \
                  observed_digest, requested_json, error, approved_manifest_sha256, approved_digest, status, \
-                 granted_json, decided_at, decided_by, first_seen, last_seen, observed_signer, approved_signer, observed_files_json)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, NULL, NULL, 'pending', '[]', NULL, NULL, ?10, ?10, ?11, NULL, ?12)
+                 granted_json, decided_at, decided_by, first_seen, last_seen, observed_signer, approved_signer, observed_files_json, observed_signature_scope)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, NULL, NULL, 'pending', '[]', NULL, NULL, ?10, ?10, ?11, NULL, ?12, ?13)
              ON CONFLICT(plugin_id) DO UPDATE SET
                  kind = excluded.kind, name = excluded.name, version = excluded.version,
                  source_path = excluded.source_path,
@@ -170,6 +176,7 @@ impl Database {
                  requested_json = excluded.requested_json,
                  error = excluded.error,
                  observed_files_json = excluded.observed_files_json,
+                 observed_signature_scope = excluded.observed_signature_scope,
                  last_seen = excluded.last_seen",
             params![
                 o.plugin_id,
@@ -184,6 +191,7 @@ impl Database {
                 now,
                 o.signer,
                 o.files_json,
+                o.signature_scope,
             ],
         )?;
         Ok(())
@@ -207,7 +215,7 @@ impl Database {
             conn.execute(
                 "UPDATE plugin_grants SET status = ?2, granted_json = ?3, approved_manifest_sha256 = ?4, \
                      approved_digest = ?5, decided_at = ?6, decided_by = ?7, approved_signer = ?8, \
-                     approved_files_json = observed_files_json, approved_version = version, approved_requested_json = requested_json \
+                     approved_files_json = observed_files_json, approved_version = version, approved_requested_json = requested_json, approved_signature_scope = observed_signature_scope \
                      WHERE plugin_id = ?1",
                 params![plugin_id, status, granted_json, pin_manifest_sha256, pin_digest, now, decided_by, pin_signer],
             )?

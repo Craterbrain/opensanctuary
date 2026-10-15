@@ -132,7 +132,7 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 - Approval records both values. On every boot, and on every web-plugin fetch, the host recomputes them. **Any mismatch moves the plugin to `changed`: it is not loaded, and the console asks for re-review.**
 
 **Signatures (optional, TOFU):**
-- If `plugin.json.minisig` exists, it is verified with `minisign_verify::Signature`. **The signature covers `plugin.json` only**, not the plugin's other files (the manifest doesn't list their hashes), so "signed" today means "the manifest was signed". Digest pinning, below, is what catches changes to the other files. Closing this gap is the first step of `docs/PLUGIN_SIGNING.md`.
+- If `plugin.json.minisig` exists, it is verified with `minisign_verify::Signature`. The signature covers the bytes of `plugin.json`. If the manifest lists every other file's SHA-256 in `files`, the one signature covers the whole package (*fully signed*, and the host refuses a package whose files differ from the list); without `files` it covers the manifest only (*manifest signed*, and the review screen says so). Digest pinning, below, separately catches any change after approval. See `docs/PLUGIN_SIGNING.md` for what comes next.
 - The signer's key id and public key come from a `publisher_key` field in the manifest. They are pinned on first approval.
 - Later versions signed by the same key get a one-click "Approve update" when they request no new permissions. A different key, or a signed plugin that becomes unsigned, triggers a full re-prompt with a warning.
 - Unsigned plugins are allowed and labelled "unsigned".

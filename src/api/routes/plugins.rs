@@ -126,6 +126,11 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         "error": row.error,
         "digest": row.observed_digest,
         "signed": row.observed_signer.is_some(),
+        // What the signature covers: "unsigned", "manifest" (plugin.json only) or "full" (every file). Rows seen
+        // before this was recorded are "manifest" if signed, which is all they could have been.
+        "signature_scope": row.observed_signature_scope.clone().unwrap_or_else(|| if row.observed_signer.is_some() { "manifest".to_string() } else { "unsigned".to_string() }),
+        // It was fully signed when approved and isn't now: less assurance than the operator agreed to.
+        "signature_weaker": row.approved_signature_scope.as_deref() == Some("full") && row.observed_signature_scope.as_deref() != Some("full"),
         "signer_id": row.observed_signer.as_deref().map(signer_id),
         // Approved before under a different publisher key, or it used to be signed and now isn't.
         "signer_changed": row.approved_signer.is_some() && row.approved_signer != row.observed_signer,

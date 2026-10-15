@@ -505,6 +505,10 @@ export interface PluginInfo {
   error: string | null;
   digest: string;
   signed: boolean;
+  /** What the signature covers: nothing, plugin.json only, or every file. */
+  signature_scope?: 'unsigned' | 'manifest' | 'full';
+  /** Fully signed when you approved it, less than that now. */
+  signature_weaker?: boolean;
   signer_id: string | null;
   signer_changed: boolean;
   approved_digest: string | null;

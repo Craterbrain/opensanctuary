@@ -7048,3 +7048,54 @@ async fn test_plugin_install_and_uninstall() {
     assert!(audit.iter().any(|a| a.plugin_id == "hello_pkg" && a.action == "installed"));
     assert_eq!(post("", ok_pkg).await.status(), reqwest::StatusCode::OK);
 }
+
+#[test]
+fn test_plugin_author_workflow_hash_sign_check() {
+    // The workflow docs/PLUGINS.md tells authors to follow: --hash-plugin, set publisher_key, sign with minisign, --check-plugin.
+    let exe = env!("CARGO_BIN_EXE_os-next");
+    let web = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("author_demo");
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    std::fs::write(dir.join("index.html"), "<html>hi</html>").unwrap();
+    std::fs::write(dir.join("lib/app.js"), "var x = 1;").unwrap();
+    std::fs::write(dir.join("plugin.json"), serde_json::json!({
+        "manifest_version": 1, "id": "author_demo", "name": "Author Demo", "version": "1.0.0",
+        "web": {"entry": "index.html", "sandbox": true}, "permissions": [{"id": "ui.panel", "reason": "shows a panel"}]
+    }).to_string()).unwrap();
+    let run = |flag: &str| std::process::Command::new(exe).args([flag, dir.to_str().unwrap(), "--web-dir", web.to_str().unwrap()]).output().unwrap();
+    let text = |o: &std::process::Output| format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+
+    // Unsigned to begin with.
+    let o = run("--check-plugin");
+    assert!(o.status.success() && text(&o).contains("signature: unsigned"), "{}", text(&o));
+
+    // Hash the files: the manifest now lists them (and only them).
+    let o = run("--hash-plugin");
+    assert!(o.status.success() && text(&o).contains("listed 2 files"), "{}", text(&o));
+    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("plugin.json")).unwrap()).unwrap();
+    let listed: Vec<&String> = manifest["files"].as_object().unwrap().keys().collect();
+    assert_eq!(listed, ["index.html", "lib/app.js"]);
+    assert_eq!(manifest["name"], "Author Demo", "other fields survive");
+
+    // Set the key and sign the manifest as it is.
+    let kp = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+    let mut manifest = manifest;
+    manifest["publisher_key"] = serde_json::json!(kp.pk.to_base64());
+    let bytes = serde_json::to_vec_pretty(&manifest).unwrap();
+    std::fs::write(dir.join("plugin.json"), &bytes).unwrap();
+    std::fs::write(dir.join("plugin.json.minisig"), minisign::sign(None, &kp.sk, &bytes[..], None, None).unwrap().into_string()).unwrap();
+    let o = run("--check-plugin");
+    assert!(o.status.success() && text(&o).contains("fully signed"), "{}", text(&o));
+
+    // Edit a file after signing: refused, with the file named.
+    std::fs::write(dir.join("lib/app.js"), "steal();").unwrap();
+    let o = run("--check-plugin");
+    assert!(!o.status.success() && text(&o).contains("lib/app.js"), "{}", text(&o));
+
+    // Running --hash-plugin again after an edit warns that the signature is stale.
+    let o = run("--hash-plugin");
+    assert!(o.status.success() && text(&o).contains("out of date"), "{}", text(&o));
+    let o = run("--check-plugin");
+    assert!(!o.status.success() && text(&o).contains("signature"), "a re-hashed manifest no longer matches its signature: {}", text(&o));
+}

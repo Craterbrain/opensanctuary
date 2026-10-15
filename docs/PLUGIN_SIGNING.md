@@ -1,8 +1,10 @@
 # Plugin signing: design (not implemented)
 
-_Status: a framework for discussion. Nothing in this document changes behavior yet, except the "Today" section, which describes what the code does now. Written 2026-10-14._
+_Status: **phase 1 is implemented** (section 10); phases 2 to 5 are design only. Section 0 describes what the code does now. Written 2026-10-14, updated with phase 1._
 
-## 0. Today
+## 0. Today (after phase 1)
+
+Phase 1 closed gap 1 below: a plugin can list every file's hash in `files`, so one signature covers the whole package, and the review screen says exactly what a signature covers (*signed, covers every file* / *manifest signed, other files aren't covered* / *unsigned*). What follows is the situation phase 1 started from, kept because gaps 2 and 3 still stand.
 
 What exists, and what it does and doesn't prove:
 
@@ -54,7 +56,7 @@ Verification, in this order, and any failure is "invalid":
 
 A plugin whose manifest has no `files` and no signature is simply unsigned, as now. A plugin with a signature but no `files` is treated as **manifest-only signed** and labelled exactly that (so the display stops overstating it), until the publisher re-releases it with `files`.
 
-Tooling: `os-next --check-plugin <folder>` (exists) grows `--sign <secret key file>` to write `files` and the `.minisig`, so authors never hash by hand. The check command also reports "not signed", "manifest-only", or "fully signed".
+Tooling (implemented): `os-next --hash-plugin <folder>` writes `files` into `plugin.json`; the author then sets `publisher_key` and signs with the standard `minisign -Sm plugin.json`; `os-next --check-plugin <folder>` reports *unsigned*, *manifest only* or *fully signed* and exits non-zero if the package doesn't verify. The binary deliberately has no signing command: that would mean shipping minisign's signing code and handling authors' secret keys, and `minisign` already exists for it.
 
 Compatibility: `manifest_version` stays 1. `PluginManifest` does not reject unknown fields (only a few nested structs do, such as toolbar items), so `files` is an optional field that older hosts simply ignore.
 
@@ -103,7 +105,7 @@ A catalog is a signed index of packages: `{ "plugins": [{ "id", "version", "min_
 
 ## 10. Implementation phases
 
-1. **Honest labels** (small, no new format): separate "manifest signed" from "unsigned", and say so. Add `files` verification (section 3) and `--check-plugin`/`--sign`.
+1. **Honest labels and `files` verification** (section 3) — **done**: `files` in the manifest; discovery and install refuse a package whose files differ, are missing, or aren't listed (signed or not); `signature_scope` is recorded (`unsigned` / `manifest` / `full`) and shown; a plugin approved as fully signed that later isn't gets a warning; `--hash-plugin` and `--check-plugin` for authors. Built-in plugins are not signed yet (that belongs with the release key in phase 2).
 2. **Trust store and display** (section 4, 9): table, badges, trust checkbox, Publishers list.
 3. **Revocation list and rotation** (section 5).
 4. **Policy setting** (section 6) and downgrade memory (section 7).

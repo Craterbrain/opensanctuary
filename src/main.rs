@@ -26,6 +26,9 @@ struct Args {
     #[arg(long, value_name = "FOLDER", help = "Check a plugin folder (plugin.json, entry, icons, permissions) the way the app would, print the result and exit")]
     check_plugin: Option<String>,
 
+    #[arg(long, value_name = "FOLDER", help = "Write the SHA-256 of every file in a plugin folder into its plugin.json (`files`), ready to be signed with minisign, then exit")]
+    hash_plugin: Option<String>,
+
     #[arg(long)]
     bibles_dir: Option<String>,
 
@@ -69,6 +72,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
+    if let Some(folder) = &args.hash_plugin {
+        std::process::exit(hash_plugin_folder_cli(std::path::Path::new(folder)));
+    }
     if let Some(folder) = &args.check_plugin {
         std::process::exit(check_plugin_folder_cli(std::path::Path::new(folder), args.web_dir.as_deref()));
     }
@@ -643,6 +649,14 @@ fn check_plugin_folder_cli(folder: &std::path::Path, web_dir: Option<&str>) -> i
     match os_next::core::plugin_registry::check_plugin_folder(&folder, env!("CARGO_PKG_VERSION"), Some(&icons)) {
         Ok(d) => {
             println!("ok: {} ({}) v{}", d.name, d.id, d.version.as_deref().unwrap_or("?"));
+            println!(
+                "signature: {}",
+                match d.signature_scope {
+                    "full" => "fully signed: the signature covers plugin.json and, through its `files` hashes, every other file",
+                    "manifest" => "manifest only: the signature covers plugin.json but the other files aren't listed (run --hash-plugin, then sign again)",
+                    _ => "unsigned",
+                }
+            );
             println!("it would ask the operator for:");
             for p in &d.requested {
                 println!("  {:<20} {:?}{}  {}", p.id, p.tier(), if p.optional { " (optional)" } else { "" }, p.reason.as_deref().unwrap_or("(no reason given)"));
@@ -657,4 +671,47 @@ fn check_plugin_folder_cli(folder: &std::path::Path, web_dir: Option<&str>) -> i
             1
         }
     }
+}
+
+/// `--hash-plugin <folder>`: records every file's SHA-256 in `plugin.json` so that one minisign signature over
+/// `plugin.json` covers the whole package. Run it after your last edit to any file, then sign `plugin.json`.
+fn hash_plugin_folder_cli(folder: &std::path::Path) -> i32 {
+    let manifest_path = folder.join("plugin.json");
+    let Ok(bytes) = std::fs::read(&manifest_path) else {
+        eprintln!("error: {} has no plugin.json", folder.display());
+        return 2;
+    };
+    let mut manifest: serde_json::Value = match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(v) if v.is_object() => v,
+        _ => {
+            eprintln!("error: plugin.json isn't a JSON object");
+            return 1;
+        }
+    };
+    let files = match os_next::core::plugin_registry::sandbox_dir_files(folder) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let listed: std::collections::BTreeMap<String, String> = files
+        .into_iter()
+        .filter(|(p, _)| !os_next::core::plugin_registry::UNLISTED.contains(&p.as_str()))
+        .collect();
+    let count = listed.len();
+    manifest["files"] = serde_json::json!(listed);
+    let mut text = serde_json::to_string_pretty(&manifest).unwrap_or_default();
+    text.push('\n');
+    if let Err(e) = std::fs::write(&manifest_path, text) {
+        eprintln!("error: couldn't write plugin.json: {e}");
+        return 1;
+    }
+    println!("listed {count} files in plugin.json");
+    if folder.join("plugin.json.minisig").exists() {
+        println!("note: plugin.json.minisig is now out of date; sign plugin.json again");
+    }
+    println!("next: set \"publisher_key\" in plugin.json to your minisign public key, then run `minisign -Sm plugin.json`");
+    println!("      (the manifest is signed as it is, so do both before signing), and check the result with --check-plugin");
+    0
 }

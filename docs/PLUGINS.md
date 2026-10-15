@@ -276,11 +276,23 @@ runs after the app has booted.
 
 ## Versions and updates
 
-(Signing is described, not yet built, in [PLUGIN_SIGNING.md](PLUGIN_SIGNING.md).)
-
 `version` in `plugin.json` must be a semantic version (`1.2.3`; empty is allowed). `host_api` (a semver requirement such as `>=0.2.0, <0.3.0`) says which OpenSanctuary versions it works with; outside that range the plugin shows as incompatible.
 
 When an approved plugin's files change (a new version dropped in, an **Update…**, or an edit), it stops until you review it again, and the card shows **what changed** against the version you approved: `v1.0.0 → v1.1.0`, whether that is an upgrade, a **downgrade** (an older version than you approved, shown with a warning), or the same version number with different files (also warned), the files edited, added and removed, and any **new permissions** with their risk level, or wider scope on existing ones. Permissions you declined last time (optional ones) are not reported as new again. The manifest counts as a file, so a version bump shows `plugin.json` as edited. Plugins approved before this was recorded show the version and permission changes but not the file list.
+
+---
+
+## Signing your plugin (optional)
+
+A signature tells the operator *who* released a package and that no file was changed since; it never grants anything, and an unsigned plugin works the same way. To sign:
+
+1. Finish your plugin. Any later edit to any file means repeating steps 2 to 4.
+2. `os-next --hash-plugin my_plugin` writes `"files": { "<path>": "<sha256>", ... }` into `plugin.json`, one entry for every file except `plugin.json` and its signature.
+3. Put your [minisign](https://jedisct1.github.io/minisign/) public key (the second line of your `.pub` file) in `plugin.json` as `"publisher_key"`.
+4. `cd my_plugin && minisign -Sm plugin.json` writes `plugin.json.minisig`. (`plugin.json` is signed byte for byte, so don't reformat it afterwards.)
+5. `os-next --check-plugin my_plugin` should say **fully signed**.
+
+The review screen then says *signed, covers every file*. A signed `plugin.json` that doesn't list `files` says *manifest signed; the other files aren't covered*, and a package whose files differ from the list (edited, missing, or an extra file) is refused outright, signed or not. Design and what comes next: [PLUGIN_SIGNING.md](PLUGIN_SIGNING.md).
 
 ---
 
