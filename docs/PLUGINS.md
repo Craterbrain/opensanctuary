@@ -274,6 +274,16 @@ runs after the app has booted.
 
 ---
 
+## When a plugin misbehaves
+
+A plugin page runs in its own frame, but some browsers run that frame on the console's own thread, so a page stuck in an endless loop can freeze the whole tab. The console defends against this without trusting the plugin:
+
+- **Watchdog.** The console pings every running frame; the SDK (`__os/sdk.js`) answers automatically. A frame that was answering and then goes silent for 15 seconds is removed for the rest of the session and you get a notice. It stays approved; reload to start it again. **Load the SDK**: a page that never answers a ping is not watched.
+- **Safe mode.** If the console itself hangs, nothing on the page can help, so the next load does. Plugins are started behind a marker that is cleared after a clean unload or 8 healthy seconds. If the marker is still there at the next start, a banner says plugins are paused and every plugin (including console scripts) waits until you press **Resume plugins**. Nothing is revoked.
+- **Limits that always apply:** manifests over 256 KB are rejected, notifications are rate-limited per plugin, and a frame's height is clamped.
+
+---
+
 ## Choosing between them
 
 | | Sandboxed web plugin | Console script (`ui.dom`) |

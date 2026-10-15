@@ -78,6 +78,7 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 | `process.run` | `commands[]` (ids of commands declared in the manifest) | Critical | **E** | Sandboxed plugins only: the host runs exactly the manifest's declared command templates, no shell, throwaway job folders, with host-managed signed tools. See PLUGINS.md. |
 | `ui.panel` | — | Medium | **E** (slots) | |
 | `ui.toolbar` | — | Medium | **E** (sandboxed web plugins) | Up to 2 ribbon buttons declared in `ui.toolbar`; see PLUGINS.md |
+| `ui.clipboard` | — | Medium | **E** (sandboxed web plugins) | `ui.pasteText`: read the text on the system clipboard (it is often a password). Separate from `ui.panel` so a harmless panel can't read it. |
 | `notifications.post` | — | Low | **E** (`POST /api/plugin-host/notify`) | Posts to the console's notification center; see PLUGINS.md |
 
 **E** means the host enforces it. **Consent-only** means it is shown at consent time and recorded, but not technically enforced (a console script shares the page, so nothing could enforce it).  **Reserved** means the id is accepted but nothing acts on it yet.

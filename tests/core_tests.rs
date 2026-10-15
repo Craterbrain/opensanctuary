@@ -6329,9 +6329,9 @@ echo "{\"id\":\"abc123\",\"title\":\"Fake Title\",\"duration\":12.5,\"thumbnail\
     assert_eq!(p["tools"][0]["key_sha256"].as_str().unwrap().len(), 64);
     assert_eq!(p["placements"].as_array().unwrap().len(), 2);
     let ids: Vec<&str> = p["requested"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["ui.panel", "process.run", "library.write", "commands.send", "notifications.post"]);
-    assert_eq!(p["requested"][1]["tier"], "critical");
-    assert_eq!(p["requested"][1]["enforcement"], "enforced");
+    assert_eq!(ids, ["ui.panel", "ui.clipboard", "process.run", "library.write", "commands.send", "notifications.post"]);
+    assert_eq!(p["requested"][2]["tier"], "critical");
+    assert_eq!(p["requested"][2]["enforcement"], "enforced");
 
     // Nothing runs before approval (and a token can't be minted).
     let mint = |scopes: serde_json::Value| {

@@ -34,6 +34,7 @@ const KNOWN: &[(&str, Tier, &str)] = &[
     ("process.run", Tier::Critical, "enforced"),
     ("ui.panel", Tier::Medium, "enforced"),
     ("ui.toolbar", Tier::Medium, "enforced"),
+    ("ui.clipboard", Tier::Medium, "enforced"),
     ("notifications.post", Tier::Low, "enforced"),
 ];
 

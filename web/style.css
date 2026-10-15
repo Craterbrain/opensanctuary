@@ -6166,3 +6166,7 @@ video {
 .plugin-advanced-access { margin: 4px 0 0 26px; }
 /* The `hidden` attribute must win over .btn's display (Approve / Apply override swap places) */
 .plugin-actions [hidden] { display: none !important; }
+
+/* Shown when the last session ended in a hang: plugins stay paused until the operator resumes them. */
+#plugin-safe-mode { position: fixed; left: 0; right: 0; top: 0; z-index: 3000; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 14px; background: var(--bg-panel, #1c1f26); border-bottom: 2px solid var(--accent-warning, #e8a33d); color: var(--text-main, #fff); font-size: 13px; }
+#plugin-safe-mode span { flex: 1 1 320px; }

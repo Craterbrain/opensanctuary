@@ -163,10 +163,18 @@ pub fn sandbox_dir_files(dir: &Path) -> Result<Vec<(String, String)>, String> {
     Ok(out)
 }
 
+/// A manifest is a few KB; anything this big is hostile or broken, and is never parsed.
+const MAX_MANIFEST_BYTES: usize = 256 * 1024;
+
 fn discover_sandbox(dir: &Path, host_version: &str, icons_dir: Option<&Path>) -> Option<Discovered> {
     let dir_name = dir.file_name()?.to_str()?.to_string();
     let bytes = std::fs::read(dir.join("plugin.json")).ok()?; // not a plugin folder
     let manifest_sha = sha256_hex(&bytes);
+    if bytes.len() > MAX_MANIFEST_BYTES {
+        let mut d = failed(dir_name, "sandbox", dir, format!("plugin.json is {} KB; the limit is {} KB", bytes.len() / 1024, MAX_MANIFEST_BYTES / 1024));
+        d.manifest_sha256 = Some(manifest_sha);
+        return Some(d);
+    }
     let manifest = match PluginManifest::parse(&bytes).and_then(|m| m.validate(host_version).map(|_| m)) {
         Ok(m) => m,
         Err(e) => {
@@ -357,6 +365,22 @@ mod tests {
         assert_eq!(db.get_plugin_grant("thing").unwrap().unwrap().effective_state(), "changed");
         let audit = db.list_plugin_audit(50).unwrap();
         assert!(audit.iter().any(|a| a.plugin_id == "thing" && a.action == "changed"));
+    }
+
+    #[test]
+    fn an_oversized_manifest_is_rejected_unparsed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("plugins").join("big");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.html"), "<html></html>").unwrap();
+        let manifest = serde_json::json!({
+            "manifest_version": 1, "id": "big", "name": "Big", "web": {"entry": "index.html", "sandbox": true},
+            "permissions": [{"id": "ui.panel"}], "description": "x".repeat(MAX_MANIFEST_BYTES + 1)
+        });
+        std::fs::write(dir.join("plugin.json"), manifest.to_string()).unwrap();
+        let found = discover(&tmp.path().join("plugins"), "0.2.0");
+        let err = found.iter().find(|d| d.id == "big").unwrap().error.clone().unwrap_or_default();
+        assert!(err.contains("the limit is"), "{err}");
     }
 
     #[test]

@@ -22,7 +22,7 @@
  *   process.start|poll|cancel|release   process.run: run one of the plugin's manifest-declared commands
  *   tool.status|update            process.run: the host-managed tool behind those commands
  *   library.addMedia { job, file, ... } library.write on "media": a finished file from a job's folder
- *   ui.pasteText                  ui.panel: the clipboard's text (for a URL box)
+ *   ui.pasteText                  ui.clipboard: the clipboard's text (for a URL box)
  *   ui.theme                      the console's design tokens (--os-*) and icon set, so a page can look native
  *   ui.resize { height }          ui.panel
  *   ui.toolbar.update { id, disabled?, pressed? } ui.toolbar: on/off and pressed state of one of the plugin's own ribbon
@@ -36,6 +36,8 @@ import { api, type PluginInfo } from "./api_client.ts";
 import { getCurrentIconSet } from "./icon_sets.ts";
 import { registerLibrarySource, unregisterLibrarySource } from "../ui/library_panel.ts";
 import { addToolbarItems, removeToolbarItems, updateToolbarItem } from "./plugin_toolbar.ts";
+import { silentFrames, PING_EVERY_MS, type Watched } from "./plugin_guard.ts";
+import { showToast } from "./ui_utils.ts";
 
 interface Running {
   plugin: PluginInfo;
@@ -50,6 +52,28 @@ function grantedList(p: PluginInfo, id: string, field: 'hosts' | 'categories' | 
 }
 
 const running = new Map<Window, Running>();
+/** Liveness of each running frame, for the watchdog (plugin_guard.ts). */
+const watched = new Map<Window, Watched>();
+let watchdogTimer: number | null = null;
+
+function startWatchdog() {
+  if (watchdogTimer !== null) return;
+  let expected = Date.now() + PING_EVERY_MS;
+  watchdogTimer = window.setInterval(() => {
+    const now = Date.now();
+    const lagged = now - expected > 3000; // the console itself was stalled: nobody is judged this round
+    expected = now + PING_EVERY_MS;
+    for (const [win, w] of watched) {
+      try { win.postMessage({ type: 'os.ping', n: now }, '*'); } catch { /* frame gone */ }
+      if (!running.has(win)) watched.delete(win);
+    }
+    for (const dead of silentFrames(watched.values(), now, lagged)) {
+      const name = Array.from(running.values()).find((r) => r.plugin.id === dead.id)?.plugin.name ?? dead.id;
+      stopSandboxedPlugin(dead.id);
+      showToast(`Plugin "${name}" stopped responding and was turned off for this session. It is still approved; reload to start it again.`, 'error', 15000);
+    }
+  }, PING_EVERY_MS);
+}
 /** The one frame of a plugin that receives its ribbon-button clicks (so two placements don't both act). */
 const primaryFrame = new Map<string, HTMLIFrameElement>();
 
@@ -284,7 +308,7 @@ async function handle(r: Running, method: string, params: any): Promise<unknown>
       return { id: body.id };
     }
     case 'ui.pasteText': {
-      need('ui.panel');
+      need('ui.clipboard');
       // The console's own clipboard route first (works on the desktop app), then the browser's.
       let text = '';
       try {
@@ -327,6 +351,11 @@ function installListener() {
     // The sandboxed origin is "null", so the only reliable identity is the window itself.
     const r = ev.source ? running.get(ev.source as Window) : undefined;
     const msg = ev.data;
+    const w = ev.source ? watched.get(ev.source as Window) : undefined;
+    if (w) {
+      w.alive = Date.now();
+      if (msg && msg.type === 'os.pong') w.everAlive = true;
+    }
     if (!r || !msg || msg.type !== 'os.request' || typeof msg.method !== 'string') return;
     const reply = (body: Record<string, unknown>) =>
       r.frame.contentWindow?.postMessage({ type: 'os.response', id: msg.id, ...body }, '*');
@@ -412,7 +441,11 @@ export function startSandboxedPlugin(plugin: PluginInfo): void {
     if (!primaryFrame.has(plugin.id)) primaryFrame.set(plugin.id, frame);
     const register = () => {
       const w = frame.contentWindow;
-      if (w) running.set(w, { plugin, frame, granted, commands: grantedCommands(plugin), token: null });
+      if (w) {
+        running.set(w, { plugin, frame, granted, commands: grantedCommands(plugin), token: null });
+        watched.set(w, { id: plugin.id, alive: Date.now(), everAlive: false });
+        startWatchdog();
+      }
       watchTheme();
     };
     register();
@@ -492,7 +525,7 @@ export function isSandboxedPluginRunning(id: string): boolean {
 /** Removes a sandboxed plugin's frames, dock cards and library entries -- on revoke/deny, without a reload. */
 export function stopSandboxedPlugin(id: string): void {
   for (const [win, r] of Array.from(running.entries())) {
-    if (r.plugin.id === id) running.delete(win);
+    if (r.plugin.id === id) { running.delete(win); watched.delete(win); }
   }
   document.querySelectorAll(`iframe[data-plugin-id="${CSS.escape(id)}"]`).forEach((frame) => {
     (frame.closest('.plugin-dock-card') ?? frame.closest('.plugin-source') ?? frame).remove();
