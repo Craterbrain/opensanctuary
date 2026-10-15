@@ -26,6 +26,9 @@ struct Args {
     #[arg(long, value_name = "FOLDER", help = "Check a plugin folder (plugin.json, entry, icons, permissions) the way the app would, print the result and exit")]
     check_plugin: Option<String>,
 
+    #[arg(long, value_name = "KEY", hide = true, help = "TESTING ONLY: treat this minisign public key as the release key for plugin signing (see testdata/signing/README.md)")]
+    test_release_key: Option<String>,
+
     #[arg(long, value_name = "FOLDER", help = "Write the SHA-256 of every file in a plugin folder into its plugin.json (`files`), ready to be signed with minisign, then exit")]
     hash_plugin: Option<String>,
 
@@ -71,6 +74,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let args = Args::parse();
+
+    // The key that vouches for the app's own plugins and the plugin revocation list. Only a test run may change it.
+    let plugin_release_key = match &args.test_release_key {
+        Some(k) => {
+            tracing::warn!("--test-release-key: plugin signatures are being checked against a TEST release key; this is not a normal run");
+            k.clone()
+        }
+        None => os_next::network::updater::RELEASE_PUBLIC_KEY_B64.to_string(),
+    };
 
     if let Some(folder) = &args.hash_plugin {
         std::process::exit(hash_plugin_folder_cli(std::path::Path::new(folder)));
@@ -153,6 +165,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // (docs/PLUGIN_PERMISSIONS.md).
         let web_plugins_dir = os_next::storage::paths::resolve_web_dir(args.web_dir.as_deref()).join("plugins");
         let user_plugins_dir = os_next::core::plugin_registry::user_plugins_dir(&resolved_paths.data_dir());
+        let web_for_lists = os_next::storage::paths::resolve_web_dir(args.web_dir.as_deref());
+        if let Some(applied) = os_next::core::plugin_revocation::apply(&db, &plugin_release_key, &os_next::core::plugin_revocation::list_paths(&web_for_lists, &resolved_paths.data_dir())) {
+            tracing::warn!("plugin revocation list #{} applied: {} keys revoked, {} plugins stopped", applied.sequence, applied.revoked_keys.len(), applied.stopped.len());
+        }
         let discovered = os_next::core::plugin_registry::discover_all(&web_plugins_dir, Some(&user_plugins_dir), env!("CARGO_PKG_VERSION"));
         os_next::core::plugin_registry::sync(&db, &discovered);
         db.prune_plugin_audit(5000);
@@ -330,6 +346,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         pending_pairing_token_delivery: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         security_header_settings: Arc::new(std::sync::RwLock::new(security_header_settings)),
         update_status: Arc::new(std::sync::Mutex::new(None)),
+        plugin_release_key: plugin_release_key.clone(),
     };
 
     let headless = args.headless;
@@ -676,42 +693,19 @@ fn check_plugin_folder_cli(folder: &std::path::Path, web_dir: Option<&str>) -> i
 /// `--hash-plugin <folder>`: records every file's SHA-256 in `plugin.json` so that one minisign signature over
 /// `plugin.json` covers the whole package. Run it after your last edit to any file, then sign `plugin.json`.
 fn hash_plugin_folder_cli(folder: &std::path::Path) -> i32 {
-    let manifest_path = folder.join("plugin.json");
-    let Ok(bytes) = std::fs::read(&manifest_path) else {
-        eprintln!("error: {} has no plugin.json", folder.display());
-        return 2;
-    };
-    let mut manifest: serde_json::Value = match serde_json::from_slice::<serde_json::Value>(&bytes) {
-        Ok(v) if v.is_object() => v,
-        _ => {
-            eprintln!("error: plugin.json isn't a JSON object");
-            return 1;
+    match os_next::core::plugin_registry::write_file_list(folder, None) {
+        Ok(count) => {
+            println!("listed {count} files in plugin.json");
+            if folder.join("plugin.json.minisig").exists() {
+                println!("note: plugin.json.minisig is now out of date; sign plugin.json again");
+            }
+            println!("next: set \"publisher_key\" in plugin.json to your minisign public key, then run `minisign -Sm plugin.json`");
+            println!("      (the manifest is signed as it is, so do both before signing), and check the result with --check-plugin");
+            0
         }
-    };
-    let files = match os_next::core::plugin_registry::sandbox_dir_files(folder) {
-        Ok(f) => f,
         Err(e) => {
             eprintln!("error: {e}");
-            return 1;
+            1
         }
-    };
-    let listed: std::collections::BTreeMap<String, String> = files
-        .into_iter()
-        .filter(|(p, _)| !os_next::core::plugin_registry::UNLISTED.contains(&p.as_str()))
-        .collect();
-    let count = listed.len();
-    manifest["files"] = serde_json::json!(listed);
-    let mut text = serde_json::to_string_pretty(&manifest).unwrap_or_default();
-    text.push('\n');
-    if let Err(e) = std::fs::write(&manifest_path, text) {
-        eprintln!("error: couldn't write plugin.json: {e}");
-        return 1;
     }
-    println!("listed {count} files in plugin.json");
-    if folder.join("plugin.json.minisig").exists() {
-        println!("note: plugin.json.minisig is now out of date; sign plugin.json again");
-    }
-    println!("next: set \"publisher_key\" in plugin.json to your minisign public key, then run `minisign -Sm plugin.json`");
-    println!("      (the manifest is signed as it is, so do both before signing), and check the result with --check-plugin");
-    0
 }

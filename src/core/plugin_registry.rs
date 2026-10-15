@@ -32,6 +32,8 @@ pub struct Discovered {
     pub files: Vec<(String, String)>,
     /// What the signature, if any, covers: `unsigned`, `manifest` (only plugin.json) or `full` (every file).
     pub signature_scope: &'static str,
+    /// The key this plugin's signer proved it replaces (a rotation statement signed by that old key), if any.
+    pub rotation_from: Option<String>,
 }
 
 /// Checks the detached signature next to a manifest, if there is one. `Ok(None)` = unsigned.
@@ -65,6 +67,7 @@ fn failed(id: String, kind: &'static str, source: &Path, msg: String) -> Discove
         error: Some(msg),
         files: Vec::new(),
         signature_scope: "unsigned",
+        rotation_from: None,
     }
 }
 
@@ -125,6 +128,7 @@ fn discover_web(web_plugins_dir: &Path, host_version: &str, icons_dir: Option<&P
                         files: vec![(file_name.clone(), file_sha)],
                         // One script file: there are no other files, and `files` doesn't apply.
                         signature_scope: if signer.is_some() { "manifest" } else { "unsigned" },
+                        rotation_from: None,
                     });
                 }
             }
@@ -172,7 +176,34 @@ pub fn sandbox_dir_files(dir: &Path) -> Result<Vec<(String, String)>, String> {
 
 /// Files that are never listed in a manifest's `files`: the manifest itself (the signature covers its bytes)
 /// and the signature.
-pub const UNLISTED: [&str; 2] = ["plugin.json", "plugin.json.minisig"];
+pub const UNLISTED: [&str; 4] = ["plugin.json", "plugin.json.minisig", ROTATION_FILE, "plugin.rotation.json.minisig"];
+
+/// A key rotation statement shipped next to the manifest: `{ "old_key": "...", "new_key": "..." }`, signed (detached,
+/// `plugin.rotation.json.minisig`) by the OLD key. It says "the publisher who signed with old_key now signs with new_key".
+pub const ROTATION_FILE: &str = "plugin.rotation.json";
+
+#[derive(serde::Deserialize)]
+struct RotationStatement {
+    old_key: String,
+    new_key: String,
+}
+
+/// The old key, if the folder carries a rotation statement for `new_key` that the old key really signed. Anything
+/// wrong with it (missing, malformed, for another key, a bad signature) means no rotation: the plugin then shows the
+/// ordinary "different publisher" warning, which is the safe reading.
+fn verified_rotation(dir: &Path, new_key: &str) -> Option<String> {
+    let bytes = std::fs::read(dir.join(ROTATION_FILE)).ok()?;
+    if bytes.len() > 16 * 1024 {
+        return None;
+    }
+    let sig = std::fs::read_to_string(dir.join("plugin.rotation.json.minisig")).ok()?;
+    let st: RotationStatement = serde_json::from_slice(&bytes).ok()?;
+    if st.new_key != new_key || st.old_key == new_key {
+        return None;
+    }
+    crate::network::updater::verify_signature(&bytes, &sig, &st.old_key).ok()?;
+    Some(st.old_key)
+}
 
 /// When a manifest lists its files, the folder must hold exactly those, with exactly those hashes: a
 /// listed file that is missing, an unlisted file, a different hash, or a path that could escape the folder
@@ -211,6 +242,29 @@ pub fn check_listed_files(listed: Option<&std::collections::BTreeMap<String, Str
     Ok(())
 }
 
+/// Writes every file's SHA-256 into a plugin folder's `plugin.json` as `files` (and, if given, sets `publisher_key`),
+/// so that one signature over the manifest covers the whole package. Returns how many files were listed. The caller signs
+/// `plugin.json` afterwards; any existing signature is left in place, now stale.
+pub fn write_file_list(folder: &Path, publisher_key: Option<&str>) -> Result<usize, String> {
+    let manifest_path = folder.join("plugin.json");
+    let bytes = std::fs::read(&manifest_path).map_err(|_| format!("{} has no plugin.json", folder.display()))?;
+    let mut manifest = match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(v) if v.is_object() => v,
+        _ => return Err("plugin.json isn't a JSON object".to_string()),
+    };
+    let listed: std::collections::BTreeMap<String, String> =
+        sandbox_dir_files(folder)?.into_iter().filter(|(p, _)| !UNLISTED.contains(&p.as_str())).collect();
+    let count = listed.len();
+    manifest["files"] = serde_json::json!(listed);
+    if let Some(k) = publisher_key {
+        manifest["publisher_key"] = serde_json::json!(k);
+    }
+    let mut text = serde_json::to_string_pretty(&manifest).unwrap_or_default();
+    text.push('\n');
+    std::fs::write(&manifest_path, text).map_err(|e| format!("couldn't write plugin.json: {e}"))?;
+    Ok(count)
+}
+
 /// A manifest is a few KB; anything this big is hostile or broken, and is never parsed.
 const MAX_MANIFEST_BYTES: usize = 256 * 1024;
 
@@ -244,6 +298,7 @@ fn discover_sandbox(dir: &Path, host_version: &str, icons_dir: Option<&Path>) ->
         error: None,
         files: Vec::new(),
         signature_scope: "unsigned",
+        rotation_from: None,
     };
     let fail = |mut d: Discovered, msg: String| {
         d.digest = sha256_hex(format!("{manifest_sha}{msg}").as_bytes());
@@ -281,6 +336,7 @@ fn discover_sandbox(dir: &Path, host_version: &str, icons_dir: Option<&Path>) ->
                 (Some(_), None) => "manifest",
                 (Some(_), Some(_)) => "full",
             };
+            d.rotation_from = d.signer.as_deref().and_then(|new_key| verified_rotation(dir, new_key));
             d.digest = artifact_digest(&files);
             d.files = files;
             Some(d)
@@ -368,6 +424,7 @@ pub fn sync(db: &Database, discovered: &[Discovered]) {
             error: d.error.as_deref(),
             files_json: &serde_json::to_string(&d.files).unwrap_or_else(|_| "[]".to_string()),
             signature_scope: d.signature_scope,
+            rotation_from: d.rotation_from.as_deref(),
         };
         if db.upsert_observed_plugin(&observed).is_err() {
             continue;
@@ -481,7 +538,7 @@ mod tests {
         for (id, kind) in [("legacy.old_plugin", "legacy-native"), ("demo", "legacy-web"), ("org.example.observer", "native")] {
             let observed = ObservedPlugin {
                 plugin_id: id, kind, name: id, version: None, source_path: "x", manifest_sha256: None, digest: "d",
-                signer: None, requested_json: "[]", error: None, files_json: "[]", signature_scope: "unsigned",
+                signer: None, requested_json: "[]", error: None, files_json: "[]", signature_scope: "unsigned", rotation_from: None,
             };
             db.upsert_observed_plugin(&observed).unwrap();
         }

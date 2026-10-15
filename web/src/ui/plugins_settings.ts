@@ -205,7 +205,7 @@ const TRUST_HINT: Record<PluginTrustLevel, string> = {
 
 /** What the signature proves, in words: "signed" is only said when the signature covers every file. */
 function signatureLabel(plugin: PluginInfo): string {
-  const key = plugin.signer_id ? ` (publisher key ${plugin.signer_id})` : '';
+  const key = plugin.trust?.release_signed ? ' by the OpenSanctuary release key' : plugin.signer_id ? ` (publisher key ${plugin.signer_id})` : '';
   switch (plugin.signature_scope ?? (plugin.signed ? 'manifest' : 'unsigned')) {
     case 'full': return `signed${key}, covers every file`;
     case 'manifest': return `manifest signed${key}; the other files aren't covered by the signature`;
@@ -271,6 +271,9 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   if (plugin.overridden) head.appendChild(el('span', 'os-badge plugin-state plugin-state--changed', 'Permissions overridden'));
   card.appendChild(head);
   card.appendChild(el('div', 'settings-hint plugin-id-line', `id: ${plugin.id}${plugin.trust?.publisher_name ? ` · ${plugin.trust.name_is_claim ? 'says it is by' : 'by'} ${plugin.trust.publisher_name}` : ''} · digest ${plugin.digest.slice(0, 12)}… · ${signatureLabel(plugin)}`));
+  if (plugin.trust?.rotated_from_key_id) {
+    card.appendChild(el('div', 'settings-hint plugin-rotation', `This plugin is signed by a new key. The publisher's previous key (${plugin.trust.rotated_from_key_id}) signed a statement that it moved to this one, so the trust you gave the old key carries over.`));
+  }
   if (plugin.signature_weaker) {
     card.appendChild(el('div', 'plugin-warning', 'This plugin was fully signed when you approved it. Now the signature no longer covers all of its files. Treat this update with more suspicion.'));
   }
@@ -526,6 +529,15 @@ async function renderPublishers(content: HTMLElement, refresh: () => void): Prom
     const wrap = el('details', 'plugin-publishers');
     wrap.open = list.length > 0;
     wrap.appendChild(el('summary', undefined, `Publishers (${list.length})`));
+    try {
+      const rev = await api.plugins.revocations();
+      const line = el('div', 'settings-hint plugin-revocation-status', rev.applied_sequence
+        ? `Revocation list #${rev.applied_sequence} applied (${rev.listed_keys} keys). It is signed by the release key and can only move forward.`
+        : 'No revocation list has been applied.');
+      wrap.appendChild(line);
+      for (const p of rev.problems) wrap.appendChild(el('div', 'plugin-warning', `A revocation list was ignored: ${p}`));
+      if (rev.applied_sequence || rev.problems.length) wrap.open = true; // news the operator should see
+    } catch { /* older server, or not a console page */ }
     if (!list.length) {
       wrap.appendChild(el('div', 'settings-hint', 'No publishers trusted or revoked. Tick "Trust everything … signs" when you approve a signed plugin to add one.'));
     }
@@ -534,7 +546,7 @@ async function renderPublishers(content: HTMLElement, refresh: () => void): Prom
       row.dataset.keyId = p.key_id;
       row.appendChild(el('strong', undefined, p.name || 'Unnamed publisher'));
       row.appendChild(el('span', `os-badge plugin-trust plugin-trust--${p.revoked ? 'revoked' : 'trusted'}`, p.revoked ? 'Revoked' : 'Trusted'));
-      row.appendChild(el('span', 'settings-hint', ` key ${p.key_id} · ${p.plugins.length ? p.plugins.join(', ') : 'no plugins'}`));
+      row.appendChild(el('span', 'settings-hint', ` key ${p.key_id} · ${p.plugins.length ? p.plugins.join(', ') : 'no plugins'}${p.revoked && p.note ? ` · ${p.note}` : ''}`));
       const doIt = async (fn: () => Promise<unknown>, done: string) => {
         try { await fn(); showToast(done); refresh(); } catch (e: any) { showToast(`Couldn't do that: ${e?.message ?? e}`); }
       };

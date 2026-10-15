@@ -37,10 +37,18 @@ fn main() -> ExitCode {
             let password = args.get(4).cloned();
             sign_file(sk_path, file_path, password)
         }
+        Some("sign-plugin") => {
+            let (Some(sk_path), Some(folder)) = (args.get(2), args.get(3)) else {
+                eprintln!("Usage: sign_release sign-plugin <secret-key-path> <plugin-folder> [password]");
+                return ExitCode::FAILURE;
+            };
+            sign_plugin(sk_path, folder, args.get(4).cloned())
+        }
         _ => {
             eprintln!("Usage:");
             eprintln!("  sign_release generate-keypair <prefix> [password]");
             eprintln!("  sign_release sign <secret-key-path> <file-to-sign> [password]");
+            eprintln!("  sign_release sign-plugin <secret-key-path> <plugin-folder> [password]");
             ExitCode::FAILURE
         }
     }
@@ -106,5 +114,59 @@ fn sign_file(sk_path: &str, file_path: &str, password: Option<String>) -> ExitCo
     }
 
     println!("Signed {} -> {}", Path::new(file_path).display(), sig_path);
+    ExitCode::SUCCESS
+}
+
+/// Signs a whole plugin folder with `sk_path`: lists every file's hash in `plugin.json`, sets `publisher_key` to the
+/// key's public half, and writes `plugin.json.minisig`. Used by the release process for the bundled plugins
+/// (docs/PLUGIN_SIGNING.md) and by tests with the throwaway keys in testdata/signing/.
+fn sign_plugin(sk_path: &str, folder: &str, password: Option<String>) -> ExitCode {
+    // Real release keys are encrypted; the throwaway test keys in testdata/signing/ are not.
+    let loaded = match fs::read_to_string(sk_path).ok().and_then(|t| minisign::SecretKeyBox::from_string(&t).ok()) {
+        Some(b) if password.is_none() => b.into_unencrypted_secret_key().or_else(|_| minisign::SecretKey::from_file(sk_path, None)),
+        _ => minisign::SecretKey::from_file(sk_path, password),
+    };
+    let sk = match loaded {
+        Ok(sk) => sk,
+        Err(e) => {
+            eprintln!("Failed to load secret key {}: {}", sk_path, e);
+            return ExitCode::FAILURE;
+        }
+    };
+    let pk = match minisign::PublicKey::from_secret_key(&sk) {
+        Ok(pk) => pk,
+        Err(e) => {
+            eprintln!("Couldn't derive the public key: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+    let folder = Path::new(folder);
+    let count = match os_next::core::plugin_registry::write_file_list(folder, Some(&pk.to_base64())) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("{}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+    let manifest = folder.join("plugin.json");
+    let data = match fs::read(&manifest) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Failed to read {}: {}", manifest.display(), e);
+            return ExitCode::FAILURE;
+        }
+    };
+    let sig = match minisign::sign(None, &sk, &data[..], None, None) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Signing failed: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(e) = fs::write(folder.join("plugin.json.minisig"), sig.into_string()) {
+        eprintln!("Failed to write the signature: {}", e);
+        return ExitCode::FAILURE;
+    }
+    println!("Signed {} ({} files listed) with key {}", folder.display(), count, pk.to_base64());
     ExitCode::SUCCESS
 }
