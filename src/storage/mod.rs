@@ -7,6 +7,7 @@ pub mod openlp_import;
 pub mod paths;
 pub mod pattern_cache;
 pub mod pptx_import;
+pub mod xml_scan;
 pub mod rtf;
 pub mod transcode;
 pub mod keyring;

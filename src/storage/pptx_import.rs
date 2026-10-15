@@ -4,6 +4,7 @@ use std::path::Path;
 use zip::ZipArchive;
 
 use crate::core::models::{Presentation, Slide, SlideBackground};
+use crate::storage::xml_scan::{decode_xml_entities, extract_attr, find_all_tag_attrs, find_tag_open_pos, next_tag, next_tag_content};
 
 pub struct PptxImporter;
 
@@ -162,74 +163,6 @@ fn read_zip_bytes(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Result
     Ok(crate::storage::media_sniff::read_capped_bytes(&mut file, crate::storage::media_sniff::MAX_ZIP_MEDIA_BYTES)?)
 }
 
-/// Finds the next occurrence of a tag named `tag` (matching both `<tag>`/`<tag attr="...">`
-/// and their self-closing `.../>` forms), returning its raw attribute substring, its inner
-/// content (empty for a self-closing tag), and the remainder of `xml` just past the tag so
-/// the caller can keep scanning forward. PPTX doesn't nest same-named tags within a single
-/// paragraph/run/property group, so a plain "next close tag" search is sufficient without a
-/// real XML parser.
-fn next_tag<'a>(xml: &'a str, tag: &str) -> Option<(&'a str, &'a str, &'a str)> {
-    let open_needle = format!("<{}", tag);
-    let mut search_from = 0;
-    loop {
-        let rel_pos = xml[search_from..].find(&open_needle)?;
-        let abs_pos = search_from + rel_pos;
-        let after_tag_name = abs_pos + open_needle.len();
-        let next_char = xml[after_tag_name..].chars().next();
-        // Reject partial matches, e.g. tag "a:t" must not match "a:txBody" or "a:tc".
-        if !matches!(next_char, Some('>') | Some(' ') | Some('/')) {
-            search_from = after_tag_name;
-            continue;
-        }
-        let gt_pos = abs_pos + xml[abs_pos..].find('>')?;
-        let attrs = &xml[after_tag_name..gt_pos];
-        if xml[..gt_pos].ends_with('/') {
-            let attrs = attrs.strip_suffix('/').unwrap_or(attrs);
-            return Some((attrs, "", &xml[gt_pos + 1..]));
-        }
-        let close_needle = format!("</{}>", tag);
-        let content_start = gt_pos + 1;
-        let close_pos = content_start + xml[content_start..].find(&close_needle)?;
-        return Some((attrs, &xml[content_start..close_pos], &xml[close_pos + close_needle.len()..]));
-    }
-}
-
-/// Content-only convenience wrapper around `next_tag`, for tags whose attributes aren't
-/// needed (e.g. `<a:t>`, `<a:p>`).
-fn next_tag_content<'a>(xml: &'a str, tag: &str) -> Option<(&'a str, &'a str)> {
-    let (_, content, remainder) = next_tag(xml, tag)?;
-    Some((content, remainder))
-}
-
-/// Iterates all occurrences of `<tag_name ...>` / `<tag_name .../>`, yielding the raw
-/// attribute substring between the tag name and its closing `>`/`/>` for each.
-fn find_all_tag_attrs<'a>(xml: &'a str, tag_name: &str) -> Vec<&'a str> {
-    let mut results = Vec::new();
-    let open_needle = format!("<{}", tag_name);
-    let mut search_from = 0;
-    while let Some(rel_pos) = xml[search_from..].find(&open_needle) {
-        let abs_pos = search_from + rel_pos;
-        let after_tag_name = abs_pos + open_needle.len();
-        let next_char = xml[after_tag_name..].chars().next();
-        if !matches!(next_char, Some('>') | Some(' ') | Some('/')) {
-            search_from = after_tag_name;
-            continue;
-        }
-        let Some(gt_rel) = xml[abs_pos..].find('>') else { break; };
-        let gt_pos = abs_pos + gt_rel;
-        results.push(&xml[after_tag_name..gt_pos]);
-        search_from = gt_pos + 1;
-    }
-    results
-}
-
-fn extract_attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
-    let needle = format!("{}=\"", name);
-    let start = attrs.find(&needle)? + needle.len();
-    let end = start + attrs[start..].find('"')?;
-    Some(&attrs[start..end])
-}
-
 fn extract_ordered_rel_ids(xml: &str) -> Vec<String> {
     find_all_tag_attrs(xml, "p:sldId")
         .into_iter()
@@ -375,25 +308,6 @@ fn parse_slide_size(presentation_xml: &str) -> Option<(f64, f64)> {
 enum SlideShapeXml<'a> {
     TextShape(&'a str),
     Picture(&'a str),
-}
-
-/// Position of the next `<tag` occurrence that's actually a tag-name match (not a
-/// same-prefixed longer name, e.g. `p:sp` must not match inside `p:spPr`) -- the
-/// same partial-match guard `next_tag` itself uses, exposed separately so
-/// `next_slide_shape` can compare *where* two different tag names would each be
-/// found without consuming either match.
-fn find_tag_open_pos(xml: &str, tag: &str) -> Option<usize> {
-    let needle = format!("<{}", tag);
-    let mut search_from = 0;
-    loop {
-        let rel = xml[search_from..].find(&needle)?;
-        let abs = search_from + rel;
-        let after = abs + needle.len();
-        match xml[after..].chars().next() {
-            Some('>') | Some(' ') | Some('/') => return Some(abs),
-            _ => search_from = after,
-        }
-    }
 }
 
 /// Finds whichever of `<p:sp>` (a text/generic shape) or `<p:pic>` (a picture) comes
@@ -663,12 +577,4 @@ fn resolve_relative_path(base_dir: &str, target: &str) -> String {
     parts.join("/")
 }
 
-/// Decodes the 5 standard XML entities. `&amp;` must be decoded last, otherwise a
-/// literal `&amp;lt;` in the source would incorrectly decode to `<` instead of `&lt;`.
-fn decode_xml_entities(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
-}
+
