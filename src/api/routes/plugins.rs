@@ -1000,6 +1000,25 @@ pub(super) async fn plugin_add_media(State(app): State<AppState>, headers: Heade
         Ok(m) if m.is_file() => {}
         _ => return Err(err(StatusCode::NOT_FOUND, "no such file in the job's folder")),
     }
+    // The name's extension says what this is *supposed* to be; it is never what makes it so. Read enough
+    // of the real bytes to check: a command's own tool decides what it writes, and the manifest promises
+    // "video" or "audio", not "whatever that tool felt like producing".
+    {
+        let mut head = vec![0u8; 4096];
+        let read = {
+            use std::io::Read;
+            std::fs::File::open(&src).and_then(|mut f| f.read(&mut head)).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("couldn't read the file: {e}")))?
+        };
+        head.truncate(read);
+        let sniffed = match media_type {
+            crate::core::models::MediaType::Video => crate::storage::media_sniff::sniff_media_ext(&head).filter(|e| VIDEO_EXTS.contains(e)),
+            crate::core::models::MediaType::Audio => crate::storage::media_sniff::sniff_audio_ext(&head),
+            _ => None,
+        };
+        if sniffed.is_none() {
+            return Err(err(StatusCode::BAD_REQUEST, &format!("'{name}' doesn't look like a {} file (its contents don't match a known {0} format, whatever its name claims)", req.media_type)));
+        }
+    }
     let title: String = req.title.trim().chars().filter(|c| !c.is_control()).take(300).collect();
     if title.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "a title is required"));

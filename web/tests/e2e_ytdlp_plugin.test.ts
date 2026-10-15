@@ -1,6 +1,7 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
 import { mkdtempSync, writeFileSync, chmodSync } from "fs";
+import { Buffer } from "buffer";
 import { tmpdir } from "os";
 import { join } from "path";
 import { spawnTestServer, teardownTestServer, ensureArtifactDir, type SpawnedTestServer, expectNativeIcons } from "./e2e_helpers";
@@ -21,7 +22,7 @@ echo "[download]  25.0% of 1.00MiB at 1.00MiB/s ETA 00:02"
 sleep 0.4
 echo "[download]  75.0% of 1.00MiB at 1.00MiB/s ETA 00:01"
 sleep 0.4
-printf 'fake media' > "$dir/E2E Clip [zz9].$ext"
+if [ $audio = 1 ]; then cp "\${SEED_MP3}" "$dir/E2E Clip [zz9].$ext"; else cp "\${SEED_WEBM}" "$dir/E2E Clip [zz9].$ext"; fi
 echo "{\\"id\\":\\"zz9\\",\\"title\\":\\"E2E Clip\\",\\"duration\\":3.5,\\"_filename\\":\\"$dir/E2E Clip [zz9].webm\\"}"
 `;
 
@@ -36,11 +37,17 @@ describe("E2E Live Test: Video Downloader plugin (yt-dlp) downloads through the 
     const toolsDir = mkdtempSync(join(tmpdir(), "os-next-fake-ytdlp-"));
     writeFileSync(join(toolsDir, "yt-dlp"), FAKE_YTDLP);
     chmodSync(join(toolsDir, "yt-dlp"), 0o755);
+    // Real magic bytes for the "video"/"audio" the fake tool hands back (library.addMedia checks the actual
+    // bytes, not just the extension -- see src/storage/media_sniff.rs): EBML (webm) and an MPEG audio frame (mp3).
+    const seedWebm = join(toolsDir, "seed.webm");
+    const seedMp3 = join(toolsDir, "seed.mp3");
+    writeFileSync(seedWebm, Buffer.from([0x1a, 0x45, 0xdf, 0xa3, ...Buffer.from("fake webm bytes")]));
+    writeFileSync(seedMp3, Buffer.from([0xff, 0xfb, 0x90, 0x00, ...Buffer.from("fake mp3 bytes")]));
     const mediaDir = mkdtempSync(join(tmpdir(), "os-next-ytdlp-media-"));
     server = await spawnTestServer({
       port: PORT, tempPrefix: "os-next-ytdlp-plugin-e2e-",
       extraArgs: ["--media-dir", mediaDir],
-      env: { PATH: `${toolsDir}:${process.env.PATH}` },
+      env: { PATH: `${toolsDir}:${process.env.PATH}`, SEED_WEBM: seedWebm, SEED_MP3: seedMp3 },
     });
     artifactDir = ensureArtifactDir();
     browser = await chromium.launch({ headless: true });

@@ -44,6 +44,32 @@ pub fn sniff_media_ext(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// Returns the canonical extension for `bytes` if they start with a known audio container/stream
+/// signature, else `None`. Separate from `sniff_media_ext` because an importer or a plugin's
+/// `library.addMedia` call picks one or the other depending on what it claims to be adding, never both.
+pub fn sniff_audio_ext(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"ID3") {
+        Some("mp3")
+    } else if bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0 {
+        // MPEG audio frame sync (11 set bits); covers a bare .mp3/.aac stream with no ID3 tag.
+        Some("mp3")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE" {
+        Some("wav")
+    } else if bytes.starts_with(b"fLaC") {
+        Some("flac")
+    } else if bytes.starts_with(b"OggS") {
+        if bytes.windows(9).any(|w| w == b"OpusHead\0" || w == b"OpusHead ") || bytes.windows(8).any(|w| w == b"OpusHead") {
+            Some("opus")
+        } else {
+            Some("ogg")
+        }
+    } else if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" && matches!(&bytes[8..12], b"M4A " | b"M4B ") {
+        Some("m4a")
+    } else {
+        None
+    }
+}
+
 /// Writes `bytes` into `dir` as `<prefix>_<uuid>.<sniffed ext>` and returns
 /// the file name, or `None` if the bytes aren't recognizable media or the
 /// write fails.
