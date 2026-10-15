@@ -185,6 +185,47 @@ the same font name/fallback -- an inherent cross-renderer difference, not a posi
 failed to round-trip. (This fixture's rectangle, mentioned as a dropped shape in an earlier version
 of this note, is no longer dropped -- see "Shapes, lines, tables, and groups" above.)
 
+### Checked against the actual OASIS standard, not just LibreOffice's own UI -- (2026-10-15)
+
+Everything above was built and verified against real producer output, but "real producer" so far
+meant specifically LibreOffice Impress's own shape gallery. A follow-up pass asked the more
+rigorous question: what does the actual ODF 1.3 standard (OASIS, not LibreOffice's toolbar
+conventions) define as legal `<draw:page>` content, and does this importer silently drop any of
+it? It does not (drop anything previously silent) -- but four more spec elements, distinct from
+anything `draw:custom-shape`'s preset vocabulary covers, were found and added:
+
+- **`draw:polygon`** (a closed point list) was a genuine silent-drop gap, the same class of bug as
+  the original `Shape`/`Line`/`Table`/`Group` one above: it simply wasn't in the page-shape
+  dispatcher's candidate list at all, so a file using one (instead of the functionally-equivalent
+  `draw:custom-shape`) lost that shape entirely. Fixed; falls back to a plain rect glyph on import
+  (no point-list field on `Shape` to preserve the exact outline), same honest degrade as an
+  unrecognized custom-shape preset, but position/size/color are kept.
+- **`draw:regular-polygon`** (a true N-sided polygon, `draw:corners`/`draw:concave`) is mapped by
+  corner count to the closest shape this app can draw (`regular_polygon_kind`).
+- **`draw:caption`** (a pointer-line callout, a distinct spec element from the `*-callout`
+  custom-shape presets) reuses the existing `"callout"` glyph.
+- **A shape wrapped in a hyperlink** (`<draw:a href="...">...</draw:a>`) is unwrapped in place,
+  continuing the page's own z-order sequence, rather than missed for sitting one tag deeper than
+  every other page-level shape (the link itself has no equivalent in this app's model, same gap
+  PPTX's own importer has).
+
+One real finding from verifying these against actual LibreOffice (not assumed): a bare
+`draw:regular-polygon` with only `draw:corners`/`draw:concave` and no supplementary path data
+renders as *nothing at all* in real LibreOffice's own importer -- it does not compute the N-gon's
+geometry from just the corner count the way the spec's attribute names might suggest. This
+importer still extracts position/color/shape_kind for one regardless, which is more lenient than
+the reference implementation, not a bug -- there was simply nothing to cross-check the *visual*
+result against for this one case, unlike `draw:polygon`, which real LibreOffice does render.
+
+Also checked and confirmed correctly out of scope (no sensible equivalent in this app's model, or
+rare enough in a real slide deck not to be worth it): `draw:connector`, `draw:measure`,
+`draw:control`, `draw:object`/`-object-ole`/`draw:applet`/`draw:plugin`/`draw:floating-frame`
+(embedded sub-documents/OLE/Java-applet/plugin content), `draw:layer-set`, image-maps/contours, and
+the entire animation/transition/sound/click-action vocabulary (`anim:*`,
+`presentation:animations`/`-sound`/`-event-listener`) -- the last of these is a real, separate
+product question (this app's `Slide`/`SlideElement` model has no animation concept at all), not a
+parser gap, and was deliberately left alone this pass.
+
 ## What determines how a slide actually displays
 
 Traced through `renderSlideVisual` (`web/src/app_core.ts:2769`, mirrored in `live_output.ts`):

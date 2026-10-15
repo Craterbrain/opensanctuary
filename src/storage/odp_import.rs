@@ -1,8 +1,8 @@
 //! Imports an OpenDocument Presentation (`.odp`, ISO/IEC 26300) into a `Presentation`,
 //! following the same "one positioned element per shape" fidelity rule `pptx_import.rs`
-//! uses (docs/IMPORT_EXPORT_NOTES.md), and the same scope: basic shapes/lines/tables and a
-//! shape's position inside a group are not reconstructed, same as PPTX's `<p:grpSp>`/`<a:tbl>`
-//! gap -- a slide with one just silently drops that one shape rather than mis-parsing it.
+//! uses (docs/IMPORT_EXPORT_NOTES.md). Unlike PPTX, a shape's position inside a group IS
+//! reconstructed here (see `Group` below) -- a real, not-yet-fixed gap PPTX still has, not
+//! parity worth preserving.
 //!
 //! Unlike PPTX (one file per slide), ODP keeps every slide's content in one `content.xml`, as
 //! `<draw:page>` siblings of `<office:presentation>`. Style lookup is two-level: a run or
@@ -30,12 +30,30 @@
 //! are plain strings -- and a merged/covered cell, `table:covered-table-cell`, is simply not counted
 //! as a cell, same "skip rather than mis-parse" rule as everything else undocumented here).
 //!
+//! The full ODF 1.3 drawing-shape vocabulary (not just what LibreOffice Impress's own gallery
+//! happens to produce) is covered too: `draw:polygon` (a closed point list, distinct from a
+//! custom-shape preset -- no point-list field on `Shape` to preserve the exact outline, so it
+//! falls back to a plain rect, same honest degrade as an unrecognized preset, rather than being
+//! silently dropped as it was before this was added to the dispatcher at all), `draw:regular-
+//! polygon` (a true N-sided polygon, mapped by corner count -- see `regular_polygon_kind`), and
+//! `draw:caption` (a pointer-line callout, distinct from the `*-callout` custom-shape presets --
+//! reuses that same `"callout"` glyph). A shape wrapped in a hyperlink (`<draw:a href="...">`) is
+//! unwrapped in place rather than missed for sitting one tag deeper than every other page-level
+//! shape; the link itself has no equivalent in this app's model (same gap PPTX's own importer has).
+//!
 //! Out of scope: rotated shapes (`draw:transform`'s `rotate()` replaces `svg:x`/`svg:y` entirely
 //! per spec -- treated as unrotated/un-positioned rather than guessed; unlike PPTX, which carries
 //! an `a:xfrm`'s `rot` straight into `ElementTransform::rotation_deg`, this is a real gap here, not
 //! parity), `draw:connector` (an anchored connector between two other shapes by ID, which this
-//! app's `Line` has no equivalent for), gradient/bitmap slide backgrounds (solid only), and
-//! master-page-inherited content other than page size.
+//! app's `Line` has no equivalent for), `draw:measure` (a dimension/measurement line) and
+//! `draw:control` (an embedded form control), both genuinely rare in a presentation and with no
+//! sensible equivalent in this model, `draw:object`/`draw:object-ole`/`draw:applet`/`draw:plugin`/
+//! `draw:floating-frame` (embedded sub-documents/OLE/Java-applet/plugin content -- legacy, and
+//! this app has nowhere to put an embedded document anyway), `draw:layer-set` (Draw-app-style
+//! named layers, not a per-shape concept), image-maps/contours, animations/transitions/sound/
+//! click-actions (`anim:*`, `presentation:animations`/`-sound`/`-event-listener` -- this app's
+//! model has no concept of any of these at all, a product decision, not a parser gap), gradient/
+//! bitmap slide backgrounds (solid only), and master-page-inherited content other than page size.
 
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -382,9 +400,30 @@ enum PageShapeXml<'a> {
     Polyline(&'a str),
     Path(&'a str),
     CustomShape(&'a str, &'a str),
+    /// A closed multi-point shape (`draw:points`, same attributes as `draw:polyline`) -- a
+    /// distinct spec element from `draw:custom-shape`, not just another preset name. This app's
+    /// `Shape` has no field for an arbitrary point list, so the glyph falls back to a plain rect
+    /// (position/size/fill/stroke preserved, same honest degrade as an unrecognized custom-shape
+    /// preset), rather than silently dropping the shape, which is what happened before this was
+    /// added to the dispatcher at all.
+    Polygon(&'a str),
+    /// A true N-sided regular polygon (`draw:corners`, optionally `draw:concave` for a star-like
+    /// variant) -- a distinct spec element from a custom-shape preset or the free-form `Polygon`
+    /// above.
+    RegularPolygon(&'a str),
+    /// A pointer-line-plus-text callout -- a distinct spec element from the `*-callout`
+    /// custom-shape presets this app already maps to `shape_kind: "callout"`; reuses that same
+    /// glyph.
+    Caption(&'a str),
     /// A `draw:g`'s own attributes carry nothing this importer uses (see `extract_group_element`),
     /// so only its already-isolated inner span is kept.
     Group(&'a str),
+    /// A shape wrapped in a hyperlink (`<draw:a xlink:href="...">...the real shape...</draw:a>`).
+    /// The link itself has no equivalent in this app's model (same gap as PPTX's own hyperlink
+    /// handling, if any), but the shape inside is real content and must not become invisible just
+    /// because it's nested one level deeper than every other page-level shape -- unwrapped in
+    /// place, continuing the same z-order sequence, not treated as a `Group`.
+    HyperlinkWrap(&'a str),
 }
 
 /// Finds whichever of the recognized page-level shape tags occurs earliest in `xml` (so document
@@ -394,7 +433,20 @@ enum PageShapeXml<'a> {
 /// "sees into" a group's children early; they're only reached once the caller recurses into the
 /// group's own already-isolated inner span.
 fn next_page_shape<'a>(xml: &'a str) -> Option<(PageShapeXml<'a>, &'a str)> {
-    const CANDIDATES: [&str; 8] = ["draw:frame", "draw:rect", "draw:ellipse", "draw:line", "draw:polyline", "draw:path", "draw:custom-shape", "draw:g"];
+    const CANDIDATES: [&str; 12] = [
+        "draw:frame",
+        "draw:rect",
+        "draw:ellipse",
+        "draw:line",
+        "draw:polyline",
+        "draw:path",
+        "draw:custom-shape",
+        "draw:polygon",
+        "draw:regular-polygon",
+        "draw:caption",
+        "draw:g",
+        "draw:a",
+    ];
     let tag = CANDIDATES.into_iter().filter_map(|t| find_tag_open_pos(xml, t).map(|p| (p, t))).min_by_key(|(p, _)| *p)?.1;
     match tag {
         "draw:frame" => next_tag(xml, "draw:frame").map(|(a, c, r)| (PageShapeXml::Frame(a, c), r)),
@@ -404,7 +456,11 @@ fn next_page_shape<'a>(xml: &'a str) -> Option<(PageShapeXml<'a>, &'a str)> {
         "draw:polyline" => next_tag(xml, "draw:polyline").map(|(a, _, r)| (PageShapeXml::Polyline(a), r)),
         "draw:path" => next_tag(xml, "draw:path").map(|(a, _, r)| (PageShapeXml::Path(a), r)),
         "draw:custom-shape" => next_tag(xml, "draw:custom-shape").map(|(a, c, r)| (PageShapeXml::CustomShape(a, c), r)),
+        "draw:polygon" => next_tag(xml, "draw:polygon").map(|(a, _, r)| (PageShapeXml::Polygon(a), r)),
+        "draw:regular-polygon" => next_tag(xml, "draw:regular-polygon").map(|(a, _, r)| (PageShapeXml::RegularPolygon(a), r)),
+        "draw:caption" => next_tag(xml, "draw:caption").map(|(a, _, r)| (PageShapeXml::Caption(a), r)),
         "draw:g" => extract_balanced_tag(xml, "draw:g").map(|(_, c, r)| (PageShapeXml::Group(c), r)),
+        "draw:a" => extract_balanced_tag(xml, "draw:a").map(|(_, c, r)| (PageShapeXml::HyperlinkWrap(c), r)),
         _ => unreachable!(),
     }
 }
@@ -477,6 +533,26 @@ fn extract_page_elements(
             PageShapeXml::Group(inner) => {
                 push(extract_group_element(archive, inner, page_w, page_h, styles, media_dir)?, &mut elements, &mut z);
             }
+            PageShapeXml::Polygon(attrs) => {
+                let transform = frame_transform(attrs, page_w, page_h);
+                push(Some(extract_shape_element("rect", attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
+            }
+            PageShapeXml::RegularPolygon(attrs) => {
+                let transform = frame_transform(attrs, page_w, page_h);
+                let kind = regular_polygon_kind(attrs);
+                push(Some(extract_shape_element(kind, attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
+            }
+            PageShapeXml::Caption(attrs) => {
+                let transform = frame_transform(attrs, page_w, page_h);
+                push(Some(extract_shape_element("callout", attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
+            }
+            PageShapeXml::HyperlinkWrap(inner) => {
+                for mut child in extract_page_elements(archive, inner, page_w, page_h, styles, media_dir)? {
+                    child.transform_mut().z_index = z;
+                    elements.push(child);
+                    z += 1;
+                }
+            }
         }
     }
     Ok(elements)
@@ -487,6 +563,25 @@ fn extract_page_elements(
 /// else (including this app's own round-tripped `shape_kind` strings, which are never one of these
 /// ODF spellings) passes through unchanged, so re-importing this app's own export reconstructs the
 /// exact original `shape_kind`, not just a visually-similar one.
+/// A `draw:regular-polygon`'s `shape_kind`: `draw:concave="true"` is a star-like shape regardless
+/// of corner count (this app's one `"star"` glyph, not a true N-pointed star); otherwise mapped by
+/// corner count to the closest regular shape this app can actually draw, falling back to a plain
+/// rect for a corner count with no good equivalent (same honest degrade as an unrecognized
+/// `draw:custom-shape` preset).
+fn regular_polygon_kind(attrs: &str) -> &'static str {
+    if extract_attr(attrs, "draw:concave") == Some("true") {
+        return "star";
+    }
+    match extract_attr(attrs, "draw:corners").and_then(|s| s.parse::<u32>().ok()) {
+        Some(3) => "triangle",
+        Some(4) => "diamond", // a point-up square, matching draw:regular-polygon's own default orientation
+        Some(5) => "pentagon",
+        Some(6) => "hexagon",
+        Some(8) => "octagon",
+        _ => "rect",
+    }
+}
+
 /// Every ODF preset/custom-shape type name mapped here was confirmed against real LibreOffice
 /// Impress itself (not guessed from the spec or from memory): a probe `.odp` naming each candidate
 /// via `draw:type` with no `draw:enhanced-path` at all was handed to real `soffice --convert-to`,

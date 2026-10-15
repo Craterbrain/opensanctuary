@@ -7834,6 +7834,86 @@ fn test_odp_import_reconstructs_shapes_lines_tables_and_groups() {
     }
 }
 
+/// `draw:polygon`/`draw:regular-polygon`/`draw:caption`/`draw:a` are all real, spec-defined ODF
+/// elements (ISO/IEC 26300, confirmed against the actual OASIS schema, not LibreOffice's own UI
+/// conventions -- see docs/IMPORT_EXPORT_NOTES.md), distinct from anything `draw:custom-shape`'s
+/// preset-name vocabulary covers. `draw:polygon` in particular was a real silent-drop gap before
+/// this test was added: it was simply absent from the page-shape dispatcher's candidate list, so
+/// a file using one (rather than the functionally-equivalent `draw:custom-shape`) lost that shape
+/// entirely.
+#[test]
+fn test_odp_import_reconstructs_spec_elements_pptx_gallery_doesnt_produce() {
+    let tmp = tempfile::tempdir().unwrap();
+    let media_dir = tmp.path().join("media/images");
+
+    let content_xml = r##"<?xml version="1.0"?>
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"
+  xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+  xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"
+  xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"
+  xmlns:xlink="http://www.w3.org/1999/xlink"
+  xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0">
+<office:automatic-styles>
+  <style:style style:name="grPoly" style:family="graphic"><style:graphic-properties draw:fill-color="#223344" draw:stroke="none"/></style:style>
+  <style:style style:name="grHex" style:family="graphic"><style:graphic-properties draw:fill-color="#556677" draw:stroke="none"/></style:style>
+  <style:style style:name="grStar" style:family="graphic"><style:graphic-properties draw:fill-color="#887766" draw:stroke="none"/></style:style>
+  <style:style style:name="grCaption" style:family="graphic"><style:graphic-properties draw:fill-color="#aabbcc" draw:stroke="none"/></style:style>
+  <style:style style:name="grLinked" style:family="graphic"><style:graphic-properties draw:fill-color="#112233" draw:stroke="none"/></style:style>
+</office:automatic-styles>
+<office:body><office:presentation>
+  <draw:page draw:name="page1" draw:style-name="dp1" draw:master-page-name="Default">
+    <draw:polygon draw:style-name="grPoly" svg:x="1cm" svg:y="1cm" svg:width="4cm" svg:height="3cm" svg:viewBox="0 0 4000 3000" draw:points="0,0 2000,500 4000,0 2000,3000"/>
+    <draw:regular-polygon draw:style-name="grHex" svg:x="6cm" svg:y="1cm" svg:width="4cm" svg:height="3cm" draw:corners="6"/>
+    <draw:regular-polygon draw:style-name="grStar" svg:x="11cm" svg:y="1cm" svg:width="4cm" svg:height="3cm" draw:corners="6" draw:concave="true"/>
+    <draw:caption draw:style-name="grCaption" svg:x="1cm" svg:y="6cm" svg:width="4cm" svg:height="3cm" draw:caption-point-x="0cm" draw:caption-point-y="0cm"/>
+    <draw:a xlink:href="https://example.org/">
+      <draw:rect draw:style-name="grLinked" svg:x="6cm" svg:y="6cm" svg:width="4cm" svg:height="3cm"/>
+    </draw:a>
+  </draw:page>
+</office:presentation></office:body>
+</office:document-content>"##;
+    let styles_xml = r##"<?xml version="1.0"?>
+<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">
+  <office:master-styles><style:master-page style:name="Default" style:page-layout-name="PM1"/></office:master-styles>
+  <office:automatic-styles>
+    <style:page-layout style:name="PM1"><style:page-layout-properties fo:page-width="28cm" fo:page-height="15.75cm"/></style:page-layout>
+  </office:automatic-styles>
+</office:document-styles>"##;
+    let zip_bytes = make_zip(&[
+        ("mimetype", b"application/vnd.oasis.opendocument.presentation"),
+        ("content.xml", content_xml.as_bytes()),
+        ("styles.xml", styles_xml.as_bytes()),
+    ]);
+    let pres = os_next::storage::OdpImporter::import_odp_bytes(&zip_bytes, "Stem", &media_dir).unwrap();
+    let els = &pres.slides[0].elements;
+    assert_eq!(els.len(), 5, "{:?}", els.iter().map(|e| e.id()).collect::<Vec<_>>());
+
+    use os_next::core::models::SlideElement;
+    let SlideElement::Shape { shape_kind, fill_color, .. } = &els[0] else { panic!("expected the free-form polygon: {:?}", els[0]) };
+    assert_eq!(shape_kind, "rect", "no point-list field on Shape to preserve the exact outline, so it falls back to a plain rect -- position/color still preserved, not dropped");
+    assert_eq!(fill_color.to_lowercase(), "#223344");
+    assert!((els[0].transform().x - 1.0 / 28.0).abs() < 0.001, "{}", els[0].transform().x);
+
+    let SlideElement::Shape { shape_kind, fill_color, .. } = &els[1] else { panic!("expected the regular hexagon: {:?}", els[1]) };
+    assert_eq!(shape_kind, "hexagon", "draw:corners=\"6\" maps to this app's hexagon glyph");
+    assert_eq!(fill_color.to_lowercase(), "#556677");
+
+    let SlideElement::Shape { shape_kind, fill_color, .. } = &els[2] else { panic!("expected the concave (star-like) regular polygon: {:?}", els[2]) };
+    assert_eq!(shape_kind, "star", "draw:concave=\"true\" always maps to this app's one star glyph, regardless of corner count");
+    assert_eq!(fill_color.to_lowercase(), "#887766");
+
+    let SlideElement::Shape { shape_kind, fill_color, .. } = &els[3] else { panic!("expected the caption: {:?}", els[3]) };
+    assert_eq!(shape_kind, "callout", "draw:caption reuses this app's existing callout glyph");
+    assert_eq!(fill_color.to_lowercase(), "#aabbcc");
+
+    let SlideElement::Shape { shape_kind, fill_color, .. } = &els[4] else { panic!("expected the hyperlink-wrapped rect, unwrapped in place: {:?}", els[4]) };
+    assert_eq!(shape_kind, "rect");
+    assert_eq!(fill_color.to_lowercase(), "#112233");
+    assert_eq!(els[4].transform().z_index, 4, "unwrapped content continues the page's own z-order sequence, not a restarted-at-0 local one");
+}
+
 #[test]
 fn test_odp_import_reconstructs_a_table_with_a_merged_cell_padded_out() {
     let tmp = tempfile::tempdir().unwrap();
