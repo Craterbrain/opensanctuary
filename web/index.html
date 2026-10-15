@@ -724,9 +724,16 @@
 
             <div class="store-card">
               <h4>📊 PowerPoint Presentations</h4>
-              <p>Import a <code>.pptx</code> deck's slide text into the Presentations library (text only — layout, background images, and speaker notes are not carried over):</p>
+              <p>Import a <code>.pptx</code> deck into the Presentations library — each text box and inline picture keeps its own position (basic shapes, tables, and speaker notes are not carried over):</p>
               <input type="file" id="file-pptx-import" accept=".pptx">
               <div id="pptx-import-status" class="store-card-status" style="display: none;"></div>
+            </div>
+
+            <div class="store-card">
+              <h4>📽️ OpenDocument Presentations</h4>
+              <p>Import an <code>.odp</code> deck (LibreOffice Impress, OpenOffice Impress) into the Presentations library — text boxes, images, backgrounds, and speaker notes keep their position and formatting (basic shapes and tables are not carried over):</p>
+              <input type="file" id="file-odp-import" accept=".odp">
+              <div id="odp-import-status" class="store-card-status" style="display: none;"></div>
             </div>
 
             <div class="store-card">

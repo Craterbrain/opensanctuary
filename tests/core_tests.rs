@@ -7592,3 +7592,152 @@ fn test_sniff_audio_ext_recognizes_real_audio_and_rejects_impostors() {
     assert_eq!(sniff_audio_ext(b"GIF89a"), None, "an image is not audio, even if someone names it x.mp3");
     assert_eq!(sniff_audio_ext(b""), None);
 }
+
+// ---------------------------------------------------------------------------------------------
+// ODP import (testdata/odp/fixture.odp: a real presentation built and saved by actual
+// LibreOffice via pyuno, not hand-authored XML -- see testdata/odp/README.md)
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn test_odp_import_against_a_real_libreoffice_fixture() {
+    let tmp = tempfile::tempdir().unwrap();
+    let media_dir = tmp.path().join("media/images");
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/odp/fixture.odp")).unwrap();
+    let pres = os_next::storage::OdpImporter::import_odp_bytes(&bytes, "My Deck", &media_dir).expect("real LibreOffice output must import");
+
+    assert_eq!(pres.title, "My Deck", "no dc:title in this fixture's meta.xml, so the file stem is used");
+    assert_eq!(pres.slides.len(), 2);
+
+    // Slide 1: one text box, two paragraphs. First paragraph: a plain run then a styled run
+    // (LibreOffice's own editor merged "World" and " plain" into one run sharing the same
+    // direct formatting once both were typed under the same character attributes -- a real
+    // editing-model behavior, not an importer bug; see testdata/odp/README.md).
+    let s1 = &pres.slides[0];
+    assert_eq!(s1.elements.len(), 1, "{:?}", s1.elements.iter().map(|e| e.id()).collect::<Vec<_>>());
+    let os_next::core::models::SlideElement::TextBlock { transform, block, .. } = &s1.elements[0] else { panic!("expected a TextBlock") };
+    // "Hello " (plain), "World plain" (styled -- LibreOffice's own editor merged "World" and
+    // " plain" into one run under the same direct formatting once both were typed with the same
+    // character attributes active; a real editing-model behavior, not an importer bug), "\n"
+    // (the paragraph break), "Second paragraph left" (styled the same way, independently, in its
+    // own paragraph -- see testdata/odp/README.md).
+    assert_eq!(block.runs.len(), 4, "{:?}", block.runs);
+    assert_eq!(block.runs[0].text, "Hello ");
+    assert!(!block.runs[0].bold && !block.runs[0].italic);
+    let styled = &block.runs[1];
+    assert_eq!(styled.text, "World plain");
+    assert!(styled.bold && styled.italic, "{:?}", styled);
+    assert_eq!(styled.color.to_lowercase(), "#ff0000");
+    assert_eq!(styled.font_family, "Liberation Sans");
+    assert!((styled.font_size_pt - 28.0).abs() < 0.01);
+    assert_eq!(block.runs[2].text, "\n");
+    let styled2 = &block.runs[3];
+    assert_eq!(styled2.text, "Second paragraph left");
+    assert!(styled2.bold && styled2.italic && styled2.color.eq_ignore_ascii_case("#ff0000"));
+    assert_eq!(block.paragraph_style.align, "right", "the first paragraph (text-align=right) sets the shape's alignment");
+    // Position: svg:x=2cm y=1.5cm w=16cm h=3cm on a 28cm x 15.75cm page.
+    assert!((transform.x - 2.0 / 28.0).abs() < 0.001, "{}", transform.x);
+    assert!((transform.y - 1.5 / 15.75).abs() < 0.001, "{}", transform.y);
+    assert!((transform.w - 16.0 / 28.0).abs() < 0.001, "{}", transform.w);
+    assert!((transform.h - 3.0 / 15.75).abs() < 0.001, "{}", transform.h);
+    assert_eq!(transform.z_index, 0);
+    assert!(s1.text.contains("Hello World plain"), "{}", s1.text);
+
+    // Slide 2: the rectangle is skipped (out of scope, like PPTX's own shape gap), the image and
+    // the second text box both come through, each at its own position, document order preserved.
+    let s2 = &pres.slides[1];
+    assert_eq!(s2.elements.len(), 2, "{:?}", s2.elements.iter().map(|e| e.id()).collect::<Vec<_>>());
+    let os_next::core::models::SlideElement::Image { transform: img_t, file_path, .. } = &s2.elements[0] else { panic!("expected an Image first (document order)") };
+    assert!(file_path.starts_with("/media/images/odp_"), "{file_path}");
+    assert_eq!(img_t.z_index, 0);
+    assert!((img_t.x - 3.0 / 28.0).abs() < 0.001);
+    let saved = media_dir.join(file_path.trim_start_matches("/media/images/"));
+    assert!(saved.is_file(), "the embedded PNG must actually be written to media_dir");
+    assert_eq!(std::fs::metadata(&saved).unwrap().len() > 0, true);
+
+    let os_next::core::models::SlideElement::TextBlock { transform: t2, block: b2, .. } = &s2.elements[1] else { panic!("expected the second text box") };
+    assert_eq!(b2.runs[0].text, "Second slide title");
+    assert_eq!(t2.z_index, 1);
+}
+
+#[test]
+fn test_odp_import_backgrounds_notes_bare_text_and_error_cases() {
+    let tmp = tempfile::tempdir().unwrap();
+    let media_dir = tmp.path().join("media/images");
+
+    let content_xml = r##"<?xml version="1.0"?>
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"
+  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+  xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+  xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"
+  xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"
+  xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0">
+<office:automatic-styles>
+  <style:style style:name="dp1" style:family="drawing-page">
+    <style:drawing-page-properties draw:fill="solid" draw:fill-color="#336699"/>
+  </style:style>
+  <style:style style:name="dp2" style:family="drawing-page">
+    <style:drawing-page-properties draw:fill="bitmap" draw:fill-image-name="bg1"/>
+  </style:style>
+  <draw:fill-image draw:name="bg1" xlink:href="Pictures/bg.png"/>
+</office:automatic-styles>
+<office:body><office:presentation>
+  <draw:page draw:name="page1" draw:style-name="dp1" draw:master-page-name="Default">
+    <draw:frame svg:x="1cm" svg:y="1cm" svg:width="10cm" svg:height="2cm">
+      <draw:text-box><text:p>Bare paragraph, no span</text:p></draw:text-box>
+    </draw:frame>
+    <presentation:notes draw:style-name="dp1">
+      <draw:page-thumbnail svg:x="0cm" svg:y="0cm" svg:width="1cm" svg:height="1cm" presentation:class="page"/>
+      <draw:frame presentation:class="notes"><draw:text-box><text:p>Speaker note line one</text:p><text:p>line two</text:p></draw:text-box></draw:frame>
+    </presentation:notes>
+  </draw:page>
+  <draw:page draw:name="page2" draw:style-name="dp2" draw:master-page-name="Default">
+    <draw:frame svg:x="1cm" svg:y="1cm" svg:width="5cm" svg:height="2cm"><draw:text-box><text:p>Image bg slide</text:p></draw:text-box></draw:frame>
+  </draw:page>
+</office:presentation></office:body>
+</office:document-content>"##;
+    let styles_xml = r##"<?xml version="1.0"?>
+<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">
+  <office:master-styles><style:master-page style:name="Default" style:page-layout-name="PM1"/></office:master-styles>
+  <office:automatic-styles>
+    <style:page-layout style:name="PM1"><style:page-layout-properties fo:page-width="28cm" fo:page-height="15.75cm"/></style:page-layout>
+  </office:automatic-styles>
+</office:document-styles>"##;
+    let png = [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0,0,0,0];
+    let zip_bytes = make_zip(&[
+        ("mimetype", b"application/vnd.oasis.opendocument.presentation"),
+        ("content.xml", content_xml.as_bytes()),
+        ("styles.xml", styles_xml.as_bytes()),
+        ("Pictures/bg.png", &png),
+    ]);
+    let pres = os_next::storage::OdpImporter::import_odp_bytes(&zip_bytes, "Stem", &media_dir).unwrap();
+    assert_eq!(pres.title, "Stem", "no meta.xml at all: falls back to the file stem");
+    assert_eq!(pres.slides.len(), 2);
+
+    let s1 = &pres.slides[0];
+    assert_eq!(s1.background.as_deref(), Some("#336699"));
+    assert_eq!(s1.speaker_notes.as_deref(), Some("Speaker note line one\nline two"));
+    let os_next::core::models::SlideElement::TextBlock { block, .. } = &s1.elements[0] else { panic!() };
+    assert_eq!(block.runs.len(), 1);
+    assert_eq!(block.runs[0].text, "Bare paragraph, no span");
+    assert_eq!(block.runs[0].color, "#ffffff", "no style at all: the model's own default, not something this importer invented");
+
+    let s2 = &pres.slides[1];
+    match s2.background_v2.as_ref().unwrap() {
+        os_next::core::models::SlideBackground::Image { file_path, .. } => {
+            assert!(media_dir.join(file_path.trim_start_matches("/media/images/")).is_file());
+        }
+        other => panic!("expected an Image background: {other:?}"),
+    }
+
+    // Error cases: never panics, always a readable Err.
+    assert!(os_next::storage::OdpImporter::import_odp_bytes(b"not a zip", "x", &media_dir).is_err());
+    let wrong_mime = make_zip(&[("mimetype", b"application/zip"), ("content.xml", b"<office:document-content/>")]);
+    assert!(os_next::storage::OdpImporter::import_odp_bytes(&wrong_mime, "x", &media_dir).is_err());
+    let no_pages = make_zip(&[
+        ("mimetype", b"application/vnd.oasis.opendocument.presentation"),
+        ("content.xml", b"<office:document-content><office:body><office:presentation/></office:body></office:document-content>"),
+    ]);
+    assert!(os_next::storage::OdpImporter::import_odp_bytes(&no_pages, "x", &media_dir).is_err());
+}

@@ -252,6 +252,45 @@ pub(super) async fn import_pptx(
     }
 }
 
+#[derive(Deserialize)]
+pub struct OdpImportReq {
+    pub file_name: Option<String>,
+    pub file_data_base64: String,
+}
+
+/// Import an OpenDocument Presentation `.odp` file into the Presentations library, as one
+/// positioned element per shape (text boxes, inline images) -- see
+/// `OdpImporter::import_odp_bytes` doc comment for exactly what is and isn't reconstructed.
+pub(super) async fn import_odp(
+    State(app): State<AppState>,
+    Json(req): Json<OdpImportReq>,
+) -> impl IntoResponse {
+    use base64::Engine;
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(req.file_data_base64.trim()) {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "success": false, "message": format!("Invalid base64: {}", e) }))),
+    };
+    let stem = req.file_name.as_deref()
+        .and_then(|f| std::path::Path::new(f).file_stem().and_then(|s| s.to_str()))
+        .unwrap_or("Imported Presentation")
+        .to_string();
+
+    let media_dir = app.media_dir.join("images");
+    match crate::storage::OdpImporter::import_odp_bytes(&bytes, &stem, &media_dir) {
+        Ok(pres) => match app.db.insert_presentation(&pres) {
+            Ok(()) => (StatusCode::OK, Json(serde_json::json!({
+                "success": true,
+                "id": pres.id,
+                "title": pres.title,
+                "slide_count": pres.slides.len(),
+                "message": format!("Successfully imported '{}' ({} slides) from OpenDocument Presentation", pres.title, pres.slides.len())
+            }))),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "success": false, "message": format!("Database error saving presentation: {}", e) }))),
+        },
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "success": false, "message": format!("Error parsing .odp: {}", e) }))),
+    }
+}
+
 #[derive(Deserialize, Default)]
 pub struct FreeShowShowImportReq {
     pub file_data_base64: String,
@@ -336,5 +375,6 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/bibles/parse-ref", get(parse_bible_ref))
         .route("/api/import/openlp", post(import_openlp))
         .route("/api/import/pptx", post(import_pptx))
+        .route("/api/import/odp", post(import_odp))
         .route("/api/import/freeshow-show", post(import_freeshow_show))
 }
