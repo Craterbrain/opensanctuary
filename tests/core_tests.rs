@@ -8664,14 +8664,36 @@ fn test_pptx_import_reconstructs_shapes_lines_connectors_and_nested_groups() {
 
     let SlideElement::Group { children, .. } = &els[4] else { panic!("expected the outer group: {:?}", els[4]) };
     assert_eq!(children.len(), 2, "the ellipse and the nested group's own child, both unwrapped to this level");
-    let SlideElement::Shape { shape_kind, fill_color, .. } = &children[0] else { panic!("expected the ellipse: {:?}", children[0]) };
+    let SlideElement::Shape { shape_kind, fill_color, transform: ellipse_t, .. } = &children[0] else { panic!("expected the ellipse: {:?}", children[0]) };
     assert_eq!(shape_kind, "ellipse");
     assert_eq!(fill_color.to_lowercase(), "#aabbcc");
+    // Outer group: off=(1500000,100000) ext=(800000,800000) chOff=(0,0) chExt=(400000,400000)
+    // -> a uniform 2x scale. Ellipse's own local off/ext=(0,0)/(200000,200000) remap to
+    // absolute EMU (1500000,100000)/(400000,400000), normalized against the default
+    // 12192000x6858000 EMU slide size (no presentation.xml in this test).
+    assert!((ellipse_t.x - 0.123_031_496).abs() < 1e-6, "{}", ellipse_t.x);
+    assert!((ellipse_t.y - 0.014_581_511).abs() < 1e-6, "{}", ellipse_t.y);
+    assert!((ellipse_t.w - 0.032_808_399).abs() < 1e-6, "{}", ellipse_t.w);
+    assert!((ellipse_t.h - 0.058_326_043).abs() < 1e-6, "{}", ellipse_t.h);
+
     let SlideElement::Group { children: inner_children, .. } = &children[1] else { panic!("expected the nested group: {:?}", children[1]) };
     assert_eq!(inner_children.len(), 1);
-    let SlideElement::Shape { shape_kind, fill_color, .. } = &inner_children[0] else { panic!("expected the star: {:?}", inner_children[0]) };
+    let SlideElement::Shape { shape_kind, fill_color, transform: star_t, .. } = &inner_children[0] else { panic!("expected the star: {:?}", inner_children[0]) };
     assert_eq!(shape_kind, "star");
     assert_eq!(fill_color.to_lowercase(), "#ffee00");
+    // This is the number that actually exercises the nested-group fix: the inner
+    // group's own off=(200000,200000)/ext=(200000,200000) must FIRST be remapped
+    // through the OUTER group's 2x transform (-> absolute off=(1900000,500000),
+    // ext=(400000,400000)) before its own chOff/chExt=(200000,200000)/(200000,200000)
+    // (read raw, un-remapped) are used to build ITS remap -- giving a second 2x
+    // scale on top. The star's local off/ext=(200000,200000)/(100000,100000) then
+    // remap to absolute EMU (1900000,500000)/(200000,200000). If the inner group's
+    // off/ext were used un-remapped instead (the bug this test exists to catch),
+    // the star would land at a visibly different, wrong position.
+    assert!((star_t.x - 0.155_839_895).abs() < 1e-6, "{}", star_t.x);
+    assert!((star_t.y - 0.072_907_553).abs() < 1e-6, "{}", star_t.y);
+    assert!((star_t.w - 0.016_404_199).abs() < 1e-6, "{}", star_t.w);
+    assert!((star_t.h - 0.029_163_021).abs() < 1e-6, "{}", star_t.h);
 }
 
 /// A theme-colored shape (`<p:style><a:fillRef idx="2"><a:schemeClr val="accent1"/>`,
@@ -8707,27 +8729,61 @@ fn test_pptx_import_theme_colored_shape_has_no_crash_and_no_guessed_color() {
     assert!(stroke_color.is_none());
 }
 
-/// A table with one horizontally-merged cell (`gridSpan`/`hMerge`, OOXML's
-/// equivalent of ODF's `table:number-columns-spanned`/`table:covered-table-cell`) --
-/// the covered continuation cell must not be counted as a real cell, and the row it
-/// shortens must be padded back out to the table's real column count.
+/// A `<p:sp>` with `prst="line"` that *also* carries real text -- legal OOXML
+/// (nothing stops a line-preset autoshape from having a `<p:txBody>`), and real
+/// text must always win over the line/shape distinction, the same priority this
+/// importer already used for text vs. non-text shapes before `Line` existed at
+/// all. A version of this importer once checked `prst=="line"` unconditionally
+/// before ever looking at the shape's text, silently dropping it for exactly this
+/// case -- this test exists to keep that from coming back.
 #[test]
-fn test_pptx_import_table_with_merged_cell_padded_out() {
+fn test_pptx_import_prefers_real_text_over_line_preset_geometry() {
+    use os_next::core::models::SlideElement;
+    let slide_xml = r##"<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree>
+    <p:sp>
+      <p:spPr><a:xfrm><a:off x="100000" y="100000"/><a:ext cx="500000" cy="100000"/></a:xfrm>
+        <a:prstGeom prst="line"><a:avLst/></a:prstGeom>
+      </p:spPr>
+      <p:txBody><a:p><a:r><a:t>Caption on a line shape</a:t></a:r></a:p></p:txBody>
+    </p:sp>
+  </p:spTree></p:cSld>
+</p:sld>"##;
+    let bytes = build_single_slide_pptx(slide_xml);
+    let media_dir = tempfile::tempdir().unwrap();
+    let pres = PptxImporter::import_pptx_bytes(&bytes, "stem", media_dir.path()).expect("should parse");
+    let SlideElement::TextBlock { block, .. } = &pres.slides[0].elements[0] else { panic!("expected a TextBlock, text must not be dropped: {:?}", pres.slides[0].elements[0]) };
+    assert_eq!(block.runs[0].text, "Caption on a line shape");
+}
+
+/// A table with a horizontally-merged cell (`gridSpan`/`hMerge`, OOXML's equivalent
+/// of ODF's `table:number-columns-spanned`/`table:covered-table-cell`) -- the
+/// covered continuation cell must not be counted as a real cell, and every real
+/// cell must land in its actual column, not just get appended and the row padded
+/// at the end. Two rows on purpose: a merge at the row's *trailing* edge (where
+/// appending-and-padding would accidentally look correct) and one *not* at the
+/// trailing edge (where it wouldn't -- a real cell after the merge would otherwise
+/// shift into the wrong column entirely instead of landing after the covered
+/// slot). Both must place every cell by its own real column position.
+#[test]
+fn test_pptx_import_table_with_merged_cells_placed_by_real_column_not_appended() {
     use os_next::core::models::SlideElement;
     let slide_xml = r##"<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:cSld><p:spTree>
     <p:graphicFrame>
-      <p:xfrm><a:off x="100000" y="100000"/><a:ext cx="2000000" cy="1000000"/></p:xfrm>
+      <p:xfrm><a:off x="100000" y="100000"/><a:ext cx="3000000" cy="1000000"/></p:xfrm>
       <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">
         <a:tbl>
-          <a:tblGrid><a:gridCol w="1000000"/><a:gridCol w="1000000"/></a:tblGrid>
+          <a:tblGrid><a:gridCol w="1000000"/><a:gridCol w="1000000"/><a:gridCol w="1000000"/></a:tblGrid>
           <a:tr h="500000">
-            <a:tc gridSpan="2"><a:txBody><a:p><a:r><a:t>Spans both</a:t></a:r></a:p></a:txBody></a:tc>
+            <a:tc gridSpan="2"><a:txBody><a:p><a:r><a:t>AB</a:t></a:r></a:p></a:txBody></a:tc>
             <a:tc hMerge="1"><a:txBody><a:p/></a:txBody></a:tc>
+            <a:tc><a:txBody><a:p><a:r><a:t>C</a:t></a:r></a:p></a:txBody></a:tc>
           </a:tr>
           <a:tr h="500000">
             <a:tc><a:txBody><a:p><a:r><a:t>A</a:t></a:r></a:p></a:txBody></a:tc>
-            <a:tc><a:txBody><a:p><a:r><a:t>B</a:t></a:r></a:p></a:txBody></a:tc>
+            <a:tc gridSpan="2"><a:txBody><a:p><a:r><a:t>BC</a:t></a:r></a:p></a:txBody></a:tc>
+            <a:tc hMerge="1"><a:txBody><a:p/></a:txBody></a:tc>
           </a:tr>
         </a:tbl>
       </a:graphicData></a:graphic>
@@ -8739,7 +8795,15 @@ fn test_pptx_import_table_with_merged_cell_padded_out() {
     let pres = PptxImporter::import_pptx_bytes(&bytes, "stem", media_dir.path()).expect("should parse");
     let SlideElement::Table { rows, cols, cells, .. } = &pres.slides[0].elements[0] else { panic!() };
     assert_eq!(*rows, 2);
-    assert_eq!(*cols, 2);
-    assert_eq!(cells[0], vec!["Spans both".to_string(), String::new()], "the hMerge continuation cell is padded back in as empty, not left short");
-    assert_eq!(cells[1], vec!["A".to_string(), "B".to_string()]);
+    assert_eq!(*cols, 3);
+    // Merge NOT at the trailing edge: a naive "append real cells, pad the end"
+    // approach would produce ["AB", "C", ""] (C shifted into the covered slot's
+    // column instead of its own) -- this is the case that actually distinguishes
+    // correct placement from that bug, unlike the row below.
+    assert_eq!(cells[0], vec!["AB".to_string(), String::new(), "C".to_string()], "merge NOT at the trailing edge");
+    // Contrast case: merge AT the trailing edge, where append-and-pad happens to
+    // produce the same result as correct positional placement -- kept to show why
+    // the row above is the one that actually matters, not because this one alone
+    // would have caught anything.
+    assert_eq!(cells[1], vec!["A".to_string(), "BC".to_string(), String::new()], "merge at the trailing edge");
 }

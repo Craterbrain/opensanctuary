@@ -310,6 +310,34 @@ that common case.
 
 Still out of scope: layout/master-inherited backgrounds, and speaker notes.
 
+Two real bugs an independent review of this work caught before merge, worth recording:
+- **A table's merged-cell handling silently misplaced data for any merge not at a row's
+  trailing edge.** The first version tracked a running column position by advancing past
+  `gridSpan` for the origin cell and past 1 for each `hMerge`/`vMerge` continuation -- but a
+  `<a:tr>` always carries exactly one `<a:tc>` per grid column regardless of `gridSpan`
+  (confirmed against documented real OOXML examples, not assumed): `gridSpan` is purely
+  descriptive of how many columns a cell visually covers, and every covered column still gets
+  its own (`hMerge`-marked) `<a:tc>`. Advancing past `gridSpan` double-counted those columns,
+  shifting every real cell after a merge one column too far right. Fixed by placing each
+  `<a:tc>` purely by its ordinal position in the row (position *is* the column index,
+  `gridSpan` plays no part in placement), and caught with a test designed so a naive
+  "append real cells, pad the row's end" bug would produce a visibly different (wrong) result
+  from correct positional placement -- the original test's own merge happened to sit at the
+  row's trailing edge, where that bug produces the same output as the fix, so it couldn't have
+  caught this itself.
+- **A `<p:sp>` with `prst="line"` that also carried real text silently dropped the text.** The
+  first version checked `prst=="line"` before ever looking at `<p:txBody>`; a line-preset
+  autoshape can legally carry one in real OOXML. Fixed by trying real text first, unconditionally
+  (the same priority this importer already used for text vs. non-text shapes before `Line`
+  existed at all), and falling back to the line/shape distinction only when there's none.
+
+Also worth recording: the first version's test for the hardest part of this work (a nested
+group's coordinates, remapped through its own parent group's transform before building its own
+children's remap) asserted `shape_kind`/`fill_color`/child counts but never a single x/y/w/h --
+it would have stayed green even if the whole nested-remap step were deleted. Fixed with explicit
+numeric position assertions (confirmed to actually fail when the fix is disabled, not just
+asserted to work).
+
 **EasyWorship** (`ewsx.rs`): already emits one positioned `TextBlock` per source shape
 (real `x`/`y`/`width`/`height`/`order_index` columns in EasyWorship's own `element` table) —
 this was the working example the PPTX rewrite above was patterned against. EasyWorship

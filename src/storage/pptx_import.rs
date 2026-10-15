@@ -747,7 +747,9 @@ fn extract_connector_element(cxn_inner: &str, z_index: i32, slide_w: f64, slide_
 /// they're identified by those attributes instead and skipped); a row short a real
 /// cell because of one is padded back out to the column count, not left short.
 fn extract_table_element(gf_inner: &str, z_index: i32, slide_w: f64, slide_h: f64, remap: Option<&GroupRemap>) -> Option<crate::core::models::SlideElement> {
-    let (xfrm_attrs, xfrm_content, _) = next_tag(gf_inner, "p:xfrm")?;
+    // p:xfrm on a graphicFrame carries no rotation in practice, so only its content
+    // (off/ext) is needed -- its own attributes are discarded, not read.
+    let (_xfrm_attrs, xfrm_content, _) = next_tag(gf_inner, "p:xfrm")?;
     let (_, graphic_content, _) = next_tag(gf_inner, "a:graphic")?;
     let (_, graphic_data_content, _) = next_tag(graphic_content, "a:graphicData")?;
     let (_, tbl_content, _) = next_tag(graphic_data_content, "a:tbl")?;
@@ -758,17 +760,25 @@ fn extract_table_element(gf_inner: &str, z_index: i32, slide_w: f64, slide_h: f6
     let mut rest = tbl_content;
     while let Some((_, row_inner, remainder)) = next_tag(rest, "a:tr") {
         rest = remainder;
-        let mut row = Vec::new();
+        // A row always carries exactly one <a:tc> per grid column, full stop --
+        // `gridSpan` on a merge's origin cell is purely descriptive of how many
+        // columns it visually covers; it does NOT mean fewer <a:tc> elements are
+        // present for those columns. Every column still gets its own <a:tc>, with
+        // the covered ones marked hMerge="1" (horizontal) or vMerge="1" (vertical,
+        // continuing a merge from an earlier row) instead of holding real content.
+        // So each <a:tc>'s own ordinal position in the row *is* its column index --
+        // gridSpan plays no part in placement and must never be used to skip
+        // ahead, or every real cell after a merge would land one column too far
+        // over instead of in its own real column.
+        let mut row = vec![String::new(); cols];
         let mut r = row_inner;
-        while let Some((cell_attrs, cell_inner, rem2)) = next_tag(r, "a:tc") {
+        for slot in row.iter_mut() {
+            let Some((cell_attrs, cell_inner, rem2)) = next_tag(r, "a:tc") else { break };
             r = rem2;
-            if extract_attr(cell_attrs, "hMerge") == Some("1") || extract_attr(cell_attrs, "vMerge") == Some("1") {
-                continue;
+            if extract_attr(cell_attrs, "hMerge") != Some("1") && extract_attr(cell_attrs, "vMerge") != Some("1") {
+                *slot = next_tag(cell_inner, "a:txBody").map(|(_, c, _)| plain_cell_text(c)).unwrap_or_default();
             }
-            let text = next_tag(cell_inner, "a:txBody").map(|(_, c, _)| plain_cell_text(c)).unwrap_or_default();
-            row.push(text);
         }
-        row.resize(cols, String::new());
         cells.push(row);
     }
     if cells.is_empty() {
@@ -794,7 +804,6 @@ fn extract_table_element(gf_inner: &str, z_index: i32, slide_w: f64, slide_h: f6
             transform.h = cy / slide_h;
         }
     }
-    let _ = xfrm_attrs; // p:xfrm on a graphicFrame carries no rotation in practice; nothing else to read here.
     transform = transform.normalized();
     transform.z_index = z_index;
 
@@ -839,43 +848,50 @@ fn extract_group_element(
     media_dir: &Path,
     outer_remap: Option<&GroupRemap>,
 ) -> Result<Option<crate::core::models::SlideElement>, Box<dyn std::error::Error>> {
-    let Some((_, grpsppr_content, _)) = next_tag(grp_inner, "p:grpSpPr") else { return Ok(None) };
-    let Some((_, xfrm_content, _)) = next_tag(grpsppr_content, "a:xfrm") else { return Ok(None) };
-    let (Some((off_attrs, _, _)), Some((ext_attrs, _, _)), Some((choff_attrs, _, _)), Some((chext_attrs, _, _))) = (
-        next_tag(xfrm_content, "a:off"),
-        next_tag(xfrm_content, "a:ext"),
-        next_tag(xfrm_content, "a:chOff"),
-        next_tag(xfrm_content, "a:chExt"),
-    ) else {
-        return Ok(None);
-    };
-    let parse = |attrs: &str, name: &str| extract_attr(attrs, name).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-    // This group's own off/ext are expressed in whatever coordinate space it itself
-    // sits in -- absolute slide EMU at the top level, but the OUTER group's local
-    // space when this group is nested inside another one, which must be remapped
-    // through that outer transform before this group's own chOff/chExt (its
-    // children's local space, always self-contained, never remapped) can be used
-    // to build the remap its own children need.
-    let (mut off_x, mut off_y, mut ext_cx, mut ext_cy) = (parse(off_attrs, "x"), parse(off_attrs, "y"), parse(ext_attrs, "cx"), parse(ext_attrs, "cy"));
-    if let Some(r) = outer_remap {
-        let (x, y, cx, cy) = r.apply(off_x, off_y, ext_cx, ext_cy);
-        off_x = x;
-        off_y = y;
-        ext_cx = cx;
-        ext_cy = cy;
-    }
-    let remap = GroupRemap {
-        off_x,
-        off_y,
-        ext_cx,
-        ext_cy,
-        ch_off_x: parse(choff_attrs, "x"),
-        ch_off_y: parse(choff_attrs, "y"),
-        ch_ext_cx: parse(chext_attrs, "cx"),
-        ch_ext_cy: parse(chext_attrs, "cy"),
-    };
+    // A group's own transform is read on a strictly best-effort basis: unlike every
+    // other shape here (which falls back to ElementTransform::default() and still
+    // keeps the element when its own transform is missing/unparsable), a group with
+    // no real transform information at all has nothing sensible to remap its
+    // children *through* -- but still scans and keeps them, unremapped (their own
+    // raw local coordinates used as-is), rather than silently dropping the whole
+    // subtree over one malformed/missing piece. Real producers always emit a
+    // group's own full off/ext/chOff/chExt, so this path is a safety net, not the
+    // common case.
+    let own_remap = (|| {
+        let (_, grpsppr_content, _) = next_tag(grp_inner, "p:grpSpPr")?;
+        let (_, xfrm_content, _) = next_tag(grpsppr_content, "a:xfrm")?;
+        let (off_attrs, _, _) = next_tag(xfrm_content, "a:off")?;
+        let (ext_attrs, _, _) = next_tag(xfrm_content, "a:ext")?;
+        let (choff_attrs, _, _) = next_tag(xfrm_content, "a:chOff")?;
+        let (chext_attrs, _, _) = next_tag(xfrm_content, "a:chExt")?;
+        let parse = |attrs: &str, name: &str| extract_attr(attrs, name).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+        // This group's own off/ext are expressed in whatever coordinate space it
+        // itself sits in -- absolute slide EMU at the top level, but the OUTER
+        // group's local space when this group is nested inside another one, which
+        // must be remapped through that outer transform before this group's own
+        // chOff/chExt (its children's local space, always self-contained, never
+        // remapped) can be used to build the remap its own children need.
+        let (mut off_x, mut off_y, mut ext_cx, mut ext_cy) = (parse(off_attrs, "x"), parse(off_attrs, "y"), parse(ext_attrs, "cx"), parse(ext_attrs, "cy"));
+        if let Some(r) = outer_remap {
+            let (x, y, cx, cy) = r.apply(off_x, off_y, ext_cx, ext_cy);
+            off_x = x;
+            off_y = y;
+            ext_cx = cx;
+            ext_cy = cy;
+        }
+        Some(GroupRemap {
+            off_x,
+            off_y,
+            ext_cx,
+            ext_cy,
+            ch_off_x: parse(choff_attrs, "x"),
+            ch_off_y: parse(choff_attrs, "y"),
+            ch_ext_cx: parse(chext_attrs, "cx"),
+            ch_ext_cy: parse(chext_attrs, "cy"),
+        })
+    })();
 
-    let children = extract_shapes_in_scope(archive, slide_path, grp_inner, slide_w, slide_h, media_dir, Some(&remap))?;
+    let children = extract_shapes_in_scope(archive, slide_path, grp_inner, slide_w, slide_h, media_dir, own_remap.as_ref().or(outer_remap))?;
     if children.is_empty() {
         return Ok(None);
     }
@@ -934,15 +950,22 @@ fn extract_shapes_in_scope(
     while let Some((shape, rest)) = next_slide_shape(remaining) {
         match shape {
             SlideShapeXml::Sp(inner) => {
-                let prst_line = next_tag(inner, "p:spPr")
-                    .and_then(|(_, sppr, _)| next_tag(sppr, "a:prstGeom"))
-                    .and_then(|(attrs, _, _)| extract_attr(attrs, "prst"))
-                    == Some("line");
-                let el = if prst_line {
-                    extract_line_from_autoshape_element(inner, z_index, slide_w, slide_h, remap)
-                } else {
-                    extract_text_shape_element(inner, z_index, slide_w, slide_h, remap).or_else(|| extract_autoshape_element(inner, z_index, slide_w, slide_h, remap))
-                };
+                // Real text always wins first (a "line" preset shape can still carry
+                // a <p:txBody>, legally -- nothing OOXML-side stops it), same
+                // priority this importer already used before Shape/Line existed;
+                // only once there's no text does prst="line" vs. anything else
+                // decide whether the shape becomes a Line or a Shape.
+                let el = extract_text_shape_element(inner, z_index, slide_w, slide_h, remap).or_else(|| {
+                    let prst_line = next_tag(inner, "p:spPr")
+                        .and_then(|(_, sppr, _)| next_tag(sppr, "a:prstGeom"))
+                        .and_then(|(attrs, _, _)| extract_attr(attrs, "prst"))
+                        == Some("line");
+                    if prst_line {
+                        extract_line_from_autoshape_element(inner, z_index, slide_w, slide_h, remap)
+                    } else {
+                        extract_autoshape_element(inner, z_index, slide_w, slide_h, remap)
+                    }
+                });
                 if let Some(el) = el {
                     elements.push(el);
                     z_index += 1;
