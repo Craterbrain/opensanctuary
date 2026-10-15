@@ -7741,3 +7741,149 @@ fn test_odp_import_backgrounds_notes_bare_text_and_error_cases() {
     ]);
     assert!(os_next::storage::OdpImporter::import_odp_bytes(&no_pages, "x", &media_dir).is_err());
 }
+
+// ---------------------------------------------------------------------------------------------
+// ODP export: the write side. Validated two ways -- round-tripped through this app's own
+// importer, and (if `soffice` is on PATH) handed to real LibreOffice to open/convert, which is a
+// much stronger check than anything this app's own (necessarily lenient) reader could give.
+// ---------------------------------------------------------------------------------------------
+
+fn sample_presentation_for_export(media_root: &std::path::Path, image_bytes: &[u8]) -> os_next::core::models::Presentation {
+    use os_next::core::models::*;
+    std::fs::create_dir_all(media_root.join("images")).unwrap();
+    std::fs::write(media_root.join("images/photo.png"), image_bytes).unwrap();
+
+    let text_block = SlideElement::TextBlock {
+        id: "el_1".to_string(),
+        transform: ElementTransform { x: 0.1, y: 0.1, w: 0.5, h: 0.2, z_index: 0, ..Default::default() },
+        block: TextBlock {
+            runs: vec![
+                TextRun { text: "Plain ".to_string(), ..Default::default() },
+                TextRun { text: "Bold Red".to_string(), bold: true, italic: true, underline: true, strike: true, color: "#ff00aa".to_string(), font_family: "Georgia".to_string(), font_size_pt: 40.0, ..Default::default() },
+                TextRun { text: "\n".to_string(), ..Default::default() },
+                TextRun { text: "Second line".to_string(), ..Default::default() },
+            ],
+            paragraph_style: TextParagraphStyle { align: "right".to_string(), ..Default::default() },
+            effects: ElementEffects::default(),
+            autofit: false,
+        },
+    };
+    let image = SlideElement::Image {
+        id: "el_2".to_string(),
+        transform: ElementTransform { x: 0.2, y: 0.3, w: 0.3, h: 0.3, z_index: 1, ..Default::default() },
+        file_path: "/media/images/photo.png".to_string(),
+        crop: None,
+        mask_shape: None,
+        alt_text: None,
+    };
+    // A dropped reference (the file doesn't exist) must not break export, just skip that element.
+    let missing_image = SlideElement::Image {
+        id: "el_3".to_string(),
+        transform: ElementTransform::default(),
+        file_path: "/media/images/does_not_exist.png".to_string(),
+        crop: None,
+        mask_shape: None,
+        alt_text: None,
+    };
+
+    Presentation {
+        id: "pres_export_test".to_string(),
+        title: "Export <Test> & \"Quotes\"".to_string(),
+        author: "Jason".to_string(),
+        theme_name: None,
+        slides: vec![
+            Slide { label: Some("Slide 1".to_string()), background_v2: Some(SlideBackground::Solid("#123456".to_string())), elements: vec![text_block, image, missing_image], slide_document_version: 1, ..Default::default() },
+            Slide { label: Some("Slide 2".to_string()), elements: vec![SlideElement::TextBlock {
+                id: "el_4".to_string(), transform: ElementTransform::default(),
+                block: TextBlock { runs: vec![TextRun { text: "Second slide".to_string(), ..Default::default() }], paragraph_style: TextParagraphStyle::default(), effects: ElementEffects::default(), autofit: false },
+            }], slide_document_version: 1, ..Default::default() },
+        ],
+    }
+}
+
+#[test]
+fn test_odp_export_round_trips_through_this_apps_own_importer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let png = [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4, 5, 6, 7, 8];
+    let pres = sample_presentation_for_export(tmp.path(), &png);
+
+    let bytes = os_next::storage::OdpExporter::export_presentation(&pres, tmp.path()).unwrap();
+    assert!(bytes.len() > 100);
+
+    // It's a real zip whose first entry is the stored, uncompressed mimetype -- the ODF-specific
+    // convention a generic sniffer uses, checked directly rather than trusting the writer's intent.
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+    assert_eq!(archive.by_index(0).unwrap().name(), "mimetype");
+    assert_eq!(archive.by_index(0).unwrap().compression(), zip::CompressionMethod::Stored);
+    let mut mt = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("mimetype").unwrap(), &mut mt).unwrap();
+    assert_eq!(mt, "application/vnd.oasis.opendocument.presentation");
+    drop(archive);
+
+    let reimport_media = tmp.path().join("reimport");
+    let reimported = os_next::storage::OdpImporter::import_odp_bytes(&bytes, "stem", &reimport_media).expect("this app's own export must import cleanly");
+    assert_eq!(reimported.title, "Export <Test> & \"Quotes\"", "XML special characters in the title round-trip");
+    assert_eq!(reimported.slides.len(), 2);
+
+    let s1 = &reimported.slides[0];
+    assert_eq!(s1.background.as_deref(), Some("#123456"));
+    // The missing-file image was skipped; the real text block and the real image survive, in order.
+    assert_eq!(s1.elements.len(), 2);
+    let os_next::core::models::SlideElement::TextBlock { block, transform, .. } = &s1.elements[0] else { panic!() };
+    assert_eq!(transform.z_index, 0);
+    assert_eq!(block.runs.len(), 4, "{:?}", block.runs);
+    assert_eq!(block.runs[0].text, "Plain ");
+    assert!(!block.runs[0].bold);
+    assert_eq!(block.runs[1].text, "Bold Red");
+    assert!(block.runs[1].bold && block.runs[1].italic && block.runs[1].underline && block.runs[1].strike);
+    assert_eq!(block.runs[1].color.to_lowercase(), "#ff00aa");
+    assert_eq!(block.runs[1].font_family, "Georgia");
+    assert!((block.runs[1].font_size_pt - 40.0).abs() < 0.01);
+    assert_eq!(block.runs[2].text, "\n");
+    assert_eq!(block.runs[3].text, "Second line");
+    assert_eq!(block.paragraph_style.align, "right");
+    assert!((transform.x - 0.1).abs() < 0.001 && (transform.w - 0.5).abs() < 0.001);
+
+    let os_next::core::models::SlideElement::Image { file_path, transform: img_t, .. } = &s1.elements[1] else { panic!("expected the image") };
+    assert_eq!(img_t.z_index, 1);
+    assert!((img_t.x - 0.2).abs() < 0.001);
+    let saved = reimport_media.join(file_path.trim_start_matches("/media/images/"));
+    assert_eq!(std::fs::read(&saved).unwrap(), png);
+
+    let s2 = &reimported.slides[1];
+    let os_next::core::models::SlideElement::TextBlock { block, .. } = &s2.elements[0] else { panic!() };
+    assert_eq!(block.runs[0].text, "Second slide");
+}
+
+#[test]
+fn test_odp_export_is_a_real_file_real_libreoffice_accepts() {
+    if std::process::Command::new("soffice").arg("--version").output().is_err() {
+        eprintln!("skipping: no `soffice` on PATH");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let png = [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4];
+    let pres = sample_presentation_for_export(tmp.path(), &png);
+    let bytes = os_next::storage::OdpExporter::export_presentation(&pres, tmp.path()).unwrap();
+    let odp_path = tmp.path().join("export_test.odp");
+    std::fs::write(&odp_path, &bytes).unwrap();
+
+    let profile = tmp.path().join("lo_profile");
+    std::fs::create_dir_all(&profile).unwrap();
+    let out = std::process::Command::new("soffice")
+        .arg("--headless")
+        .arg("--invisible")
+        .arg("--norestore")
+        .arg(format!("-env:UserInstallation=file://{}", profile.display()))
+        .arg("--convert-to").arg("pdf")
+        .arg("--outdir").arg(tmp.path())
+        .arg(&odp_path)
+        .output()
+        .expect("soffice must run");
+    assert!(out.status.success(), "soffice failed: {}", String::from_utf8_lossy(&out.stderr));
+    let pdf = tmp.path().join("export_test.pdf");
+    assert!(pdf.is_file(), "no PDF produced: {}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let pdf_bytes = std::fs::read(&pdf).unwrap();
+    assert!(pdf_bytes.starts_with(b"%PDF"), "not a real PDF");
+    assert!(pdf_bytes.len() > 1000, "suspiciously small PDF ({} bytes): real LibreOffice couldn't have rendered real content", pdf_bytes.len());
+}
