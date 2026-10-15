@@ -8529,3 +8529,281 @@ fn test_ring_shape_exports_as_unfilled_not_a_solid_blob() {
     let SlideElement::Shape { fill_color, .. } = &reimported.slides[0].elements[0] else { panic!() };
     assert_eq!(fill_color.to_lowercase(), "#cc2222");
 }
+
+/// A real-world `.pptx` produced by actual LibreOffice Impress (see
+/// `testdata/pptx/README.md`), not hand-authored XML -- confirms `Table`/`Group`
+/// reconstruction against genuine OOXML, including the two structural facts that
+/// file's README calls out (a table's `<p:xfrm>` isn't nested in `<p:spPr>`; a
+/// group's `<a:off>`/`<a:ext>` matching its own `<a:chOff>`/`<a:chExt>` in the
+/// untouched-group case).
+#[test]
+fn test_pptx_import_against_a_real_libreoffice_fixture() {
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/pptx/fixture.pptx")).unwrap();
+    let media_dir = tempfile::tempdir().unwrap();
+    let pres = PptxImporter::import_pptx_bytes(&bytes, "stem", media_dir.path()).expect("real LibreOffice output must import");
+
+    let els = &pres.slides[0].elements;
+    assert_eq!(els.len(), 4, "{:?}", els.iter().map(|e| e.id()).collect::<Vec<_>>());
+
+    use os_next::core::models::SlideElement;
+    // The two title/subtitle placeholder boxes come through as plain, unfilled rects
+    // (no text of their own in this fixture, but a real <a:prstGeom prst="rect">).
+    assert!(matches!(&els[0], SlideElement::Shape { shape_kind, .. } if shape_kind == "rect"));
+    assert!(matches!(&els[1], SlideElement::Shape { shape_kind, .. } if shape_kind == "rect"));
+
+    let SlideElement::Table { rows, cols, cells, transform, .. } = &els[2] else { panic!("expected the table: {:?}", els[2]) };
+    assert_eq!(*rows, 2);
+    assert_eq!(*cols, 2);
+    assert_eq!(cells[0], vec!["R0C0".to_string(), "R0C1".to_string()]);
+    assert_eq!(cells[1], vec!["R1C0".to_string(), "R1C1".to_string()]);
+    assert!(transform.x > 0.0 && transform.x < 1.0, "{}", transform.x);
+
+    let SlideElement::Group { children, .. } = &els[3] else { panic!("expected the group: {:?}", els[3]) };
+    assert_eq!(children.len(), 2, "both rectangles in the group must come through");
+    for child in children {
+        assert!(matches!(child, SlideElement::Shape { shape_kind, .. } if shape_kind == "rect"));
+    }
+    // The two children must be at genuinely different positions (the group's own
+    // off/ext == chOff/chExt in this fixture, so this is really testing that the
+    // GroupRemap identity case didn't collapse both children onto the same spot).
+    assert_ne!(children[0].transform().x, children[1].transform().x);
+}
+
+/// Hand-authored XML for the shapes/lines/connectors this app's own editor can
+/// render, covering exactly the cases `test_pptx_import_against_a_real_libreoffice_
+/// fixture` doesn't (that fixture has no connectors, no callouts, no explicit
+/// fill/stroke colors, and no nested group) -- attribute names and structure
+/// (`a:prstGeom`, `a:solidFill`/`a:srgbClr`, `a:ln`/`a:headEnd`/`a:tailEnd`,
+/// `p:cxnSp`) are the same ones confirmed against real LibreOffice output above and
+/// in `docs/IMPORT_EXPORT_NOTES.md`, not invented for this test alone.
+#[test]
+fn test_pptx_import_reconstructs_shapes_lines_connectors_and_nested_groups() {
+    use os_next::core::models::SlideElement;
+
+    let slide_xml = r##"<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree>
+    <p:sp>
+      <p:spPr><a:xfrm><a:off x="100000" y="100000"/><a:ext cx="500000" cy="400000"/></a:xfrm>
+        <a:prstGeom prst="diamond"><a:avLst/></a:prstGeom>
+        <a:solidFill><a:srgbClr val="FF00AA"/></a:solidFill>
+        <a:ln w="25400"><a:solidFill><a:srgbClr val="112233"/></a:solidFill></a:ln>
+      </p:spPr>
+    </p:sp>
+    <p:sp>
+      <p:spPr><a:xfrm><a:off x="700000" y="100000"/><a:ext cx="500000" cy="400000"/></a:xfrm>
+        <a:prstGeom prst="wedgeRectCallout"><a:avLst/></a:prstGeom>
+        <a:solidFill><a:srgbClr val="00AA55"/></a:solidFill>
+      </p:spPr>
+    </p:sp>
+    <p:sp>
+      <p:spPr><a:xfrm><a:off x="100000" y="600000"/><a:ext cx="500000" cy="100000"/></a:xfrm>
+        <a:prstGeom prst="line"><a:avLst/></a:prstGeom>
+        <a:ln w="38160"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill>
+          <a:headEnd type="none"/><a:tailEnd type="triangle"/>
+        </a:ln>
+      </p:spPr>
+    </p:sp>
+    <p:cxnSp>
+      <p:spPr><a:xfrm><a:off x="700000" y="600000"/><a:ext cx="500000" cy="300000"/></a:xfrm>
+        <a:prstGeom prst="bentConnector3"><a:avLst/></a:prstGeom>
+        <a:ln w="12700"><a:solidFill><a:srgbClr val="654321"/></a:solidFill></a:ln>
+      </p:spPr>
+    </p:cxnSp>
+    <p:grpSp>
+      <p:grpSpPr><a:xfrm>
+        <a:off x="1500000" y="100000"/><a:ext cx="800000" cy="800000"/>
+        <a:chOff x="0" y="0"/><a:chExt cx="400000" cy="400000"/>
+      </a:xfrm></p:grpSpPr>
+      <p:sp>
+        <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="200000" cy="200000"/></a:xfrm>
+          <a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>
+          <a:solidFill><a:srgbClr val="AABBCC"/></a:solidFill>
+        </p:spPr>
+      </p:sp>
+      <p:grpSp>
+        <p:grpSpPr><a:xfrm>
+          <a:off x="200000" y="200000"/><a:ext cx="200000" cy="200000"/>
+          <a:chOff x="200000" y="200000"/><a:chExt cx="200000" cy="200000"/>
+        </a:xfrm></p:grpSpPr>
+        <p:sp>
+          <p:spPr><a:xfrm><a:off x="200000" y="200000"/><a:ext cx="100000" cy="100000"/></a:xfrm>
+            <a:prstGeom prst="star5"><a:avLst/></a:prstGeom>
+            <a:solidFill><a:srgbClr val="FFEE00"/></a:solidFill>
+          </p:spPr>
+        </p:sp>
+      </p:grpSp>
+    </p:grpSp>
+  </p:spTree></p:cSld>
+</p:sld>"##;
+
+    let bytes = build_single_slide_pptx(slide_xml);
+    let media_dir = tempfile::tempdir().unwrap();
+    let pres = PptxImporter::import_pptx_bytes(&bytes, "stem", media_dir.path()).expect("should parse");
+    let els = &pres.slides[0].elements;
+    assert_eq!(els.len(), 5, "{:?}", els.iter().map(|e| e.id()).collect::<Vec<_>>());
+
+    let SlideElement::Shape { shape_kind, fill_color, stroke_color, stroke_width, .. } = &els[0] else { panic!("expected the diamond: {:?}", els[0]) };
+    assert_eq!(shape_kind, "diamond");
+    assert_eq!(fill_color.to_lowercase(), "#ff00aa");
+    assert_eq!(stroke_color.as_deref().map(str::to_lowercase).as_deref(), Some("#112233"));
+    assert!(*stroke_width > 0.0);
+
+    let SlideElement::Shape { shape_kind, fill_color, .. } = &els[1] else { panic!("expected the callout: {:?}", els[1]) };
+    assert_eq!(shape_kind, "callout", "OOXML's wedgeRectCallout maps to this app's callout glyph");
+    assert_eq!(fill_color.to_lowercase(), "#00aa55");
+
+    let SlideElement::Line { line_kind, color, start_arrow, end_arrow, .. } = &els[2] else { panic!("expected the plain-sp line: {:?}", els[2]) };
+    assert_eq!(line_kind, "straight");
+    assert_eq!(color.to_lowercase(), "#0000ff");
+    assert!(!*start_arrow, "headEnd type=\"none\" means no start arrow");
+    assert!(*end_arrow, "tailEnd type=\"triangle\" means an end arrow");
+
+    let SlideElement::Line { line_kind, color, .. } = &els[3] else { panic!("expected the bent connector: {:?}", els[3]) };
+    assert_eq!(line_kind, "elbow", "bentConnectorN maps to this app's elbow line_kind");
+    assert_eq!(color.to_lowercase(), "#654321");
+
+    let SlideElement::Group { children, .. } = &els[4] else { panic!("expected the outer group: {:?}", els[4]) };
+    assert_eq!(children.len(), 2, "the ellipse and the nested group's own child, both unwrapped to this level");
+    let SlideElement::Shape { shape_kind, fill_color, transform: ellipse_t, .. } = &children[0] else { panic!("expected the ellipse: {:?}", children[0]) };
+    assert_eq!(shape_kind, "ellipse");
+    assert_eq!(fill_color.to_lowercase(), "#aabbcc");
+    // Outer group: off=(1500000,100000) ext=(800000,800000) chOff=(0,0) chExt=(400000,400000)
+    // -> a uniform 2x scale. Ellipse's own local off/ext=(0,0)/(200000,200000) remap to
+    // absolute EMU (1500000,100000)/(400000,400000), normalized against the default
+    // 12192000x6858000 EMU slide size (no presentation.xml in this test).
+    assert!((ellipse_t.x - 0.123_031_496).abs() < 1e-6, "{}", ellipse_t.x);
+    assert!((ellipse_t.y - 0.014_581_511).abs() < 1e-6, "{}", ellipse_t.y);
+    assert!((ellipse_t.w - 0.032_808_399).abs() < 1e-6, "{}", ellipse_t.w);
+    assert!((ellipse_t.h - 0.058_326_043).abs() < 1e-6, "{}", ellipse_t.h);
+
+    let SlideElement::Group { children: inner_children, .. } = &children[1] else { panic!("expected the nested group: {:?}", children[1]) };
+    assert_eq!(inner_children.len(), 1);
+    let SlideElement::Shape { shape_kind, fill_color, transform: star_t, .. } = &inner_children[0] else { panic!("expected the star: {:?}", inner_children[0]) };
+    assert_eq!(shape_kind, "star");
+    assert_eq!(fill_color.to_lowercase(), "#ffee00");
+    // This is the number that actually exercises the nested-group fix: the inner
+    // group's own off=(200000,200000)/ext=(200000,200000) must FIRST be remapped
+    // through the OUTER group's 2x transform (-> absolute off=(1900000,500000),
+    // ext=(400000,400000)) before its own chOff/chExt=(200000,200000)/(200000,200000)
+    // (read raw, un-remapped) are used to build ITS remap -- giving a second 2x
+    // scale on top. The star's local off/ext=(200000,200000)/(100000,100000) then
+    // remap to absolute EMU (1900000,500000)/(200000,200000). If the inner group's
+    // off/ext were used un-remapped instead (the bug this test exists to catch),
+    // the star would land at a visibly different, wrong position.
+    assert!((star_t.x - 0.155_839_895).abs() < 1e-6, "{}", star_t.x);
+    assert!((star_t.y - 0.072_907_553).abs() < 1e-6, "{}", star_t.y);
+    assert!((star_t.w - 0.016_404_199).abs() < 1e-6, "{}", star_t.w);
+    assert!((star_t.h - 0.029_163_021).abs() < 1e-6, "{}", star_t.h);
+}
+
+/// A theme-colored shape (`<p:style><a:fillRef idx="2"><a:schemeClr val="accent1"/>`,
+/// no explicit `<a:solidFill>` at all in `<p:spPr>` itself) -- the single most common
+/// real-world gap this importer has, per its own module doc: a shape inserted via
+/// the authoring tool's UI without manually overriding its fill very often looks
+/// exactly like this. Must not crash, and must come through with this app's own
+/// "nothing resolved" fallback (`"none"`), not a guessed color.
+#[test]
+fn test_pptx_import_theme_colored_shape_has_no_crash_and_no_guessed_color() {
+    use os_next::core::models::SlideElement;
+    let slide_xml = r##"<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree>
+    <p:sp>
+      <p:spPr><a:xfrm><a:off x="100000" y="100000"/><a:ext cx="500000" cy="400000"/></a:xfrm>
+        <a:prstGeom prst="hexagon"><a:avLst/></a:prstGeom>
+      </p:spPr>
+      <p:style>
+        <a:lnRef idx="1"><a:schemeClr val="accent1"/></a:lnRef>
+        <a:fillRef idx="2"><a:schemeClr val="accent1"/></a:fillRef>
+        <a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef>
+        <a:fontRef idx="minor"><a:schemeClr val="tx1"/></a:fontRef>
+      </p:style>
+    </p:sp>
+  </p:spTree></p:cSld>
+</p:sld>"##;
+    let bytes = build_single_slide_pptx(slide_xml);
+    let media_dir = tempfile::tempdir().unwrap();
+    let pres = PptxImporter::import_pptx_bytes(&bytes, "stem", media_dir.path()).expect("should parse, not crash");
+    let SlideElement::Shape { shape_kind, fill_color, stroke_color, .. } = &pres.slides[0].elements[0] else { panic!() };
+    assert_eq!(shape_kind, "hexagon");
+    assert_eq!(fill_color, "none", "a theme-only fill must not be guessed at");
+    assert!(stroke_color.is_none());
+}
+
+/// A `<p:sp>` with `prst="line"` that *also* carries real text -- legal OOXML
+/// (nothing stops a line-preset autoshape from having a `<p:txBody>`), and real
+/// text must always win over the line/shape distinction, the same priority this
+/// importer already used for text vs. non-text shapes before `Line` existed at
+/// all. A version of this importer once checked `prst=="line"` unconditionally
+/// before ever looking at the shape's text, silently dropping it for exactly this
+/// case -- this test exists to keep that from coming back.
+#[test]
+fn test_pptx_import_prefers_real_text_over_line_preset_geometry() {
+    use os_next::core::models::SlideElement;
+    let slide_xml = r##"<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree>
+    <p:sp>
+      <p:spPr><a:xfrm><a:off x="100000" y="100000"/><a:ext cx="500000" cy="100000"/></a:xfrm>
+        <a:prstGeom prst="line"><a:avLst/></a:prstGeom>
+      </p:spPr>
+      <p:txBody><a:p><a:r><a:t>Caption on a line shape</a:t></a:r></a:p></p:txBody>
+    </p:sp>
+  </p:spTree></p:cSld>
+</p:sld>"##;
+    let bytes = build_single_slide_pptx(slide_xml);
+    let media_dir = tempfile::tempdir().unwrap();
+    let pres = PptxImporter::import_pptx_bytes(&bytes, "stem", media_dir.path()).expect("should parse");
+    let SlideElement::TextBlock { block, .. } = &pres.slides[0].elements[0] else { panic!("expected a TextBlock, text must not be dropped: {:?}", pres.slides[0].elements[0]) };
+    assert_eq!(block.runs[0].text, "Caption on a line shape");
+}
+
+/// A table with a horizontally-merged cell (`gridSpan`/`hMerge`, OOXML's equivalent
+/// of ODF's `table:number-columns-spanned`/`table:covered-table-cell`) -- the
+/// covered continuation cell must not be counted as a real cell, and every real
+/// cell must land in its actual column, not just get appended and the row padded
+/// at the end. Two rows on purpose: a merge at the row's *trailing* edge (where
+/// appending-and-padding would accidentally look correct) and one *not* at the
+/// trailing edge (where it wouldn't -- a real cell after the merge would otherwise
+/// shift into the wrong column entirely instead of landing after the covered
+/// slot). Both must place every cell by its own real column position.
+#[test]
+fn test_pptx_import_table_with_merged_cells_placed_by_real_column_not_appended() {
+    use os_next::core::models::SlideElement;
+    let slide_xml = r##"<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree>
+    <p:graphicFrame>
+      <p:xfrm><a:off x="100000" y="100000"/><a:ext cx="3000000" cy="1000000"/></p:xfrm>
+      <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">
+        <a:tbl>
+          <a:tblGrid><a:gridCol w="1000000"/><a:gridCol w="1000000"/><a:gridCol w="1000000"/></a:tblGrid>
+          <a:tr h="500000">
+            <a:tc gridSpan="2"><a:txBody><a:p><a:r><a:t>AB</a:t></a:r></a:p></a:txBody></a:tc>
+            <a:tc hMerge="1"><a:txBody><a:p/></a:txBody></a:tc>
+            <a:tc><a:txBody><a:p><a:r><a:t>C</a:t></a:r></a:p></a:txBody></a:tc>
+          </a:tr>
+          <a:tr h="500000">
+            <a:tc><a:txBody><a:p><a:r><a:t>A</a:t></a:r></a:p></a:txBody></a:tc>
+            <a:tc gridSpan="2"><a:txBody><a:p><a:r><a:t>BC</a:t></a:r></a:p></a:txBody></a:tc>
+            <a:tc hMerge="1"><a:txBody><a:p/></a:txBody></a:tc>
+          </a:tr>
+        </a:tbl>
+      </a:graphicData></a:graphic>
+    </p:graphicFrame>
+  </p:spTree></p:cSld>
+</p:sld>"##;
+    let bytes = build_single_slide_pptx(slide_xml);
+    let media_dir = tempfile::tempdir().unwrap();
+    let pres = PptxImporter::import_pptx_bytes(&bytes, "stem", media_dir.path()).expect("should parse");
+    let SlideElement::Table { rows, cols, cells, .. } = &pres.slides[0].elements[0] else { panic!() };
+    assert_eq!(*rows, 2);
+    assert_eq!(*cols, 3);
+    // Merge NOT at the trailing edge: a naive "append real cells, pad the end"
+    // approach would produce ["AB", "C", ""] (C shifted into the covered slot's
+    // column instead of its own) -- this is the case that actually distinguishes
+    // correct placement from that bug, unlike the row below.
+    assert_eq!(cells[0], vec!["AB".to_string(), String::new(), "C".to_string()], "merge NOT at the trailing edge");
+    // Contrast case: merge AT the trailing edge, where append-and-pad happens to
+    // produce the same result as correct positional placement -- kept to show why
+    // the row above is the one that actually matters, not because this one alone
+    // would have caught anything.
+    assert_eq!(cells[1], vec!["A".to_string(), "BC".to_string(), String::new()], "merge at the trailing edge");
+}
