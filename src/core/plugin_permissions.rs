@@ -28,12 +28,11 @@ const KNOWN: &[(&str, Tier, &str)] = &[
     ("commands.send", Tier::Medium, "enforced"),
     ("keyring.own", Tier::Medium, "enforced"),
     ("keyring.service", Tier::Critical, "enforced"),
-    ("settings.read", Tier::Medium, "reserved"),
-    ("settings.write", Tier::High, "reserved"),
     ("network.outbound", Tier::Medium, "enforced"),
     ("process.run", Tier::Critical, "enforced"),
     ("ui.panel", Tier::Medium, "enforced"),
     ("ui.toolbar", Tier::Medium, "enforced"),
+    ("ui.clipboard", Tier::Medium, "enforced"),
     ("notifications.post", Tier::Low, "enforced"),
 ];
 
@@ -204,6 +203,19 @@ impl PermissionSet {
     }
 }
 
+/// What changed between two permission lists: ids only in `b` (`added`), only in `a` (`removed`), and ids in both
+/// whose scope (categories, commands, keys, hosts, paths, ports) differs (`changed`).
+pub fn permission_diff(a: &[PermissionRequest], b: &[PermissionRequest]) -> serde_json::Value {
+    let same_scope = |x: &PermissionRequest, y: &PermissionRequest| {
+        (&x.categories, &x.commands, &x.keys, &x.hosts, &x.paths, &x.ports, &x.services, &x.access)
+            == (&y.categories, &y.commands, &y.keys, &y.hosts, &y.paths, &y.ports, &y.services, &y.access)
+    };
+    let added: Vec<&String> = b.iter().filter(|g| !a.iter().any(|r| r.id == g.id)).map(|g| &g.id).collect();
+    let removed: Vec<&String> = a.iter().filter(|r| !b.iter().any(|g| g.id == r.id)).map(|r| &r.id).collect();
+    let changed: Vec<&String> = b.iter().filter(|g| a.iter().any(|r| r.id == g.id && !same_scope(r, g))).map(|g| &g.id).collect();
+    serde_json::json!({ "added": added, "removed": removed, "changed": changed })
+}
+
 /// Which scope list a permission takes: `categories`, `commands`, `hosts`, `paths`, `ports`,
 /// `keys` or `none`.
 pub fn scope_kind(id: &str) -> &'static str {
@@ -211,7 +223,6 @@ pub fn scope_kind(id: &str) -> &'static str {
         "library.write" => "categories",
         "commands.send" | "process.run" => "commands",
         "network.outbound" => "hosts",
-        "settings.read" | "settings.write" => "keys",
         "keyring.service" => "services",
         _ => "none",
     }
@@ -642,6 +653,9 @@ impl PluginManifest {
 
     pub fn validate(&self, host_version: &str) -> Result<(), ManifestError> {
         let bad = |m: String| Err(ManifestError::Invalid(m));
+        if !self.version.is_empty() && semver::Version::parse(&self.version).is_err() {
+            return bad(format!("version '{}' isn't a semantic version like 1.2.3", self.version));
+        }
         if self.manifest_version != MANIFEST_VERSION {
             return bad(format!("manifest_version must be {MANIFEST_VERSION}"));
         }
@@ -1080,7 +1094,7 @@ mod tests {
         // A plugin needs a web section at all.
         assert!(manifest(r#"{"manifest_version":1,"id":"nothing","name":"N","permissions":[]}"#).is_err());
         // The permissions only a native library could hold are unknown now.
-        for id in ["native.code", "commands.intercept", "commands.modify", "resources.provide", "library.read", "filesystem.plugin_data", "filesystem.read", "filesystem.write", "network.listen", "process.spawn"] {
+        for id in ["native.code", "commands.intercept", "commands.modify", "resources.provide", "library.read", "settings.read", "settings.write", "filesystem.plugin_data", "filesystem.read", "filesystem.write", "network.listen", "process.spawn"] {
             let m = GOOD.replace(r#"{"id": "show.observe", "reason": "follow blackout"}"#, &format!(r#"{{"id": "{id}"}}"#));
             assert!(manifest(&m).is_err(), "{id} must not be accepted");
             assert!(validate_grant(&PermissionRequest::simple(id), "sandbox").is_err(), "{id} must not be grantable by hand either");

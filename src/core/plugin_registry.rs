@@ -28,6 +28,8 @@ pub struct Discovered {
     pub signer: Option<String>,
     pub requested: Vec<PermissionRequest>,
     pub error: Option<String>,
+    /// `(path, sha256)` of every file the digest covers (empty when the plugin failed to load).
+    pub files: Vec<(String, String)>,
 }
 
 /// Checks the detached signature next to a manifest, if there is one. `Ok(None)` = unsigned.
@@ -59,23 +61,22 @@ fn failed(id: String, kind: &'static str, source: &Path, msg: String) -> Discove
         signer: None,
         requested: Vec::new(),
         error: Some(msg),
+        files: Vec::new(),
     }
 }
 
-fn discover_web(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
-    // Ribbon-button icons are names of files in the app's icon set, `web/icons/crimson/` next to the plugins folder.
-    let icons_dir = web_plugins_dir.parent().map(|w| w.join("icons").join("crimson"));
+fn discover_web(web_plugins_dir: &Path, host_version: &str, icons_dir: Option<&Path>, folders_only: bool) -> Vec<Discovered> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(web_plugins_dir) else { return out };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            if let Some(d) = discover_sandbox(&path, host_version, icons_dir.as_deref()) {
+            if let Some(d) = discover_sandbox(&path, host_version, icons_dir) {
                 out.push(d);
             }
             continue;
         }
-        if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("js") {
+        if folders_only || !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("js") {
             continue;
         }
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string()) else { continue };
@@ -114,10 +115,11 @@ fn discover_web(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
                         version: Some(m.version.clone()).filter(|v| !v.is_empty()),
                         source_path: path.to_string_lossy().to_string(),
                         manifest_sha256: Some(manifest_sha),
-                        digest: artifact_digest(&[(file_name.clone(), file_sha)]),
+                        digest: artifact_digest(&[(file_name.clone(), file_sha.clone())]),
                         signer: signer.clone(),
                         requested: m.permissions.clone(),
                         error: problem,
+                        files: vec![(file_name.clone(), file_sha)],
                     });
                 }
             }
@@ -163,10 +165,18 @@ pub fn sandbox_dir_files(dir: &Path) -> Result<Vec<(String, String)>, String> {
     Ok(out)
 }
 
+/// A manifest is a few KB; anything this big is hostile or broken, and is never parsed.
+const MAX_MANIFEST_BYTES: usize = 256 * 1024;
+
 fn discover_sandbox(dir: &Path, host_version: &str, icons_dir: Option<&Path>) -> Option<Discovered> {
     let dir_name = dir.file_name()?.to_str()?.to_string();
     let bytes = std::fs::read(dir.join("plugin.json")).ok()?; // not a plugin folder
     let manifest_sha = sha256_hex(&bytes);
+    if bytes.len() > MAX_MANIFEST_BYTES {
+        let mut d = failed(dir_name, "sandbox", dir, format!("plugin.json is {} KB; the limit is {} KB", bytes.len() / 1024, MAX_MANIFEST_BYTES / 1024));
+        d.manifest_sha256 = Some(manifest_sha);
+        return Some(d);
+    }
     let manifest = match PluginManifest::parse(&bytes).and_then(|m| m.validate(host_version).map(|_| m)) {
         Ok(m) => m,
         Err(e) => {
@@ -186,6 +196,7 @@ fn discover_sandbox(dir: &Path, host_version: &str, icons_dir: Option<&Path>) ->
         signer: None,
         requested: manifest.permissions.clone(),
         error: None,
+        files: Vec::new(),
     };
     let fail = |mut d: Discovered, msg: String| {
         d.digest = sha256_hex(format!("{manifest_sha}{msg}").as_bytes());
@@ -215,18 +226,26 @@ fn discover_sandbox(dir: &Path, host_version: &str, icons_dir: Option<&Path>) ->
                 return Some(fail(d, format!("entry page '{}' is missing", web.entry)));
             }
             d.digest = artifact_digest(&files);
+            d.files = files;
             Some(d)
         }
     }
 }
 
 /// Scans the web plugins folder.
+/// Where plugins the operator installs live: under the data directory, never the (read-only) install.
+pub fn user_plugins_dir(data_dir: &Path) -> std::path::PathBuf {
+    data_dir.join("plugins")
+}
+
 pub fn discover(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
-    let mut out = Vec::new();
-    out.extend(discover_web(web_plugins_dir, host_version));
+    discover_all(web_plugins_dir, None, host_version)
+}
+
+fn flag_duplicates(out: &mut [Discovered]) {
     // A duplicate id is ambiguous; neither copy may run.
     let mut counts = std::collections::HashMap::new();
-    for d in &out {
+    for d in out.iter() {
         *counts.entry(d.id.clone()).or_insert(0usize) += 1;
     }
     for d in out.iter_mut() {
@@ -234,7 +253,40 @@ pub fn discover(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
             d.error = Some(format!("another plugin also uses the id '{}'", d.id));
         }
     }
+}
+
+/// The plugins that ship with the app (`web/plugins/`) plus those the operator installed
+/// (`<data dir>/plugins/`, sandboxed folders only). A built-in plugin always wins an id clash: an
+/// installed folder can never shadow, replace or break one that shipped.
+pub fn discover_all(web_plugins_dir: &Path, user_plugins_dir: Option<&Path>, host_version: &str) -> Vec<Discovered> {
+    // Ribbon-button icons are names of files in the app's icon set, `web/icons/crimson/` next to the plugins folder.
+    let icons_dir = web_plugins_dir.parent().map(|w| w.join("icons").join("crimson"));
+    let mut out = discover_web(web_plugins_dir, host_version, icons_dir.as_deref(), false);
+    flag_duplicates(&mut out);
+    if let Some(user) = user_plugins_dir {
+        let mut installed = discover_web(user, host_version, icons_dir.as_deref(), true);
+        flag_duplicates(&mut installed);
+        for d in installed {
+            if out.iter().any(|b| b.id == d.id) {
+                tracing::warn!("ignoring installed plugin folder {:?}: '{}' is the id of a built-in plugin", d.source_path, d.id);
+                continue;
+            }
+            out.push(d);
+        }
+    }
     out
+}
+
+/// Checks one extracted plugin folder the way discovery would, returning the reason it can't be
+/// installed. The folder's name must be the plugin's id.
+pub fn check_plugin_folder(dir: &Path, host_version: &str, icons_dir: Option<&Path>) -> Result<Discovered, String> {
+    match discover_sandbox(dir, host_version, icons_dir) {
+        None => Err("there is no plugin.json in the package".to_string()),
+        Some(d) => match &d.error {
+            Some(e) => Err(e.clone()),
+            None => Ok(d),
+        },
+    }
 }
 
 fn requested_json(d: &Discovered) -> String {
@@ -258,6 +310,7 @@ pub fn sync(db: &Database, discovered: &[Discovered]) {
             signer: d.signer.as_deref(),
             requested_json: &requested_json(d),
             error: d.error.as_deref(),
+            files_json: &serde_json::to_string(&d.files).unwrap_or_else(|_| "[]".to_string()),
         };
         if db.upsert_observed_plugin(&observed).is_err() {
             continue;
@@ -270,6 +323,53 @@ pub fn sync(db: &Database, discovered: &[Discovered]) {
             _ => {}
         }
     }
+}
+
+/// How an approved plugin's files now differ from what the operator reviewed -- the "what changed" shown when
+/// it stops at `changed`. `None` unless it was approved and has since changed. Permission differences are
+/// measured against what the plugin *asked for* last time, so an optional permission you declined is not
+/// reported as new every update.
+pub fn describe_update(row: &PluginGrantRow) -> Option<serde_json::Value> {
+    if row.status != "approved" || row.error.is_some() || row.approved_digest.as_deref() == Some(row.observed_digest.as_str()) {
+        return None;
+    }
+    row.approved_digest.as_ref()?;
+    let files = |json: &Option<String>| -> Option<std::collections::BTreeMap<String, String>> {
+        serde_json::from_str::<Vec<(String, String)>>(json.as_deref()?).ok().map(|v| v.into_iter().collect())
+    };
+    let file_diff = match (files(&row.approved_files_json), files(&row.observed_files_json)) {
+        (Some(old), Some(new)) => {
+            let added: Vec<&String> = new.keys().filter(|k| !old.contains_key(*k)).collect();
+            let removed: Vec<&String> = old.keys().filter(|k| !new.contains_key(*k)).collect();
+            let modified: Vec<&String> = new.iter().filter(|(k, v)| old.get(*k).is_some_and(|o| o != *v)).map(|(k, _)| k).collect();
+            Some(serde_json::json!({ "added": added, "removed": removed, "modified": modified }))
+        }
+        _ => None, // approved before file lists were recorded
+    };
+    let direction = match (
+        row.approved_version.as_deref().and_then(|v| semver::Version::parse(v).ok()),
+        row.version.as_deref().and_then(|v| semver::Version::parse(v).ok()),
+    ) {
+        (Some(a), Some(b)) => match b.cmp(&a) {
+            std::cmp::Ordering::Greater => "upgrade",
+            std::cmp::Ordering::Less => "downgrade",
+            std::cmp::Ordering::Equal => "same",
+        },
+        _ => "unknown",
+    };
+    let parse = |json: &str| serde_json::from_str::<Vec<PermissionRequest>>(json).unwrap_or_default();
+    // Rows approved before this was recorded fall back to what was granted.
+    let before = parse(row.approved_requested_json.as_deref().unwrap_or(&row.granted_json));
+    let now = parse(&row.requested_json);
+    let mut permissions = crate::core::plugin_permissions::permission_diff(&before, &now);
+    // New asks come with their risk, so the review can say "this update wants something Critical".
+    permissions["added_tiers"] = serde_json::json!(
+        now.iter().filter(|p| !before.iter().any(|b| b.id == p.id)).map(|p| serde_json::json!({ "id": p.id, "tier": format!("{:?}", p.tier()).to_lowercase() })).collect::<Vec<_>>()
+    );
+    Some(serde_json::json!({
+        "from_version": row.approved_version, "to_version": row.version, "direction": direction,
+        "files": file_diff, "permissions": permissions,
+    }))
 }
 
 pub fn parse_granted(row: &PluginGrantRow) -> PermissionSet {
@@ -324,7 +424,7 @@ mod tests {
         for (id, kind) in [("legacy.old_plugin", "legacy-native"), ("demo", "legacy-web"), ("org.example.observer", "native")] {
             let observed = ObservedPlugin {
                 plugin_id: id, kind, name: id, version: None, source_path: "x", manifest_sha256: None, digest: "d",
-                signer: None, requested_json: "[]", error: None,
+                signer: None, requested_json: "[]", error: None, files_json: "[]",
             };
             db.upsert_observed_plugin(&observed).unwrap();
         }
@@ -357,6 +457,88 @@ mod tests {
         assert_eq!(db.get_plugin_grant("thing").unwrap().unwrap().effective_state(), "changed");
         let audit = db.list_plugin_audit(50).unwrap();
         assert!(audit.iter().any(|a| a.plugin_id == "thing" && a.action == "changed"));
+    }
+
+    fn write_versioned(web: &Path, id: &str, version: &str, perms: &str, html: &str, extra: &[(&str, &str)]) {
+        let dir = web.join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("plugin.json"),
+            format!(r#"{{"manifest_version":1,"id":"{id}","name":"V","version":"{version}","web":{{"entry":"index.html","sandbox":true}},"permissions":[{perms}]}}"#),
+        ).unwrap();
+        std::fs::write(dir.join("index.html"), html).unwrap();
+        for (name, body) in extra {
+            std::fs::write(dir.join(name), body).unwrap();
+        }
+    }
+
+    #[test]
+    fn an_update_is_described_as_a_difference_from_what_was_approved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let web = tmp.path().join("plugins");
+        let db = temp_db(tmp.path());
+        let ui = r#"{"id":"ui.panel","reason":"x"}"#;
+        write_versioned(&web, "up", "1.0.0", ui, "<html>v1</html>", &[("old.js", "1")]);
+        sync(&db, &discover(&web, "0.2.0"));
+        let row = db.get_plugin_grant("up").unwrap().unwrap();
+        assert!(describe_update(&row).is_none(), "nothing to compare before approval");
+        db.set_plugin_decision("up", "approved", &row.requested_json, row.observed_manifest_sha256.as_deref(), Some(&row.observed_digest), None, "t").unwrap();
+        assert!(describe_update(&db.get_plugin_grant("up").unwrap().unwrap()).is_none(), "approved and unchanged");
+
+        // v1.1.0: one file edited, one removed, one added.
+        std::fs::remove_file(web.join("up/old.js")).unwrap();
+        write_versioned(&web, "up", "1.1.0", ui, "<html>v2</html>", &[("new.js", "2")]);
+        sync(&db, &discover(&web, "0.2.0"));
+        let d = describe_update(&db.get_plugin_grant("up").unwrap().unwrap()).expect("changed plugins are described");
+        assert_eq!((d["from_version"].as_str(), d["to_version"].as_str(), d["direction"].as_str()), (Some("1.0.0"), Some("1.1.0"), Some("upgrade")), "{d}");
+        assert_eq!(d["files"]["modified"], serde_json::json!(["index.html", "plugin.json"]), "the manifest counts too: its version changed: {d}");
+        assert_eq!(d["files"]["added"], serde_json::json!(["new.js"]));
+        assert_eq!(d["files"]["removed"], serde_json::json!(["old.js"]));
+        assert_eq!(d["permissions"]["added"], serde_json::json!([]));
+
+        // Rolling back to an older version is flagged as a downgrade.
+        write_versioned(&web, "up", "0.9.0", ui, "<html>v0</html>", &[]);
+        sync(&db, &discover(&web, "0.2.0"));
+        assert_eq!(describe_update(&db.get_plugin_grant("up").unwrap().unwrap()).unwrap()["direction"], "downgrade");
+
+        // A version that isn't semver is refused outright.
+        write_versioned(&web, "up", "latest", ui, "<html>v0</html>", &[]);
+        let found = discover(&web, "0.2.0");
+        assert!(found.iter().find(|d| d.id == "up").unwrap().error.as_deref().unwrap_or("").contains("semantic version"));
+    }
+
+    #[test]
+    fn a_new_permission_in_an_update_is_reported_with_its_risk_and_declined_optionals_are_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let web = tmp.path().join("plugins");
+        let db = temp_db(tmp.path());
+        let base = r#"{"id":"ui.panel","reason":"x"},{"id":"notifications.post","optional":true,"reason":"x"}"#;
+        write_versioned(&web, "np", "1.0.0", base, "<html>v1</html>", &[]);
+        sync(&db, &discover(&web, "0.2.0"));
+        let row = db.get_plugin_grant("np").unwrap().unwrap();
+        // The operator approves only ui.panel, declining the optional one.
+        db.set_plugin_decision("np", "approved", r#"[{"id":"ui.panel"}]"#, None, Some(&row.observed_digest), None, "t").unwrap();
+        write_versioned(&web, "np", "1.0.1", &format!(r#"{base},{{"id":"keyring.own","reason":"y"}}"#), "<html>v2</html>", &[]);
+        sync(&db, &discover(&web, "0.2.0"));
+        let d = describe_update(&db.get_plugin_grant("np").unwrap().unwrap()).unwrap();
+        assert_eq!(d["permissions"]["added"], serde_json::json!(["keyring.own"]), "{d}");
+        assert_eq!(d["permissions"]["added_tiers"], serde_json::json!([{"id": "keyring.own", "tier": "medium"}]));
+    }
+
+    #[test]
+    fn an_oversized_manifest_is_rejected_unparsed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("plugins").join("big");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.html"), "<html></html>").unwrap();
+        let manifest = serde_json::json!({
+            "manifest_version": 1, "id": "big", "name": "Big", "web": {"entry": "index.html", "sandbox": true},
+            "permissions": [{"id": "ui.panel"}], "description": "x".repeat(MAX_MANIFEST_BYTES + 1)
+        });
+        std::fs::write(dir.join("plugin.json"), manifest.to_string()).unwrap();
+        let found = discover(&tmp.path().join("plugins"), "0.2.0");
+        let err = found.iter().find(|d| d.id == "big").unwrap().error.clone().unwrap_or_default();
+        assert!(err.contains("the limit is"), "{err}");
     }
 
     #[test]

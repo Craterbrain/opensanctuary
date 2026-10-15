@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::api::ws::AppState;
 use crate::core::plugin_permissions::{PermissionRequest, PermissionSet};
-use crate::core::plugin_registry::{discover, parse_granted, sync, Discovered};
+use crate::core::plugin_registry::{check_plugin_folder, discover_all, parse_granted, sync, user_plugins_dir, Discovered};
 use crate::storage::db::PluginGrantRow;
 
 use super::common::require_host_token;
@@ -24,7 +24,7 @@ fn err(status: StatusCode, msg: &str) -> ApiErr {
 }
 
 pub(super) fn rescan(app: &AppState) -> Vec<Discovered> {
-    let found = discover(&app.web_dir.join("plugins"), env!("CARGO_PKG_VERSION"));
+    let found = discover_all(&app.web_dir.join("plugins"), Some(&user_plugins_dir(&app.data_dir)), env!("CARGO_PKG_VERSION"));
     sync(&app.db, &found);
     found
 }
@@ -119,6 +119,8 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         "name": row.name,
         "version": row.version,
         "sandboxed": row.kind == "sandbox",
+        "changes": crate::core::plugin_registry::describe_update(row),
+        "removable": row.kind == "sandbox" && is_installed_folder(app, std::path::Path::new(&row.source_path)),
         "state": state,
         "status": row.status,
         "error": row.error,
@@ -266,17 +268,7 @@ pub(super) async fn approve_plugin(
 
 /// What an Advanced override changed relative to what the plugin asked for.
 fn override_summary(requested: &[PermissionRequest], granted: &[PermissionRequest]) -> serde_json::Value {
-    let same_scope = |a: &PermissionRequest, b: &PermissionRequest| {
-        (&a.categories, &a.commands, &a.keys, &a.hosts, &a.paths, &a.ports) == (&b.categories, &b.commands, &b.keys, &b.hosts, &b.paths, &b.ports)
-    };
-    let added: Vec<&String> = granted.iter().filter(|g| !requested.iter().any(|r| r.id == g.id)).map(|g| &g.id).collect();
-    let removed: Vec<&String> = requested.iter().filter(|r| !granted.iter().any(|g| g.id == r.id)).map(|r| &r.id).collect();
-    let changed: Vec<&String> = granted
-        .iter()
-        .filter(|g| requested.iter().any(|r| r.id == g.id && !same_scope(r, g)))
-        .map(|g| &g.id)
-        .collect();
-    serde_json::json!({ "added": added, "removed": removed, "changed": changed })
+    crate::core::plugin_permissions::permission_diff(requested, granted)
 }
 
 /// GET /api/plugins/permissions -- every permission the host knows, for the Advanced override.
@@ -610,7 +602,7 @@ async fn active_manifest(app: &AppState, plugin_id: &str) -> Result<(PluginGrant
         .flatten()
         .filter(|r| r.kind == "sandbox" && r.effective_state() == "active")
         .ok_or_else(|| err(StatusCode::FORBIDDEN, "this plugin isn't approved"))?;
-    let dir = app.web_dir.join("plugins").join(plugin_id);
+    let dir = plugin_folder(&row);
     let (id, dir2) = (plugin_id.to_string(), dir.clone());
     let approved = row.approved_digest.clone().unwrap_or_default();
     let folder_ok = tokio::task::spawn_blocking(move || current_folder_digest(&id, &dir2).is_some_and(|d| d == approved))
@@ -625,6 +617,17 @@ async fn active_manifest(app: &AppState, plugin_id: &str) -> Result<(PluginGrant
     }
     let manifest = PluginManifest::parse(&bytes).map_err(|e| err(StatusCode::CONFLICT, &e.to_string()))?;
     Ok((row, manifest))
+}
+
+/// Where a sandboxed plugin's files are: the folder discovery found it in (built-in or installed).
+fn plugin_folder(row: &PluginGrantRow) -> std::path::PathBuf {
+    std::path::PathBuf::from(&row.source_path)
+}
+
+/// Is this folder one the operator installed (so it can be removed), as opposed to one that ships with the app?
+fn is_installed_folder(app: &AppState, dir: &std::path::Path) -> bool {
+    let (Ok(root), Ok(dir)) = (std::fs::canonicalize(user_plugins_dir(&app.data_dir)), std::fs::canonicalize(dir)) else { return false };
+    dir.parent() == Some(root.as_path())
 }
 
 fn tools_dir(app: &AppState) -> std::path::PathBuf {
@@ -1107,7 +1110,7 @@ pub(super) async fn serve_plugin_frame(
     if row.kind != "sandbox" || row.effective_state() != "active" {
         return not_found();
     }
-    let dir = app.web_dir.join("plugins").join(&id);
+    let dir = plugin_folder(&row);
     // The console's shared plugin SDK and theme stylesheet are part of the app, not of the plugin:
     // served under `__os/` to any plugin that passes the checks below.
     let shared = rel.strip_prefix("__os/").map(|n| n.to_string());
@@ -1158,12 +1161,214 @@ pub(super) async fn serve_plugin_frame(
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "couldn't build the response").into_response())
 }
 
+
+/// Largest plugin package accepted (the zip itself), and what it may unpack to.
+const MAX_PACKAGE_BYTES: usize = 25 * 1024 * 1024;
+const MAX_UNPACKED_BYTES: u64 = 25 * 1024 * 1024;
+const MAX_PACKAGE_FILES: usize = 300;
+
+#[derive(Deserialize, Default)]
+pub(super) struct InstallQuery {
+    /// Replace an already-installed plugin of the same id (an update). Its approval is dropped back to review.
+    replace: Option<bool>,
+}
+
+type InstallErr = (StatusCode, String);
+
+fn bad(msg: impl Into<String>) -> InstallErr {
+    (StatusCode::BAD_REQUEST, msg.into())
+}
+
+/// Unpacks `bytes` into a fresh staging folder and returns `(staging root, plugin id, folder to move)`.
+/// Nothing in here trusts the archive: entry names are checked, links are refused, sizes are counted as
+/// they are written, and the result is validated exactly as discovery would validate it.
+fn unpack_package(app: &AppState, bytes: &[u8], staging: &std::path::Path) -> Result<(String, std::path::PathBuf), InstallErr> {
+    use std::io::Read;
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|_| bad("that isn't a zip file"))?;
+    if zip.len() > MAX_PACKAGE_FILES * 2 {
+        return Err(bad("the package holds too many files"));
+    }
+    // Which entries to take, with their paths inside the plugin folder.
+    let mut files: Vec<(usize, std::path::PathBuf)> = Vec::new();
+    for i in 0..zip.len() {
+        let entry = zip.by_index(i).map_err(|_| bad("the zip file is damaged"))?;
+        let Some(name) = entry.enclosed_name().map(|p| p.to_path_buf()) else {
+            return Err(bad(format!("unsafe path in the package: {}", entry.name())));
+        };
+        if name.components().any(|c| matches!(c, std::path::Component::Normal(n) if n == "__MACOSX")) || name.file_name().is_some_and(|n| n == ".DS_Store") {
+            continue;
+        }
+        if entry.name().contains('\\') {
+            return Err(bad(format!("unsafe path in the package: {}", entry.name())));
+        }
+        if entry.unix_mode().is_some_and(|m| m & 0o170000 == 0o120000) {
+            return Err(bad(format!("the package contains a symbolic link ({}); plugins can't", entry.name())));
+        }
+        if entry.is_dir() {
+            continue;
+        }
+        files.push((i, name));
+    }
+    if files.is_empty() {
+        return Err(bad("the package is empty"));
+    }
+    if files.len() > MAX_PACKAGE_FILES {
+        return Err(bad(format!("the package holds more than {MAX_PACKAGE_FILES} files")));
+    }
+    // A package is either the plugin's files at its top level, or one folder holding them.
+    let at_root = files.iter().any(|(_, p)| p == std::path::Path::new("plugin.json"));
+    let strip = if at_root {
+        None
+    } else {
+        let first = |p: &std::path::Path| p.components().next().map(|c| c.as_os_str().to_os_string());
+        let top = first(&files[0].1);
+        if top.is_some() && files.iter().all(|(_, p)| first(p) == top && p.components().count() > 1) { top } else { None }
+    };
+    let root = staging.join("unpacked");
+    std::fs::create_dir_all(&root).map_err(|_| bad("couldn't create a working folder"))?;
+    let mut total: u64 = 0;
+    for (i, name) in &files {
+        let rel = match &strip {
+            Some(top) => name.strip_prefix(top).unwrap_or(name).to_path_buf(),
+            None => name.clone(),
+        };
+        let dest = root.join(&rel);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|_| bad("couldn't unpack the package"))?;
+        }
+        let entry = zip.by_index(*i).map_err(|_| bad("the zip file is damaged"))?;
+        let mut out = std::fs::File::create(&dest).map_err(|_| bad("couldn't unpack the package"))?;
+        // Count what is actually written, not what the archive claims: a zip bomb lies about its sizes.
+        let copied = std::io::copy(&mut entry.take(MAX_UNPACKED_BYTES + 1 - total), &mut out).map_err(|_| bad("the zip file is damaged"))?;
+        total += copied;
+        if total > MAX_UNPACKED_BYTES {
+            return Err(bad(format!("the package unpacks to more than {} MB", MAX_UNPACKED_BYTES / 1024 / 1024)));
+        }
+    }
+    let manifest_bytes = std::fs::read(root.join("plugin.json")).map_err(|_| bad("there is no plugin.json at the top of the package"))?;
+    if manifest_bytes.len() > 256 * 1024 {
+        return Err(bad("plugin.json is too large"));
+    }
+    let manifest = PluginManifest::parse(&manifest_bytes).map_err(|e| bad(e.to_string()))?;
+    if !crate::core::plugin_permissions::valid_plugin_id(&manifest.id) {
+        return Err(bad(format!("invalid plugin id '{}'", manifest.id)));
+    }
+    // Discovery wants the folder to be named after the plugin.
+    let named = staging.join("named").join(&manifest.id);
+    std::fs::create_dir_all(named.parent().unwrap_or(staging)).map_err(|_| bad("couldn't create a working folder"))?;
+    std::fs::rename(&root, &named).map_err(|_| bad("couldn't prepare the package"))?;
+    let icons = app.web_dir.join("icons").join("crimson");
+    check_plugin_folder(&named, env!("CARGO_PKG_VERSION"), Some(&icons)).map_err(bad)?;
+    Ok((manifest.id, named))
+}
+
+fn install_package(app: &AppState, bytes: &[u8], replace: bool) -> Result<String, InstallErr> {
+    let user_dir = user_plugins_dir(&app.data_dir);
+    let staging = app.data_dir.join("plugins-staging").join(uuid::Uuid::new_v4().to_string());
+    std::fs::create_dir_all(&staging).map_err(|_| bad("couldn't create a working folder"))?;
+    let result = (|| {
+        let (id, folder) = unpack_package(app, bytes, &staging)?;
+        let bundled = app.web_dir.join("plugins");
+        if bundled.join(&id).exists() || bundled.join(format!("{id}.js")).exists() || bundled.join(format!("{id}.plugin.json")).exists() {
+            return Err((StatusCode::CONFLICT, format!("'{id}' is the id of a plugin that ships with the app; it can't be replaced")));
+        }
+        std::fs::create_dir_all(&user_dir).map_err(|_| bad("couldn't create the plugins folder"))?;
+        let dest = user_dir.join(&id);
+        let backup = staging.join("previous");
+        let had_old = dest.exists();
+        if had_old {
+            if !replace {
+                return Err((StatusCode::CONFLICT, format!("'{id}' is already installed; install it as an update to replace it")));
+            }
+            std::fs::rename(&dest, &backup).map_err(|_| bad("couldn't replace the installed copy"))?;
+        }
+        if std::fs::rename(&folder, &dest).is_err() {
+            if had_old {
+                let _ = std::fs::rename(&backup, &dest);
+            }
+            return Err(bad("couldn't install the plugin"));
+        }
+        Ok(id)
+    })();
+    let _ = std::fs::remove_dir_all(&staging);
+    result
+}
+
+/// POST /api/plugins/install -- the body is a plugin package (a zip with `plugin.json`). Installing
+/// grants nothing: the plugin appears as "needs review" like any other.
+pub(super) async fn install_plugin(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<InstallQuery>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, ApiErr> {
+    require_host_token(&headers, &app)?;
+    if body.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "choose a plugin package (.zip)"));
+    }
+    if body.len() > MAX_PACKAGE_BYTES {
+        return Err(err(StatusCode::PAYLOAD_TOO_LARGE, "that package is too large"));
+    }
+    let replace = q.replace.unwrap_or(false);
+    let app2 = app.clone();
+    let id = tokio::task::spawn_blocking(move || install_package(&app2, &body, replace))
+        .await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "install failed"))?
+        .map_err(|(status, msg)| err(status, &msg))?;
+    let app3 = app.clone();
+    tokio::task::spawn_blocking(move || rescan(&app3)).await.map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "scan failed"))?;
+    app.db.add_plugin_audit(&id, &actor_of(&headers, &app), if replace { "updated" } else { "installed" }, "{}");
+    app.revoke_plugin_tokens(&id).await;
+    let fresh = app.db.get_plugin_grant(&id).ok().flatten().ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    Ok(Json(view(&app, &fresh)))
+}
+
+/// DELETE /api/plugins/:id -- removes a plugin the operator installed: its files, its approval, its
+/// downloaded tools and the secrets it saved. Plugins that ship with the app can only be revoked.
+pub(super) async fn uninstall_plugin(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<impl IntoResponse, ApiErr> {
+    require_host_token(&headers, &app)?;
+    let row = app.db.get_plugin_grant(&id).ok().flatten().ok_or_else(|| err(StatusCode::NOT_FOUND, "no such plugin"))?;
+    let dir = plugin_folder(&row);
+    if row.kind != "sandbox" || !is_installed_folder(&app, &dir) {
+        return Err(err(StatusCode::FORBIDDEN, "plugins that ship with the app can't be removed; revoke them instead"));
+    }
+    // Stop it first: every token it holds dies before its files do.
+    app.revoke_plugin_tokens(&id).await;
+    let (dir2, tools) = (dir.clone(), tools_dir(&app).join("plugins").join(&id));
+    tokio::task::spawn_blocking(move || {
+        let _ = std::fs::remove_dir_all(&dir2);
+        let _ = std::fs::remove_dir_all(&tools);
+    })
+    .await
+    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "couldn't remove the plugin"))?;
+    if dir.exists() {
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "couldn't remove the plugin's files"));
+    }
+    // Its saved secrets go with it, so a different plugin installed later under the same id can't read them.
+    let owners = [format!("plugin:{id}"), crate::api::keyring_policy::plugin_owner_tag(&id)];
+    let mut secrets = 0;
+    for (service, account) in app.db.take_keyring_entries_owned_by(&owners).unwrap_or_default() {
+        if crate::storage::KeyringService::delete_secret(&service, &account).unwrap_or(false) {
+            secrets += 1;
+        }
+    }
+    let _ = app.db.delete_plugin_grant(&id);
+    app.db.add_plugin_audit(&id, &actor_of(&headers, &app), "uninstalled", &serde_json::json!({ "secrets_deleted": secrets }).to_string());
+    Ok(Json(serde_json::json!({ "success": true, "secrets_deleted": secrets })))
+}
+
 pub(super) fn router() -> Router<AppState> {
     use axum::routing::{get, post};
     Router::new()
         .route("/api/plugins", get(list_plugins))
         .route("/api/plugins/audit", get(plugin_audit))
         .route("/api/plugins/permissions", get(permission_catalog))
+        .route("/api/plugins/install", post(install_plugin).layer(axum::extract::DefaultBodyLimit::max(MAX_PACKAGE_BYTES + 1024)))
+        .route("/api/plugins/:id", axum::routing::delete(uninstall_plugin))
         .route("/api/plugins/:id/approve", post(approve_plugin))
         .route("/api/plugins/:id/deny", post(deny_plugin))
         .route("/api/plugins/:id/revoke", post(revoke_plugin))

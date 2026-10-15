@@ -27,6 +27,12 @@ pub struct PluginGrantRow {
     pub decided_by: Option<String>,
     pub first_seen: i64,
     pub last_seen: i64,
+    /// `[[path, sha256], ...]` for the files on disk now / when approved (None for rows approved before this was recorded).
+    pub observed_files_json: Option<String>,
+    pub approved_files_json: Option<String>,
+    pub approved_version: Option<String>,
+    /// The permissions the plugin asked for when it was approved (granted_json is only what was granted).
+    pub approved_requested_json: Option<String>,
 }
 
 impl PluginGrantRow {
@@ -67,7 +73,7 @@ pub struct PluginAuditRow {
 
 const GRANT_COLS: &str = "plugin_id, kind, name, version, source_path, observed_manifest_sha256, observed_digest, \
      observed_signer, approved_signer, requested_json, error, approved_manifest_sha256, approved_digest, status, granted_json, decided_at, decided_by, \
-     first_seen, last_seen";
+     first_seen, last_seen, observed_files_json, approved_files_json, approved_version, approved_requested_json";
 
 fn grant_from_row(row: &rusqlite::Row<'_>) -> Result<PluginGrantRow> {
     Ok(PluginGrantRow {
@@ -90,6 +96,10 @@ fn grant_from_row(row: &rusqlite::Row<'_>) -> Result<PluginGrantRow> {
         decided_by: row.get(16)?,
         first_seen: row.get(17)?,
         last_seen: row.get(18)?,
+        observed_files_json: row.get(19)?,
+        approved_files_json: row.get(20)?,
+        approved_version: row.get(21)?,
+        approved_requested_json: row.get(22)?,
     })
 }
 
@@ -105,6 +115,7 @@ pub struct ObservedPlugin<'a> {
     pub signer: Option<&'a str>,
     pub requested_json: &'a str,
     pub error: Option<&'a str>,
+    pub files_json: &'a str,
 }
 
 impl Database {
@@ -113,6 +124,13 @@ impl Database {
     pub fn purge_removed_plugin_kinds(&self) -> Result<usize> {
         let conn = self.conn();
         Ok(conn.execute("DELETE FROM plugin_grants WHERE kind IN ('native', 'legacy-native', 'legacy-web')", [])?)
+    }
+
+    /// Forgets a plugin that was uninstalled. The audit log is history, so it keeps its entries.
+    pub fn delete_plugin_grant(&self, plugin_id: &str) -> Result<()> {
+        let conn = self.conn();
+        conn.execute("DELETE FROM plugin_grants WHERE plugin_id = ?1", params![plugin_id])?;
+        Ok(())
     }
 
     pub fn get_plugin_grant(&self, plugin_id: &str) -> Result<Option<PluginGrantRow>> {
@@ -141,8 +159,8 @@ impl Database {
         conn.execute(
             "INSERT INTO plugin_grants (plugin_id, kind, name, version, source_path, observed_manifest_sha256, \
                  observed_digest, requested_json, error, approved_manifest_sha256, approved_digest, status, \
-                 granted_json, decided_at, decided_by, first_seen, last_seen, observed_signer, approved_signer)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, NULL, NULL, 'pending', '[]', NULL, NULL, ?10, ?10, ?11, NULL)
+                 granted_json, decided_at, decided_by, first_seen, last_seen, observed_signer, approved_signer, observed_files_json)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, NULL, NULL, 'pending', '[]', NULL, NULL, ?10, ?10, ?11, NULL, ?12)
              ON CONFLICT(plugin_id) DO UPDATE SET
                  kind = excluded.kind, name = excluded.name, version = excluded.version,
                  source_path = excluded.source_path,
@@ -151,6 +169,7 @@ impl Database {
                  observed_signer = excluded.observed_signer,
                  requested_json = excluded.requested_json,
                  error = excluded.error,
+                 observed_files_json = excluded.observed_files_json,
                  last_seen = excluded.last_seen",
             params![
                 o.plugin_id,
@@ -164,6 +183,7 @@ impl Database {
                 o.error,
                 now,
                 o.signer,
+                o.files_json,
             ],
         )?;
         Ok(())
@@ -186,7 +206,9 @@ impl Database {
         let changed = if status == "approved" {
             conn.execute(
                 "UPDATE plugin_grants SET status = ?2, granted_json = ?3, approved_manifest_sha256 = ?4, \
-                     approved_digest = ?5, decided_at = ?6, decided_by = ?7, approved_signer = ?8 WHERE plugin_id = ?1",
+                     approved_digest = ?5, decided_at = ?6, decided_by = ?7, approved_signer = ?8, \
+                     approved_files_json = observed_files_json, approved_version = version, approved_requested_json = requested_json \
+                     WHERE plugin_id = ?1",
                 params![plugin_id, status, granted_json, pin_manifest_sha256, pin_digest, now, decided_by, pin_signer],
             )?
         } else {

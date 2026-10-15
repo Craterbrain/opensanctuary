@@ -8,6 +8,8 @@ import { keyring } from "./core/keyring.ts";
 import { resolveHostSessionToken } from "./core/host_session.ts";
 import { startSandboxedPlugin, stopSandboxedPlugin, isSandboxedPluginRunning } from "./core/plugin_bridge.ts";
 import { startEmojiIcons } from "./core/emoji_icons.ts";
+import { previousSessionHung, markPluginsStarting, watchConsoleHealth, showSafeModeBanner } from "./core/plugin_guard.ts";
+import { openSettingsAt } from "./ui/settings_dialog.ts";
 import { initNotificationBell, startNotificationFeed } from "./ui/notification_center.ts";
 
 // 0. Swap emoji for the themed SVG icons (static markup now, rendered content as it appears)
@@ -56,10 +58,20 @@ clock.synchronize(5).then(async () => {
             const res = await fetch("/api/plugins?kind=web&active=1");
             if (!res.ok) return; // no console credential on this page (live/stage/remote)
             const list = await res.json();
-            for (const p of Array.isArray(list) ? list : []) {
-                if (!p || typeof p.id !== "string") continue;
-                if (p.kind === "sandbox") startSandboxedPlugin(p);
-                else await pluginManager.loadLocalPlugin(`/plugins/${p.id}.js`, p.id);
+            const approved = (Array.isArray(list) ? list : []).filter((p: any) => p && typeof p.id === "string");
+            const startAll = async () => {
+                if (approved.length) { markPluginsStarting(); watchConsoleHealth(); }
+                for (const p of approved) {
+                    if (p.kind === "sandbox") startSandboxedPlugin(p);
+                    else await pluginManager.loadLocalPlugin(`/plugins/${p.id}.js`, p.id);
+                }
+            };
+            // The last session ended without ever becoming healthy: a plugin may have hung the console.
+            // Keep every plugin paused until the operator says otherwise (nothing is revoked).
+            if (approved.length && previousSessionHung()) {
+                showSafeModeBanner(() => { void startAll(); }, () => openSettingsAt("plugins"));
+            } else {
+                await startAll();
             }
         } catch (e) {
             console.warn("[Plugins] could not load approved plugins:", e);

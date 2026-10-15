@@ -34,6 +34,21 @@ impl Database {
         }
     }
 
+    /// Every secret on record that `owner` created, and forgets the records: for uninstalling a plugin.
+    pub fn take_keyring_entries_owned_by(&self, owners: &[String]) -> Result<Vec<(String, String)>> {
+        let conn = self.conn();
+        let mut found = Vec::new();
+        for owner in owners {
+            let mut stmt = conn.prepare("SELECT service, account FROM keyring_metadata WHERE owner = ?1")?;
+            let rows = stmt.query_map(params![owner], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            for row in rows {
+                found.push(row?);
+            }
+            conn.execute("DELETE FROM keyring_metadata WHERE owner = ?1", params![owner])?;
+        }
+        Ok(found)
+    }
+
     /// The shared-namespace entries on record: `(service, account, owner)`, never the secrets.
     pub fn list_shared_keyring_entries(&self) -> Result<Vec<(String, String, String)>> {
         let conn = self.conn();

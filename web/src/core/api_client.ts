@@ -349,6 +349,21 @@ export const api = {
       await resolveHostSessionToken();
       return api.get<PluginCatalogEntry[]>('/api/plugins/permissions', { headers: hostTokenHeader() });
     },
+    /** Installs a plugin package (.zip). Nothing is granted: it appears as "needs review". `replace` updates an installed one. */
+    install: async (file: Blob, replace = false): Promise<PluginInfo> => {
+      await resolveHostSessionToken();
+      const res = await fetch(`/api/plugins/install${replace ? '?replace=true' : ''}`, {
+        method: 'POST', headers: { ...hostTokenHeader(), 'content-type': 'application/zip' }, body: file,
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `install failed (${res.status})`);
+      return body as PluginInfo;
+    },
+    /** Removes an installed plugin: files, approval, saved secrets. Built-in plugins can only be revoked. */
+    uninstall: async (id: string) => {
+      await resolveHostSessionToken();
+      return api.delete<{ success: boolean; secrets_deleted: number }>(`/api/plugins/${encodeURIComponent(id)}`, { headers: hostTokenHeader() });
+    },
     deny: async (id: string) => {
       await resolveHostSessionToken();
       return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/deny`, {}, { headers: hostTokenHeader() });
@@ -473,6 +488,16 @@ export interface PluginInfo {
   id: string;
   kind: 'web' | 'sandbox';
   sandboxed?: boolean;
+  /** Installed by the operator (so it can be updated or removed), as opposed to shipping with the app. */
+  removable?: boolean;
+  /** For an approved plugin that has since changed: how it differs from the version you reviewed. */
+  changes?: {
+    from_version: string | null;
+    to_version: string | null;
+    direction: 'upgrade' | 'downgrade' | 'same' | 'unknown';
+    files: { added: string[]; removed: string[]; modified: string[] } | null;
+    permissions: { added: string[]; removed: string[]; changed: string[]; added_tiers: Array<{ id: string; tier: string }> };
+  } | null;
   entry?: string | null;
   name: string;
   version: string | null;

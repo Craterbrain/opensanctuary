@@ -274,6 +274,45 @@ runs after the app has booted.
 
 ---
 
+## Versions and updates
+
+(Signing is described, not yet built, in [PLUGIN_SIGNING.md](PLUGIN_SIGNING.md).)
+
+`version` in `plugin.json` must be a semantic version (`1.2.3`; empty is allowed). `host_api` (a semver requirement such as `>=0.2.0, <0.3.0`) says which OpenSanctuary versions it works with; outside that range the plugin shows as incompatible.
+
+When an approved plugin's files change (a new version dropped in, an **Update…**, or an edit), it stops until you review it again, and the card shows **what changed** against the version you approved: `v1.0.0 → v1.1.0`, whether that is an upgrade, a **downgrade** (an older version than you approved, shown with a warning), or the same version number with different files (also warned), the files edited, added and removed, and any **new permissions** with their risk level, or wider scope on existing ones. Permissions you declined last time (optional ones) are not reported as new again. The manifest counts as a file, so a version bump shows `plugin.json` as edited. Plugins approved before this was recorded show the version and permission changes but not the file list.
+
+---
+
+## Installing and removing plugins
+
+**Settings → Plugins → Install plugin…** takes a **package**: a `.zip` holding the plugin's files, with `plugin.json` at the top (or inside one wrapping folder, which is stripped). Installed plugins live in `<data dir>/plugins/<id>/`, so they survive app updates and work when the app itself is installed read-only. The ones that ship with the app are in `web/plugins/`.
+
+- **Installing grants nothing.** The plugin appears as "needs review" and does not run until you approve it, like any other.
+- **The package is not trusted.** It is checked before anything is kept: no paths that leave the folder, no symbolic links, at most 300 files and 25 MB once unpacked (counted as written, so a zip bomb that lies about its size is stopped), and the result must pass the same checks as a plugin found on disk. A failed install leaves nothing behind.
+- **Built-in plugins can't be shadowed.** A package whose id belongs to a bundled plugin is refused, and an installed folder with such an id is ignored.
+- **Update…** on an installed plugin replaces its files. The new files hash differently, so the plugin shows "changed" and stays off until you review it.
+- **Remove** deletes the files, the approval, the plugin's downloaded tools and the secrets it saved in the keyring (so a different plugin installed later under the same id can't read them). Bundled plugins can only be revoked.
+
+Every install, update and removal is in the audit log. The API is `POST /api/plugins/install` (body: the zip; `?replace=true` to update) and `DELETE /api/plugins/:id`, both console-only.
+
+To make a package: `cd my_plugin && zip -r ../my_plugin.zip .`
+
+**Check a plugin before you ship it:** `os-next --check-plugin path/to/my_plugin` runs the checks the app runs on install (manifest, entry file, icons, permission names and scopes) and prints what the operator would be asked to approve, with each permission's risk level. It exits 0 if the plugin would load. The folder's name must be the plugin's id.
+
+---
+
+## When a plugin misbehaves
+
+A plugin page runs in its own frame, but some browsers run that frame on the console's own thread, so a page stuck in an endless loop can freeze the whole tab. The console defends against this without trusting the plugin:
+
+- **Watchdog.** The console pings every running frame; the SDK (`__os/sdk.js`) answers automatically. A frame that was answering and then goes silent for 15 seconds is removed for the rest of the session and you get a notice. It stays approved; reload to start it again. **Load the SDK**: a page that never answers a ping is not watched.
+- **Safe mode.** If the console itself hangs, nothing on the page can help, so the next load does. Plugins are started behind a marker that is cleared after a clean unload or 8 healthy seconds. If the marker is still there at the next start, a banner says plugins are paused and every plugin (including console scripts) waits until you press **Resume plugins**. Nothing is revoked.
+- **Load shedding.** A frame that does lots of small jobs keeps answering pings while the console crawls, because they share a thread. When the console's own 1-second timer runs late three ticks out of four, plugins are switched off one at a time (newest first) until it recovers. The last one switched off is blamed and stays off for the session with a notice; the ones that were only being tested are started again. If switching them all off doesn't help, the plugins weren't the cause and nothing is blamed. This can take a minute on a badly stalled console.
+- **Limits that always apply:** manifests over 256 KB are rejected, notifications are rate-limited per plugin, and a frame's height is clamped.
+
+---
+
 ## Choosing between them
 
 | | Sandboxed web plugin | Console script (`ui.dom`) |

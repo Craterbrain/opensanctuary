@@ -27,6 +27,11 @@
       "reason": "Appears in the Media library, where video downloads used to be"
     },
     {
+      "id": "ui.clipboard",
+      "optional": true,
+      "reason": "Paste button: reads the copied text so you don't have to type a URL"
+    },
+    {
       "id": "process.run",
       "commands": [
         "download"

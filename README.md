@@ -93,7 +93,8 @@ Optional features are plugins, and nothing runs until the operator approves it i
 **Settings → Plugins**. The review screen shows exactly what a plugin asks for (which
 websites it may reach, whether it may write to your library, which commands it may run)
 with a risk level for each, and a plugin that changes on disk drops back to "needs
-review" until you look at it again. A sandboxed plugin never gets the console's own credentials.
+review" until you look at it again. A sandboxed plugin never gets the console's own credentials. You can add your own with
+**Install plugin…** (a `.zip` package; it stays off until you review it) and remove it again later.
 
 Bundled with the app (all sandboxed web plugins, off until you turn them on):
 

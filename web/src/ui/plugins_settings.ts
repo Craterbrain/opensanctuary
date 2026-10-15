@@ -184,6 +184,46 @@ function buildAdvanced(plugin: PluginInfo, onChange: (on: boolean) => void): { r
   return { root, collect, isOn: () => toggle.checked };
 }
 
+/** "What changed" for an approved plugin whose files differ from what was reviewed. */
+function renderChanges(plugin: PluginInfo): HTMLElement | null {
+  const c = plugin.changes;
+  if (!c) return null;
+  const box = el('div', 'plugin-changes');
+  const from = c.from_version ? `v${c.from_version}` : 'the version you approved';
+  box.appendChild(el('strong', 'plugin-changes-title', c.to_version ? `Update: ${from} → v${c.to_version}` : `Changed since ${from}`));
+  if (c.direction === 'downgrade') {
+    box.appendChild(el('div', 'plugin-warning', 'This is an OLDER version than the one you approved. Rolling back can bring back fixed bugs and old security holes.'));
+  } else if (c.direction === 'same') {
+    box.appendChild(el('div', 'plugin-warning', "The version number didn't change, but the files did."));
+  }
+  const p = c.permissions;
+  if (p.added.length) {
+    const tiers = new Map(p.added_tiers.map((t) => [t.id, t.tier]));
+    box.appendChild(el('div', 'plugin-warning plugin-changes-perms', `New permissions requested: ${p.added.map((id) => `${id} (${tiers.get(id) ?? 'unknown risk'})`).join(', ')}.`));
+  }
+  if (p.changed.length) box.appendChild(el('div', 'plugin-warning plugin-changes-perms', `Wider or different scope: ${p.changed.join(', ')}.`));
+  if (!p.added.length && !p.changed.length) box.appendChild(el('div', 'settings-hint', p.removed.length ? `No new permissions (it no longer asks for: ${p.removed.join(', ')}).` : 'No new permissions.'));
+  if (c.files) {
+    const parts: string[] = [];
+    if (c.files.modified.length) parts.push(`edited: ${c.files.modified.join(', ')}`);
+    if (c.files.added.length) parts.push(`added: ${c.files.added.join(', ')}`);
+    if (c.files.removed.length) parts.push(`removed: ${c.files.removed.join(', ')}`);
+    box.appendChild(el('div', 'settings-hint plugin-changes-files', parts.length ? `Files ${parts.join(' · ')}` : 'No file changes.'));
+  } else {
+    box.appendChild(el('div', 'settings-hint', 'The list of changed files is not available for a plugin approved before updates were tracked.'));
+  }
+  return box;
+}
+
+/** Opens the file chooser for a plugin package and hands the chosen .zip over. */
+function pickPackage(onFile: (file: File) => void): void {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.zip,application/zip';
+  input.addEventListener('change', () => { const f = input.files?.[0]; if (f) onFile(f); });
+  input.click();
+}
+
 function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   const card = el('div', 'network-card plugin-card');
   card.dataset.pluginId = plugin.id;
@@ -195,7 +235,9 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   head.appendChild(el('span', 'os-badge os-badge--neutral', plugin.kind === 'sandbox' ? 'Sandboxed page' : 'Console script'));
   if (plugin.overridden) head.appendChild(el('span', 'os-badge plugin-state plugin-state--changed', 'Permissions overridden'));
   card.appendChild(head);
-  card.appendChild(el('div', 'settings-hint', `id: ${plugin.id} · digest ${plugin.digest.slice(0, 12)}… · ${plugin.signed ? `signed (publisher key ${plugin.signer_id})` : 'unsigned'}`));
+  card.appendChild(el('div', 'settings-hint', `id: ${plugin.id} · digest ${plugin.digest.slice(0, 12)}… · ${plugin.signed ? `manifest signed (publisher key ${plugin.signer_id}; the plugin's other files aren't covered by the signature)` : 'unsigned'}`));
+  const changes = renderChanges(plugin);
+  if (changes) card.appendChild(changes);
   if (plugin.signer_changed) {
     card.appendChild(el('div', 'plugin-warning', 'The publisher signature is different from the one you approved before (or it used to be signed and now isn\'t). Check that this update is from who you expect.'));
   }
@@ -349,6 +391,20 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
     revoke.addEventListener('click', () => void act(() => api.plugins.revoke(plugin.id), `${plugin.name} revoked`));
     actions.appendChild(revoke);
   }
+  if (plugin.removable) {
+    const update = el('button', 'btn btn-secondary plugin-update', 'Update…');
+    update.addEventListener('click', () => pickPackage((file) => void act(() => api.plugins.install(file, true), `${plugin.name} updated: review it before it runs again`)));
+    actions.appendChild(update);
+    const remove = el('button', 'btn btn-danger plugin-remove', 'Remove');
+    remove.addEventListener('click', () => {
+      if (!window.confirm(`Remove "${plugin.name}"?\n\nIts files, its approval and any secrets it saved are deleted. This can't be undone.`)) return;
+      void act(async () => {
+        await api.plugins.uninstall(plugin.id);
+        return { id: plugin.id, kind: 'sandbox', state: 'revoked' };
+      }, `${plugin.name} removed`);
+    });
+    actions.appendChild(remove);
+  }
   if (advanced && plugin.state !== 'incompatible' && !plugin.error) {
     const apply = el('button', 'btn btn-danger', 'Apply override');
     apply.hidden = true;
@@ -418,6 +474,19 @@ export function renderPluginsSettings(content: HTMLElement) {
       content.appendChild(el('div', 'settings-group-header', 'Plugins'));
       content.appendChild(el('div', 'settings-hint',
         'A plugin does nothing until you approve it. Only this console can grant permissions, and a plugin whose files change is stopped until you review it again.'));
+      const install = el('div', 'plugin-install-row');
+      const installBtn = el('button', 'btn btn-secondary plugin-install', 'Install plugin…');
+      installBtn.addEventListener('click', () => pickPackage(async (file) => {
+        try {
+          const p = await api.plugins.install(file);
+          showToast(`${p.name} installed. Review its permissions below before it can run.`);
+          refresh();
+        } catch (e: any) {
+          showToast(`Couldn't install: ${e?.message ?? e}`);
+        }
+      }));
+      install.append(installBtn, el('span', 'settings-hint', 'A plugin package is a .zip with a plugin.json. Only install plugins from people you trust: it stays switched off until you approve it.'));
+      content.appendChild(install);
       if (!plugins.length) {
         content.appendChild(el('div', 'settings-empty', 'No plugins installed.'));
       }

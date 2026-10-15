@@ -23,6 +23,9 @@ struct Args {
     #[arg(long, help = "SQLite library database path [default: platform data dir, or ./library.db in dev/portable mode -- see docs/paths.md]")]
     db_path: Option<String>,
 
+    #[arg(long, value_name = "FOLDER", help = "Check a plugin folder (plugin.json, entry, icons, permissions) the way the app would, print the result and exit")]
+    check_plugin: Option<String>,
+
     #[arg(long)]
     bibles_dir: Option<String>,
 
@@ -65,6 +68,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let args = Args::parse();
+
+    if let Some(folder) = &args.check_plugin {
+        std::process::exit(check_plugin_folder_cli(std::path::Path::new(folder), args.web_dir.as_deref()));
+    }
 
     // Resolve where data actually lives (see docs/paths.md): an explicit CLI
     // flag always wins; otherwise a relocated-data-dir pointer file;
@@ -139,7 +146,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Record what plugins are installed (web/plugins): nothing runs until the operator approves it
         // (docs/PLUGIN_PERMISSIONS.md).
         let web_plugins_dir = os_next::storage::paths::resolve_web_dir(args.web_dir.as_deref()).join("plugins");
-        let discovered = os_next::core::plugin_registry::discover(&web_plugins_dir, env!("CARGO_PKG_VERSION"));
+        let user_plugins_dir = os_next::core::plugin_registry::user_plugins_dir(&resolved_paths.data_dir());
+        let discovered = os_next::core::plugin_registry::discover_all(&web_plugins_dir, Some(&user_plugins_dir), env!("CARGO_PKG_VERSION"));
         os_next::core::plugin_registry::sync(&db, &discovered);
         db.prune_plugin_audit(5000);
     }
@@ -621,5 +629,32 @@ async fn network_request_timeout(
     match tokio::time::timeout(std::time::Duration::from_secs(60), next.run(req)).await {
         Ok(resp) => resp,
         Err(_) => (axum::http::StatusCode::REQUEST_TIMEOUT, "request timed out").into_response(),
+    }
+}
+
+/// `--check-plugin <folder>`: for plugin authors. Runs the checks the app runs when it finds or installs a
+/// plugin, and lists what the operator would be asked to approve. Exit code 0 means it would load.
+fn check_plugin_folder_cli(folder: &std::path::Path, web_dir: Option<&str>) -> i32 {
+    let Ok(folder) = std::fs::canonicalize(folder) else {
+        eprintln!("error: {} isn't a folder", folder.display());
+        return 2;
+    };
+    let icons = os_next::storage::paths::resolve_web_dir(web_dir).join("icons").join("crimson");
+    match os_next::core::plugin_registry::check_plugin_folder(&folder, env!("CARGO_PKG_VERSION"), Some(&icons)) {
+        Ok(d) => {
+            println!("ok: {} ({}) v{}", d.name, d.id, d.version.as_deref().unwrap_or("?"));
+            println!("it would ask the operator for:");
+            for p in &d.requested {
+                println!("  {:<20} {:?}{}  {}", p.id, p.tier(), if p.optional { " (optional)" } else { "" }, p.reason.as_deref().unwrap_or("(no reason given)"));
+            }
+            if d.requested.iter().any(|p| p.reason.as_deref().unwrap_or("").trim().is_empty()) {
+                println!("note: give every permission a reason; it is what the operator reads when deciding");
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
     }
 }

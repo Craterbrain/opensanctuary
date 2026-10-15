@@ -120,6 +120,9 @@
       (listeners[m.event] || []).forEach(function (cb) { try { cb(m.data); } catch (e) { console.error(e); } });
     } else if (m.type === 'os.theme') {
       applyTheme(m.vars, m.iconSet);
+    } else if (m.type === 'os.ping') {
+      // The console's watchdog: a page that stops answering is removed for the session.
+      parent.postMessage({ type: 'os.pong', n: m.n }, '*');
     }
   });
 
