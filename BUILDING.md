@@ -1,6 +1,6 @@
 # Building OpenSanctuary (os-next)
 
-_Last edited: 2026-10-01 14:19_
+_Last edited: 2026-10-15_
 
 ## Prerequisites
 
@@ -128,6 +128,16 @@ artifacts, not for day-to-day development:
 - `packaging/install.sh` — the end-user-facing installer script for the
   generic Linux tarball (`curl | sh`), not something you run as part of
   building.
+- Both scripts also build and bundle the Android TV client APK
+  (`apps/android-tv/build_apk.sh`) by default, which needs the Android SDK
+  (`packaging/Dockerfile.linux-build` installs it into the container; a
+  local Windows-installer build needs it on your own machine). Set
+  `SKIP_TV_APK=1` to skip building/bundling it entirely — no Android
+  toolchain required, and ADB provisioning then reports "APK not available"
+  (`src/storage/paths.rs::resolve_tv_apk_path`). The real `release.yml`
+  workflow always builds with `SKIP_TV_APK=1` (see `docs/workflow.md`), so a
+  local build with the APK included is a strictly bigger build than a tagged
+  release, not a smaller one.
 
 ## Cross-compiling for Windows from Linux
 

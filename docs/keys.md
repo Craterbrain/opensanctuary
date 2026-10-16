@@ -1,6 +1,6 @@
 # Setting up the release signing key
 
-_Last edited: 2026-10-01 13:38_
+_Last edited: 2026-10-15_
 
 This is the one key OpenSanctuary needs right now: the Ed25519 keypair
 (via `minisign`) that signs every release's `checksums.txt`, which
@@ -9,6 +9,17 @@ This is the one key OpenSanctuary needs right now: the Ed25519 keypair
 ever installing anything. The design rationale and threat model are in
 `docs/update.md`'s "Release signing key" section — this doc is just the
 checklist for actually doing it, once, for real.
+
+**Current status**: done, and already rotated once. The live key (minisign
+ID `C12205725EA34858`) was generated 2026-10-11, replacing a 2026-10-06 key
+whose encrypted secret was lost before any release was ever signed with it
+(so that rotation needed none of "If the key is ever lost or compromised"
+below — nothing had shipped with the old key yet). The current key has
+signed real published releases (`v0.1.0-alpha`, `v0.2.0`); see
+`docs/release-signing-key.txt` for its public half and
+`docs/workflow.md`'s "Current status" for the release history. The steps
+below are kept as the runbook for the *next* rotation, not a still-open
+task.
 
 Follow these in order. Steps 1–4 you do on your own machine, outside any
 CI system. Nothing in steps 1–4 ever touches GitHub.

@@ -1,6 +1,6 @@
 # Setting up and running the release workflow
 
-_Last edited: 2026-10-06_
+_Last edited: 2026-10-15_
 
 `.github/workflows/release.yml` builds, signs, and publishes a GitHub Release
 (`.deb`, Linux tarball, Windows installer, portable zip, `checksums.txt`,
@@ -11,24 +11,28 @@ how the app verifies updates is in `docs/update.md`.
 `ci.yml` is separate: it runs the tests on every push and PR. Only
 `release.yml` signs and publishes, and it deliberately does **not** run tests.
 
-## Current status (2026-10-10)
+## Current status (2026-10-15)
 
-- The workflow has **not yet published a release**. The last dry run (tag
-  `v0.2.2-keytest`, run 8) passed the version check and both builds: Linux, and
-  Windows after the Wine/Inno-under-xvfb and `llvm` fixes. `sign-and-publish`
-  then failed at "Sign checksums.txt" with `Error while loading the secret key
-  file`: the `MINISIGN_SECRET_KEY` secret must hold the key file **verbatim, both
-  lines** (`untrusted comment: ...` and the base64 line). Reset it with
-  `gh secret set MINISIGN_SECRET_KEY < opensanctuary_release.key`, then rerun the
-  failed job (`gh run rerun <id> --failed`). The verify and publish steps have not
-  run yet. The `MINISIGN_PUBLIC_KEY_B64` variable, by contrast, is the bare
-  `RW...` string.
-- The workflow fixes are on `main`. The throwaway dry-run tags/versions
-  (`v0.2.1-keytest`, `v0.2.2-keytest`) can be deleted; a dry run needs a new tag
-  and a matching throwaway `Cargo.toml` version on a branch (see "First run").
+- The workflow is **working and has published real releases**: `v0.1.0-alpha`
+  (2026-09-25) and `v0.2.0` — beta 2 — (2026-10-13, run 38439712249,
+  `sign-and-publish` green end to end). The `MINISIGN_SECRET_KEY`-loading
+  failure that blocked the dry runs below was the secret not holding the key
+  file verbatim (both the `untrusted comment:` line and the base64 line);
+  resetting it with `gh secret set MINISIGN_SECRET_KEY < opensanctuary_release.key`
+  fixed it for good.
+- Project status: no 1.0 yet. `v0.2.0` is beta 2; work on beta 3 (`v0.3.0`) is
+  in progress on `main` (Cargo.toml is still at `0.2.0` — bump it per "Before
+  every release" when beta 3 is ready to tag).
+- The throwaway dry-run tags (`v0.2.1-keytest`, `v0.2.2-keytest`) are still on
+  the remote (`git ls-remote --tags origin`) and can be deleted
+  (`git push origin :refs/tags/v0.2.1-keytest`, same for `.2.2`) — neither has
+  a GitHub Release attached, so there's nothing to `gh release delete` first.
+  A future dry run needs a new tag and a matching throwaway `Cargo.toml`
+  version on a branch (see "First run").
 - The signing secrets/variable are set. The production public key is embedded
   in `updater.rs` and `install.sh`. `RELEASES_REPO`/`REPO` point at
-  `Craterbrain/opensanctuary`.
+  `Craterbrain/opensanctuary`, which is now a **public** repo (the updater's
+  anonymous `/releases/latest` poll needs that).
 - Known and still open: see "Known issues" at the bottom.
 
 ## One-time setup
@@ -223,11 +227,14 @@ old key cannot verify releases signed with the new one; see `docs/update.md`'s
 
 ## Known issues
 
-- **TLS key without an OS keyring.** The server stores its TLS private key in the
-  OS keyring (`src/network/tls.rs`). On a machine with no Secret Service (headless
-  Linux, CI), the key can't be read back and the certificate is regenerated on
-  every start, which breaks clients that pinned the old fingerprint (Android TV).
-  Not fixed.
+- ~~**TLS key without an OS keyring.**~~ Fixed: when the OS keyring is
+  unavailable (headless Linux, CI, no Secret Service), `src/network/tls.rs`
+  falls back to an owner-only (`0600`) key file under the config dir instead
+  of regenerating the cert every start, which used to break clients that
+  pinned the old fingerprint (Android TV). Covered by
+  `fallback_key_file_round_trips_without_a_keyring` in `tls.rs`'s own tests
+  (deliberately not gated on a real keyring existing, unlike the older
+  `test_tls_private_key_storage_and_legacy_migration`).
 - **`ci.yml` web tests** reference files outside the repo (above).
 - **Prerelease replay gap.** The updater binds a release to the signed asset
   filename's `major.minor.patch` only; a prerelease replayed as its own final

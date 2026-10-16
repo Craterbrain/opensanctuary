@@ -1,6 +1,6 @@
 # Third-Party Licenses & Attribution
 
-_Last edited: 2026-10-01 15:31_
+_Last edited: 2026-10-15_
 
 OpenSanctuary (`os-next`) is MIT-licensed (see `LICENSE`). It builds on a
 large number of open-source libraries, and a couple of external tools it
@@ -51,7 +51,7 @@ redox_users, rfd, rusqlite, schannel, sharded-slab, simd-adler32, slab,
 soup3, soup3-sys, spin, strsim, synstructure, tokio, tokio-macros,
 tokio-native-tls, tokio-tungstenite, tokio-util, tower, tower-http,
 tower-layer, tower-service, tracing, tracing-attributes, tracing-core,
-tracing-log, tracing-subscriber, try-lock, uds_windows, urlencoding,
+tracing-log, tracing-subscriber, try-lock, uds_windows,
 valuable, want, wayland-backend, wayland-client, wayland-protocols,
 wayland-scanner, wayland-sys, webkit2gtk, webkit2gtk-sys, webview2-com,
 webview2-com-macros, webview2-com-sys, winapi, winnow, x11, x11-dl, zbus,
@@ -213,8 +213,8 @@ to an end user and is omitted.
 ## Bundled or fetched external tools (not Rust/Cargo dependencies)
 
 These aren't linked into `os-next`'s own binary -- they're invoked as
-separate subprocesses (`src/storage/ytdlp_import.rs`,
-`src/storage/transcode.rs`) -- but ship alongside it on Windows, so their
+separate subprocesses (`src/storage/transcode.rs`,
+`src/api/plugin_tools.rs`) -- but ship alongside it on Windows, so their
 own license terms apply to those specific files.
 
 ### ffmpeg / ffprobe (Windows installer/portable build only)
@@ -237,17 +237,20 @@ own license terms apply to those specific files.
 
 - **License**: [Unlicense](https://github.com/yt-dlp/yt-dlp/blob/master/LICENSE)
   (public-domain-equivalent) for the core project. The standalone
-  platform executables yt-dlp itself publishes (what
-  `src/network/ytdlp_updater.rs` downloads) are PyInstaller bundles that
+  platform executables yt-dlp itself publishes (what the Video Downloader
+  plugin's tool installer downloads) are PyInstaller bundles that
   yt-dlp's own release notes document as GPLv3+ combined works -- see
   [yt-dlp's README "LICENSE" section](https://github.com/yt-dlp/yt-dlp#license)
   and its `THIRD_PARTY_LICENSES.txt` for the full breakdown of what's
   bundled inside that specific executable.
-- Not shipped in any OpenSanctuary release artifact: `ytdlp_updater.rs`
-  downloads it directly from yt-dlp's own GitHub releases at runtime (see
-  `docs/installer.md`'s "Bundled ffmpeg + self-managed yt-dlp" section for
-  why).
-- `src/network/ytdlp_public_key.asc` is yt-dlp's own published GPG public
+- Not shipped in any OpenSanctuary release artifact: the Video Downloader
+  plugin (`web/plugins/ytdlp/`) declares the GitHub release/asset/checksums
+  to fetch, and the generic plugin-tool installer (`src/api/plugin_tools.rs`,
+  shared by every plugin-declared tool, not yt-dlp-specific) downloads it
+  directly from yt-dlp's own GitHub releases on request, into
+  `<data dir>/tools/` (see `docs/paths.md`). See `docs/PLUGINS.md` and
+  `docs/installer.md`'s "Bundled ffmpeg + self-managed yt-dlp" section for why.
+- `web/plugins/ytdlp/yt-dlp-key.asc` is yt-dlp's own published GPG public
   key (RSA-4096, fingerprint
   `AC0C BBE6 848D 6A87 3464 AF4E 57CF 6593 3B5A 7581`), used only to verify
   the authenticity of what's downloaded -- not OpenSanctuary's own key, and

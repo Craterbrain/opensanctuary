@@ -33,10 +33,13 @@ use sha2::{Digest, Sha256};
 pub const RELEASES_REPO: &str = "Craterbrain/opensanctuary";
 
 /// The release-signing public key (minisign key ID C12205725EA34858; the
-/// matching encrypted secret key is kept offline, never in this repo). Releases
-/// previously signed with the old throwaway test key will no longer verify.
-/// `RELEASES_REPO` above is still the test mirror and must be swapped to the
-/// real release repo before this verifies a release handed to real users.
+/// matching encrypted secret key is kept offline, never in this repo). This
+/// is the real production key (generated 2026-10-11, replacing an earlier key
+/// whose encrypted secret was lost before any release was signed with it) --
+/// matches `docs/release-signing-key.txt` and `PUBLIC_KEY` in
+/// `packaging/install.sh`. Releases signed with the old throwaway test key
+/// (used only against the disposable `opensanctuary-release-testing` mirror
+/// before this repo went public) no longer verify.
 pub const RELEASE_PUBLIC_KEY_B64: &str = "RWRYSKNecgUiwS2YaMPmshtR2/ZAQA/XnunXaOBQw/SRkZPyMspLwhGw";
 
 /// Verifies `data` was signed by the holder of the private key matching
@@ -598,16 +601,20 @@ mod tests {
         assert!(is_version_newer("v1.0.0", "also-not-a-version").is_err());
     }
 
-    /// Exercises the real network path end to end against the actual public
-    /// test repo (`RELEASES_REPO`): fetch /releases/latest for real, build a
-    /// `ReleaseInfo` from it (bypassing the version-newer check, since this
-    /// crate's own dev version may not be "older" than the test tag -- see
+    /// Exercises the real network path end to end against `RELEASES_REPO`:
+    /// fetch /releases/latest for real, build a `ReleaseInfo` from it
+    /// (bypassing the version-newer check, since this crate's own dev
+    /// version may not be "older" than the latest published tag -- see
     /// `is_version_newer_uses_real_semver_ordering_not_lexical` above for
-    /// why "v0.2.0-test" specifically does NOT count as newer than "0.2.0"),
-    /// then really download and verify it. Proves `download_and_verify_release`
-    /// works against a real GitHub release signed with the real (test) key
-    /// embedded in `RELEASE_PUBLIC_KEY_B64`, not just against synthetic
-    /// fixtures.
+    /// why a prerelease suffix specifically does NOT count as newer than a
+    /// plain version), then really download and verify it. Proves
+    /// `download_and_verify_release` works against a real GitHub release
+    /// signed with the real production key embedded in
+    /// `RELEASE_PUBLIC_KEY_B64`, not just against synthetic fixtures. Originally
+    /// written against the disposable `opensanctuary-release-testing` mirror
+    /// before the real repo went public; `RELEASES_REPO` now points at the
+    /// real `Craterbrain/opensanctuary`, so this hits real published releases
+    /// (`v0.1.0-alpha`, `v0.2.0`, ...) -- that's the point, not a leftover.
     ///
     /// `#[ignore]`d unlike most of this codebase's live-network tests (e.g.
     /// `test_fetch_churchapps_catalog_live`) -- confirmed directly that
@@ -623,7 +630,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn downloads_and_verifies_the_real_test_repo_release() {
-        let release_json = fetch_latest_release_json().await.expect("Should fetch the real test repo's latest release");
+        let release_json = fetch_latest_release_json().await.expect("Should fetch the real repo's latest release");
         let release = release_info_from_json(&release_json).expect("Should extract a ReleaseInfo from the real release");
         assert!(release.asset_name.ends_with(".deb"), "expected a .deb asset on Linux, got {}", release.asset_name);
 

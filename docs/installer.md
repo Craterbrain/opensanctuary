@@ -1,16 +1,17 @@
 # Plan: installers (Windows, Linux)
 
-_Last edited: 2026-10-01 14:19_
+_Last edited: 2026-10-15_
 
 ## Current state
 
-There is no installer on either platform. Windows distribution today is
-`dist/windows-x64/` — a manually-assembled folder (`os-next.exe`,
-`WebView2Loader.dll`, `web/`, `library.db`, `.config/`) that only works
-because everything is CWD-relative (see `paths.md`) and the user just...
-runs the exe from that folder. Linux distribution (the `v0.1.0-alpha`
-release) is the same idea as a `.tar.gz`. Both are fine for a developer's
-own machine; neither is something to hand a church volunteer.
+Both platforms have a real installer now (sections below) and both ship as
+part of `.github/workflows/release.yml`'s real releases (`v0.1.0-alpha`,
+`v0.2.0` — see `docs/workflow.md`'s "Current status"): Windows gets
+`opensanctuary-setup-x64.exe` (Inno Setup) plus a portable zip, Linux gets a
+`.deb` plus a generic `.tar.gz`. Only macOS has no installer story yet (see
+that section below). This doc predates all of that — what follows is kept
+as the design rationale and build history, not a still-open plan, except
+where a section says otherwise (macOS, code signing).
 
 ## Windows — **installer built and verified; app launches cleanly**
 
@@ -249,7 +250,7 @@ just doesn't get the smoother elevated-install experience.
 ### Code signing
 
 Unsigned `setup.exe` triggers SmartScreen ("Windows protected your PC").
-Acceptable for an alpha; a real certificate costs money and requires
+Acceptable pre-1.0; a real certificate costs money and requires
 vetting. Worth investigating free code-signing for open-source projects
 (e.g. SignPath.io) before any wider release, but explicitly out of scope
 here.
@@ -342,7 +343,10 @@ disposable public test repo
 ([Craterbrain/opensanctuary-release-testing](https://github.com/Craterbrain/opensanctuary-release-testing)),
 a real signed release (test key, see `update.md`), anonymous `curl` fetch,
 checksum + signature verification, then the exact downloaded `.deb`
-installed the same way.
+installed the same way. This was the dry run that validated the approach
+before the real repo went public; `v0.1.0-alpha` and `v0.2.0` have since
+confirmed the identical path against the real repo and real production key
+(`docs/update.md`, `docs/workflow.md`).
 
 Install/uninstall: `apt install ./opensanctuary_*.deb`,
 `apt remove opensanctuary`. Same rule as Windows — uninstall removes the
@@ -363,10 +367,11 @@ A single downloadable POSIX `sh` script (the same shape as rustup's or
 Homebrew's installers) for distros without a native package built for them:
 
 1. Detects arch (currently just `x86_64` — flag ARM/aarch64 as future
-   work, not a blocker for the alpha) and downloads the matching release
+   work, not a blocker pre-1.0) and downloads the matching release
    tarball from `RELEASES_REPO`/`RELEASE_PUBLIC_KEY_B64`'s exact values,
-   mirrored as shell variables at the top of the script with a comment to
-   swap both together once the real repo goes public.
+   mirrored as shell variables (`REPO`, `PUBLIC_KEY`) at the top of the
+   script — already the real, public repo and the real production key, not
+   placeholders waiting to be swapped in.
 2. Verifies it against `checksums.txt`/`checksums.txt.minisig`
    (`update.md`'s signing plan) before extracting anything, via the real
    `minisign` CLI against the same embedded Ed25519 public key the Rust
@@ -411,9 +416,11 @@ with an explicit "download and inspect first" alternative
 (`curl -fsSL ... -o install.sh`, read it, `sh install.sh`) in the docs
 rather than only offering the pipe form.
 
-**Verified for real**, not just written: ran it against the actual public
-test repo (`Craterbrain/opensanctuary-release-testing`) with a real
-`minisign`-compatible verifier on `PATH`, into a scratch `$HOME` — it
+**Verified for real**, not just written: ran it (before the real repo went
+public, so against the disposable `Craterbrain/opensanctuary-release-testing`
+mirror — `install.sh` itself now points at the real repo and real key, see
+above) with a real `minisign`-compatible verifier on `PATH`, into a scratch
+`$HOME` — it
 fetched `/releases/latest`, downloaded the real tarball plus
 `checksums.txt`/`checksums.txt.minisig`, verified both, extracted into
 `~/.local/share/opensanctuary-install`, symlinked
@@ -432,9 +439,12 @@ instead of failing confusingly mid-script. **Not yet verified**: the
 ### Where it's hosted
 
 Both `install.sh` and the release tarball/`.deb` need to be fetchable
-without auth — same requirement, same blocker, as `update.md`'s "the repo
-is private" issue. `install.sh` itself can live at a stable
-`raw.githubusercontent.com` URL once the repo is public, or as its own
-pinned GitHub Release asset if a stable unversioned URL matters more (the
-former is simpler and is what most projects do; revisit only if that
-becomes a real problem).
+without auth, which no longer needs resolving: `Craterbrain/opensanctuary`
+is public now (`docs/update.md`'s old "the repo is private" blocker is
+resolved). `install.sh` itself isn't yet published at a stable URL for the
+`curl -fsSL <url>/install.sh | sh` one-liner its own header comment
+describes — it still only exists as the in-repo `packaging/install.sh`.
+Open choice, now unblocked either way: a stable `raw.githubusercontent.com`
+URL (simplest, what most projects do) vs. its own pinned GitHub Release
+asset (if a stable unversioned URL matters more). Pick one when it's time
+to put that one-liner in the README/docs.
