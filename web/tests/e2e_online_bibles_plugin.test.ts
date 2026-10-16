@@ -61,7 +61,6 @@ describe("E2E Live Test: Online Bibles plugin replaces the built-in Bible downlo
     await frame.waitForSelector("#catalog-list li", { state: "visible", timeout: 40000 }); // the curated list at least
     await expectNativeIcons(frame, 3);
     await page.screenshot({ path: `${artifactDir}/screenshot_online_bibles_panel.png` });
-    await page.screenshot({ path: `../docs/screenshots/online-bibles-plugin.png` });
 
     // Install a translation through the host API, the way the plugin's Download button does after parsing.
     const added = await bridge("library.addScriptures", { items: [

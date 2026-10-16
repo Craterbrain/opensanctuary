@@ -102,7 +102,7 @@ pub(super) async fn keyring_plugin_token(
         }
     };
     let allowed = row.as_ref().is_some_and(|r| {
-        r.effective_state() == "active" && crate::core::plugin_registry::parse_granted(r).has("keyring.own")
+        crate::core::plugin_registry::is_usable(&app.db, &app.data_dir, r) && crate::core::plugin_registry::parse_granted(r).has("keyring.own")
     });
     if !allowed {
         return Err(AppError::Forbidden(

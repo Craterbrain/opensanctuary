@@ -160,6 +160,17 @@ An icon on a primary/danger fill must be white. The block at the end of `style.c
 whitens `.ui-icon` / `img[data-icon]` inside every recipe that fills with primary or
 danger. When you add a new filled state, add its selector there.
 
+## Known gaps
+Two behavior bugs turned up while building this system and are still open (behavior, not
+styling, so fixing them means touching the modal/dialog code, not `style.css`):
+- Settings → Paired Devices' "Pair TV App" and "Install via ADB" buttons
+  (`settings_dialog.ts`) open the remote modal by calling
+  `remoteModal.classList.add('active')`, but the dialog manager actually shows/hides modals
+  via `style.display` and no `#remote-modal.active` rule exists — the click does nothing
+  visible. Fix by routing through the dialog manager's real open function instead.
+- No focus trap in open dialogs: `Tab` can move focus out of a modal into the page behind
+  it. Every other modal behavior (backdrop click, `Esc`, stacking) works; this one doesn't.
+
 ## Out of scope
 The slide canvases (`.canvas-16-9`, the editor canvas, thumbnails), `live.html`,
 `stage.html`, `remote.html` and `pairing.html` are output or separate surfaces and are not

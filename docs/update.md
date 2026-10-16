@@ -1,39 +1,36 @@
 # Plan: updater (verified releases from GitHub)
 
-_Last edited: 2026-10-01 13:38_
+_Last edited: 2026-10-15_
 
-## Blocker to resolve first: the repo is private
+## Resolved: the repo is public, `RELEASES_REPO` points at it for real
 
-`Craterbrain/opensanctuary` is currently a **private** repo. GitHub's
-Releases API requires authentication for a private repo — there's no safe
-way to embed a credential for that in a binary handed out to end users.
-This has to be decided before any of the below is buildable:
+`Craterbrain/opensanctuary` was originally private, which blocked this
+feature entirely — GitHub's Releases API requires authentication for a
+private repo, and there's no safe way to embed a credential for that in a
+binary handed out to end users. Of the two options this section used to
+weigh (make the repo public, vs. mirror releases to a second public repo),
+**the repo went public** (`gh repo view Craterbrain/opensanctuary` →
+`"isPrivate": false`), the simpler of the two and what's actually in place
+now.
 
-- **(a) Make the repo public** before shipping this to real users. Then
-  `GET https://api.github.com/repos/Craterbrain/opensanctuary/releases/latest`
-  works unauthenticated — the normal, intended use of that endpoint.
-  Recommended: simplest, no extra infrastructure, and is what the API is
-  for.
-- **(b) Keep source private, mirror releases publicly.** A second, public
-  repo containing only release artifacts (not source), which the updater
-  points at instead. More moving parts, only worth it if source needs to
-  stay private for longer than releases should.
+`crate::network::updater::RELEASES_REPO` and `packaging/install.sh`'s `REPO`
+both point at the real `Craterbrain/opensanctuary` (not a mirror), and
+`RELEASE_PUBLIC_KEY_B64`/`PUBLIC_KEY` hold the real production signing key
+(generated 2026-10-11 — see `docs/release-signing-key.txt` and
+`docs/keys.md`), not a throwaway test key. Real releases (`v0.1.0-alpha`,
+`v0.2.0`) have shipped through this exact path — see `docs/workflow.md`'s
+"Current status" for the up-to-date release history.
 
-Everything below assumes (a). If the decision goes the other way, only the
-"where to check" endpoint changes — the verification and apply steps are
-the same either way.
-
-**Current status: worked around via (b), not resolved.** The automated
-check/download/apply flow described below is built and does run against a
-real repo — but that repo is
+**History, kept for context**: before the real repo went public, this flow
+was validated end to end against
 [`Craterbrain/opensanctuary-release-testing`](https://github.com/Craterbrain/opensanctuary-release-testing),
-a disposable public test repo, not the real `Craterbrain/opensanctuary`
-(still private). `crate::network::updater::RELEASES_REPO` is the one
-constant pointing at it; swapping it for the real repo (once public) or a
-dedicated release-mirror repo is the entire migration. `RELEASE_PUBLIC_KEY_B64`
-is similarly still the throwaway test key (`.test-signing-key/test.pub`),
-not a real production key — see "Release signing key" below, which hasn't
-happened yet either.
+a disposable public test repo created solely to prove the check/download/
+verify/apply flow worked against a real GitHub Releases API and a real
+signed `.deb`, using a throwaway test keypair (`.test-signing-key/`, since
+replaced). That repo and key are no longer part of the live path — every
+mention of them below is historical, describing what that dry run proved,
+not the current mechanism. It still exists, but ships no real release
+builds for this project.
 
 ## Check flow
 
@@ -80,6 +77,8 @@ test: the release was briefly marked prerelease to mirror the real repo's
 own `v0.1.0-alpha`, `/releases/latest` 404'd, and un-marking it (a plain
 release, version string still says `-test`/`-alpha`) fixed it — a test
 repo has no reason to carry that complication, and neither does a real one.
+Since then, tier 2 has also verified real production releases
+(`v0.1.0-alpha`, `v0.2.0`) signed with the real key, not just this dry run.
 
 Three tiers, in order of how much infrastructure they need:
 
@@ -115,15 +114,16 @@ user-facing copy than what's actually implemented.
 
 ## Release signing key
 
-**Actually setting this up? Use `docs/keys.md`** — a step-by-step
-checklist (generate, back up, add the GitHub secrets, publish the public
-key) that follows the plan below. This section is the design rationale
-behind those steps, not the steps themselves.
+**Already done — see `docs/keys.md`** for the real key's status (generated
+2026-10-11, rotated once already after an earlier key's encrypted secret was
+lost before anything was signed with it) and `docs/release-signing-key.txt`
+for the public half. This section remains as the design rationale this was
+built from, not a still-open task — read it for *why* the setup works this
+way, not as a "this hasn't happened yet" status.
 
-The private key doesn't exist yet. This is the plan for generating it and,
-the harder part, keeping it safe *and* not losing it — those are two
-different failure modes (theft vs. "my laptop died") and the plan needs to
-cover both without trading one off against the other.
+Keeping the private key safe *and* not losing it are two different failure
+modes (theft vs. "my laptop died"), and the plan below covers both without
+trading one off against the other.
 
 ### Tooling: minisign (Ed25519)
 
@@ -222,8 +222,10 @@ passphrase from the "Generating it" section above) and one repo *variable*
 (`MINISIGN_PUBLIC_KEY_B64`, not a secret — see "Publishing the public key"
 below) set under Settings → Secrets and variables → Actions before it can
 publish anything; it fails closed with a clear error if either is missing,
-not a confusing partial release. **Not yet exercised against a real
-GitHub Actions run** — see that workflow file's own header comment.
+not a confusing partial release. **Exercised for real**: `v0.1.0-alpha` and
+`v0.2.0` both published through this exact workflow, `sign-and-publish`
+green end to end — see `docs/workflow.md`'s "Current status" and "Known
+issues".
 
 ### If the key is ever lost or compromised
 
@@ -249,7 +251,7 @@ plan above is for: the failure mode to actually avoid is needing this
 procedure at all because every copy of the key was lost.
 
 **Optional stronger option, worth revisiting once real users depend on
-auto-updates** (not needed for the alpha): a second, offline-only
+auto-updates** (not needed pre-1.0): a second, offline-only
 "root" keypair, generated once and never used for day-to-day release
 signing, whose only job is countersigning a future key-rotation
 announcement for the everyday release-signing key. This mirrors [The
@@ -258,7 +260,7 @@ separation at a much smaller scale — it means the frequently-used release
 key being compromised doesn't fully break trust, since the rarely-touched
 root key can still vouch for the rotation. Skip it for now; the two-key
 model adds real operational overhead that isn't worth it until there's
-something at stake beyond an alpha's own installer.
+something at stake beyond a pre-1.0 beta's own installer.
 
 ## Download & apply (Windows) — built, interactively rather than silently
 
@@ -341,15 +343,12 @@ wiring a macOS-appropriate fallback message is unstarted.)
   "Check for Updates" (shows the result, offers to download-and-install if
   newer) sits alongside the pre-existing "Install Update from File" — no
   new top-level category needed.
-- **Points at a test repo, not the real one** — see "Current status" under
-  "Blocker to resolve first" above. The test repo's current release
-  (`v0.2.0-test3` at the time of writing -- the tag itself is disposable
-  and gets rebuilt/replaced under a fresh tag rather than edited in place,
-  since clobbering an existing release's same-named assets hit real GitHub
-  CDN staleness during testing) carries all three platform artifacts signed
-  under one `checksums.txt`.
+- **Points at the real repo** — `RELEASES_REPO`/`REPO` are
+  `Craterbrain/opensanctuary` (public), not the old test mirror; see
+  "Resolved: the repo is public" above and `docs/workflow.md`'s "Current
+  status" for the real release history this now checks against.
 
-## Explicitly out of scope for the alpha
+## Explicitly out of scope pre-1.0
 
 - Fully silent/no-confirmation updates.
 - Auto-apply on macOS (Linux now has it; see above).

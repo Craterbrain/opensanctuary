@@ -1,6 +1,6 @@
 # Import/Export Architecture — Discussion Notes (2026-09-28)
 
-_Last edited: 2026-10-02 21:15_
+_Last edited: 2026-10-15_
 
 Notes from a design conversation about `src/storage`'s importers, whether they should be
 split out as plugins, adopting OpenLP or ODF/ODP as a format, and what the actual fidelity
@@ -228,7 +228,9 @@ parser gap, and was deliberately left alone this pass.
 
 ## What determines how a slide actually displays
 
-Traced through `renderSlideVisual` (`web/src/app_core.ts:2769`, mirrored in `live_output.ts`):
+Traced through `renderSlideVisual` (`web/src/core/slide_render.ts`, called from `app_core.ts`'s
+Preview/Live canvases and from the Slide Editor's filmstrip thumbnails/`ui/slide_deck_view.ts`;
+`live_output.ts` has its own independent copy of the same branch, not a call to this function):
 branches on `slide.elements.length > 0`.
 
 - **Elements present** → `renderSlideElements` (`web/src/core/slide_render.ts`): the rich

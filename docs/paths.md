@@ -1,6 +1,6 @@
 # Configurable Default Paths & Storage Architecture
 
-_Last edited: 2026-10-02 20:05_
+_Last edited: 2026-10-15_
 
 ## Overview & Background
 
@@ -67,6 +67,31 @@ The media cache is completely decoupled from the static web UI assets:
 - **Writable Location**: User-downloaded backgrounds (stock photos added by the Stock Images plugin, imported PPTX/FreeShow assets) and cached video loops are saved to `<data dir>/media/{images,videos}`.
 - **Asset Graph**: `AssetGraph::new(&media_dir)` operates against this data directory.
 - **HTTP Routing**: Axum routes serve the media directory directly at `/media` via `ServeDir::new(media_dir)`.
+
+---
+
+## Other resolved paths (not covered above, same module)
+
+`src/storage/paths.rs` also resolves a few more paths with their own
+precedence, each following the same "portable-folder next to the exe, else
+FHS install layout, else a sane fallback" shape as `resolve_web_dir` above:
+
+- **`tools_dir()`** (`ResolvedPaths::tools_dir`): `<data dir>/tools` — where
+  `src/api/plugin_tools.rs` keeps command-line tools it manages for plugins
+  (e.g. the video downloader's `yt-dlp`). Under the data directory because
+  it's mutable state the app writes itself, not a read-only installed asset.
+- **Android TV client APK** (`resolve_tv_apk_path`): a `tv-client/` directory
+  next to the executable (portable layout), then the `.deb`'s FHS layout
+  (`<prefix>/share/opensanctuary/tv-client/opensanctuary-tv.apk`), then
+  `None` — there's no bare-CWD dev fallback, since a dev checkout hasn't
+  built the Android app. `None` is a normal "APK not available" state
+  (`AdbAvailability::apk_available: false`), not an error; this is also what
+  a release built with `SKIP_TV_APK=1` reports (see `docs/workflow.md`).
+- **`ffmpeg`/`ffprobe`** (`resolve_ffmpeg_command`/`resolve_ffprobe_command`):
+  a bundled `ffmpeg/ffmpeg.exe`/`ffprobe.exe` next to the executable (the
+  Windows installer's staged LGPL build, which has no system package manager
+  to rely on), falling back to the bare command name resolved via `PATH`
+  otherwise (Linux/macOS, system-installed, unchanged).
 
 ---
 

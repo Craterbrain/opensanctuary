@@ -35,12 +35,15 @@ fn fallback_key_path() -> std::path::PathBuf {
     crate::storage::paths::config_dir().join("tls_private_key.pem")
 }
 
-fn read_fallback_key() -> Option<String> {
-    std::fs::read_to_string(fallback_key_path()).ok().filter(|k| !k.trim().is_empty())
+fn read_fallback_key_at(path: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(path).ok().filter(|k| !k.trim().is_empty())
 }
 
-fn write_fallback_key(key_pem: &str) -> std::io::Result<()> {
-    let path = fallback_key_path();
+fn read_fallback_key() -> Option<String> {
+    read_fallback_key_at(&fallback_key_path())
+}
+
+fn write_fallback_key_at(path: &std::path::Path, key_pem: &str) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -49,14 +52,18 @@ fn write_fallback_key(key_pem: &str) -> std::io::Result<()> {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
         // Create with 0600 so the key is never briefly world-readable.
-        let _ = std::fs::remove_file(&path);
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+        let _ = std::fs::remove_file(path);
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?;
         f.write_all(key_pem.as_bytes())
     }
     #[cfg(not(unix))]
     {
-        std::fs::write(&path, key_pem)
+        std::fs::write(path, key_pem)
     }
+}
+
+fn write_fallback_key(key_pem: &str) -> std::io::Result<()> {
+    write_fallback_key_at(&fallback_key_path(), key_pem)
 }
 
 /// Generates a self-signed X.509 certificate with Subject Alternative Names (SANs)
@@ -274,6 +281,45 @@ mod tests {
     #[test]
     fn cert_fingerprint_rejects_garbage_input() {
         assert!(cert_fingerprint_sha256("not a certificate").is_err());
+    }
+
+    // Exercises the owner-only file fallback directly against a temp path,
+    // independent of whether this machine/CI runner has a real OS keyring --
+    // this is specifically the headless/no-Secret-Service case the fallback
+    // exists for (see `fallback_key_path`'s doc comment), so it must not be
+    // skipped the way `test_tls_private_key_storage_and_legacy_migration`
+    // skips without a working keyring.
+    #[test]
+    fn fallback_key_file_round_trips_without_a_keyring() {
+        let test_dir = tempfile::tempdir().unwrap();
+        let path = test_dir.path().join("nested").join("tls_private_key.pem");
+
+        assert!(read_fallback_key_at(&path).is_none(), "nothing written yet");
+
+        let (_cert, key_pem) = generate_self_signed_cert("fallback-host", &[]).unwrap();
+        write_fallback_key_at(&path, &key_pem).unwrap();
+        assert_eq!(read_fallback_key_at(&path).as_deref(), Some(key_pem.as_str()));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "private key file must never be group/world readable");
+        }
+
+        // A later restart that regenerates (e.g. after a KeyMismatch) must be
+        // able to overwrite the file, not fail with AlreadyExists.
+        let (_cert2, key_pem2) = generate_self_signed_cert("fallback-host-2", &[]).unwrap();
+        write_fallback_key_at(&path, &key_pem2).unwrap();
+        assert_eq!(read_fallback_key_at(&path).as_deref(), Some(key_pem2.as_str()));
+    }
+
+    #[test]
+    fn fallback_key_read_ignores_a_blank_file() {
+        let test_dir = tempfile::tempdir().unwrap();
+        let path = test_dir.path().join("tls_private_key.pem");
+        std::fs::write(&path, "   \n").unwrap();
+        assert!(read_fallback_key_at(&path).is_none(), "whitespace-only content must not be treated as a key");
     }
 
     // Both scenarios below share the same real OS keyring entry (it's

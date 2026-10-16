@@ -1,6 +1,6 @@
 # OpenSanctuary
 
-_Last edited: 2026-10-14_
+_Last edited: 2026-10-15_
 
 A next-generation church presentation engine — the software that drives the
 screens during a church service (lyrics, scripture, announcements, video)
@@ -25,10 +25,11 @@ multi-display story, and formats that don't talk to each other. OpenSanctuary is
 - **No per-seat licensing.** MIT-licensed. Run it on as many machines as
   your church has.
 
-Status: **alpha**. The core engine, multi-display output, and most import
-paths work and are used for real; some documented features
-(`docs/CCLI_REPORTING.md`, `docs/TUNNELS.md`) are design docs, not built
-yet — each doc under `docs/` says plainly whether it's implemented.
+Status: **beta** (currently beta 2, released as `v0.2.0`; beta 3 is in
+progress). No 1.0 yet. The core engine, multi-display output, most import
+paths, CCLI reporting, and reverse-proxy tunneling are built and used for
+real — each doc under `docs/` says plainly whether what it describes is
+implemented or still a design.
 
 ## Screenshots
 

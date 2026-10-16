@@ -68,7 +68,6 @@ describe("E2E Live Test: Genius Lyrics plugin (sandboxed) imports through the ho
     // The plugin's page replaces the list and preview, like the old Genius mode did.
     expect(await page.locator(".resource-catalog-pane").isVisible()).toBe(false);
     await page.screenshot({ path: `${artifactDir}/screenshot_genius_plugin_panel.png` });
-    await page.screenshot({ path: `../docs/screenshots/genius-plugin.png` });
 
     // Search goes plugin -> bridge -> server fetch. Whether or not this machine can reach genius.com,
     // it must finish (results or a clear error) rather than hang.

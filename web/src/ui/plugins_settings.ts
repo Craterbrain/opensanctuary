@@ -24,6 +24,13 @@ const STATE_LABEL: Record<string, string> = {
   denied: 'Denied',
   revoked: 'Revoked',
   incompatible: 'Incompatible',
+  policy_blocked: 'Blocked by policy',
+};
+const POLICY_LABEL: Record<string, string> = { allow: 'Allow', warn: 'Warn', require: 'Require' };
+const POLICY_HINT: Record<string, string> = {
+  allow: 'Unsigned and signed plugins are reviewed the same way.',
+  warn: 'Approving an unsigned plugin needs an extra confirmation.',
+  require: 'Only a built-in or a signed plugin may load at all -- for a console that only installs from one trusted source.',
 };
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -213,6 +220,19 @@ function signatureLabel(plugin: PluginInfo): string {
   }
 }
 
+/**
+ * Independent of `changes` (which only compares against the single most recent approval, and
+ * only once a plugin has already been approved at least once): this plugin's version is older
+ * than the highest one ever approved from this same signer, remembered even across a
+ * revoke/re-approve or an uninstall/reinstall (docs/PLUGIN_SIGNING.md section 7).
+ */
+function renderVersionFloorWarning(plugin: PluginInfo): HTMLElement | null {
+  if (!plugin.is_downgrade_from_floor) return null;
+  return el('div', 'plugin-warning', plugin.version_floor
+    ? `This is v${plugin.version ?? '?'}, but a newer v${plugin.version_floor} was approved from this publisher before. Rolling back can bring back fixed bugs and old security holes.`
+    : 'This is an older version than one approved from this publisher before.');
+}
+
 /** "What changed" for an approved plugin whose files differ from what was reviewed. */
 function renderChanges(plugin: PluginInfo): HTMLElement | null {
   const c = plugin.changes;
@@ -254,7 +274,7 @@ function pickPackage(onFile: (file: File) => void): void {
   input.click();
 }
 
-function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
+function renderPlugin(plugin: PluginInfo, refresh: () => void, policy: string): HTMLElement {
   const card = el('div', 'network-card plugin-card');
   card.dataset.pluginId = plugin.id;
 
@@ -279,6 +299,11 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   }
   const changes = renderChanges(plugin);
   if (changes) card.appendChild(changes);
+  // Don't repeat it: `changes.direction === 'downgrade'` already says this when it applies.
+  if (plugin.changes?.direction !== 'downgrade') {
+    const floorWarning = renderVersionFloorWarning(plugin);
+    if (floorWarning) card.appendChild(floorWarning);
+  }
   if (plugin.signer_changed) {
     card.appendChild(el('div', 'plugin-warning', 'The publisher signature is different from the one you approved before (or it used to be signed and now isn\'t). Check that this update is from who you expect.'));
   }
@@ -288,6 +313,20 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
   }
   if (plugin.state === 'changed') {
     card.appendChild(el('div', 'plugin-warning', 'This plugin\'s files changed since you approved it, so it is not running. Review the permissions again to re-approve.'));
+  }
+  if (plugin.state === 'policy_blocked') {
+    card.appendChild(el('div', 'plugin-warning',
+      "Approved, but this console's plugin signature policy (Require) only loads a built-in or a signed plugin, and this one is unsigned. It stays off until the policy is loosened or a signed build is installed."));
+  }
+  // A built-in is never touched by policy or the unsigned-confirmation rules below, same as the
+  // server's `plugin_policy::approval_gate`/`permits_load` (both check builtin before signed).
+  const builtin = plugin.trust?.level === 'builtin';
+  // Can the operator even approve this one? `require` refuses an unsigned, non-built-in plugin
+  // outright -- no confirmation unlocks it, the policy itself has to change first.
+  const unsignedRefused = policy === 'require' && !builtin && !plugin.signed && plugin.state !== 'active' && plugin.state !== 'policy_blocked';
+  if (unsignedRefused) {
+    card.appendChild(el('div', 'plugin-error',
+      "Can't be approved: this console's plugin signature policy (Settings → Plugins → Policy) requires a signed plugin or a built-in."));
   }
   if (plugin.kind === 'sandbox' && plugin.state !== 'active') {
     card.appendChild(el('div', 'settings-hint',
@@ -414,7 +453,7 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
     }
   };
   let trustBox: HTMLInputElement | null = null;
-  if (plugin.state !== 'active' && !plugin.error && plugin.trust?.can_trust) {
+  if (plugin.state !== 'active' && plugin.state !== 'policy_blocked' && !plugin.error && plugin.trust?.can_trust) {
     const label = el('label', 'plugin-trust-choice');
     trustBox = document.createElement('input');
     trustBox.type = 'checkbox';
@@ -422,7 +461,19 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
     label.append(trustBox, document.createTextNode(` Trust everything ${plugin.trust.publisher_name ? `"${plugin.trust.publisher_name}" ` : ''}signs from now on (key ${plugin.trust.key_id}). It never skips this review.`));
     card.appendChild(label);
   }
-  if (plugin.state !== 'active' && !plugin.error) {
+  // Confirms (returning the flag to send) or bails (returning null) for approving an unsigned
+  // plugin, mirroring the revoked-publisher confirmation above. Independent of policy: granting
+  // a Critical permission to an unsigned plugin always asks; `warn` asks for any unsigned plugin.
+  const confirmUnsignedIfNeeded = (grantedIds: string[]): boolean | null => {
+    if (builtin || plugin.signed) return false;
+    const grantingCritical = grantedIds.some((id) => plugin.requested.find((p) => p.id === id)?.tier === 'critical');
+    if (policy !== 'warn' && !grantingCritical) return false;
+    const why = policy === 'warn'
+      ? "This console's plugin signature policy warns on unsigned plugins."
+      : `"${plugin.name}" is unsigned and you are granting it a Critical permission.`;
+    return window.confirm(`${why}\n\nApprove it anyway?`) ? true : null;
+  };
+  if (plugin.state !== 'active' && plugin.state !== 'policy_blocked' && !plugin.error && !unsignedRefused) {
     const approve = el('button', 'btn btn-primary', plugin.state === 'changed' ? 'Approve changes' : 'Approve');
     approve.addEventListener('click', () => {
       const granted = checks.filter(c => c.box.checked).map(c => c.id);
@@ -431,15 +482,17 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
         if (!window.confirm(`"${plugin.name}" is signed by a publisher you revoked.\n\nApprove it anyway?`)) return;
         confirmRevokedPublisher = true;
       }
-      void act(() => api.plugins.approve(plugin.id, plugin.digest, granted, { trustPublisher: !!trustBox?.checked, confirmRevokedPublisher }), `${plugin.name} approved`);
+      const confirmUnsigned = confirmUnsignedIfNeeded(granted);
+      if (confirmUnsigned === null) return;
+      void act(() => api.plugins.approve(plugin.id, plugin.digest, granted, { trustPublisher: !!trustBox?.checked, confirmRevokedPublisher, confirmUnsigned }), `${plugin.name} approved`);
     });
     actions.appendChild(approve);
     normalApprove = approve;
-    if (plugin.state === 'pending' || plugin.state === 'changed') {
-      const deny = el('button', 'btn btn-secondary', 'Deny');
-      deny.addEventListener('click', () => void act(() => api.plugins.deny(plugin.id), `${plugin.name} denied`));
-      actions.appendChild(deny);
-    }
+  }
+  if (plugin.state === 'pending' || plugin.state === 'changed') {
+    const deny = el('button', 'btn btn-secondary', 'Deny');
+    deny.addEventListener('click', () => void act(() => api.plugins.deny(plugin.id), `${plugin.name} denied`));
+    actions.appendChild(deny);
   }
   if (plugin.state === 'active' && plugin.trust?.can_trust) {
     const trust = el('button', 'btn btn-secondary plugin-trust-now', 'Trust publisher');
@@ -466,13 +519,26 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void): HTMLElement {
     });
     actions.appendChild(remove);
   }
-  if (advanced && plugin.state !== 'incompatible' && !plugin.error) {
+  if (advanced && plugin.state !== 'incompatible' && !plugin.error && !unsignedRefused) {
     const apply = el('button', 'btn btn-danger', 'Apply override');
     apply.hidden = true;
     apply.addEventListener('click', () => {
       const grants = advanced!.collect();
       if (!grants) return;
-      void act(() => api.plugins.approveOverride(plugin.id, plugin.digest, grants), `${plugin.name} updated with your override`);
+      let confirmRevokedPublisher = false;
+      if (plugin.trust?.level === 'revoked') {
+        if (!window.confirm(`"${plugin.name}" is signed by a publisher you revoked.\n\nApprove it anyway?`)) return;
+        confirmRevokedPublisher = true;
+      }
+      // An override can grant an id the plugin never requested, so its tier isn't known here the
+      // way it is for a normal approval -- ask whenever it's unsigned at all, rather than trying
+      // (and sometimes failing) to guess which grants are Critical.
+      let confirmUnsigned = false;
+      if (!builtin && !plugin.signed) {
+        if (!window.confirm(`"${plugin.name}" is unsigned.\n\nApprove this override anyway?`)) return;
+        confirmUnsigned = true;
+      }
+      void act(() => api.plugins.approveOverride(plugin.id, plugin.digest, grants, { confirmRevokedPublisher, confirmUnsigned }), `${plugin.name} updated with your override`);
     });
     actions.appendChild(apply);
     advancedApply = apply;
@@ -572,6 +638,39 @@ async function renderPublishers(content: HTMLElement, refresh: () => void): Prom
   } catch { /* not a console page */ }
 }
 
+/** Settings > Plugins > Policy: how strictly this console treats an unsigned plugin (docs/PLUGIN_SIGNING.md section 6). */
+function renderPolicyControl(content: HTMLElement, policy: string, refresh: () => void): void {
+  const row = el('div', 'settings-row');
+  const labelWrap = el('div', 'settings-row-label');
+  labelWrap.appendChild(el('label', 'form-label', 'Plugin signature policy'));
+  labelWrap.appendChild(el('div', 'settings-row-desc', POLICY_HINT[policy] ?? POLICY_HINT.allow));
+  row.appendChild(labelWrap);
+  const controlWrap = el('div', 'settings-row-control');
+  const select = document.createElement('select');
+  select.className = 'plugin-policy-select';
+  for (const value of ['allow', 'warn', 'require']) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = POLICY_LABEL[value];
+    opt.selected = value === policy;
+    select.appendChild(opt);
+  }
+  select.addEventListener('change', () => {
+    void (async () => {
+      try {
+        await api.settings.save({ pluginSignaturePolicy: select.value });
+        showToast(`Plugin signature policy set to ${POLICY_LABEL[select.value]}`);
+        refresh();
+      } catch (e: any) {
+        showToast(`Couldn't save: ${e?.message ?? e}`);
+      }
+    })();
+  });
+  controlWrap.appendChild(select);
+  row.appendChild(controlWrap);
+  content.appendChild(row);
+}
+
 export function renderPluginsSettings(content: HTMLElement) {
   content.innerHTML = '';
   content.classList.add('network-panel');
@@ -579,12 +678,14 @@ export function renderPluginsSettings(content: HTMLElement) {
   content.appendChild(loading);
 
   const refresh = () => renderPluginsSettings(content);
-  Promise.all([api.plugins.list(), api.plugins.audit()])
-    .then(([plugins, audit]) => {
+  Promise.all([api.plugins.list(), api.plugins.audit(), api.settings.get()])
+    .then(([plugins, audit, settings]) => {
+      const policy = typeof settings.pluginSignaturePolicy === 'string' ? settings.pluginSignaturePolicy : 'allow';
       content.innerHTML = '';
       content.appendChild(el('div', 'settings-group-header', 'Plugins'));
       content.appendChild(el('div', 'settings-hint',
         'A plugin does nothing until you approve it. Only this console can grant permissions, and a plugin whose files change is stopped until you review it again.'));
+      renderPolicyControl(content, policy, refresh);
       const install = el('div', 'plugin-install-row');
       const installBtn = el('button', 'btn btn-secondary plugin-install', 'Install plugin…');
       installBtn.addEventListener('click', () => pickPackage(async (file) => {
@@ -601,7 +702,7 @@ export function renderPluginsSettings(content: HTMLElement) {
       if (!plugins.length) {
         content.appendChild(el('div', 'settings-empty', 'No plugins installed.'));
       }
-      for (const p of plugins) content.appendChild(renderPlugin(p, refresh));
+      for (const p of plugins) content.appendChild(renderPlugin(p, refresh, policy));
       void renderPublishers(content, refresh);
       void renderSharedSecrets(content, refresh);
       content.appendChild(renderAudit(audit));

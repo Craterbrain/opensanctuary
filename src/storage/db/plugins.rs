@@ -1,7 +1,7 @@
 //! Persistence for plugin permission grants and their audit trail
 //! (docs/PLUGIN_PERMISSIONS.md).
 
-use rusqlite::{params, Result};
+use rusqlite::{params, OptionalExtension, Result};
 use serde::Serialize;
 
 use super::Database;
@@ -337,5 +337,30 @@ impl Database {
         let mut stmt = conn.prepare("SELECT plugin_id FROM plugin_grants WHERE observed_signer = ?1 OR approved_signer = ?1 ORDER BY plugin_id")?;
         let rows = stmt.query_map(params![key], |r| r.get(0))?;
         rows.collect()
+    }
+
+    // --- Version floor (docs/PLUGIN_SIGNING.md section 7: rollback and freshness) ---
+
+    /// The highest version ever approved for `plugin_id` under `signer` ("" for unsigned).
+    pub fn version_floor(&self, plugin_id: &str, signer: Option<&str>) -> Result<Option<String>> {
+        let conn = self.conn();
+        conn.query_row(
+            "SELECT version FROM plugin_version_floor WHERE plugin_id = ?1 AND signer = ?2",
+            params![plugin_id, signer.unwrap_or("")],
+            |r| r.get(0),
+        )
+        .optional()
+    }
+
+    /// Sets the remembered floor outright (the caller -- `plugin_registry::remember_approved_version`
+    /// -- decides whether `version` is actually higher than what's there; this just persists it).
+    pub fn raise_version_floor(&self, plugin_id: &str, signer: Option<&str>, version: &str) -> Result<()> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO plugin_version_floor (plugin_id, signer, version) VALUES (?1, ?2, ?3)
+             ON CONFLICT(plugin_id, signer) DO UPDATE SET version = excluded.version",
+            params![plugin_id, signer.unwrap_or(""), version],
+        )?;
+        Ok(())
     }
 }

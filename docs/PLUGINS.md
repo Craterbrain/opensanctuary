@@ -1,6 +1,6 @@
 # OS-Next Plugin System
 
-_Last edited: 2026-09-16 20:04_
+_Last edited: 2026-10-15_
 
 A plugin extends OpenSanctuary in one of two ways, and **nothing runs until the operator approves it**
 in Settings > Plugins:
