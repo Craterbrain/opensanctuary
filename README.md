@@ -25,7 +25,7 @@ multi-display story, and formats that don't talk to each other. OpenSanctuary is
 - **No per-seat licensing.** MIT-licensed. Run it on as many machines as
   your church has.
 
-Status: **alpha**. The core engine, multi-display output, and most import
+Status: **beta**. The core engine, multi-display output, and most import
 paths work and are used for real; some documented features
 (`docs/CCLI_REPORTING.md`, `docs/TUNNELS.md`) are design docs, not built
 yet — each doc under `docs/` says plainly whether it's implemented.
