@@ -481,7 +481,19 @@ impl Database {
                 action TEXT NOT NULL,
                 detail_json TEXT NOT NULL DEFAULT '{}'
             );
-            CREATE INDEX IF NOT EXISTS idx_plugin_audit_plugin ON plugin_audit(plugin_id, ts_ms);",
+            CREATE INDEX IF NOT EXISTS idx_plugin_audit_plugin ON plugin_audit(plugin_id, ts_ms);
+
+            -- Highest version ever approved per (plugin, publisher key) -- '' for unsigned -- so a
+            -- downgrade is still flagged after a revoke/re-approve or an uninstall/reinstall, not
+            -- just while the plugin has stayed continuously approved (docs/PLUGIN_SIGNING.md
+            -- section 7). Deliberately NOT cleared by uninstalling a plugin: that would reopen
+            -- exactly the hole this exists to close.
+            CREATE TABLE IF NOT EXISTS plugin_version_floor (
+                plugin_id TEXT NOT NULL,
+                signer TEXT NOT NULL DEFAULT '',
+                version TEXT NOT NULL,
+                PRIMARY KEY (plugin_id, signer)
+            );",
         )?;
 
         // Signer pinning columns for plugin grants (added after the table first shipped)

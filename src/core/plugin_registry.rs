@@ -350,6 +350,66 @@ pub fn user_plugins_dir(data_dir: &Path) -> std::path::PathBuf {
     data_dir.join("plugins")
 }
 
+/// Is `dir` one the operator installed (so it can be updated or removed), as opposed to one that
+/// ships with the app?
+pub fn is_installed_folder(data_dir: &Path, dir: &Path) -> bool {
+    let (Ok(root), Ok(dir)) = (std::fs::canonicalize(user_plugins_dir(data_dir)), std::fs::canonicalize(dir)) else { return false };
+    dir.parent() == Some(root.as_path())
+}
+
+/// Is this plugin's folder one that ships with the app (`web/plugins/`), rather than one the
+/// operator installed? Decided by location, not by any signature (docs/PLUGIN_SIGNING.md
+/// section 2's "Built-in" trust level: "the folder ships with the app").
+pub fn is_builtin(data_dir: &Path, source_path: &Path) -> bool {
+    !is_installed_folder(data_dir, source_path)
+}
+
+/// Whether `row` is actually usable right now: approved and unchanged (`effective_state() ==
+/// "active"`) AND allowed to load under the console's signature policy
+/// (docs/PLUGIN_SIGNING.md section 6) -- `require` stops a plugin that isn't built-in and isn't
+/// signed, even if it was already approved and nothing about it has changed since.
+pub fn is_usable(db: &Database, data_dir: &Path, row: &PluginGrantRow) -> bool {
+    if row.effective_state() != "active" {
+        return false;
+    }
+    let policy = crate::core::plugin_policy::Policy::parse(db.get_setting(crate::core::plugin_policy::SETTING_KEY).ok().flatten().as_deref());
+    crate::core::plugin_policy::permits_load(policy, is_builtin(data_dir, Path::new(&row.source_path)), row.approved_signer.is_some())
+}
+
+/// The highest version ever approved for `plugin_id` under `signer` ("" for unsigned), if any.
+/// Scoped per publisher key: an unrelated key's history says nothing about what to expect from
+/// this one (docs/PLUGIN_SIGNING.md section 7).
+pub fn version_floor(db: &Database, plugin_id: &str, signer: Option<&str>) -> Option<String> {
+    db.version_floor(plugin_id, signer).ok().flatten()
+}
+
+/// Rolls `plugin_id`'s remembered highest-ever-approved version (scoped to `signer`) up to
+/// `version` if it's a real, higher semver than what's recorded -- never down. Call this once a
+/// plugin is actually approved; it's what keeps a downgrade detectable after a revoke/re-approve
+/// or an uninstall/reinstall, not just while the plugin has stayed continuously approved
+/// (docs/PLUGIN_SIGNING.md section 7). Deliberately never deleted when a plugin is uninstalled --
+/// that would reopen exactly the hole this exists to close.
+pub fn remember_approved_version(db: &Database, plugin_id: &str, signer: Option<&str>, version: Option<&str>) {
+    let Some(version) = version else { return };
+    let Ok(new) = semver::Version::parse(version) else { return };
+    let should_raise = match version_floor(db, plugin_id, signer).as_deref().map(semver::Version::parse) {
+        Some(Ok(old)) => new > old,
+        _ => true,
+    };
+    if should_raise {
+        let _ = db.raise_version_floor(plugin_id, signer, version);
+    }
+}
+
+/// Is `candidate` an older version than the remembered floor? `false` whenever either side isn't
+/// a parseable semver -- an unknown relationship is not reported as a downgrade.
+pub fn is_downgrade_from_floor(floor: Option<&str>, candidate: Option<&str>) -> bool {
+    match (floor.and_then(|v| semver::Version::parse(v).ok()), candidate.and_then(|v| semver::Version::parse(v).ok())) {
+        (Some(floor), Some(candidate)) => candidate < floor,
+        _ => false,
+    }
+}
+
 pub fn discover(web_plugins_dir: &Path, host_version: &str) -> Vec<Discovered> {
     discover_all(web_plugins_dir, None, host_version)
 }
@@ -839,5 +899,65 @@ mod tests {
         std::fs::write(web.join("p.plugin.json.minisig"), "untrusted comment: x\nAAAA\n").unwrap();
         let found = discover(&web, "0.2.0");
         assert!(found.iter().find(|d| d.id == "p").unwrap().error.is_some());
+    }
+
+    #[test]
+    fn is_builtin_is_decided_by_folder_location_not_by_anything_about_the_plugin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data");
+        let installed = user_plugins_dir(&data_dir).join("from_operator");
+        std::fs::create_dir_all(&installed).unwrap();
+        let shipped = tmp.path().join("web").join("plugins").join("shipped");
+        std::fs::create_dir_all(&shipped).unwrap();
+
+        assert!(!is_builtin(&data_dir, &installed));
+        assert!(is_installed_folder(&data_dir, &installed));
+        assert!(is_builtin(&data_dir, &shipped), "anywhere outside <data dir>/plugins/* counts as built-in");
+        assert!(!is_installed_folder(&data_dir, &shipped));
+        // A folder that doesn't exist (e.g. a stale row after uninstall) can't canonicalize --
+        // the safe reading is "not installed", i.e. built-in, never the reverse.
+        assert!(is_builtin(&data_dir, &data_dir.join("plugins").join("gone")));
+    }
+
+    #[test]
+    fn version_floor_only_ever_rises_and_is_scoped_per_signer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = temp_db(tmp.path());
+
+        assert_eq!(version_floor(&db, "p", Some("KEY_A")), None);
+        remember_approved_version(&db, "p", Some("KEY_A"), Some("2.0.0"));
+        assert_eq!(version_floor(&db, "p", Some("KEY_A")).as_deref(), Some("2.0.0"));
+
+        // Re-approving a lower version (e.g. after a revoke) must not lower the floor.
+        remember_approved_version(&db, "p", Some("KEY_A"), Some("1.0.0"));
+        assert_eq!(version_floor(&db, "p", Some("KEY_A")).as_deref(), Some("2.0.0"), "the floor only ever rises");
+
+        // A genuine upgrade raises it.
+        remember_approved_version(&db, "p", Some("KEY_A"), Some("2.1.0"));
+        assert_eq!(version_floor(&db, "p", Some("KEY_A")).as_deref(), Some("2.1.0"));
+
+        // A different signer (or unsigned) starts its own floor: an unrelated key's releases
+        // say nothing about what to expect from this one.
+        assert_eq!(version_floor(&db, "p", Some("KEY_B")), None);
+        assert_eq!(version_floor(&db, "p", None), None);
+        remember_approved_version(&db, "p", None, Some("0.1.0"));
+        assert_eq!(version_floor(&db, "p", None).as_deref(), Some("0.1.0"));
+        assert_eq!(version_floor(&db, "p", Some("KEY_A")).as_deref(), Some("2.1.0"), "unaffected by the unsigned floor");
+
+        // Garbage versions are ignored rather than parsed as "anything, so always lower".
+        remember_approved_version(&db, "p", Some("KEY_A"), Some("not-a-version"));
+        assert_eq!(version_floor(&db, "p", Some("KEY_A")).as_deref(), Some("2.1.0"));
+        remember_approved_version(&db, "p", Some("KEY_A"), None);
+        assert_eq!(version_floor(&db, "p", Some("KEY_A")).as_deref(), Some("2.1.0"));
+    }
+
+    #[test]
+    fn downgrade_from_floor_is_only_reported_for_two_real_comparable_versions() {
+        assert!(is_downgrade_from_floor(Some("2.0.0"), Some("1.0.0")));
+        assert!(!is_downgrade_from_floor(Some("2.0.0"), Some("2.0.0")));
+        assert!(!is_downgrade_from_floor(Some("2.0.0"), Some("3.0.0")));
+        assert!(!is_downgrade_from_floor(None, Some("1.0.0")), "nothing remembered yet is not a downgrade");
+        assert!(!is_downgrade_from_floor(Some("2.0.0"), None));
+        assert!(!is_downgrade_from_floor(Some("not-semver"), Some("1.0.0")));
     }
 }

@@ -33,7 +33,21 @@ pub(super) fn rescan(app: &AppState) -> Vec<Discovered> {
 
 /// Is this plugin's folder one that ships with the app (rather than one the operator installed)?
 fn is_builtin(app: &AppState, row: &PluginGrantRow) -> bool {
-    !is_installed_folder(app, std::path::Path::new(&row.source_path))
+    crate::core::plugin_registry::is_builtin(&app.data_dir, std::path::Path::new(&row.source_path))
+}
+
+/// Whether `row` is approved, unchanged, and allowed to load under the console's plugin
+/// signature policy (docs/PLUGIN_SIGNING.md section 6) -- the policy-aware replacement for a
+/// bare `row.effective_state() == "active"` check everywhere a plugin is actually served, not
+/// just displayed.
+fn plugin_usable(app: &AppState, row: &PluginGrantRow) -> bool {
+    crate::core::plugin_registry::is_usable(&app.db, &app.data_dir, row)
+}
+
+/// The console's current plugin signature policy setting (docs/PLUGIN_SIGNING.md section 6),
+/// `allow` unless the operator set it otherwise in Settings > Plugins.
+fn plugin_signature_policy(app: &AppState) -> crate::core::plugin_policy::Policy {
+    crate::core::plugin_policy::Policy::parse(app.db.get_setting(crate::core::plugin_policy::SETTING_KEY).ok().flatten().as_deref())
 }
 
 /// The keys of every plugin the operator has approved: a signature by one of these is a "known" publisher.
@@ -98,7 +112,10 @@ fn read_manifest(row: &PluginGrantRow) -> Option<crate::core::plugin_permissions
 fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
     let requested: Vec<PermissionRequest> = serde_json::from_str(&row.requested_json).unwrap_or_default();
     let granted: Vec<PermissionRequest> = serde_json::from_str(&row.granted_json).unwrap_or_default();
-    let state = row.effective_state();
+    // Approved and unchanged, but the console's signature policy stops it from actually loading
+    // right now (docs/PLUGIN_SIGNING.md section 6) -- a distinct, honest state rather than
+    // silently claiming "active" for something that in fact isn't running.
+    let state = if row.effective_state() == "active" && !plugin_usable(app, row) { "policy_blocked" } else { row.effective_state() };
     let describe = |p: &PermissionRequest| {
         let mut v = serde_json::to_value(p).unwrap_or_default();
         v["tier"] = serde_json::to_value(p.tier()).unwrap_or_default();
@@ -137,6 +154,8 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         ),
         None => (Vec::new(), Vec::new()),
     };
+    let version_floor = crate::core::plugin_registry::version_floor(&app.db, &row.plugin_id, row.observed_signer.as_deref());
+    let is_downgrade_from_floor = crate::core::plugin_registry::is_downgrade_from_floor(version_floor.as_deref(), row.version.as_deref());
     // Granted differently from what the plugin asked for (the Advanced override): extra, dropped or re-scoped permissions.
     let diff = override_summary(&requested, &granted);
     let non_empty = |k: &str| diff[k].as_array().is_some_and(|a| !a.is_empty());
@@ -152,9 +171,10 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         for svc in mine.iter().flat_map(|p| p.services.iter()) {
             let mut plugins = Vec::new();
             for o in others.iter().filter(|o| o.plugin_id != row.plugin_id) {
-                let theirs: Vec<PermissionRequest> = serde_json::from_str(if o.effective_state() == "active" { &o.granted_json } else { &o.requested_json }).unwrap_or_default();
+                let o_usable = plugin_usable(app, o);
+                let theirs: Vec<PermissionRequest> = serde_json::from_str(if o_usable { &o.granted_json } else { &o.requested_json }).unwrap_or_default();
                 if let Some(p) = theirs.iter().find(|p| p.id == "keyring.service" && p.services.contains(svc)) {
-                    plugins.push(serde_json::json!({ "id": o.plugin_id, "name": o.name, "access": p.access.clone().unwrap_or_else(|| "read".to_string()), "state": o.effective_state() }));
+                    plugins.push(serde_json::json!({ "id": o.plugin_id, "name": o.name, "access": p.access.clone().unwrap_or_else(|| "read".to_string()), "state": if o_usable { "active" } else { o.effective_state() } }));
                 }
             }
             out.push(serde_json::json!({ "service": svc, "plugins": plugins }));
@@ -175,6 +195,12 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         "kind": row.kind,
         "name": row.name,
         "version": row.version,
+        // The highest version ever approved from this same signer, and whether this one is
+        // older than that -- holds across revoke/re-approve and uninstall/reinstall, unlike
+        // `changes.direction` below, which only compares against the single most recent
+        // approval (docs/PLUGIN_SIGNING.md section 7).
+        "version_floor": version_floor,
+        "is_downgrade_from_floor": is_downgrade_from_floor,
         "sandboxed": row.kind == "sandbox",
         "changes": crate::core::plugin_registry::describe_update(row),
         "trust": trust_view(app, row),
@@ -226,7 +252,7 @@ pub(super) async fn list_plugins(
             Some("web") => r.kind == "web" || r.kind == "sandbox",
             _ => true,
         })
-        .filter(|r| !only_active || r.effective_state() == "active")
+        .filter(|r| !only_active || plugin_usable(&app, r))
         .map(|r| view(&app, r))
         .collect();
     Ok(Json(list))
@@ -250,6 +276,11 @@ pub(super) struct ApproveReq {
     /// Required to approve a plugin signed by a publisher the operator revoked.
     #[serde(default)]
     confirm_revoked_publisher: bool,
+    /// Required to approve an unsigned plugin when the console's signature policy is `warn`, or
+    /// when it's being granted a Critical permission regardless of policy (docs/PLUGIN_SIGNING.md
+    /// section 6).
+    #[serde(default)]
+    confirm_unsigned: bool,
 }
 
 fn actor_of(headers: &HeaderMap, app: &AppState) -> String {
@@ -296,6 +327,18 @@ pub(super) async fn approve_plugin(
     if req.trust_publisher && (row.observed_signer.is_none() || revoked_publisher) {
         return Err(err(StatusCode::BAD_REQUEST, "only a signed plugin from a publisher you haven't revoked can be trusted"));
     }
+    let signature_policy = plugin_signature_policy(&app);
+    let builtin = is_builtin(&app, &row);
+    let signed = row.observed_signer.is_some();
+    // `granting_critical` doesn't matter for `Refused` (policy `require` refuses an unsigned,
+    // non-built-in plugin outright, whatever it asks for), so this early check can run before
+    // `granted` exists yet.
+    if crate::core::plugin_policy::approval_gate(signature_policy, builtin, signed, false) == crate::core::plugin_policy::ApprovalGate::Refused {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "this console's plugin signature policy (Settings > Plugins) requires a signed plugin or a built-in; loosen it to Warn or Allow to approve this one",
+        ));
+    }
     let requested: Vec<PermissionRequest> = serde_json::from_str(&row.requested_json).unwrap_or_default();
     let mut override_diff = None;
     let granted: Vec<PermissionRequest> = if let Some(custom) = req.override_grants {
@@ -327,16 +370,31 @@ pub(super) async fn approve_plugin(
         }
         requested.into_iter().filter(|p| req.granted.contains(&p.id)).collect()
     };
+    let granting_critical = granted.iter().any(|p| p.tier() == crate::core::plugin_permissions::Tier::Critical);
+    let unsigned_confirmation_needed =
+        crate::core::plugin_policy::approval_gate(signature_policy, builtin, signed, granting_critical) == crate::core::plugin_policy::ApprovalGate::NeedsConfirmation;
+    if unsigned_confirmation_needed && !req.confirm_unsigned {
+        let why = if signature_policy == crate::core::plugin_policy::Policy::Warn {
+            "this console's plugin signature policy warns on unsigned plugins"
+        } else {
+            "this plugin is unsigned and is being granted a Critical permission"
+        };
+        return Err(err(StatusCode::CONFLICT, &format!("{why}; confirm to approve it anyway")));
+    }
     let granted_json = serde_json::to_string(&granted).unwrap_or_else(|_| "[]".to_string());
     let actor = actor_of(&headers, &app);
     app.db
         .set_plugin_decision(&id, "approved", &granted_json, row.observed_manifest_sha256.as_deref(), Some(&row.observed_digest), row.observed_signer.as_deref(), &actor)
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    crate::core::plugin_registry::remember_approved_version(&app.db, &id, row.observed_signer.as_deref(), row.version.as_deref());
     app.db.add_plugin_audit(
         &id,
         &actor,
         "approved",
-        &serde_json::json!({ "granted": granted.iter().map(|p| &p.id).collect::<Vec<_>>(), "digest": row.observed_digest, "override": override_diff, "revoked_publisher_accepted": revoked_publisher }).to_string(),
+        &serde_json::json!({
+            "granted": granted.iter().map(|p| &p.id).collect::<Vec<_>>(), "digest": row.observed_digest, "override": override_diff,
+            "revoked_publisher_accepted": revoked_publisher, "unsigned_accepted": unsigned_confirmation_needed,
+        }).to_string(),
     );
     // A publisher that proved it moved from a key you trusted (the old key signed the statement) keeps your trust.
     if let (Some(new_key), Some(old_key)) = (row.observed_signer.as_deref(), row.observed_rotation_from.as_deref()) {
@@ -444,7 +502,7 @@ pub(super) async fn mint_plugin_token(
         .ok()
         .flatten()
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "no such plugin"))?;
-    if row.effective_state() != "active" {
+    if !plugin_usable(&app, &row) {
         return Err(err(StatusCode::FORBIDDEN, "this plugin isn't approved"));
     }
     let granted = parse_granted(&row);
@@ -697,7 +755,7 @@ async fn active_manifest(app: &AppState, plugin_id: &str) -> Result<(PluginGrant
         .get_plugin_grant(plugin_id)
         .ok()
         .flatten()
-        .filter(|r| r.kind == "sandbox" && r.effective_state() == "active")
+        .filter(|r| r.kind == "sandbox" && plugin_usable(app, r))
         .ok_or_else(|| err(StatusCode::FORBIDDEN, "this plugin isn't approved"))?;
     let dir = plugin_folder(&row);
     let (id, dir2) = (plugin_id.to_string(), dir.clone());
@@ -723,8 +781,7 @@ fn plugin_folder(row: &PluginGrantRow) -> std::path::PathBuf {
 
 /// Is this folder one the operator installed (so it can be removed), as opposed to one that ships with the app?
 fn is_installed_folder(app: &AppState, dir: &std::path::Path) -> bool {
-    let (Ok(root), Ok(dir)) = (std::fs::canonicalize(user_plugins_dir(&app.data_dir)), std::fs::canonicalize(dir)) else { return false };
-    dir.parent() == Some(root.as_path())
+    crate::core::plugin_registry::is_installed_folder(&app.data_dir, dir)
 }
 
 fn tools_dir(app: &AppState) -> std::path::PathBuf {
@@ -1081,7 +1138,7 @@ pub(super) async fn plugin_add_media(State(app): State<AppState>, headers: Heade
 pub(crate) fn web_plugin_file_is_active(app: &AppState, file_name: &str) -> bool {
     let Some(stem) = file_name.strip_suffix(".js") else { return false };
     let Some(row) = app.db.get_plugin_grant(stem).ok().flatten() else { return false };
-    if row.kind != "web" || row.effective_state() != "active" {
+    if row.kind != "web" || !plugin_usable(app, &row) {
         return false;
     }
     let path = app.web_dir.join("plugins").join(file_name);
@@ -1223,7 +1280,7 @@ pub(super) async fn serve_plugin_frame(
         return not_found();
     }
     let Some(row) = app.db.get_plugin_grant(&id).ok().flatten() else { return not_found() };
-    if row.kind != "sandbox" || row.effective_state() != "active" {
+    if row.kind != "sandbox" || !plugin_usable(&app, &row) {
         return not_found();
     }
     let dir = plugin_folder(&row);

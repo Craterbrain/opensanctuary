@@ -7213,6 +7213,114 @@ async fn test_publisher_trust_levels_and_revocation() {
     assert_eq!(post("/api/plugins/publishers/0000000000000000/trust".to_string()).await.status(), reqwest::StatusCode::NOT_FOUND);
 }
 
+/// Plugin signing phase 4: the `pluginSignaturePolicy` setting (docs/PLUGIN_SIGNING.md section 6)
+/// and the version floor that remembers a downgrade across revoke/re-approve (section 7).
+#[tokio::test]
+async fn test_plugin_signature_policy_and_version_floor() {
+    let unsigned_manifest = |id: &str, version: &str, perms: serde_json::Value| {
+        serde_json::json!({
+            "manifest_version": 1, "id": id, "name": format!("Plugin {id}"), "version": version,
+            "web": {"entry": "index.html", "sandbox": true}, "permissions": perms,
+        }).to_string()
+    };
+    let pkg = |id: &str, version: &str, perms: serde_json::Value| {
+        make_zip(&[("plugin.json", unsigned_manifest(id, version, perms).as_bytes()), ("index.html", b"<html></html>")])
+    };
+    let non_critical = || serde_json::json!([{ "id": "ui.panel", "reason": "x" }]);
+    let critical = || serde_json::json!([{ "id": "keyring.service", "services": ["OpenSanctuary:Shared:policy-test"], "reason": "x" }]);
+
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("policy.db").to_str().unwrap()).unwrap();
+    let web_dir = tmp.path().join("web");
+    // An unsigned built-in: `require` must never touch it.
+    std::fs::create_dir_all(web_dir.join("plugins/builtin_u")).unwrap();
+    std::fs::write(web_dir.join("plugins/builtin_u/plugin.json"), unsigned_manifest("builtin_u", "1.0.0", non_critical())).unwrap();
+    std::fs::write(web_dir.join("plugins/builtin_u/index.html"), "<html></html>").unwrap();
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"), data_dir: data_dir.clone(),
+        host_session_token: "policy_host".to_string(), server_port: addr.port(),
+        ..base_app_state(db.clone())
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+    let h = "policy_host";
+    let install = |body: Vec<u8>| { let (c, base) = (c.clone(), base.clone()); async move {
+        let r = c.post(format!("{base}/api/plugins/install")).header("x-host-token", h).body(body).send().await.unwrap();
+        assert_eq!(r.status(), reqwest::StatusCode::OK, "{}", r.text().await.unwrap_or_default());
+    } };
+    let get = |id: &str| { let (c, base, id) = (c.clone(), base.clone(), id.to_string()); async move {
+        let list: serde_json::Value = c.get(format!("{base}/api/plugins")).header("x-host-token", h).send().await.unwrap().json().await.unwrap();
+        list.as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).cloned().unwrap_or_else(|| panic!("{id} missing"))
+    } };
+    let approve = |id: &str, granted: &[&str], digest: serde_json::Value, extra: serde_json::Value| { let (c, base, id, granted) = (c.clone(), base.clone(), id.to_string(), granted.iter().map(|s| s.to_string()).collect::<Vec<_>>()); async move {
+        let mut body = serde_json::json!({ "digest": digest, "granted": granted });
+        for (k, v) in extra.as_object().unwrap() { body[k] = v.clone(); }
+        c.post(format!("{base}/api/plugins/{id}/approve")).header("x-host-token", h).json(&body).send().await.unwrap()
+    } };
+    let revoke = |id: &str| { let (c, base, id) = (c.clone(), base.clone(), id.to_string()); async move {
+        c.post(format!("{base}/api/plugins/{id}/revoke")).header("x-host-token", h).send().await.unwrap()
+    } };
+
+    // Default policy (nothing set yet) is `allow`: an unsigned, non-critical plugin needs no confirmation.
+    install(pkg("u1", "1.0.0", non_critical())).await;
+    assert_eq!(approve("u1", &["ui.panel"], get("u1").await["digest"].clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::OK);
+
+    // Independent of policy: an unsigned plugin granted a Critical permission always needs confirmation.
+    install(pkg("u2", "1.0.0", critical())).await;
+    let u2_digest = get("u2").await["digest"].clone();
+    assert_eq!(approve("u2", &["keyring.service"], u2_digest.clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::CONFLICT, "still under allow, but Critical+unsigned always asks");
+    assert_eq!(approve("u2", &["keyring.service"], u2_digest, serde_json::json!({ "confirm_unsigned": true })).await.status(), reqwest::StatusCode::OK);
+
+    // `warn`: now ANY unsigned plugin needs confirmation, critical or not.
+    db.set_setting("pluginSignaturePolicy", "warn").unwrap();
+    install(pkg("u3", "1.0.0", non_critical())).await;
+    let u3_digest = get("u3").await["digest"].clone();
+    assert_eq!(approve("u3", &["ui.panel"], u3_digest.clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::CONFLICT, "warn asks for every unsigned plugin");
+    assert_eq!(approve("u3", &["ui.panel"], u3_digest, serde_json::json!({ "confirm_unsigned": true })).await.status(), reqwest::StatusCode::OK);
+
+    // `require`: a confirmation no longer helps a non-built-in unsigned plugin -- it's refused outright.
+    db.set_setting("pluginSignaturePolicy", "require").unwrap();
+    install(pkg("u4", "1.0.0", non_critical())).await;
+    let u4_digest = get("u4").await["digest"].clone();
+    assert_eq!(approve("u4", &["ui.panel"], u4_digest.clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(approve("u4", &["ui.panel"], u4_digest, serde_json::json!({ "confirm_unsigned": true })).await.status(), reqwest::StatusCode::FORBIDDEN, "no confirmation unlocks `require`");
+    // But a built-in is never touched by any policy value, signed or not.
+    assert_eq!(approve("builtin_u", &["ui.panel"], get("builtin_u").await["digest"].clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(get("builtin_u").await["state"], "active");
+    // u1, approved earlier under `allow`, is still approved -- but `require` now stops it from
+    // actually loading, a distinct honest state rather than silently claiming "active".
+    assert_eq!(get("u1").await["state"], "policy_blocked");
+    // Loosen it back: u1 recovers without having to be re-approved.
+    db.set_setting("pluginSignaturePolicy", "allow").unwrap();
+    assert_eq!(get("u1").await["state"], "active");
+
+    // Version floor (section 7): u1 is approved at 1.0.0. Bump it to 2.0.0 and approve that too.
+    std::fs::write(data_dir.join("plugins/u1/plugin.json"), unsigned_manifest("u1", "2.0.0", non_critical())).unwrap();
+    let u1_v2 = get("u1").await;
+    assert_eq!(u1_v2["state"], "changed");
+    assert_eq!(approve("u1", &["ui.panel"], u1_v2["digest"].clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(get("u1").await["version_floor"], "2.0.0");
+
+    // Revoke it, then bring back 1.0.0 -- an older, previously-superseded version signed by the
+    // same (lack of a) key. The floor remembers 2.0.0 regardless of the revoke, and flags this as
+    // a downgrade even before it's re-approved.
+    assert_eq!(revoke("u1").await.status(), reqwest::StatusCode::OK);
+    std::fs::write(data_dir.join("plugins/u1/plugin.json"), unsigned_manifest("u1", "1.0.0", non_critical())).unwrap();
+    let u1_v1_again = get("u1").await;
+    assert_eq!(u1_v1_again["version"], "1.0.0");
+    assert_eq!(u1_v1_again["version_floor"], "2.0.0", "the floor survives the revoke");
+    assert_eq!(u1_v1_again["is_downgrade_from_floor"], true);
+    // Re-approving the downgrade is allowed (flagged, not blocked) -- and must not lower the floor.
+    assert_eq!(approve("u1", &["ui.panel"], u1_v1_again["digest"].clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(get("u1").await["version_floor"], "2.0.0", "approving an older version never lowers the remembered floor");
+}
+
 // ---------------------------------------------------------------------------------------------
 // Plugin signing phase 3: the release key, the revocation list, key rotation
 // (uses the throwaway keys in testdata/signing/, see its README)

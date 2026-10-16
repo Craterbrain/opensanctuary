@@ -155,13 +155,20 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 **HTTP API** (new `src/api/routes/plugins.rs`). All POSTs are already gated by `host_token_gate_middleware`; the GETs below get added to `needs_host_token`.
 
 ```
-GET  /api/plugins                    -> [{id,name,version,kind,status,signed,signer_key_id,observed_digest,approved_digest,requested,granted,tiers}]
-POST /api/plugins/{id}/approve       {digest, granted:[perm…]}   // granted ⊆ requested; required ones mandatory
-POST /api/plugins/{id}/deny          {digest}
-POST /api/plugins/{id}/revoke        {}
-GET  /api/plugins/audit?limit=200
-POST /api/plugins/{id}/token         {scopes?:[perm…]}           // console mints scoped token for a web plugin
+GET    /api/plugins                    -> [{id,name,version,kind,status,signed,signer_key_id,observed_digest,approved_digest,requested,granted,tiers}]
+GET    /api/plugins/permissions        -> every permission id the host knows (for the Advanced override, section 4)
+POST   /api/plugins/{id}/approve       {digest, granted:[perm…]} | {digest, override:[perm…]}   // granted ⊆ requested; override replaces it outright
+POST   /api/plugins/{id}/deny          {digest}
+POST   /api/plugins/{id}/revoke        {}
+DELETE /api/plugins/{id}               // uninstall
+POST   /api/plugins/install            // upload+install a package (docs/PLUGIN_SIGNING.md's install path)
+GET    /api/plugins/audit?limit=200
+POST   /api/plugins/{id}/token         {scopes?:[perm…]}           // console mints scoped token for a web plugin
+GET    /api/plugins/publishers         // trust store (docs/PLUGIN_SIGNING.md section 4)
+POST   /api/plugins/publishers/{key}/trust|untrust|revoke
+GET    /api/plugins/revocations        // revocation-list status (docs/PLUGIN_SIGNING.md section 5)
 ```
+`/plugin-frame/{id}/*` (the sandboxed iframe, phase 4) and `/api/plugin-host/*` (fetch, library writes, `process.run`, signed-tool status/update) are the plugin-facing side of this, not console grant management; see `docs/PLUGINS.md`.
 
 **Who may grant:** only `require_host_token`, meaning the per-run host token or a `console`-platform credential. Device tokens (remotes, displays) and plugin tokens are never accepted on `/api/plugins/*`. That rule is explicit in the handler as well as in the middleware. `decided_by` records `"host"` or `"console:<paired_devices.id>"`.
 
@@ -423,9 +430,9 @@ Each phase ships on its own.
 3. **Signed same-key updates that request no new permissions: auto-approve or one-click?** Recommend **one-click**, never silent. A live service shouldn't change code without someone seeing it.
 4. **Do plugin-originated commands bypass the one-console lock?** Recommend **yes**, attributed in audit. Plugins aren't consoles, and a DMX panic button shouldn't fail because a console is connected.
 5. **Should library and state GETs require auth so that `library.read` means something over HTTP?** Recommend **no**. The live, stage and remote pages depend on zero-auth reads, so document it as informational.
-6. **Copy the library to a private cache before `dlopen` to close the TOCTOU window?** Recommend **no**. It breaks plugins that load sibling libraries, and the attacker it stops can already edit `library.db`.
-7. **HMAC grant rows with a key in the OS keyring?** Recommend **no**, for the same reason as question 6. It adds complexity for little real protection.
+6. ~~Copy the library to a private cache before `dlopen` to close the TOCTOU window?~~ **Moot.** This was about `dlopen`-based native plugins, which no longer exist (confirmed: no `OsPlugin`, `libloading`, `dlopen`, `PluginHost`, or `create_plugin_v2` anywhere in `src/`). Kept here only so the question doesn't look unanswered.
+7. ~~HMAC grant rows with a key in the OS keyring?~~ **Moot**, same reason as question 6 — it was framed as a defense for the native-plugin era that's gone.
 8. **Keep auto-loading `hello_world.js` by default?** Recommend **no**. Make it opt-in through the new consent screen.
-9. **Offer `commands.modify` (rewriting commands) or `keyring.service` (shared namespaces) in v1?** The recommendation was to reserve both until a real plugin needed them; both have since been implemented, with the safeguards in docs/PLUGINS.md (same-kind rewrites only, never the emergency controls, native plugins only; shared namespaces limited to `OpenSanctuary:Shared:`).
+9. **Offer `commands.modify` (rewriting commands) or `keyring.service` (shared namespaces) in v1?** Settled, and the two landed differently: `commands.modify` was dropped for good — it only made sense for the native plugins that were removed, and `plugin_permissions.rs`'s own manifest tests now assert it's rejected as an unknown id ("commands.modify no longer exists"). `keyring.service` was implemented, limited to `OpenSanctuary:Shared:` namespaces, with the owner rules in docs/PLUGINS.md.
 
 **New dependencies: none.** Everything uses serde_json, sha2, minisign-verify (minisign is already a dev-dependency), semver, uuid, rusqlite and libloading, which are all already present.
