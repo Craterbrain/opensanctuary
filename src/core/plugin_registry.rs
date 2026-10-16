@@ -368,8 +368,16 @@ pub fn is_builtin(data_dir: &Path, source_path: &Path) -> bool {
 /// "active"`) AND allowed to load under the console's signature policy
 /// (docs/PLUGIN_SIGNING.md section 6) -- `require` stops a plugin that isn't built-in and isn't
 /// signed, even if it was already approved and nothing about it has changed since.
+///
+/// Requires `source_path` to still exist first (a file for a `web` plugin, a folder for a
+/// `sandbox` one): `is_installed_folder`/`is_builtin` read "can't even canonicalize it" as
+/// "built-in" (the safe reading for the unrelated `removable`-badge use this shares code with --
+/// see its own test), which would otherwise let a vanished, non-built-in, unsigned plugin's
+/// still-"active" (merely stale, since a missing path never gets re-synced) row slip past
+/// `require` by misreading "gone" as "built-in". A plugin that can't be found on disk at all is
+/// never usable, independent of what it would have been classified as.
 pub fn is_usable(db: &Database, data_dir: &Path, row: &PluginGrantRow) -> bool {
-    if row.effective_state() != "active" {
+    if row.effective_state() != "active" || !Path::new(&row.source_path).exists() {
         return false;
     }
     let policy = crate::core::plugin_policy::Policy::parse(db.get_setting(crate::core::plugin_policy::SETTING_KEY).ok().flatten().as_deref());
@@ -917,6 +925,35 @@ mod tests {
         // A folder that doesn't exist (e.g. a stale row after uninstall) can't canonicalize --
         // the safe reading is "not installed", i.e. built-in, never the reverse.
         assert!(is_builtin(&data_dir, &data_dir.join("plugins").join("gone")));
+    }
+
+    #[test]
+    fn a_plugin_whose_folder_vanished_is_never_usable_even_though_is_builtin_misreads_it() {
+        // A stale "active" row for a folder that's gone (e.g. removed outside the normal
+        // uninstall route, which also deletes the row) must never be usable -- even though
+        // `is_builtin` itself reads a missing folder as built-in (see the test above), which
+        // would otherwise let it bypass a `require` signature policy. `is_usable` has to close
+        // this regardless of that misclassification, not rely on `is_builtin` alone.
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data");
+        let db = temp_db(tmp.path());
+        let user_dir = user_plugins_dir(&data_dir);
+        let dir = write_sandbox_plugin(&user_dir, "vanishing", "<html>v1</html>");
+        let found = discover(&user_dir, "0.2.0");
+        sync(&db, &found);
+        let d = found.iter().find(|d| d.id == "vanishing").unwrap();
+        db.set_plugin_decision("vanishing", "approved", &requested_json(d), d.manifest_sha256.as_deref(), Some(&d.digest), None, "test").unwrap();
+        let row = db.get_plugin_grant("vanishing").unwrap().unwrap();
+        assert_eq!(row.effective_state(), "active");
+        assert!(is_usable(&db, &data_dir, &row), "a real, present folder is usable");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        // The row itself is untouched (nothing re-synced it away from "active"): this is exactly
+        // the stale-row condition the fix has to handle, not something it can assume away.
+        let row = db.get_plugin_grant("vanishing").unwrap().unwrap();
+        assert_eq!(row.effective_state(), "active", "a vanished folder doesn't retroactively change the stored row");
+        assert!(is_builtin(&data_dir, Path::new(&row.source_path)), "confirms the misclassification this guards against");
+        assert!(!is_usable(&db, &data_dir, &row), "but it must never be usable once its folder is gone");
     }
 
     #[test]

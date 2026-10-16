@@ -7266,6 +7266,9 @@ async fn test_plugin_signature_policy_and_version_floor() {
     let revoke = |id: &str| { let (c, base, id) = (c.clone(), base.clone(), id.to_string()); async move {
         c.post(format!("{base}/api/plugins/{id}/revoke")).header("x-host-token", h).send().await.unwrap()
     } };
+    let uninstall = |id: &str| { let (c, base, id) = (c.clone(), base.clone(), id.to_string()); async move {
+        c.delete(format!("{base}/api/plugins/{id}")).header("x-host-token", h).send().await.unwrap()
+    } };
 
     // Default policy (nothing set yet) is `allow`: an unsigned, non-critical plugin needs no confirmation.
     install(pkg("u1", "1.0.0", non_critical())).await;
@@ -7319,6 +7322,19 @@ async fn test_plugin_signature_policy_and_version_floor() {
     // Re-approving the downgrade is allowed (flagged, not blocked) -- and must not lower the floor.
     assert_eq!(approve("u1", &["ui.panel"], u1_v1_again["digest"].clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::OK);
     assert_eq!(get("u1").await["version_floor"], "2.0.0", "approving an older version never lowers the remembered floor");
+
+    // The floor also has to survive a full uninstall/reinstall, not just a revoke -- otherwise an
+    // attacker could erase the memory simply by removing and reinstalling an old, vulnerable
+    // version instead of going through revoke/re-approve. Uninstalling drops the plugin_grants
+    // row entirely (a fresh id, fresh first_seen on reinstall); the floor must not be keyed to it.
+    assert_eq!(uninstall("u1").await.status(), reqwest::StatusCode::OK);
+    install(pkg("u1", "0.5.0", non_critical())).await;
+    let u1_reinstalled = get("u1").await;
+    assert_eq!(u1_reinstalled["state"], "pending", "a fresh install starts over, same as any new plugin");
+    assert_eq!(u1_reinstalled["version_floor"], "2.0.0", "the floor survives uninstall/reinstall, not just revoke");
+    assert_eq!(u1_reinstalled["is_downgrade_from_floor"], true);
+    assert_eq!(approve("u1", &["ui.panel"], u1_reinstalled["digest"].clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::OK, "a downgrade is flagged, not blocked, even after a clean reinstall");
+    assert_eq!(get("u1").await["version_floor"], "2.0.0");
 }
 
 // ---------------------------------------------------------------------------------------------
