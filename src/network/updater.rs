@@ -343,6 +343,28 @@ fn asset_name_matches_version(asset_name: &str, version: &str, suffix: &str) -> 
 /// (Windows already has its own manual-download path per `docs/update.md`);
 /// `check_latest_release` still resolves their asset names so a future
 /// auto-apply implementation doesn't need to touch the check step.
+/// The check every downloaded update must pass before it's written anywhere: `checksums.txt` is signed
+/// by `public_key_b64`, it has a line for exactly `asset_name`, and that line's SHA-256 is the asset's.
+/// Split out of `download_and_verify_release` so the tamper cases can be tested without a network.
+pub fn verify_downloaded_asset(checksums_text: &str, checksums_sig_text: &str, public_key_b64: &str, asset_name: &str, asset_bytes: &[u8]) -> Result<(), String> {
+    verify_signature(checksums_text.as_bytes(), checksums_sig_text, public_key_b64)
+        .map_err(|e| format!("checksums.txt.minisig did not verify: {}", e))?;
+    let expected_hash = checksums_text
+        .lines()
+        .find_map(|line| {
+            let mut parts = line.split_whitespace();
+            let hash = parts.next()?;
+            let name = parts.next()?.trim_start_matches('*');
+            (name == asset_name).then(|| hash.to_lowercase())
+        })
+        .ok_or_else(|| format!("checksums.txt has no entry for {}", asset_name))?;
+    let actual_hash = sha256_hex(asset_bytes);
+    if actual_hash != expected_hash {
+        return Err(format!("Downloaded {} hash mismatch: expected {}, got {}", asset_name, expected_hash, actual_hash));
+    }
+    Ok(())
+}
+
 pub async fn download_and_verify_release(release: &ReleaseInfo) -> Result<PathBuf, String> {
     // The release JSON is only as trustworthy as whoever can publish to
     // RELEASES_REPO, and the signed manifest carries no version of its own.
@@ -393,26 +415,11 @@ pub async fn download_and_verify_release(release: &ReleaseInfo) -> Result<PathBu
 
     let checksums_text = fetch_text(release.checksums_url.clone()).await?;
     let checksums_sig_text = fetch_text(release.checksums_sig_url.clone()).await?;
+    // Reject a bad signature before downloading the (large) asset at all; verify_downloaded_asset checks it again.
     verify_signature(checksums_text.as_bytes(), &checksums_sig_text, RELEASE_PUBLIC_KEY_B64)
         .map_err(|e| format!("checksums.txt.minisig did not verify: {}", e))?;
-
     let asset_bytes = fetch_bytes(release.download_url.clone()).await?;
-    let expected_hash = checksums_text
-        .lines()
-        .find_map(|line| {
-            let mut parts = line.split_whitespace();
-            let hash = parts.next()?;
-            let name = parts.next()?.trim_start_matches('*');
-            (name == release.asset_name).then(|| hash.to_lowercase())
-        })
-        .ok_or_else(|| format!("checksums.txt has no entry for {}", release.asset_name))?;
-    let actual_hash = sha256_hex(&asset_bytes);
-    if actual_hash != expected_hash {
-        return Err(format!(
-            "Downloaded {} hash mismatch: expected {}, got {}",
-            release.asset_name, expected_hash, actual_hash
-        ));
-    }
+    verify_downloaded_asset(&checksums_text, &checksums_sig_text, RELEASE_PUBLIC_KEY_B64, &release.asset_name, &asset_bytes)?;
 
     let asset_path = dir.join(&release.asset_name);
     fs::write(&asset_path, &asset_bytes).map_err(|e| format!("Failed to write {}: {}", asset_path.display(), e))?;
@@ -463,6 +470,46 @@ mod tests {
         let other_kp = minisign::KeyPair::generate_unencrypted_keypair().expect("generate keypair");
         let result = verify_signature(data, &signature_text, &other_kp.pk.to_base64());
         assert!(result.is_err(), "expected signature from a different key to fail verification");
+    }
+
+    #[test]
+    fn a_downloaded_update_must_match_its_signed_checksum_line() {
+        let asset = b"the real installer bytes";
+        let name = "opensanctuary-setup-x64.exe";
+        let checksums = format!("{}  opensanctuary-linux-x64-0.3.0.tar.gz\n{} *{}\n", sha256_hex(b"other"), sha256_hex(asset), name);
+        let (pk, sig) = sign_with_minisign(checksums.as_bytes());
+
+        assert_eq!(verify_downloaded_asset(&checksums, &sig, &pk, name, asset), Ok(()), "the genuine asset (binary-mode `*name` line) passes");
+        let err = |r: Result<(), String>| r.unwrap_err();
+        assert!(err(verify_downloaded_asset(&checksums, &sig, &pk, name, b"tampered installer")).contains("hash mismatch"));
+        // A checksums file edited to match a tampered asset no longer carries the release key's signature.
+        let forged = checksums.replace(&sha256_hex(asset), &sha256_hex(b"tampered installer"));
+        assert!(err(verify_downloaded_asset(&forged, &sig, &pk, name, b"tampered installer")).contains("did not verify"));
+        // Signed by some other key: refused even though the hashes line up.
+        let (other_pk, _) = sign_with_minisign(b"x");
+        assert!(err(verify_downloaded_asset(&checksums, &sig, &other_pk, name, asset)).contains("did not verify"));
+        // No line for this exact asset (a different platform's file, or a near-miss name): refused.
+        assert!(err(verify_downloaded_asset(&checksums, &sig, &pk, "opensanctuary-setup-x64.exe.old", asset)).contains("no entry"));
+        assert!(err(verify_downloaded_asset(&checksums, &sig, &pk, "setup-x64.exe", asset)).contains("no entry"));
+    }
+
+    #[test]
+    fn release_json_must_carry_this_platforms_asset_and_both_checksum_files() {
+        let suffix = platform_asset_suffix();
+        let asset = |n: &str| serde_json::json!({ "name": n, "browser_download_url": format!("https://github.com/{RELEASES_REPO}/releases/download/v9.0.0/{n}") });
+        let full = serde_json::json!({ "tag_name": "v9.0.0", "assets": [asset(&format!("opensanctuary-9.0.0{suffix}")), asset("checksums.txt"), asset("checksums.txt.minisig")] });
+        let info = release_info_from_json(&full).unwrap();
+        assert_eq!(info.version, "9.0.0");
+        assert!(info.asset_name.ends_with(suffix));
+        assert!(info.checksums_sig_url.ends_with("checksums.txt.minisig"));
+        for missing in ["checksums.txt", "checksums.txt.minisig"] {
+            let mut j = full.clone();
+            j["assets"].as_array_mut().unwrap().retain(|a| a["name"] != missing);
+            assert!(release_info_from_json(&j).is_err(), "accepted a release without {missing}");
+        }
+        let no_platform = serde_json::json!({ "tag_name": "v9.0.0", "assets": [asset("opensanctuary-9.0.0.unknown"), asset("checksums.txt"), asset("checksums.txt.minisig")] });
+        assert!(release_info_from_json(&no_platform).is_err());
+        assert!(release_info_from_json(&serde_json::json!({ "assets": [] })).is_err(), "no tag_name");
     }
 
     fn scratch_dir(label: &str) -> std::path::PathBuf {
@@ -619,7 +666,7 @@ mod tests {
     /// `#[ignore]`d unlike most of this codebase's live-network tests (e.g.
     /// `test_fetch_churchapps_catalog_live`) -- confirmed directly that
     /// running this (and `test_update_check_and_status_routes_against_real_test_repo`
-    /// in `tests/core_tests.rs`) on every single `cargo test` during this
+    /// in `tests/core_tests/network.rs`) on every single `cargo test` during this
     /// feature's own iterative development was the dominant source of real
     /// GitHub requests this session, enough to trip GitHub's secondary
     /// abuse-rate-limit mid-session even with the primary 60/hour budget

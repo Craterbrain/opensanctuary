@@ -80,9 +80,11 @@ describe.skipIf(!hasMinisign)("E2E: publisher trust, badges and revocation", () 
     expect(await page.locator("iframe[data-plugin-id='acme_one']").count()).toBe(0);
 
     // Approving one of its plugins asks first, and declining changes nothing.
-    page.once("dialog", (d) => d.dismiss());
+    // (click() returns only once the confirm is answered, so this checks it was really asked.)
+    let asked = "";
+    page.once("dialog", (d) => { asked = d.message(); void d.dismiss(); });
     await card("acme_two").locator("button:has-text('Approve')").first().click();
-    await page.waitForTimeout(500);
+    expect(asked).toContain("revoked");
     expect(await card("acme_two").locator(".plugin-state").first().innerText()).not.toContain("Approved");
     page.once("dialog", (d) => { expect(d.message()).toContain("revoked"); void d.accept(); });
     await card("acme_two").locator("button:has-text('Approve')").first().click();

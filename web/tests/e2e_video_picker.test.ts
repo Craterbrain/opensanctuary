@@ -50,7 +50,6 @@ describe("E2E Live Test: Background Picker Videos Tab & Video Background Playbac
     // 1. Open slide editor
     await page.evaluate(() => (window as any).openSlideEditor('song'));
     await page.waitForSelector('#create-modal', { state: 'visible', timeout: 8000 });
-    await page.waitForTimeout(500);
 
     // 2. Open background picker
     await page.click('#tb-background');
@@ -58,7 +57,7 @@ describe("E2E Live Test: Background Picker Videos Tab & Video Background Playbac
 
     // 3. Click Videos header tab
     await page.click('#bg-picker-tab-videos');
-    await page.waitForTimeout(300);
+    await page.waitForSelector('#bg-picker-panel-videos', { state: 'visible' });
 
     // Verify Videos tab is active and other tabs inactive
     const isVideosTabActive = await page.$eval('#bg-picker-tab-videos', el => el.classList.contains('active'));
@@ -97,7 +96,6 @@ describe("E2E Live Test: Background Picker Videos Tab & Video Background Playbac
 
     // 5. Switch to 'From URL' subtab
     await page.click('#btn-video-subtab-url');
-    await page.waitForTimeout(200);
 
     expect(await page.isVisible('#video-subview-url')).toBe(true);
     expect(await page.isVisible('#video-subview-library')).toBe(false);
@@ -107,7 +105,7 @@ describe("E2E Live Test: Background Picker Videos Tab & Video Background Playbac
     const sampleUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
     await page.fill('#video-url-input', sampleUrl);
     await page.click('#btn-video-url-preview');
-    await page.waitForTimeout(300);
+    await page.waitForFunction(() => (document.getElementById('video-url-preview-element') as HTMLVideoElement)?.src.includes('BigBuckBunny.mp4'));
 
     const previewSrc = await page.$eval('#video-url-preview-element', (el: HTMLVideoElement) => el.src);
     expect(previewSrc).toContain('BigBuckBunny.mp4');
@@ -118,7 +116,6 @@ describe("E2E Live Test: Background Picker Videos Tab & Video Background Playbac
 
     // 6. Switch to the download subtab
     await page.click('#btn-video-subtab-ytdl');
-    await page.waitForTimeout(200);
 
     expect(await page.isVisible('#video-subview-ytdl')).toBe(true);
     expect(await page.isVisible('#video-subview-url')).toBe(false);
@@ -131,11 +128,10 @@ describe("E2E Live Test: Background Picker Videos Tab & Video Background Playbac
 
     // 7. Switch back to Library, select video card, and apply to active slide
     await page.click('#btn-video-subtab-library');
-    await page.waitForTimeout(200);
 
     // Click first card to select
     await page.click('#media-video-picker-grid .media-video-card');
-    await page.waitForTimeout(200);
+    await page.waitForSelector('#media-video-picker-grid .media-video-card.selected');
 
     const isCardSelected = await page.$eval('#media-video-picker-grid .media-video-card', el => el.classList.contains('selected'));
     expect(isCardSelected).toBe(true);
@@ -146,7 +142,7 @@ describe("E2E Live Test: Background Picker Videos Tab & Video Background Playbac
 
     // Click Apply to Active Slide
     await page.click('#btn-apply-video-slide');
-    await page.waitForTimeout(500);
+    await page.waitForSelector('#media-image-picker-modal', { state: 'hidden' });
 
     // Modal should be closed
     const isModalVisible = await page.isVisible('#media-image-picker-modal');
@@ -185,6 +181,5 @@ describe("E2E Live Test: Background Picker Videos Tab & Video Background Playbac
 
     // Close modal
     await page.click('#btn-close-image-picker');
-    await page.waitForTimeout(300);
   }, 45000);
 });

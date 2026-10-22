@@ -26,7 +26,7 @@ describe("E2E Live Test: Background Modal CSS Tab & Centered Header Tabs", () =>
     await page.evaluate(() => {
       (window as any).openThemePicker(null);
     });
-    await page.waitForTimeout(300);
+    await page.waitForSelector('.theme-picker-card');
 
     const isCentered = await page.evaluate(() => {
       const header = document.querySelector('#media-image-picker-modal .modal-header') as HTMLElement;
@@ -61,19 +61,16 @@ describe("E2E Live Test: Background Modal CSS Tab & Centered Header Tabs", () =>
   test("Category filtering updates visible cards correctly", async () => {
     // Click Gradients
     await page.click('#theme-picker-categories button[data-cat="gradient"]');
-    await page.waitForTimeout(200);
     const gradientCount = await page.$$eval('.theme-picker-card', cards => cards.length);
     expect(gradientCount).toBeGreaterThanOrEqual(5);
 
     // Click Solid Colors
     await page.click('#theme-picker-categories button[data-cat="solid"]');
-    await page.waitForTimeout(200);
     const solidCount = await page.$$eval('.theme-picker-card', cards => cards.length);
     expect(solidCount).toBeGreaterThanOrEqual(1);
 
     // Click Patterns
     await page.click('#theme-picker-categories button[data-cat="pattern"]');
-    await page.waitForTimeout(200);
     const patternCount = await page.$$eval('.theme-picker-card', cards => cards.length);
     expect(patternCount).toBeGreaterThanOrEqual(1);
     const patternTitles = await page.$$eval('.theme-picker-card .theme-picker-title', titles =>
@@ -86,7 +83,7 @@ describe("E2E Live Test: Background Modal CSS Tab & Centered Header Tabs", () =>
     // Reset to All Styles
     await page.click('#theme-picker-categories button[data-cat="all"]');
     await page.fill('#theme-picker-search', 'Ocean');
-    await page.waitForTimeout(200);
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('.theme-picker-card .theme-picker-title')).every((t) => /ocean/i.test(t.textContent || '')));
 
     const filteredTitles = await page.$$eval('.theme-picker-card .theme-picker-title', titles =>
       titles.map(t => t.textContent?.trim())
@@ -97,7 +94,7 @@ describe("E2E Live Test: Background Modal CSS Tab & Centered Header Tabs", () =>
 
   test("Theme cards have 16:9 previews, title bar, and selection checkmark badge", async () => {
     await page.fill('#theme-picker-search', '');
-    await page.waitForTimeout(200);
+    await page.waitForSelector('.theme-picker-card.selected');
 
     const cardDetails = await page.evaluate(() => {
       const card = document.querySelector('.theme-picker-card.selected') as HTMLElement;

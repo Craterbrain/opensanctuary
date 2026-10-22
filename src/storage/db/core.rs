@@ -598,6 +598,10 @@ impl Database {
                     .collect();
                 drop(stmt);
 
+                // Only drop the legacy table once every row is read *and* written: a failure leaves it in
+                // place to retry next start (the inserts are INSERT OR REPLACE), instead of silently losing
+                // whatever didn't make it across.
+                let mut all_moved = songs.len() == song_count;
                 for song in &songs {
                     let is_pd = Self::is_public_domain_song(song);
                     let target_arc = if is_pd {
@@ -607,7 +611,7 @@ impl Database {
                     };
                     let slides_json = serialize_slides_for_storage(&song.slides);
                     let conn = target_arc.lock().unwrap_or_else(|e| e.into_inner());
-                    let _ = conn.execute(
+                    all_moved &= conn.execute(
                         "INSERT OR REPLACE INTO songs (id, title, author, copyright, ccli_number, slides_json, theme_name)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                         params![
@@ -619,14 +623,15 @@ impl Database {
                             slides_json,
                             song.theme_name
                         ],
-                    );
+                    ).is_ok();
                 }
 
-                let _ = main_conn.execute("DROP TABLE IF EXISTS songs", []);
-                tracing::info!(
-                    "Migration of {} songs into songs/ complete. Legacy table dropped.",
-                    songs.len()
-                );
+                if all_moved {
+                    let _ = main_conn.execute("DROP TABLE IF EXISTS songs", []);
+                    tracing::info!("Migration of {} songs into songs/ complete. Legacy table dropped.", songs.len());
+                } else {
+                    tracing::error!("Not every legacy song could be moved into songs/; keeping the legacy table to retry next start.");
+                }
             }
         }
 
@@ -672,13 +677,15 @@ impl Database {
                     .collect();
                 drop(stmt);
 
+                let mut all_moved = items.len() == scrip_count; // see the songs migration above
                 let mut by_ver: HashMap<String, Vec<ScriptureItem>> = HashMap::new();
                 for it in items {
                     by_ver.entry(it.version.clone()).or_default().push(it);
                 }
 
                 for (ver, ver_items) in by_ver {
-                    if let Ok(conn_arc) = self.get_or_create_bible_conn(&ver) {
+                    let Ok(conn_arc) = self.get_or_create_bible_conn(&ver) else { all_moved = false; continue; };
+                    {
                         let mut conn = conn_arc.lock().unwrap_or_else(|e| e.into_inner());
                         if let Ok(tx) = conn.transaction() {
                             {
@@ -688,11 +695,12 @@ impl Database {
                                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                                     )
                                     .ok();
+                                all_moved &= insert_stmt.is_some();
                                 if let Some(mut s) = insert_stmt {
                                     for it in &ver_items {
                                         let verses_json = serde_json::to_string(&it.verses)
                                             .unwrap_or_else(|_| "[]".to_string());
-                                        let _ = s.execute(params![
+                                        all_moved &= s.execute(params![
                                             it.id,
                                             it.book,
                                             it.chapter,
@@ -702,11 +710,13 @@ impl Database {
                                             it.reference,
                                             verses_json,
                                             it.theme_name
-                                        ]);
+                                        ]).is_ok();
                                     }
                                 }
                             }
-                            let _ = tx.commit();
+                            all_moved &= tx.commit().is_ok();
+                        } else {
+                            all_moved = false;
                         }
                         tracing::info!(
                             "Migrated {} scriptures to bibles/{}.db",
@@ -716,8 +726,12 @@ impl Database {
                     }
                 }
 
-                let _ = main_conn.execute("DROP TABLE IF EXISTS scriptures", []);
-                tracing::info!("Migration of scriptures into bibles/ complete. Legacy table dropped.");
+                if all_moved {
+                    let _ = main_conn.execute("DROP TABLE IF EXISTS scriptures", []);
+                    tracing::info!("Migration of scriptures into bibles/ complete. Legacy table dropped.");
+                } else {
+                    tracing::error!("Not every legacy scripture could be moved into bibles/; keeping the legacy table to retry next start.");
+                }
             }
         }
 

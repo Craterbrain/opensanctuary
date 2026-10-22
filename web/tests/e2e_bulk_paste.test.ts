@@ -1,6 +1,6 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { spawnTestServer, teardownTestServer, ensureArtifactDir, type SpawnedTestServer } from "./e2e_helpers";
+import { spawnTestServer, teardownTestServer, ensureArtifactDir, openSlideEditor, type SpawnedTestServer } from "./e2e_helpers";
 
 describe("E2E Live Test: Slide Editor Bulk Paste Upgrades", () => {
   let server: SpawnedTestServer;
@@ -31,9 +31,7 @@ describe("E2E Live Test: Slide Editor Bulk Paste Upgrades", () => {
 
   test("Bulk Paste workflow: live counter badge, chord cleaning, CCLI extraction, and slide section tagging", async () => {
     // 1. Open slide creator for a song
-    await page.evaluate(() => (window as any).openSlideEditor('song'));
-    await page.waitForSelector("#create-modal", { state: "visible", timeout: 8000 });
-    await page.waitForTimeout(500);
+    await openSlideEditor(page, 'song');
 
     // 2. Click "Paste Text → Slides" to open bulk overlay
     await page.click("#btn-open-bulk-paste");
@@ -72,18 +70,15 @@ CCLI Song # 6016350
     `.trim();
 
     await page.fill("#create-item-content", songInput);
-    await page.waitForTimeout(100);
 
     // 5. Verify live counter badge updated
-    const badgeText = await page.textContent("#bulk-slide-count-badge");
-    expect(badgeText).toContain("3 Slides");
+    await page.waitForFunction(() => document.getElementById("bulk-slide-count-badge")?.textContent?.includes("3 Slides"));
 
     // Capture screenshot of the Bulk Paste overlay
     await page.screenshot({ path: `${artifactDir}/screenshot_bulk_paste_overlay.png` });
 
     // 6. Test one-click Clean Chords button
     await page.click("#btn-bulk-clean-chords");
-    await page.waitForTimeout(100);
 
     const cleanedVal = await page.inputValue("#create-item-content");
     expect(cleanedVal).not.toContain("[G]");
@@ -94,7 +89,7 @@ CCLI Song # 6016350
     // 7. Click "Convert & Build Slide Deck"
     await page.click("#btn-bulk-to-slides");
     await page.waitForSelector("#studio-bulk-view", { state: "hidden" });
-    await page.waitForTimeout(500);
+    await page.waitForFunction(() => document.querySelectorAll(".editor-filmstrip-card").length === 3);
 
     // 8. Verify slides generated in filmstrip
     const slideCards = await page.$$(".editor-filmstrip-card");

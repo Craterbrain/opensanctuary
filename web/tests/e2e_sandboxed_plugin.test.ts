@@ -112,6 +112,7 @@ describe("E2E Live Test: sandboxed plugin runs isolated and talks through the pe
     });
     await btn.dblclick(); // two clicks inside the debounce window
     await frame!.waitForFunction(() => document.getElementById("result")?.textContent === "NextSlide sent", null, { timeout: 8000 });
+    // Deliberately a fixed wait: proving a *second* click event never arrives means outlasting the debounce window.
     await page.waitForTimeout(700);
     expect(await frame!.evaluate(() => (window as any).__toolbarEvents)).toBe(1);
     // It doesn't keep focus (Enter is the Go Live shortcut).

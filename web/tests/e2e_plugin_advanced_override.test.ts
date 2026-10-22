@@ -60,8 +60,7 @@ describe("E2E Live Test: Settings > Plugins Advanced override", () => {
     expect(await card.locator("button:has-text('Approve')").first().isVisible()).toBe(false);
     const apply = card.locator("button:has-text('Apply override')");
     expect(await apply.isVisible()).toBe(true);
-    await apply.click();
-    await page.waitForTimeout(400);
+    await apply.click(); // without the acknowledgement this returns synchronously, changing nothing
     expect(await card.locator(".plugin-state").first().innerText()).not.toContain("Approved");
     await panel.locator(".plugin-advanced-ack input").check();
     await apply.click();

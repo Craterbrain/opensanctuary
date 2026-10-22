@@ -245,3 +245,32 @@ export function webDirWithPlugins(extra: Record<string, Record<string, string>>,
   }
   return dir;
 }
+
+/**
+ * Opens the slide editor (`kind`: song/presentation/…) and waits until it has actually built its canvas,
+ * rather than sleeping a fixed time after the modal appears.
+ */
+export async function openSlideEditor(page: import("playwright").Page, kind: string): Promise<void> {
+  await page.evaluate((k) => (window as any).openSlideEditor(k), kind);
+  await page.waitForSelector("#create-modal", { state: "visible", timeout: 8000 });
+  await page.waitForFunction(() => {
+    const s = (window as any).getCanvasSlideEditorDebugState?.();
+    return !!s?.hasEditor && Array.isArray(s.activeSlideElements);
+  }, null, { timeout: 8000 });
+}
+
+/** Re-runs `fn` until `ok` accepts its result (e.g. an API listing that a save will update), or throws after `timeoutMs`. */
+export async function pollUntil<T>(fn: () => Promise<T>, ok: (v: T) => boolean, timeoutMs = 8000, label = "condition"): Promise<T> {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    const v = await fn();
+    if (ok(v)) return v;
+    if (Date.now() > until) throw new Error(`timed out after ${timeoutMs}ms waiting for ${label}`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+/** Resolves after the page has rendered two more frames -- for UI that lays itself out in requestAnimationFrame. */
+export async function nextFrame(page: import("playwright").Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+}

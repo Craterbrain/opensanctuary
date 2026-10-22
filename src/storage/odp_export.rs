@@ -23,7 +23,7 @@
 //! Correctness is favored over small files: one `style:style` per run/paragraph/background rather
 //! than deduplicating identical ones, since a presentation realistically has tens, not thousands.
 //! Validated against real LibreOffice (`soffice --headless --convert-to pdf`, see
-//! `tests/core_tests.rs`), not just re-imported by this app's own (necessarily lenient) reader.
+//! `tests/core_tests/importers.rs`), not just re-imported by this app's own (necessarily lenient) reader.
 
 use std::io::Write as _;
 use std::path::Path;

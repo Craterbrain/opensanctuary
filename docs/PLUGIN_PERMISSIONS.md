@@ -28,7 +28,7 @@ Status: **implemented.** This began as a design (written by an Opus design pass)
 3. **`plugin_tokens` grows without bound and has no TTL.**
 4. **Keyring identity mismatch for `hello_world`.** `registerPlugin` scopes the vault with `forPlugin(module.default.name)`, which is `"Hello World Plugin"`. The server only accepts the file stem, `"hello_world"`. As written, `hello_world`'s keyring token request would get a 404.
 5. **The native ABI is already fragile.** `*mut dyn OsPlugin` crosses an `extern "C"` boundary using a Rust trait-object vtable. When `provide_resources` was added, it silently changed the vtable for any `.so` built earlier. Nothing checks for this, so a mismatched plugin is undefined behaviour.
-6. **`examples/` holds no plugin.** It contains only `sign_release.rs`, the minisign release signer. The only in-repo plugin is `web/plugins/hello_world.js`. The native "examples" are the test structs in `tests/core_tests.rs:904` and `:973`.
+6. **`examples/` holds no plugin.** It contains only `sign_release.rs`, the minisign release signer. The only in-repo plugin is `web/plugins/hello_world.js`. The native "examples" are the test structs in `tests/core_tests/plugins.rs`.
 
 ---
 
@@ -292,7 +292,7 @@ It does shorthand expansion (the duplicated AddToSchedule/StageItem block in `ws
 
 **Plugin tokens (`src/api/ws.rs`, `routes/keyring.rs`):**
 - The `plugin_tokens` value type changes from `String` to `PluginTokenInfo { plugin_id, scopes: PermissionSet, expires_at: i64 }`. TTL is 12 hours, with at most 8 tokens per plugin.
-- The map stays inferred as `HashMap::new()`, so the six or so `AppState { … }` literals in `core_tests.rs` need no edits.
+- The map stays inferred as `HashMap::new()`, so the six or so `AppState { … }` literals in `tests/core_tests/` need no edits.
 - `resolve_plugin_token` becomes `resolve_plugin_token(&self, tok) -> Option<PluginCaller>`. It applies `scopes ∩ live grant`, so revoking a plugin kills its tokens at once even before the purge.
 - `revoke_plugin_tokens(plugin_id)`.
 - New `authenticate_plugin(headers, app, need: PermKind) -> Result<PluginCaller, AppError>`.
@@ -348,7 +348,7 @@ ignored with a log warning, no plugin is ever approved automatically, and `plugi
   - `command_variant` handles both string and object variants.
 - `needs_host_token` covers the new `/api/plugins*` GETs and POSTs. Extend `gate_tests` in `routes/mod.rs`.
 
-**Integration tests** in `tests/core_tests.rs`, following the existing `register_plugin` and `AppState`+`create_router`+`reqwest` pattern (e.g. `:4748`):
+**Integration tests** in `tests/core_tests/plugins.rs`, following the existing `register_plugin` and `AppState`+`create_router`+`reqwest` pattern (e.g. `:4748`):
 1. `test_plugin_dispatch_respects_grants`: a plugin without `commands.intercept` is never asked; one without `show.observe` gets no state changes; `resources.provide:[songs]` contributes to songs but not themes; revoking stops dispatch at once.
 2. `test_safety_critical_uses_parsed_variant`: `AddToSchedule` with the title "SetAlert" can now be vetoed, and a real `SetAlert` still cannot.
 3. `test_ws_and_rest_give_plugins_identical_command_text`.
