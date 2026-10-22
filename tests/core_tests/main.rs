@@ -19,6 +19,7 @@ use os_next::storage::pptx_import::PptxImporter;
 mod engine;
 mod importers;
 mod network;
+mod packaging;
 mod plugins;
 mod storage;
 

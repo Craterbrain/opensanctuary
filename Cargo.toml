@@ -1,6 +1,6 @@
 [package]
 name = "os-next"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 authors = ["OpenSanctuary Core Team"]
 description = "Next-Generation Church Presentation Engine in Rust"
@@ -57,6 +57,7 @@ assets = [
     { source = "web/icons/crimson/*.svg", dest = "usr/share/opensanctuary/web/icons/crimson/", mode = "644" },
 
     { source = "web/dist/*.js", dest = "usr/share/opensanctuary/web/dist/", mode = "644" },
+    { source = "web/pattern-thumbs/*", dest = "usr/share/opensanctuary/web/pattern-thumbs/", mode = "644" },
     # Fetched by packaging/fetch-plugins.sh (run by build-deb.sh) from the
     # opensanctuary-plugins commit pinned in packaging/plugins.ref.
     { source = "target/bundled-plugins/**/*", dest = "usr/share/opensanctuary/web/plugins/", mode = "644" },
@@ -111,6 +112,7 @@ assets = [
     { source = "web/icons/crimson/*.svg", dest = "usr/share/opensanctuary/web/icons/crimson/", mode = "644" },
 
     { source = "web/dist/*.js", dest = "usr/share/opensanctuary/web/dist/", mode = "644" },
+    { source = "web/pattern-thumbs/*", dest = "usr/share/opensanctuary/web/pattern-thumbs/", mode = "644" },
     # Fetched by packaging/fetch-plugins.sh (run by build-deb.sh) from the
     # opensanctuary-plugins commit pinned in packaging/plugins.ref.
     { source = "target/bundled-plugins/**/*", dest = "usr/share/opensanctuary/web/plugins/", mode = "644" },
