@@ -290,7 +290,7 @@ fn build_display_window(
     };
 
     let mut builder = tao::window::WindowBuilder::new()
-        .with_title("OS-Next Display Output")
+        .with_title("OpenSanctuary Display Output")
         .with_decorations(false)
         .with_always_on_top(req.always_on_top)
         .with_position(monitor.position())
@@ -484,7 +484,7 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
     *display_manager.proxy.lock().unwrap_or_else(|e| e.into_inner()) = Some(event_loop.create_proxy());
 
     let mut window_builder = tao::window::WindowBuilder::new()
-        .with_title("OS-Next Operator Console")
+        .with_title("OpenSanctuary Operator Console")
         .with_inner_size(tao::dpi::LogicalSize::new(1440.0, 900.0));
 
     if let Some(icon) = load_app_icon() {
@@ -612,7 +612,7 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
     *display_manager.proxy.lock().unwrap_or_else(|e| e.into_inner()) = Some(event_loop.create_proxy());
 
     let mut window_builder = tao::window::WindowBuilder::new()
-        .with_title("OS-Next Operator Console")
+        .with_title("OpenSanctuary Operator Console")
         .with_inner_size(tao::dpi::LogicalSize::new(1440.0, 900.0));
 
     if let Some(icon) = load_app_icon() {

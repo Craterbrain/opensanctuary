@@ -328,10 +328,11 @@ export const api = {
       await resolveHostSessionToken();
       return api.get<PluginInfo[]>('/api/plugins', { headers: hostTokenHeader() });
     },
-    approve: async (id: string, digest: string, granted: string[], opts: { trustPublisher?: boolean; confirmRevokedPublisher?: boolean } = {}) => {
+    approve: async (id: string, digest: string, granted: string[], opts: { trustPublisher?: boolean; confirmRevokedPublisher?: boolean; confirmUnsigned?: boolean } = {}) => {
       await resolveHostSessionToken();
       return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/approve`, {
         digest, granted, trust_publisher: !!opts.trustPublisher, confirm_revoked_publisher: !!opts.confirmRevokedPublisher,
+        confirm_unsigned: !!opts.confirmUnsigned,
       }, { headers: hostTokenHeader() });
     },
     revocations: async () => {
@@ -355,9 +356,11 @@ export const api = {
       return api.post<{ success: boolean; stopped: string[] }>(`/api/plugins/publishers/${encodeURIComponent(keyId)}/revoke`, {}, { headers: hostTokenHeader() });
     },
     /** The Advanced override: grant exactly these permissions instead of what the plugin asked for. */
-    approveOverride: async (id: string, digest: string, grants: PluginGrantInput[]) => {
+    approveOverride: async (id: string, digest: string, grants: PluginGrantInput[], opts: { confirmRevokedPublisher?: boolean; confirmUnsigned?: boolean } = {}) => {
       await resolveHostSessionToken();
-      return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/approve`, { digest, override: grants }, { headers: hostTokenHeader() });
+      return api.post<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/approve`, {
+        digest, override: grants, confirm_revoked_publisher: !!opts.confirmRevokedPublisher, confirm_unsigned: !!opts.confirmUnsigned,
+      }, { headers: hostTokenHeader() });
     },
     sharedSecrets: async () => {
       await resolveHostSessionToken();
@@ -540,7 +543,11 @@ export interface PluginInfo {
   entry?: string | null;
   name: string;
   version: string | null;
-  state: 'pending' | 'active' | 'changed' | 'denied' | 'revoked' | 'incompatible';
+  /** The highest version ever approved from this same signer (or "" for unsigned), if any -- holds
+   * across revoke/re-approve and uninstall/reinstall, unlike `changes.direction`. */
+  version_floor?: string | null;
+  is_downgrade_from_floor?: boolean;
+  state: 'pending' | 'active' | 'changed' | 'denied' | 'revoked' | 'incompatible' | 'policy_blocked';
   error: string | null;
   digest: string;
   signed: boolean;

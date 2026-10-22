@@ -87,9 +87,13 @@
       var msg = 'Imported “' + song.title + '” with ' + song.slides.length + ' slides' +
         (song.ccli_number ? ' (CCLI #' + song.ccli_number + ')' : '') + '.';
       try {
-        await OS.call('sendCommand', { command: { AddToSchedule: { item_type: 'song', item_id: added.id } } });
+        var res = await OS.call('sendCommand', { command: { AddToSchedule: { item_type: 'song', item_id: added.id } } });
+        var ev = ((res && res.events) || []).find(function (e) { return e.event && e.event.event_type === 'ScheduleItemAdded'; });
+        if (!res || !res.success || !ev) throw new Error((res && res.error) || 'the console refused it');
         if (goLive) {
-          await OS.call('sendCommand', { command: { GoLive: { item_index: null, slide_index: 0 } } });
+          // Go live on the item just added, by index: `item_index: null` means "whatever is
+          // staged/selected", which is the previous item, not this one.
+          await OS.call('sendCommand', { command: { GoLive: { item_index: ev.event.data.index, slide_index: 0 } } });
         }
       } catch (e) {
         msg += ' (Not added to the schedule: ' + e.message + ')';

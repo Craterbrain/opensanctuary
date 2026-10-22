@@ -218,7 +218,7 @@ impl AppState {
             (t.plugin_id.clone(), t.scopes.clone())
         };
         let row = self.db.get_plugin_grant(&plugin_id).ok().flatten()?;
-        if row.effective_state() != "active" {
+        if !crate::core::plugin_registry::is_usable(&self.db, &self.data_dir, &row) {
             return None;
         }
         let granted = crate::core::plugin_registry::parse_granted(&row);

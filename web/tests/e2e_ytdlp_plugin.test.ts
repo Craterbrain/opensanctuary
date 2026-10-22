@@ -102,7 +102,6 @@ describe("E2E Live Test: Video Downloader plugin (yt-dlp) downloads through the 
     await frame.waitForSelector("#url", { state: "visible", timeout: 15000 });
     await frame.waitForFunction(() => document.getElementById("tool-status")?.textContent?.includes("2099.01.01"), null, { timeout: 15000 });
     await page.screenshot({ path: `${artifactDir}/screenshot_ytdlp_plugin_panel.png` });
-    await page.screenshot({ path: "../docs/screenshots/ytdlp-plugin.png" });
 
     await expectNativeIcons(frame, 5);
     // The same plugin also fills the video background picker's download tab (and the pointer there goes away).

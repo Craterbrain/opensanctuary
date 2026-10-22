@@ -2713,6 +2713,64 @@ fn test_merge_schedule_items_rejects_section_headers_and_self_merge() {
     assert_eq!(engine.snapshot().schedule.items.len(), 2, "self-merge is a no-op");
 }
 
+#[test]
+fn test_out_of_range_go_live_and_stage_are_no_ops() {
+    let event_log = Arc::new(EventLog::new(100));
+    let engine = ShowEngine::new(event_log);
+    engine.execute_command(ShowCommand::AddToSchedule(simple_item("a", "A", &["a1", "a2"])));
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(0), slide_index: Some(1) });
+    engine.execute_command(ShowCommand::StageItem { item_index: Some(0), slide_index: Some(0) });
+
+    // A stale index (e.g. a paired remote that hasn't seen an item removal yet)
+    // must not blank the live output or clear the staged item.
+    let events = engine.execute_command(ShowCommand::GoLive { item_index: Some(99), slide_index: Some(0) });
+    assert!(events.is_empty(), "out-of-range GoLive should emit nothing");
+    let events = engine.execute_command(ShowCommand::StageItem { item_index: Some(1), slide_index: Some(0) });
+    assert!(events.is_empty(), "out-of-range StageItem should emit nothing");
+
+    let snap = engine.snapshot();
+    assert_eq!(snap.state.live_item.as_ref().map(|i| i.id.as_str()), Some("a"));
+    assert_eq!(snap.state.live_slide_index, 1);
+    assert_eq!(snap.state.staged_item.as_ref().map(|i| i.id.as_str()), Some("a"));
+}
+
+#[test]
+fn test_item_navigation_skips_section_headers() {
+    let event_log = Arc::new(EventLog::new(100));
+    let engine = ShowEngine::new(event_log);
+    engine.execute_command(ShowCommand::AddToSchedule(simple_item("a", "A", &["a1", "a2"])));
+    engine.execute_command(ShowCommand::AddScheduleHeader { title: "Sermon".to_string(), index: None });
+    engine.execute_command(ShowCommand::AddScheduleHeader { title: "Response".to_string(), index: None });
+    engine.execute_command(ShowCommand::AddToSchedule(simple_item("b", "B", &["b1", "b2"])));
+    engine.execute_command(ShowCommand::AddScheduleHeader { title: "End".to_string(), index: None });
+    let live_id = |e: &ShowEngine| e.snapshot().state.live_item.map(|i| i.id);
+
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(0), slide_index: Some(0) });
+    engine.execute_command(ShowCommand::NextItem);
+    assert_eq!(live_id(&engine).as_deref(), Some("b"), "NextItem steps over both headers");
+
+    // Nothing but a header after B: NextItem / NextSlide off the end stay on B.
+    engine.execute_command(ShowCommand::NextItem);
+    assert_eq!(live_id(&engine).as_deref(), Some("b"));
+    engine.execute_command(ShowCommand::JumpSlide(1));
+    engine.execute_command(ShowCommand::NextSlide);
+    assert_eq!(live_id(&engine).as_deref(), Some("b"));
+    assert_eq!(engine.snapshot().state.live_slide_index, 1);
+
+    engine.execute_command(ShowCommand::PrevItem);
+    assert_eq!(live_id(&engine).as_deref(), Some("a"), "PrevItem steps over both headers");
+
+    // NextSlide past A's last slide auto-advances to B, not the header in between;
+    // PrevSlide from B's first slide goes back to A's last slide.
+    engine.execute_command(ShowCommand::JumpSlide(1));
+    engine.execute_command(ShowCommand::NextSlide);
+    assert_eq!(live_id(&engine).as_deref(), Some("b"));
+    assert_eq!(engine.snapshot().state.live_slide_index, 0);
+    engine.execute_command(ShowCommand::PrevSlide);
+    assert_eq!(live_id(&engine).as_deref(), Some("a"));
+    assert_eq!(engine.snapshot().state.live_slide_index, 1);
+}
+
 fn simple_item(id: &str, title: &str, texts: &[&str]) -> ScheduleItem {
     ScheduleItem {
         id: id.to_string(),
@@ -7211,6 +7269,130 @@ async fn test_publisher_trust_levels_and_revocation() {
         assert_eq!(req.send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED, "{path}");
     }
     assert_eq!(post("/api/plugins/publishers/0000000000000000/trust".to_string()).await.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+/// Plugin signing phase 4: the `pluginSignaturePolicy` setting (docs/PLUGIN_SIGNING.md section 6)
+/// and the version floor that remembers a downgrade across revoke/re-approve (section 7).
+#[tokio::test]
+async fn test_plugin_signature_policy_and_version_floor() {
+    let unsigned_manifest = |id: &str, version: &str, perms: serde_json::Value| {
+        serde_json::json!({
+            "manifest_version": 1, "id": id, "name": format!("Plugin {id}"), "version": version,
+            "web": {"entry": "index.html", "sandbox": true}, "permissions": perms,
+        }).to_string()
+    };
+    let pkg = |id: &str, version: &str, perms: serde_json::Value| {
+        make_zip(&[("plugin.json", unsigned_manifest(id, version, perms).as_bytes()), ("index.html", b"<html></html>")])
+    };
+    let non_critical = || serde_json::json!([{ "id": "ui.panel", "reason": "x" }]);
+    let critical = || serde_json::json!([{ "id": "keyring.service", "services": ["OpenSanctuary:Shared:policy-test"], "reason": "x" }]);
+
+    let tmp = tempfile::tempdir().unwrap();
+    let db = os_next::storage::Database::new(tmp.path().join("policy.db").to_str().unwrap()).unwrap();
+    let web_dir = tmp.path().join("web");
+    // An unsigned built-in: `require` must never touch it.
+    std::fs::create_dir_all(web_dir.join("plugins/builtin_u")).unwrap();
+    std::fs::write(web_dir.join("plugins/builtin_u/plugin.json"), unsigned_manifest("builtin_u", "1.0.0", non_critical())).unwrap();
+    std::fs::write(web_dir.join("plugins/builtin_u/index.html"), "<html></html>").unwrap();
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app_state = os_next::api::ws::AppState {
+        web_dir: web_dir.clone(), media_dir: tmp.path().join("media"), data_dir: data_dir.clone(),
+        host_session_token: "policy_host".to_string(), server_port: addr.port(),
+        ..base_app_state(db.clone())
+    };
+    let router = os_next::api::create_router(app_state);
+    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    let base = format!("http://{addr}");
+    let c = reqwest::Client::new();
+    let h = "policy_host";
+    let install = |body: Vec<u8>| { let (c, base) = (c.clone(), base.clone()); async move {
+        let r = c.post(format!("{base}/api/plugins/install")).header("x-host-token", h).body(body).send().await.unwrap();
+        assert_eq!(r.status(), reqwest::StatusCode::OK, "{}", r.text().await.unwrap_or_default());
+    } };
+    let get = |id: &str| { let (c, base, id) = (c.clone(), base.clone(), id.to_string()); async move {
+        let list: serde_json::Value = c.get(format!("{base}/api/plugins")).header("x-host-token", h).send().await.unwrap().json().await.unwrap();
+        list.as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).cloned().unwrap_or_else(|| panic!("{id} missing"))
+    } };
+    let approve = |id: &str, granted: &[&str], digest: serde_json::Value, extra: serde_json::Value| { let (c, base, id, granted) = (c.clone(), base.clone(), id.to_string(), granted.iter().map(|s| s.to_string()).collect::<Vec<_>>()); async move {
+        let mut body = serde_json::json!({ "digest": digest, "granted": granted });
+        for (k, v) in extra.as_object().unwrap() { body[k] = v.clone(); }
+        c.post(format!("{base}/api/plugins/{id}/approve")).header("x-host-token", h).json(&body).send().await.unwrap()
+    } };
+    let revoke = |id: &str| { let (c, base, id) = (c.clone(), base.clone(), id.to_string()); async move {
+        c.post(format!("{base}/api/plugins/{id}/revoke")).header("x-host-token", h).send().await.unwrap()
+    } };
+    let uninstall = |id: &str| { let (c, base, id) = (c.clone(), base.clone(), id.to_string()); async move {
+        c.delete(format!("{base}/api/plugins/{id}")).header("x-host-token", h).send().await.unwrap()
+    } };
+
+    // Default policy (nothing set yet) is `allow`: an unsigned, non-critical plugin needs no confirmation.
+    install(pkg("u1", "1.0.0", non_critical())).await;
+    assert_eq!(approve("u1", &["ui.panel"], get("u1").await["digest"].clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::OK);
+
+    // Independent of policy: an unsigned plugin granted a Critical permission always needs confirmation.
+    install(pkg("u2", "1.0.0", critical())).await;
+    let u2_digest = get("u2").await["digest"].clone();
+    assert_eq!(approve("u2", &["keyring.service"], u2_digest.clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::CONFLICT, "still under allow, but Critical+unsigned always asks");
+    assert_eq!(approve("u2", &["keyring.service"], u2_digest, serde_json::json!({ "confirm_unsigned": true })).await.status(), reqwest::StatusCode::OK);
+
+    // `warn`: now ANY unsigned plugin needs confirmation, critical or not.
+    db.set_setting("pluginSignaturePolicy", "warn").unwrap();
+    install(pkg("u3", "1.0.0", non_critical())).await;
+    let u3_digest = get("u3").await["digest"].clone();
+    assert_eq!(approve("u3", &["ui.panel"], u3_digest.clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::CONFLICT, "warn asks for every unsigned plugin");
+    assert_eq!(approve("u3", &["ui.panel"], u3_digest, serde_json::json!({ "confirm_unsigned": true })).await.status(), reqwest::StatusCode::OK);
+
+    // `require`: a confirmation no longer helps a non-built-in unsigned plugin -- it's refused outright.
+    db.set_setting("pluginSignaturePolicy", "require").unwrap();
+    install(pkg("u4", "1.0.0", non_critical())).await;
+    let u4_digest = get("u4").await["digest"].clone();
+    assert_eq!(approve("u4", &["ui.panel"], u4_digest.clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(approve("u4", &["ui.panel"], u4_digest, serde_json::json!({ "confirm_unsigned": true })).await.status(), reqwest::StatusCode::FORBIDDEN, "no confirmation unlocks `require`");
+    // But a built-in is never touched by any policy value, signed or not.
+    assert_eq!(approve("builtin_u", &["ui.panel"], get("builtin_u").await["digest"].clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(get("builtin_u").await["state"], "active");
+    // u1, approved earlier under `allow`, is still approved -- but `require` now stops it from
+    // actually loading, a distinct honest state rather than silently claiming "active".
+    assert_eq!(get("u1").await["state"], "policy_blocked");
+    // Loosen it back: u1 recovers without having to be re-approved.
+    db.set_setting("pluginSignaturePolicy", "allow").unwrap();
+    assert_eq!(get("u1").await["state"], "active");
+
+    // Version floor (section 7): u1 is approved at 1.0.0. Bump it to 2.0.0 and approve that too.
+    std::fs::write(data_dir.join("plugins/u1/plugin.json"), unsigned_manifest("u1", "2.0.0", non_critical())).unwrap();
+    let u1_v2 = get("u1").await;
+    assert_eq!(u1_v2["state"], "changed");
+    assert_eq!(approve("u1", &["ui.panel"], u1_v2["digest"].clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(get("u1").await["version_floor"], "2.0.0");
+
+    // Revoke it, then bring back 1.0.0 -- an older, previously-superseded version signed by the
+    // same (lack of a) key. The floor remembers 2.0.0 regardless of the revoke, and flags this as
+    // a downgrade even before it's re-approved.
+    assert_eq!(revoke("u1").await.status(), reqwest::StatusCode::OK);
+    std::fs::write(data_dir.join("plugins/u1/plugin.json"), unsigned_manifest("u1", "1.0.0", non_critical())).unwrap();
+    let u1_v1_again = get("u1").await;
+    assert_eq!(u1_v1_again["version"], "1.0.0");
+    assert_eq!(u1_v1_again["version_floor"], "2.0.0", "the floor survives the revoke");
+    assert_eq!(u1_v1_again["is_downgrade_from_floor"], true);
+    // Re-approving the downgrade is allowed (flagged, not blocked) -- and must not lower the floor.
+    assert_eq!(approve("u1", &["ui.panel"], u1_v1_again["digest"].clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::OK);
+    assert_eq!(get("u1").await["version_floor"], "2.0.0", "approving an older version never lowers the remembered floor");
+
+    // The floor also has to survive a full uninstall/reinstall, not just a revoke -- otherwise an
+    // attacker could erase the memory simply by removing and reinstalling an old, vulnerable
+    // version instead of going through revoke/re-approve. Uninstalling drops the plugin_grants
+    // row entirely (a fresh id, fresh first_seen on reinstall); the floor must not be keyed to it.
+    assert_eq!(uninstall("u1").await.status(), reqwest::StatusCode::OK);
+    install(pkg("u1", "0.5.0", non_critical())).await;
+    let u1_reinstalled = get("u1").await;
+    assert_eq!(u1_reinstalled["state"], "pending", "a fresh install starts over, same as any new plugin");
+    assert_eq!(u1_reinstalled["version_floor"], "2.0.0", "the floor survives uninstall/reinstall, not just revoke");
+    assert_eq!(u1_reinstalled["is_downgrade_from_floor"], true);
+    assert_eq!(approve("u1", &["ui.panel"], u1_reinstalled["digest"].clone(), serde_json::json!({})).await.status(), reqwest::StatusCode::OK, "a downgrade is flagged, not blocked, even after a clean reinstall");
+    assert_eq!(get("u1").await["version_floor"], "2.0.0");
 }
 
 // ---------------------------------------------------------------------------------------------

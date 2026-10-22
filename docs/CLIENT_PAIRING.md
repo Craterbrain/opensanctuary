@@ -1,6 +1,6 @@
 # Client discovery & console pairing
 
-_Last edited: 2026-10-01 14:19_
+_Last edited: 2026-10-15_
 
 This covers two related things for **permanent display clients** — the
 Roku and Android TV apps, as opposed to someone opening `live.html` in a
@@ -154,6 +154,21 @@ design is for, which the app never did before: every connect compares
 `GET /api/server-info`'s `instance_id` against the one stored at pairing
 time, and shows a distinct "different console" screen on mismatch instead
 of silently rendering whatever answered.
+
+The TV app also pins the console's **TLS certificate fingerprint**, not just
+`instance_id`: `PairingManager.kt`'s `pinningTrustManager` hashes the
+presented cert the same way `cert_fingerprint_sha256`
+(`src/network/tls.rs`) does, trusts it on first connection
+(trust-on-first-use, same model as SSH host keys), and rejects a mismatch on
+every connection after. Because the console's self-signed cert is
+regenerated whenever its private key can't be read back (see
+`get_or_create_tls_certificate` in `src/network/tls.rs`), a console with no
+OS keyring used to mint a new cert — and a new fingerprint — on every
+restart, breaking every already-pinned TV (it would need re-pairing after
+every restart). Fixed by `tls.rs`'s owner-only fallback key file, which keeps
+the private key (and therefore the cert and its fingerprint) stable across
+restarts even with no keyring; see `docs/workflow.md`'s "Known issues" for
+that fix's own history.
 
 ### Critical Invariant: Zero-Auth Open Access for Web *Displays*
 

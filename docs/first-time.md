@@ -1,6 +1,10 @@
-# Plan: first-time setup
+# First-time setup
 
-_Last edited: 2026-10-02 20:05_
+_Last edited: 2026-10-15_
+
+Status: **implemented** — all 7 steps below are built (`web/src/ui/first_time_setup.ts`).
+What follows is the original plan, kept because it's still the accurate rationale and
+step list; each step notes where the shipped version matched or diverged from it.
 
 ## Why this matters more than it looks like
 
@@ -10,37 +14,39 @@ content and almost no song content** — only `songs/public_domain.db`'s
 handful of bundled hymns. Without a first-run flow that actively helps the
 user get *some* content in, "add a scripture item" is a dead end the
 first time anyone opens the app. This is the most important gap this plan
-needs to close, not just an onboarding nicety.
+needed to close, not just an onboarding nicety.
 
-## Trigger condition
+## Trigger condition — implemented, differently than planned
 
-No separate "first run" flag file. The signal already exists implicitly:
-`Database::new()`/`new_with_dirs()` creates `library.db` if it isn't there.
-Thread that through explicitly — `Database::was_freshly_created(&self) ->
-bool` — and expose it from a new `GET /api/first-run-status` route (or fold
-into the existing status/settings endpoint). The frontend checks this once
-at boot (`app_core.ts` init sequence) and shows the setup overlay if true.
+Not `Database::was_freshly_created()` as originally sketched (that would stay
+true for a process's whole lifetime, re-showing the wizard on every reload
+mid-setup *and* on every later restart until the operator finished it in one
+sitting). Instead, `GET /api/server-info` (`src/api/routes/show.rs`) returns
+`"first_run": !skip_first_time_setup && !settings.contains_key("firstTimeSetupCompleted")`
+— a persisted settings flag the wizard sets on completion or skip
+(`firstTimeSetupCompleted`), so a mid-setup reload keeps showing it (expected)
+but finishing or dismissing it suppresses it for good, across restarts too. A
+`--skip-first-time-setup` CLI flag forces it off (used by the e2e test suite).
+`maybeShowFirstTimeSetup()` (`app_core.ts` init sequence) checks this once at
+boot.
 
-Render as an **overlay on top of the normal console**, not a blocking
-full-screen takeover with nothing behind it — a user who dismisses it
-without finishing shouldn't be stuck. Add a "Re-run First-Time Setup"
-action under Settings → About so a church can redo it later (new machine,
-starting over, etc.) — trivial once the modal exists, meaningful for
-support.
+Renders as an **overlay on top of the normal console**, not a blocking
+full-screen takeover — dismissing it early doesn't strand the user. "Re-run
+First-Time Setup" lives under Settings → About, per the original plan.
 
 ## Steps
 
-1. **Welcome.** One screen, plain-language intro, "Get Started."
+1. **Welcome.** One screen, plain-language intro, "Let's Go ➜."
 
-2. **Data directory — implemented.** Shows the auto-detected default
-   (`paths.md`). Also the point where legacy-layout migration is offered:
+2. **Data directory.** Shows the auto-detected default (`paths.md`). Also the
+   point where legacy-layout migration is offered:
    `paths::detect_legacy_portable_library` checks CWD and the exe's own
    directory for an older portable install's `library.db`; if found, a
    banner offers "Use This Library Instead" rather than silently starting
    fresh. Accepting points `install.json` at the legacy directory (no file
    copy) and asks for a restart. Picking a different folder for the *new*
    database before anything is written there (the originally-sketched
-   alternative to this step) is not built — only the legacy-detection path
+   alternative to this step) was never built — only the legacy-detection path
    is.
 
 3. **Church / Sanctuary name.** Feeds the existing `churchName` setting
@@ -50,8 +56,8 @@ support.
 
 4. **Bible content.** The load-bearing step (see above). Three options
    presented together, not sequential forced choices:
-   - Turn on the **Online Bibles** plugin (one click; the step lists the hosts it can
-     reach) and download a translation from its panel — works offline afterward.
+   - Turn on the **Online Bibles** plugin (one click) and download a
+     translation from its panel — works offline afterward.
    - Point at existing Bible `.db` files (someone with a prior install, or
      files obtained separately) — sets `biblesDirectory`
      (`paths.md`'s Settings entry).
@@ -62,24 +68,19 @@ support.
    `public_domain.db` ships bundled — offer pointing at an existing songs
    directory, or skip.
 
-6. **Network quick-check.** Show the detected hostname/LAN IP(s) the
-   console will be reachable at, and one line each explaining Live Output,
-   Stage Foldback, and Remote Control URLs. This is genuinely non-obvious
-   to a first-time operator and currently only discoverable by reading the
-   console's startup log output — worth surfacing once, here.
+6. **Network quick-check.** Shows the detected hostname/LAN IP(s) the
+   console is reachable at.
 
-7. **Done.** Drop into the normal console; a brief toast ("Setup complete
-   — revisit anytime in Settings") rather than a modal that needs
-   dismissing.
+7. **Done.** Drop into the normal console with a toast, rather than a modal
+   that needs dismissing.
 
 ## Where implemented
 
-- `web/src/ui/first_time_setup.ts` (new), following the existing modal
-  patterns in `web/src/ui/` (e.g. `settings_dialog.ts`,
-  `theme_picker.ts`).
-- Rust: `was_freshly_created()` on `Database`, the status route, and
-  whatever `paths.md`'s data-dir-move / `install.json` write needs on the
-  Rust side for step 2.
-- No new settings-schema entries required beyond what `paths.md` already
-  adds (`storage` category) and what already exists (`churchName`) — this
-  is a guided *flow* through existing/planned settings, not new state.
+- `web/src/ui/first_time_setup.ts`, following the existing modal patterns in
+  `web/src/ui/` (e.g. `settings_dialog.ts`).
+- Rust: the `first_run`/`legacy_library_detected` fields on `GET
+  /api/server-info` (`src/api/routes/show.rs`), `paths::detect_legacy_portable_library`
+  (`src/storage/paths.rs`), `--skip-first-time-setup` (`src/main.rs`).
+- No new settings-schema entries beyond what `paths.md` already adds
+  (`storage` category) and what already existed (`churchName`) — this is a
+  guided *flow* through existing settings, not new state.

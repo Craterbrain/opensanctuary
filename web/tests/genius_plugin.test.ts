@@ -82,6 +82,21 @@ describe("Genius plugin: pages", () => {
     expect(Genius.extractLyrics('<div data-lyrics-container="true">never closed')).toBe("");
   });
 
+  test("drops the LyricsHeader (contributors, title, song bio) Genius puts inside the container", () => {
+    // Shape of a real 2026 Genius page: the header is marked data-exclude-from-selection and its
+    // bio preview has no "Contributors"/"Embed" furniture words, so only the marker can catch it.
+    const html = `<div data-lyrics-container="true" class="Lyrics__Container"><div data-exclude-from-selection="true" class="LyricsHeader__Container">` +
+      `<button><span>8 Contributors</span></button><div><div><h2>Amazing Grace Lyrics</h2></div></div>` +
+      `<div class="SongBioPreview"><a href="#about">Two artists rework the classic hymn. <span>Read More</span></a></div></div>` +
+      `[Verse 1]<br/>Amazing grace, how sweet the sound<br/>[Chorus]<br/>My chains are gone</div>`;
+    const lyrics = Genius.extractLyrics(html);
+    expect(lyrics).not.toContain("rework the classic hymn");
+    expect(lyrics).not.toContain("Amazing Grace Lyrics");
+    const song = Genius.pageToSong(html, "Amazing Grace", "Chris Tomlin");
+    expect(song.slides.map((s: any) => s.label)).toEqual(["Verse 1", "Chorus 1"]);
+    expect(song.slides[0].text).toBe("Amazing grace, how sweet the sound");
+  });
+
   test("finds a CCLI number near the word CCLI", () => {
     expect(Genius.extractCcli("Song info CCLI #7115744 here")).toBe("7115744");
     expect(Genius.extractCcli("ccli song number: 123")).toBe(null); // too short

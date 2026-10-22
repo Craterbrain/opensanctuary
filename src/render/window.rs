@@ -15,7 +15,7 @@ impl ProjectionState {
     pub async fn new<T>(event_loop: &EventLoopWindowTarget<T>) -> Self {
         let window = Arc::new(
             WindowBuilder::new()
-                .with_title("OS-Next Projection Output")
+                .with_title("OpenSanctuary Projection Output")
                 .with_inner_size(tao::dpi::LogicalSize::new(1280.0, 720.0))
                 // .with_fullscreen(Some(tao::window::Fullscreen::Borderless(None))) // Too intrusive for debugging
                 .build(event_loop)

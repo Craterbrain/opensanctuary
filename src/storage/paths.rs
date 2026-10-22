@@ -31,10 +31,21 @@ pub struct InstallConfig {
 /// `~/Library/Application Support/OpenSanctuary` on macOS. This is exactly
 /// where the backend plugin directory already lived before this module
 /// existed -- kept as-is so upgrading doesn't strand anyone's plugins.
+///
+/// Under `cfg(test)` this is a per-process scratch folder instead: lib tests
+/// like `move_data_dir_*` call real code that writes `install.json` here, and
+/// pointing at the real one left whoever ran `cargo test` with an install
+/// pointer into a deleted temp dir (found on the Windows test VM).
+#[cfg(not(test))]
 pub fn config_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("OpenSanctuary")
+}
+
+#[cfg(test)]
+pub fn config_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("os-next-test-config-{}", std::process::id()))
 }
 
 fn install_config_path() -> PathBuf {
@@ -966,6 +977,12 @@ mod tests {
         // Source files must still exist when delete_source = false
         assert!(src.join("library.db").exists());
         assert!(src.join("bibles").join("kjv.db").exists());
+
+        // The install pointer it wrote landed in the test config dir, never
+        // the real user's.
+        assert!(install_config_path().starts_with(std::env::temp_dir()));
+        assert!(dirs::config_dir().map_or(true, |real| !install_config_path().starts_with(real)));
+        assert!(install_config_path().exists());
 
         std::fs::remove_dir_all(&root).unwrap();
     }

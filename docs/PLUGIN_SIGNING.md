@@ -1,23 +1,25 @@
-# Plugin signing: design (not implemented)
+# Plugin signing
 
-_Status: **phases 1 to 3 are implemented** (section 10); phases 4 and 5 are design only. Section 0 describes what the code does now. Written 2026-10-14, updated with phase 1._
+_Status: **phases 1 to 4 are implemented** (section 10); phase 5 (the catalog) is design only, deferred until there's demand. Section 0 describes what the code does now. Written 2026-10-14; updated 2026-10-15 to fold in phases 2 and 3, then again the same day to fold in phase 4._
 
-## 0. Today (after phase 1)
-
-Phase 1 closed gap 1 below: a plugin can list every file's hash in `files`, so one signature covers the whole package, and the review screen says exactly what a signature covers (*signed, covers every file* / *manifest signed, other files aren't covered* / *unsigned*). What follows is the situation phase 1 started from, kept because gaps 2 and 3 still stand.
+## 0. Today (after phases 1-4)
 
 What exists, and what it does and doesn't prove:
 
 - A plugin folder may hold `plugin.json.minisig`, a detached [minisign](https://jedisct1.github.io/minisign/) signature over the **bytes of `plugin.json`**, and `plugin.json` may name a `publisher_key` (a minisign public key). Discovery verifies the signature (`verify_signer` in `src/core/plugin_registry.rs`, using the same `verify_signature` as the app updater). A signature that is present but invalid, or present without a `publisher_key`, makes the plugin fail to load.
-- The verified key is recorded as the plugin's `observed_signer`, pinned as `approved_signer` when the operator approves, and a different key (or a signed plugin that becomes unsigned) shows "signer changed" on the review screen.
+- A `files` map in `plugin.json` lists every other file's SHA-256, so one signature over the manifest covers the whole package (*fully signed*); without it, a signature covers only the manifest (*manifest signed*) and the review screen says exactly that, instead of overstating what it proved.
+- The verified key is recorded as the plugin's `observed_signer`, pinned as `approved_signer` when the operator approves, and a different key (or a signed plugin that becomes unsigned) shows "signer changed" on the review screen — unless a valid rotation statement (section 5) explains the change.
+- A publisher trust store (`plugin_publishers` table, section 4) tracks every key the operator has seen, trusted or revoked; the console shows a trust-level badge (Built-in / Trusted / Known / New / Unsigned / Invalid / Revoked) rather than a bare "signed" fact.
+- A signed, release-key-distributed revocation list (`revoked_keys.json`, section 5) stops every plugin signed by a revoked key and forces re-confirmation before approving another from it.
+- A console-wide `pluginSignaturePolicy` setting (`allow` / `warn` / `require`, section 6) controls how much an unsigned plugin is allowed to get away with, and a remembered per-publisher version floor (section 7) flags a downgrade even after a revoke/re-approve or an uninstall/reinstall.
 - Separately, every plugin is **digest-pinned**: a hash over every file in its folder is recorded at approval, and any difference stops the plugin until it is reviewed again. This is independent of signing.
 - The tools a plugin may run (`process.run`) have their own, stronger scheme: the tool's release is verified by a signature and a checksum against a key shipped in the plugin folder.
 
-**Gap 1: the signature covers the manifest, not the plugin.** `plugin.json` does not list the other files' hashes, so a validly signed manifest next to a swapped `app.js` still verifies. The review screen says "signed (publisher key …)", which today means "the manifest was signed", not "this code is what the publisher released". Digest pinning still catches changes *after* approval, but it can't tell the operator that the code they are approving at first install is the publisher's. (An older line in `docs/PLUGIN_PERMISSIONS.md` claimed the manifest carries the artifact hashes; that was true of native libraries and is no longer true. It has been corrected.)
+**Gap 1 (closed, phase 1): the signature covered the manifest, not the plugin.** `plugin.json` didn't list the other files' hashes, so a validly signed manifest next to a swapped `app.js` still verified. Closed by the `files` map above. (An older line in `docs/PLUGIN_PERMISSIONS.md` claimed the manifest carries the artifact hashes; that was true of native libraries and is no longer true. It has been corrected.)
 
-**Gap 2: a key means nothing without something to say whose it is.** Trust on first use pins a key the first time it is approved; the app has no notion of a publisher it already knows, a key that was compromised, or a key that was rotated.
+**Gap 2 (closed, phases 2-3): a key meant nothing without something to say whose it is.** Closed by the trust store (section 4) and the release-key-signed revocation list plus rotation statements (section 5): the app now has a notion of a publisher it already knows, a key that was compromised (revoked), and a key that was rotated.
 
-**Gap 3: nothing stops "signed" being mistaken for "safe".** A signature says *who*, never *whether it is harmless*. Permissions, not signatures, are what limit damage, and the design below keeps it that way.
+**Gap 3 (by design, not a bug to fix): nothing stops "signed" being mistaken for "safe".** A signature says *who*, never *whether it is harmless*. Permissions, not signatures, are what limit damage, and the design keeps it that way — see "Non-goals" below.
 
 ## 1. Goals and non-goals
 
@@ -76,21 +78,21 @@ New table `plugin_publishers(key TEXT PRIMARY KEY, name TEXT, trusted INTEGER, r
 - **Rotation**: a publisher moves to a new key with a *rotation statement* (`old key signs: "new key X replaces me from <date>"`), shipped in the plugin's folder. The host accepts a key change from A to B without a scary re-prompt only if A's signature over B verifies and A isn't revoked. Without it, a key change is today's "signer changed" warning.
 - **Compromised release key**: the app's own key rotates through the same updater mechanism it already has; out of scope here.
 
-## 6. Policy
+## 6. Policy -- implemented
 
-A setting in Settings → Plugins, `plugin_signature_policy`, console-only:
+A setting in Settings → Plugins, `pluginSignaturePolicy` (`src/core/plugin_policy.rs`), console-only, read through the same generic `settings` table every other console-only setting uses:
 
 | Value | Effect |
 |---|---|
 | `allow` (default) | Unsigned and signed plugins are reviewed the same way. |
 | `warn` | Unsigned plugins show a prominent warning on the review screen and must be approved with a confirmation. |
-| `require` | Only built-in and signed plugins load. For churches that install from one trusted source only. |
+| `require` | Only built-in and signed plugins load. For churches that install from one trusted source only. An unsigned, non-built-in plugin can't even be approved while this is set (`approval_gate` returns `Refused`, not `NeedsConfirmation` -- no confirmation unlocks it), and an already-approved one that was approved while a looser policy was in effect stops loading (shown as the `policy_blocked` state) without losing its approval -- loosen the policy and it resumes without being re-approved.
 
-Independent of policy: a plugin asking for a **Critical** permission (`process.run`, `keyring.service`, `ui.dom`) that is *unsigned* gets the confirmation step, and an **invalid** signature is always refused. The policy never loosens anything for built-ins.
+Independent of policy: a plugin asking for a **Critical** permission (`process.run`, `keyring.service`, `ui.dom`) that is *unsigned* gets the confirmation step, and an **invalid** signature is always refused. The policy never loosens anything for built-ins (`plugin_policy::permits_load`/`approval_gate` both short-circuit to "allowed" for a built-in or a signed plugin before even looking at the policy value).
 
-## 7. Rollback and freshness
+## 7. Rollback and freshness -- implemented
 
-- Record the highest `version` ever approved per `(plugin id, publisher key)`. A lower signed version is shown as a **downgrade** (the review screen already flags this from the version numbers; this makes it hold across revoke/re-approve).
+- The highest `version` ever approved per `(plugin id, publisher key)` is recorded in a `plugin_version_floor` table (`""` for unsigned), raised on every approval (`plugin_registry::remember_approved_version`) but never lowered. A lower signed version is shown as a **downgrade** (`is_downgrade_from_floor` in the plugin's API view) whether or not it's even been approved yet, so this holds across revoke/re-approve -- and, deliberately, across an uninstall/reinstall too: the floor is never deleted when a plugin is removed, which is exactly the loophole an attacker would otherwise use to erase the memory and quietly reintroduce an old, vulnerable version.
 - With a catalog (section 8) each entry carries `min_version`; the host refuses to install anything below it. Without one, downgrades are flagged, not blocked: the operator may have good reason.
 
 ## 8. Catalog (later, optional)
@@ -113,7 +115,7 @@ A catalog is a signed index of packages: `{ "plugins": [{ "id", "version", "min_
    - *Release key.* A plugin signed by the release key is the app's own: trusted wherever it lives, its publisher name is vouched for as "OpenSanctuary" (so no one else can pose as it), and it can't be revoked by a list or by hand. The bundled plugins aren't signed in this repository; the release process signs them with `cargo run --release --example sign_release -- sign-plugin <release key> <folder>` (hashes the files, sets `publisher_key`, writes `plugin.json.minisig`). **Still to wire:** that step in the release workflow, which needs the real secret and is the one thing not exercised here.
    - *Revocation list.* `revoked_keys.json` + `.minisig`, signed by the release key, read from the app's `web/` folder and from the data directory. Only a list whose signature verifies counts; the highest `sequence` wins and a lower one is never applied after a higher one (an old list can't un-revoke); each key is revoked and every plugin it signed stops (audited as `revoked` by `revocation list`); entries naming the release key or junk are skipped. It is applied at startup and whenever the plugin list is read. Status at `GET /api/plugins/revocations`, shown under Publishers; a list that couldn't be used is shown too. Fetching a newer list over the network is not built (open question 3); dropping the file in the data directory works now.
    - *Rotation.* A publisher moves to a new key by shipping `plugin.rotation.json` (`{"old_key", "new_key"}`) with `plugin.rotation.json.minisig` signed by the OLD key. If it verifies, names the plugin's signing key as `new_key`, and the old key isn't revoked, there is no "different publisher" warning, the old key's standing (trusted or known) carries over, and approving moves your trust to the new key (audited as `key_rotated`). A statement signed by the new key, naming another key, or from a revoked old key is ignored and the plugin shows the ordinary warning.
-4. **Policy setting** (section 6) and downgrade memory (section 7).
+4. **Policy setting** (section 6) and downgrade memory (section 7) — **done**: `pluginSignaturePolicy` (`allow`/`warn`/`require`) in `src/core/plugin_policy.rs`, enforced everywhere a plugin is actually loaded or served (`plugin_registry::is_usable`, used by the WS command path, the keyring token route, the sandboxed frame and web-plugin-script serving, token minting and the sandboxed command/tool runner) as well as at approval time (`approval_gate`, wired into `POST /api/plugins/:id/approve`'s new `confirm_unsigned` field). The version floor is a small `plugin_version_floor` table, updated on every approval and exposed per plugin as `version_floor`/`is_downgrade_from_floor`. Settings → Plugins has the policy selector at the top of the page; each plugin card shows the floor-based downgrade warning independent of whether it's ever been approved. **Caught in review:** `is_builtin` reads a folder that can't even canonicalize (e.g. a stale `plugin_grants` row whose folder vanished outside the normal uninstall route) as built-in -- a deliberately safe reading for the unrelated `removable`-badge check it's shared with, but a dangerous one once the same answer also decides whether `require` applies. `is_usable` now also requires the folder to still exist, independent of what it would otherwise have been classified as.
 5. **Catalog** (section 8), only if there is demand and a place to host it.
 
 Each phase ships on its own and leaves the previous behavior intact.
@@ -125,8 +127,8 @@ Each phase ships on its own and leaves the previous behavior intact.
 - Trusted key + same permissions = one click; trusted key + wider permissions = full review; revoked key = distrusted and stopped.
 - Revocation list: higher sequence replaces, lower is ignored, bad signature is ignored.
 - Rotation: valid statement accepted silently, forged statement rejected, rotation from a revoked key rejected.
-- Policy modes, including that `require` never blocks a built-in.
-- Downgrade across revoke and re-approve.
+- ~~Policy modes, including that `require` never blocks a built-in.~~ `core::plugin_policy::tests` (unit) + `test_plugin_signature_policy_and_version_floor` (integration, `tests/core_tests.rs`).
+- ~~Downgrade across revoke and re-approve.~~ `plugin_registry::tests::version_floor_only_ever_rises_and_is_scoped_per_signer`/`downgrade_from_floor_is_only_reported_for_two_real_comparable_versions` (unit) + the same integration test above.
 - Hostile: a signed package whose signature is valid but whose `publisher_key` field was swapped to the attacker's own key (the signature then verifies, so the *key identity* is what the operator is shown and what is pinned; confirm the card makes this visible).
 
 ## 12. Open questions

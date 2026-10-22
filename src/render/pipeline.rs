@@ -42,7 +42,7 @@ impl RenderContext {
 
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
-                label: Some("OS-Next Device"),
+                label: Some("OpenSanctuary Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: adapter.limits(),
             },

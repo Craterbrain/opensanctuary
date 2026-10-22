@@ -61,7 +61,6 @@ describe("E2E Live Test: Stock Images plugin (Pexels & Pixabay) replaces the bui
     expect(await frame.locator("#keys").evaluate((el) => (el as HTMLDetailsElement).open)).toBe(true); // opens itself when there are no keys
     await expectNativeIcons(frame, 1);
     await page.screenshot({ path: `${artifactDir}/screenshot_stock_media_panel.png` });
-    await page.screenshot({ path: "../docs/screenshots/stock-media-plugin.png" });
 
     // Searching without a key never reaches the network.
     await frame.fill("#q", "sunrise");
