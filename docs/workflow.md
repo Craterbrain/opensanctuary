@@ -127,7 +127,9 @@ Watch it under the repo's **Actions** tab → **Release**. Jobs run in this orde
 
 1. `check-version`: the tag must equal `v<Cargo.toml version>`. Tests are not run
    here; `ci.yml` runs them on every PR.
-2. `build-linux` and `build-windows` in parallel. Linux builds inside the pinned
+2. `build-linux` and `build-windows` in parallel, then `build-flatpak`, which
+   repackages `build-linux`'s tarball as a Flatpak bundle (docs/installer.md
+   "Flatpak bundle"). Linux builds inside the pinned
    Docker image (`packaging/Dockerfile.linux-build`); Windows cross-compiles with
    `cargo-xwin` and packages with Inno Setup under Wine, so expect both to be
    slow the first time. Both run with `SKIP_TV_APK=1` (see below). Each runs

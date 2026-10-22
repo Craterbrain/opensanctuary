@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata for the Flatpak (software centers show this). build-flatpak.sh fills in
+     @VERSION@ and @DATE@ from Cargo.toml and the build date. -->
+<component type="desktop-application">
+  <id>io.github.craterbrain.OpenSanctuary</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>OpenSanctuary</name>
+  <summary>Church presentation software for lyrics, scripture and slides</summary>
+  <developer id="io.github.craterbrain">
+    <name>Craterbrain</name>
+  </developer>
+  <description>
+    <p>
+      OpenSanctuary runs a church service's screens: song lyrics, Bible passages, slides,
+      images and video, with a live output for the projector, a stage display for musicians,
+      and remotes and Android TV displays on the same network.
+    </p>
+    <ul>
+      <li>Build a schedule from songs, scripture, presentations and media, and run it live</li>
+      <li>Import from EasyWorship, OpenLP, FreeShow, PowerPoint and OpenDocument</li>
+      <li>Animated and still backgrounds, themes and a slide editor</li>
+      <li>CCLI usage reporting</li>
+      <li>Sandboxed plugins for lyrics lookup, online Bibles, stock images and video import</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.craterbrain.OpenSanctuary.desktop</launchable>
+  <url type="homepage">https://github.com/Craterbrain/opensanctuary</url>
+  <url type="bugtracker">https://github.com/Craterbrain/opensanctuary/issues</url>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Office</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

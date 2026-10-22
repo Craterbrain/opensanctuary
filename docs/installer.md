@@ -1,6 +1,6 @@
 # Plan: installers (Windows, Linux)
 
-_Last edited: 2026-10-15_
+_Last edited: 2026-10-22_
 
 ## Current state
 
@@ -8,7 +8,7 @@ Both platforms have a real installer now (sections below) and both ship as
 part of `.github/workflows/release.yml`'s real releases (`v0.1.0-alpha`,
 `v0.2.0` — see `docs/workflow.md`'s "Current status"): Windows gets
 `opensanctuary-setup-x64.exe` (Inno Setup) plus a portable zip, Linux gets a
-`.deb` plus a generic `.tar.gz`. Only macOS has no installer story yet (see
+`.deb`, a generic `.tar.gz` and (since 0.3.3) a Flatpak bundle. Only macOS has no installer story yet (see
 that section below). This doc predates all of that — what follows is kept
 as the design rationale and build history, not a still-open plan, except
 where a section says otherwise (macOS, code signing).
@@ -435,6 +435,46 @@ the signature aborts before writing anything to disk, and a `PATH` missing
 instead of failing confusingly mid-script. **Not yet verified**: the
 `--system` path (needs real root; this dev sandbox has no passwordless
 `sudo`) — same code path as the per-user install, just untested end to end.
+
+### Flatpak bundle — **implemented**
+
+`opensanctuary-<version>-x86_64.flatpak`, attached to each release since
+0.3.3, for distributions where neither the `.deb` nor the tarball's
+`webkit2gtk-4.1`/`gtk3` requirement is convenient (Fedora Silverblue,
+SteamOS, anything immutable). Install with
+`flatpak install --user opensanctuary-<version>-x86_64.flatpak` (or by
+opening the file in GNOME Software / KDE Discover).
+
+* **What's in it:** the generic tarball's binary and `web/`, repackaged
+  (`packaging/build-flatpak.sh`), on the `org.gnome.Platform` runtime named
+  in `packaging/flatpak/io.github.craterbrain.OpenSanctuary.yml`. Nothing is
+  recompiled: the binary is built once on the Ubuntu 22.04 floor and the
+  runtime has every library it links (WebKitGTK 4.1, libsoup 3, OpenSSL 3,
+  libsecret) plus an `ffmpeg` with VP9/H.264. The release workflow's
+  `build-flatpak` job builds it in Flathub's build image (pinned by digest;
+  keep its `gnome-NN` tag in step with the manifest's `runtime-version`).
+* **Sandbox permissions:** network (the HTTPS server, mDNS), Wayland/X11,
+  the GPU, audio, the Secret Service keyring, and one folder:
+  `~/.local/share/OpenSanctuary`. Flatpak also mounts that folder at the
+  app's own data location, so the Flatpak and a native install **share one
+  library** — switching between them keeps everything. (A native install
+  moved elsewhere with `install.json` isn't shared: the Flatpak can't see
+  the native config folder.) Files the operator picks arrive through the
+  file-chooser portal.
+* **Updates:** inside a Flatpak the in-app updater downloads the release's
+  `.flatpak` (same signed-checksum and version checks as the `.deb`,
+  `src/network/updater.rs`) and opens it, which hands it to the desktop's
+  software installer to replace the installed one. There's no Flatpak
+  repository yet, so `flatpak update` doesn't see new versions.
+* **Not in the sandbox:** `adb`, so setting up an Android TV over USB/ADB
+  isn't available from the Flatpak; pairing a TV by its QR code works as
+  usual.
+* **Build locally:** `packaging/build-deb.sh` (for the tarball), then
+  `packaging/build-flatpak.sh`. It installs the GNOME runtime/SDK and
+  `org.flatpak.Builder` per user from Flathub if they're missing.
+* **Flathub** isn't done: it builds from source with no network, so the
+  Rust crates would need vendoring and the Bun-built web UI a source-only
+  path.
 
 ### Where it's hosted
 

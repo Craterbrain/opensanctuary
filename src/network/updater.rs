@@ -209,7 +209,7 @@ fn releases_client_with_timeout(total: std::time::Duration) -> Result<reqwest::C
 }
 
 /// The asset name pattern each platform's automated download looks for.
-/// Only Linux's `.deb` is actually wired to `download_and_verify_release`
+/// Only Linux's `.deb` (or, in a Flatpak, its `.flatpak` bundle) is wired to `download_and_verify_release`
 /// today (see that fn's doc comment) -- this still resolves a Windows/macOS
 /// asset name so `check_latest_release`'s result is meaningful cross-platform
 /// for display purposes (e.g. "v0.3.0 is available" in Settings) even before
@@ -219,6 +219,11 @@ fn platform_asset_suffix() -> &'static str {
         "setup-x64.exe"
     } else if cfg!(target_os = "macos") {
         ".dmg"
+    } else if crate::storage::paths::running_in_flatpak() {
+        // A Flatpak is updated by its bundle (opened, it goes to the desktop's software
+        // installer, which replaces the installed Flatpak); a .deb would install a second,
+        // native copy instead.
+        ".flatpak"
     } else {
         ".deb"
     }
@@ -320,7 +325,7 @@ fn is_release_download_url(url: &str) -> bool {
 fn asset_name_matches_version(asset_name: &str, version: &str, suffix: &str) -> Result<bool, String> {
     let v = semver::Version::parse(version.trim_start_matches('v'))
         .map_err(|e| format!("Could not parse release version '{}': {}", version, e))?;
-    if suffix != ".deb" {
+    if suffix != ".deb" && suffix != ".flatpak" {
         return Ok(false);
     }
     let core = format!("{}.{}.{}", v.major, v.minor, v.patch);
@@ -336,7 +341,7 @@ fn asset_name_matches_version(asset_name: &str, version: &str, suffix: &str) -> 
 /// signature failure, or hash mismatch returns `Err` and leaves nothing
 /// for a caller to install.
 ///
-/// Only ever actually invoked for a Linux `.deb` today -- `routes.rs`'s
+/// Only ever actually invoked for a Linux `.deb` (or `.flatpak` bundle) today -- `routes.rs`'s
 /// `/api/updates/download-and-install` handler hands the result straight to
 /// `open_with_system_handler` (`apt`/the desktop's `.deb` installer).
 /// Windows/macOS auto-apply through this automated path isn't built yet
@@ -626,6 +631,8 @@ mod tests {
         assert!(asset_name_matches_version("opensanctuary_0.3.0-1_amd64.deb", "0.3.0", ".deb").unwrap());
         assert!(!asset_name_matches_version("opensanctuary_0.1.0-1_amd64.deb", "v99.0.0", ".deb").unwrap());
         assert!(!asset_name_matches_version("opensanctuary-setup-x64.exe", "0.3.0", "setup-x64.exe").unwrap());
+        assert!(asset_name_matches_version("opensanctuary-0.3.3-x86_64.flatpak", "0.3.3", ".flatpak").unwrap());
+        assert!(!asset_name_matches_version("opensanctuary-0.3.2-x86_64.flatpak", "0.3.3", ".flatpak").unwrap());
     }
 
     #[test]
