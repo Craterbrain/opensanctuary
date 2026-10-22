@@ -1,6 +1,6 @@
 # Setting up and running the release workflow
 
-_Last edited: 2026-10-15_
+_Last edited: 2026-10-21_
 
 `.github/workflows/release.yml` builds, signs, and publishes a GitHub Release
 (`.deb`, Linux tarball, Windows installer, portable zip, `checksums.txt`,
@@ -11,18 +11,19 @@ how the app verifies updates is in `docs/update.md`.
 `ci.yml` is separate: it runs the tests on every push and PR. Only
 `release.yml` signs and publishes, and it deliberately does **not** run tests.
 
-## Current status (2026-10-15)
+## Current status (2026-10-21)
 
 - The workflow is **working and has published real releases**: `v0.1.0-alpha`
-  (2026-09-25) and `v0.2.0` — beta 2 — (2026-10-13, run 38439712249,
-  `sign-and-publish` green end to end). The `MINISIGN_SECRET_KEY`-loading
-  failure that blocked the dry runs below was the secret not holding the key
-  file verbatim (both the `untrusted comment:` line and the base64 line);
-  resetting it with `gh secret set MINISIGN_SECRET_KEY < opensanctuary_release.key`
-  fixed it for good.
-- Project status: no 1.0 yet. `v0.2.0` is beta 2; work on beta 3 (`v0.3.0`) is
-  in progress on `main` (Cargo.toml is still at `0.2.0` — bump it per "Before
-  every release" when beta 3 is ready to tag).
+  (2026-09-25), `v0.2.0` — beta 2 — (2026-10-13, run 38439712249,
+  `sign-and-publish` green end to end), and `v0.3.0` — beta 3 —
+  (2026-10-21). The `MINISIGN_SECRET_KEY`-loading failure that blocked the
+  dry runs below was the secret not holding the key file verbatim (both the
+  `untrusted comment:` line and the base64 line); resetting it with
+  `gh secret set MINISIGN_SECRET_KEY < opensanctuary_release.key` fixed it for
+  good.
+- Project status: no 1.0 yet. `v0.3.0` is beta 3, the current release.
+- `ci.yml` only started running on 2026-10-21: until then it triggered on
+  `master`, but the default branch is `main`, so no push or PR had ever run it.
 - The throwaway dry-run tags (`v0.2.1-keytest`, `v0.2.2-keytest`) are still on
   the remote (`git ls-remote --tags origin`) and can be deleted
   (`git push origin :refs/tags/v0.2.1-keytest`, same for `.2.2`) — neither has
