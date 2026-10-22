@@ -24,6 +24,7 @@ import {
   resolveThemeAt,
   type ThemeDefinition
 } from './core/presentation_helpers.ts';
+import { applyBackgroundThumbnail } from './core/pattern_thumbs.ts';
 import { showToast, formatMediaTime, copyToClipboard } from './core/ui_utils.ts';
 export { showToast, formatMediaTime, copyToClipboard };
 import { formatSlideLyricsHtml, applyAutoFitLyrics, renderSlideVisual } from './core/slide_render.ts';
@@ -2568,7 +2569,7 @@ function slideBackgroundPainter(item: any, slideIdx: number, state: any): (el: H
     } else if (isVideoBackground(bg)) {
       el.style.background = '#000';
     } else {
-      applyResolvedBackground(el, bg);
+      applyBackgroundThumbnail(el, bg); // a pattern plays its pre-rendered preview, not the live pattern
     }
   };
 }
@@ -3043,6 +3044,8 @@ function renderLiveOutput(state: any) {
   if (!canvasLyricsEl) return;
   const liveItem = state.live_item;
   const slideIdx = state.live_slide_index || 0;
+  // The ribbon's Live indicator pulses only while something is actually on the screens.
+  btnLiveStatus?.classList.toggle('active', !!liveItem);
 
   const presentationControlsEl = document.getElementById('live-presentation-controls');
   if (presentationControlsEl) {

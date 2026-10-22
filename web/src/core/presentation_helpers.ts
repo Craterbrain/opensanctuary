@@ -405,16 +405,17 @@ export function applyResolvedBackground(
  */
 export function resolveSlideBackgroundElement(
     el: HTMLElement,
-    slide: { background?: string | null; background_v2?: SlideBackground | null }
+    slide: { background?: string | null; background_v2?: SlideBackground | null },
+    /** How a solid/pattern/legacy string is applied; thumbnails pass pattern_thumbs' applyBackgroundThumbnail. */
+    apply: (el: HTMLElement, bg: string | null | undefined) => void = applyResolvedBackground
 ): void {
     const bgV2 = slide.background_v2;
     const legacyBg = slide.background;
     if (bgV2) {
         switch (bgV2.kind) {
             case 'Solid':
-                // Also covers the "pattern:<name>" animated marker — gets the
-                // real (tiny) drifting animation too.
-                applyResolvedBackground(el, bgV2.data);
+                // Also covers the "pattern:<name>" animated marker.
+                apply(el, bgV2.data);
                 break;
             case 'Gradient': {
                 el.style.animation = '';
@@ -448,10 +449,10 @@ export function resolveSlideBackgroundElement(
             el.style.backgroundImage = '';
             el.style.background = '#0d1117';
         } else {
-            applyResolvedBackground(el, legacyBg);
+            apply(el, legacyBg);
         }
     } else {
-        applyResolvedBackground(el, null);
+        apply(el, null);
     }
 }
 

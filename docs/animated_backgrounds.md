@@ -1,5 +1,7 @@
 # Animated slide backgrounds and the pre-render cache
 
+_Last edited: 2026-10-22_
+
 Animated backgrounds are procedural: a slide stores only `pattern:<key>`
 (`background: "pattern:sprouting-leaves"`), and the pattern is built from SVG
 and CSS in `web/src/core/background_patterns.ts`.
@@ -58,3 +60,25 @@ renders one seamless loop of each eligible pattern into a cached video:
 * **Off switch:** *Pre-render Animated Backgrounds: Off* keeps everything live.
 * **Settings:** Settings > Animated Backgrounds has the switch, quality, the cache size and
   clear button, and the per-background choices with their cost badge.
+
+## Thumbnail previews
+
+Anywhere many patterns show at once at thumbnail size (the background pickers, the theme cards in
+the Background > CSS picker, the ribbon's background swatch, the slide thumbnails in the Preview and
+Live decks and the editor's filmstrip), each pattern is shown as a small pre-rendered looping image
+instead of being drawn live. Drawing every pattern live at once (layered SVG and CSS animations)
+kept the console's CPU and GPU flat out. Only the full-size canvases (the editor stage, Preview,
+Live and the live output) still draw the pattern live.
+
+* **Files:** `web/pattern-thumbs/<key>.webp` (256x144 animated WebP, 12 fps, loops forever) plus
+  `manifest.json`, which records the `patternRevision` each one was made from. They are committed
+  and shipped in the packages; nothing is rendered on the operator's machine.
+* **Making them:** `cd web && bun scripts/render_pattern_thumbs.ts` renders the missing or
+  out-of-date ones (`--all` for every one). It draws each frame with the same code as the
+  pre-rendered clips (`renderPatternFrame`) at 1920x1080 in headless Chromium, then ffmpeg scales
+  it down and encodes it (`libwebp_anim`, quality 92; lower qualities break the smooth dark
+  gradients into blocks). A loop longer than 6 s is sped up so the thumbnail still loops seamlessly.
+* **Keeping them current:** `web/src/core/pattern_thumbs.ts` only uses a preview whose revision
+  matches the pattern; otherwise it falls back to drawing the pattern live. `tests/pattern_thumbs.test.ts`
+  fails when any animated pattern lacks an up-to-date preview, so editing a pattern means running
+  the script and committing the new files.

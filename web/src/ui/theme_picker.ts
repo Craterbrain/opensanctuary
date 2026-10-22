@@ -6,7 +6,8 @@
  * header tabs — "Images" and "CSS" — instead of two separate stacked modals.
  */
 
-import { ThemeDefinition, applyResolvedBackground, isImageBackground } from "../core/presentation_helpers.ts";
+import { ThemeDefinition, isImageBackground } from "../core/presentation_helpers.ts";
+import { applyBackgroundThumbnail } from "../core/pattern_thumbs.ts";
 import { prepareMediaImagePickerGrid } from "./media_image_picker.ts";
 import { buildGridCard } from "./grid_card.ts";
 import { renderEmptyState } from "./filter_bar.ts";
@@ -168,7 +169,7 @@ export function renderThemePickerGrid() {
 
     if (card) {
       const previewEl = card.querySelector('.theme-picker-preview') as HTMLElement | null;
-      if (previewEl) applyResolvedBackground(previewEl, t.bg);
+      if (previewEl) applyBackgroundThumbnail(previewEl, t.bg);
       gridEl.appendChild(card);
     }
   });
