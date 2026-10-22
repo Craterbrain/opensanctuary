@@ -1,8 +1,19 @@
-# Continuous tests on every push/PR to the real development branch --
-# catches regressions at review time instead of only at release-tag time
-# (see release.yml's own `test` job for that narrower, later gate).
+# Tests every pull request into main -- catches regressions at review time
+# instead of only at release-tag time (release.yml itself runs no tests).
+#
+# When it runs:
+#   - on every PR into main, and by hand (Actions > CI > Run workflow).
+#   - NOT again on the push a merge makes: main's branch rule requires a PR to
+#     be up to date with main before it merges, so the merged code is exactly
+#     what the PR run tested, and a second full run would only repeat it.
+#   - a PR that only touches documentation (*.md anywhere, or anything under
+#     docs/) skips the three test jobs: `changes` decides, and a skipped job
+#     still satisfies the branch rule's required checks (a workflow-level
+#     paths-ignore wouldn't -- the checks would never report and the PR could
+#     never merge).
 #
 # Jobs:
+#   changes  -- does this PR touch anything besides documentation?
 #   rust     -- cargo build/test/clippy, with the GTK/WebKit dev headers
 #               BUILDING.md documents for a local build. Also needs Bun
 #               installed: build.rs runs `bun run build` as part of every
@@ -27,17 +38,41 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"   # a manual run always tests everything
+            exit 0
+          fi
+          files=$(git diff --name-only "$BASE...$HEAD")
+          echo "$files"
+          if grep -qvE '(\.md$|^docs/)' <<<"$files"; then code=true; else code=false; fi
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+
   rust:
     name: Rust (build, test, clippy)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -76,6 +111,8 @@ jobs:
 
   frontend:
     name: Frontend (typecheck, build, test)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -116,6 +153,8 @@ jobs:
 
   plugins:
     name: Bundled plugins match packaging/plugins.ref
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

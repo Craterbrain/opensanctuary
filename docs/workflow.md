@@ -8,8 +8,9 @@ _Last edited: 2026-10-21_
 for cutting a release. The signing key itself is covered in `docs/keys.md`;
 how the app verifies updates is in `docs/update.md`.
 
-`ci.yml` is separate: it runs the tests on every push and PR. Only
-`release.yml` signs and publishes, and it deliberately does **not** run tests.
+`ci.yml` is separate: it runs the tests on every PR into `main` (skipping
+them for documentation-only PRs) and on demand. Only `release.yml` signs and
+publishes, and it deliberately does **not** run tests.
 
 ## Current status (2026-10-21)
 
@@ -103,7 +104,11 @@ workflow requests its own `contents: write` for the publish job only, so
    `web/plugins/` to match; `ci.yml`'s `plugins` job fails while they differ.
    (Before v0.3.0 the packages bundled only `web/plugins/hello_world.js`, so
    v0.2.0 shipped with none of the real plugins.)
-3. Commit and push; confirm `ci.yml` is green on that commit.
+3. Land it through a PR and confirm `ci.yml` is green on the PR. `main`'s
+   branch rule only lets a PR merge once it's up to date with `main` and its
+   checks pass, so the merge commit's code is exactly what that run tested —
+   CI doesn't run again on the merge itself. To check a specific commit
+   anyway: **Actions** → **CI** → **Run workflow** on `main`.
 4. Run `cargo test` and `cd web && bun run build && bun test` locally if you
    want an earlier signal than CI.
 
@@ -117,7 +122,7 @@ git push origin v0.3.0
 Watch it under the repo's **Actions** tab → **Release**. Jobs run in this order:
 
 1. `check-version`: the tag must equal `v<Cargo.toml version>`. Tests are not run
-   here; `ci.yml` runs them on every push and PR.
+   here; `ci.yml` runs them on every PR.
 2. `build-linux` and `build-windows` in parallel. Linux builds inside the pinned
    Docker image (`packaging/Dockerfile.linux-build`); Windows cross-compiles with
    `cargo-xwin` and packages with Inno Setup under Wine, so expect both to be
@@ -179,7 +184,7 @@ Locally, `SKIP_TV_APK=1 packaging/build-deb.sh` (podman by default,
 
 ## Why tests aren't in the release workflow
 
-`ci.yml` runs tests on every push and PR; the release only checks the tag. The web suite passes
+`ci.yml` runs tests on every PR; the release only checks the tag. The web suite passes
 locally with no failures (the e2e cases also need Chromium installed for Playwright, and the release binary built): the schemas the contract tests read are vendored in
 `web/tests/contracts/`, and tests that need something a runner may not have skip themselves
 instead of failing:
