@@ -90,6 +90,9 @@ echo "==> Cross-compiling release binary (x86_64-pc-windows-msvc via cargo-xwin)
 cargo xwin build --release --target x86_64-pc-windows-msvc \
   --no-default-features --features desktop-webview
 
+# Plugins come from Craterbrain/opensanctuary-plugins at the pinned commit.
+packaging/fetch-plugins.sh
+
 echo "==> Staging runtime files..."
 STAGE=target/installer-stage
 rm -rf "$STAGE"
@@ -122,7 +125,7 @@ for f in index.html live.html stage.html remote.html pairing.html style.css favi
 done
 cp web/dist/*.js "$STAGE/web/dist/"
 cp -r web/icons "$STAGE/web/icons"
-cp web/plugins/hello_world.js "$STAGE/web/plugins/"
+cp -r target/bundled-plugins/. "$STAGE/web/plugins/"
 [ "${SKIP_TV_APK:-0}" = "1" ] || cp "$TV_APK" "$STAGE/tv-client/opensanctuary-tv.apk"
 # NOT songs/public_domain.db: same reasoning as the .deb (Cargo.toml comment) --
 # songs_dir resolves to the per-user data dir, not this install-relative path,

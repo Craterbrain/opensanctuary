@@ -95,8 +95,16 @@ workflow requests its own `contents: write` for the publish job only, so
    the workflow's first step fails otherwise. This matters: the `.deb` filename
    comes from `Cargo.toml`, and the updater refuses a release whose signed
    filename doesn't carry the tag's version.
-2. Commit and push; confirm `ci.yml` is green on that commit.
-3. Run `cargo test` and `cd web && bun run build && bun test` locally if you
+2. Decide which plugins ship. Release packages bundle the
+   `Craterbrain/opensanctuary-plugins` commit named in `packaging/plugins.ref`
+   (fetched by `packaging/fetch-plugins.sh`, which `build-deb.sh` and
+   `build-windows-installer.sh` run), not `web/plugins/`. To ship newer plugins,
+   point it at that repo's new merge commit and update the dev copies in
+   `web/plugins/` to match; `ci.yml`'s `plugins` job fails while they differ.
+   (Before v0.3.0 the packages bundled only `web/plugins/hello_world.js`, so
+   v0.2.0 shipped with none of the real plugins.)
+3. Commit and push; confirm `ci.yml` is green on that commit.
+4. Run `cargo test` and `cd web && bun run build && bun test` locally if you
    want an earlier signal than CI.
 
 ## Cutting a release

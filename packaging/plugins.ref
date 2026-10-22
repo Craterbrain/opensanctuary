@@ -1,0 +1,10 @@
+# The Craterbrain/opensanctuary-plugins commit whose plugins/ folder is bundled
+# into every release package (.deb, Linux tarball, Windows installer + zip) --
+# see packaging/fetch-plugins.sh. Pinned to an exact commit, not a branch, so
+# re-running a release tag always ships the same plugins.
+#
+# To ship newer plugins: merge them in opensanctuary-plugins, put that merge
+# commit's full SHA here, and also update the dev copies in web/plugins/ to
+# match (ci.yml's "Bundled plugins" job fails until they do).
+repo=https://github.com/Craterbrain/opensanctuary-plugins.git
+commit=07a3117b6fe46fcca69130795fb612dcd3622eaa

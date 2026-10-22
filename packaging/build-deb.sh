@@ -29,6 +29,10 @@ ANDROID_ARG=1
 [ "${SKIP_TV_APK:-0}" = "1" ] && ANDROID_ARG=0
 "$ENGINE" build --build-arg INCLUDE_ANDROID_SDK="$ANDROID_ARG" -t "$IMAGE" -f packaging/Dockerfile.linux-build .
 
+# Plugins come from Craterbrain/opensanctuary-plugins at the pinned commit; fetched
+# here on the host (the container is just a toolchain), into target/ which /src mounts.
+packaging/fetch-plugins.sh
+
 echo "==> Building inside the container..."
 "$ENGINE" run --rm -e SKIP_TV_APK="${SKIP_TV_APK:-0}" -v "$PWD":/src:Z -w /src "$IMAGE" packaging/build-deb-in-container.sh
 

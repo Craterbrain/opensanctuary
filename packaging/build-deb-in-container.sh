@@ -24,6 +24,11 @@
 set -euo pipefail
 cd /src
 
+if [ ! -d target/bundled-plugins ]; then
+  echo "target/bundled-plugins/ is missing -- run this via packaging/build-deb.sh, which fetches it" >&2
+  exit 1
+fi
+
 VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
 
 echo "==> Building web UI assets..."
@@ -66,7 +71,7 @@ for f in index.html live.html stage.html remote.html pairing.html style.css favi
 done
 cp web/dist/*.js "$STAGE/web/dist/"
 cp -r web/icons "$STAGE/web/icons"
-cp web/plugins/hello_world.js "$STAGE/web/plugins/"
+cp -r target/bundled-plugins/. "$STAGE/web/plugins/"  # packaging/fetch-plugins.sh, run by build-deb.sh
 [ "${SKIP_TV_APK:-0}" = "1" ] || cp "$TV_APK" "$STAGE/tv-client/opensanctuary-tv.apk"
 
 mkdir -p target/release-artifacts

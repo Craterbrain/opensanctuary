@@ -10,7 +10,19 @@
 #               bundle has to exist before the Rust server can even start.
 #   frontend -- bun typecheck/build/test (web/). The test suite includes
 #               Playwright-driven e2e tests, so Chromium has to be
-#               installed first.
+#               installed first -- and those tests spawn a real
+#               target/release/os-next (web/tests/e2e_helpers.ts), so this
+#               job builds it too.
+#   plugins  -- the dev copies in web/plugins/ match the opensanctuary-plugins
+#               commit release packages bundle (packaging/plugins.ref).
+#
+# Both test jobs run inside a D-Bus session with an unlocked GNOME Keyring:
+# the keyring-backed routes (plugin keyring.own/keyring.service, TLS key
+# storage) need a real Secret Service, and a hosted runner has none, so
+# without it those tests get a 500 from the keyring layer.
+#
+# Until 2026-10-21 this triggered on `master`, which isn't this repo's default
+# branch -- so it had never actually run.
 
 name: CI
 
@@ -30,10 +42,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system dependencies (BUILDING.md)
+      - name: Install system dependencies (BUILDING.md) + a keyring for the tests
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev gnome-keyring dbus
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -51,7 +63,10 @@ jobs:
         run: cargo build --verbose
 
       - name: cargo test
-        run: cargo test --verbose
+        run: |
+          dbus-run-session -- bash -c '
+            echo -n ci | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            cargo test --verbose'
 
       # Informational only for now -- this repo has pre-existing clippy
       # warnings that haven't been cleaned up yet, so this doesn't fail the
@@ -68,11 +83,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install system dependencies (BUILDING.md) + a keyring for the tests
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev gnome-keyring dbus
+
+      - uses: dtolnay/rust-toolchain@stable
+
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
 
-      - run: bun install
+      - run: bun install --frozen-lockfile
 
       - name: Install Playwright's browser (used by the e2e test suite)
         run: bunx playwright install --with-deps chromium
@@ -81,4 +104,19 @@ jobs:
 
       - run: bun run build
 
-      - run: bun test
+      - name: Build the release server the e2e tests spawn (target/release/os-next)
+        working-directory: .
+        run: cargo build --release
+
+      - name: bun test
+        run: |
+          dbus-run-session -- bash -c '
+            echo -n ci | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            bun test'
+
+  plugins:
+    name: Bundled plugins match packaging/plugins.ref
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: packaging/fetch-plugins.sh --check
