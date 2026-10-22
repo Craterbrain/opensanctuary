@@ -649,7 +649,7 @@ impl PluginManifest {
         let ver = raw.get("manifest_version").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         if ver > MANIFEST_VERSION {
             return Err(ManifestError::Incompatible(format!(
-                "plugin.json uses manifest_version {ver}; this OS-Next understands up to {MANIFEST_VERSION}"
+                "plugin.json uses manifest_version {ver}; this OpenSanctuary understands up to {MANIFEST_VERSION}"
             )));
         }
         serde_json::from_value(raw).map_err(|e| ManifestError::Invalid(format!("plugin.json: {e}")))
@@ -678,7 +678,7 @@ impl PluginManifest {
             let host_release = semver::Version::new(host.major, host.minor, host.patch);
             if !req.matches(&host_release) {
                 return Err(ManifestError::Incompatible(format!(
-                    "plugin needs OS-Next {}, this is {}",
+                    "plugin needs OpenSanctuary {}, this is {}",
                     self.host_api, host_version
                 )));
             }

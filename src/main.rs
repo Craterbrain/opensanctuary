@@ -250,7 +250,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some((l, p)) => {
                     if p != 8080 {
                         tracing::warn!("Default port 8080 is in use. Automatically falling back to available port {}", p);
-                        println!("Note: Port 8080 is in use (another OS-Next instance may be running). Using port {} instead.", p);
+                        println!("Note: Port 8080 is in use (another OpenSanctuary instance may be running). Using port {} instead.", p);
                     }
                     (l, p)
                 }
@@ -372,7 +372,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("\n============================================================");
-    println!("  OS-Next - Next-Gen Church Presentation Engine (Rust)");
+    println!("  OpenSanctuary - Next-Gen Church Presentation Engine (Rust)");
     println!("============================================================");
     println!("  Operator Console : http://127.0.0.1:{}/ (loopback only -- the native console window)", server_port);
     println!("  Live Display (FOH): http://127.0.0.1:{}/live.html (Zero-Auth, loopback only)", server_port);
@@ -385,7 +385,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Stage Foldback   : https://{}:{}/stage.html (Zero-Auth)", net_ip, hp);
         println!("  WebSocket Stream : wss://{}:{}/ws", net_ip, hp);
     } else {
-        println!("  WARNING: HTTPS failed to start -- no device other than this console can reach OS-Next right now.");
+        println!("  WARNING: HTTPS failed to start -- no device other than this console can reach OpenSanctuary right now.");
     }
     println!("============================================================");
 
@@ -552,7 +552,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let db_for_tls = app_state.db.clone();
             let router = create_router(app_state);
             let addr = SocketAddr::from(([127, 0, 0, 1], server_port));
-            tracing::info!("OS-Next local console server (loopback only, never reachable from the network) listening on http://{}", addr);
+            tracing::info!("OpenSanctuary local console server (loopback only, never reachable from the network) listening on http://{}", addr);
 
             if let (Some(hp), Some((cert_pem, key_pem))) = (https_port_actual, tls_pem_pair) {
                 match os_next::network::tls::create_rustls_config(&cert_pem, &key_pem).await {
@@ -560,7 +560,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let https_addr = SocketAddr::from(([0, 0, 0, 0], hp));
                         let https_router = router.clone().layer(axum::middleware::from_fn(network_request_timeout));
                         tokio::spawn(async move {
-                            tracing::info!("OS-Next network server listening on https://{}", https_addr);
+                            tracing::info!("OpenSanctuary network server listening on https://{}", https_addr);
                             // with_connect_info: GET /api/internal/host-token needs the real
                             // peer address to enforce its loopback-only check.
                             if let Err(e) = axum_server::bind_rustls(https_addr, rustls_config)
@@ -585,7 +585,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         let https_addr = SocketAddr::from(([0, 0, 0, 0], hp));
                                         let https_router = router.clone().layer(axum::middleware::from_fn(network_request_timeout));
                                         tokio::spawn(async move {
-                                            tracing::info!("OS-Next network server listening on https://{} (recovered via fallback regeneration)", https_addr);
+                                            tracing::info!("OpenSanctuary network server listening on https://{} (recovered via fallback regeneration)", https_addr);
                                             if let Err(e) = axum_server::bind_rustls(https_addr, rustls_config)
                                                 .serve(https_router.into_make_service_with_connect_info::<SocketAddr>())
                                                 .await

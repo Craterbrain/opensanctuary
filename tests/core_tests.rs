@@ -2713,6 +2713,64 @@ fn test_merge_schedule_items_rejects_section_headers_and_self_merge() {
     assert_eq!(engine.snapshot().schedule.items.len(), 2, "self-merge is a no-op");
 }
 
+#[test]
+fn test_out_of_range_go_live_and_stage_are_no_ops() {
+    let event_log = Arc::new(EventLog::new(100));
+    let engine = ShowEngine::new(event_log);
+    engine.execute_command(ShowCommand::AddToSchedule(simple_item("a", "A", &["a1", "a2"])));
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(0), slide_index: Some(1) });
+    engine.execute_command(ShowCommand::StageItem { item_index: Some(0), slide_index: Some(0) });
+
+    // A stale index (e.g. a paired remote that hasn't seen an item removal yet)
+    // must not blank the live output or clear the staged item.
+    let events = engine.execute_command(ShowCommand::GoLive { item_index: Some(99), slide_index: Some(0) });
+    assert!(events.is_empty(), "out-of-range GoLive should emit nothing");
+    let events = engine.execute_command(ShowCommand::StageItem { item_index: Some(1), slide_index: Some(0) });
+    assert!(events.is_empty(), "out-of-range StageItem should emit nothing");
+
+    let snap = engine.snapshot();
+    assert_eq!(snap.state.live_item.as_ref().map(|i| i.id.as_str()), Some("a"));
+    assert_eq!(snap.state.live_slide_index, 1);
+    assert_eq!(snap.state.staged_item.as_ref().map(|i| i.id.as_str()), Some("a"));
+}
+
+#[test]
+fn test_item_navigation_skips_section_headers() {
+    let event_log = Arc::new(EventLog::new(100));
+    let engine = ShowEngine::new(event_log);
+    engine.execute_command(ShowCommand::AddToSchedule(simple_item("a", "A", &["a1", "a2"])));
+    engine.execute_command(ShowCommand::AddScheduleHeader { title: "Sermon".to_string(), index: None });
+    engine.execute_command(ShowCommand::AddScheduleHeader { title: "Response".to_string(), index: None });
+    engine.execute_command(ShowCommand::AddToSchedule(simple_item("b", "B", &["b1", "b2"])));
+    engine.execute_command(ShowCommand::AddScheduleHeader { title: "End".to_string(), index: None });
+    let live_id = |e: &ShowEngine| e.snapshot().state.live_item.map(|i| i.id);
+
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(0), slide_index: Some(0) });
+    engine.execute_command(ShowCommand::NextItem);
+    assert_eq!(live_id(&engine).as_deref(), Some("b"), "NextItem steps over both headers");
+
+    // Nothing but a header after B: NextItem / NextSlide off the end stay on B.
+    engine.execute_command(ShowCommand::NextItem);
+    assert_eq!(live_id(&engine).as_deref(), Some("b"));
+    engine.execute_command(ShowCommand::JumpSlide(1));
+    engine.execute_command(ShowCommand::NextSlide);
+    assert_eq!(live_id(&engine).as_deref(), Some("b"));
+    assert_eq!(engine.snapshot().state.live_slide_index, 1);
+
+    engine.execute_command(ShowCommand::PrevItem);
+    assert_eq!(live_id(&engine).as_deref(), Some("a"), "PrevItem steps over both headers");
+
+    // NextSlide past A's last slide auto-advances to B, not the header in between;
+    // PrevSlide from B's first slide goes back to A's last slide.
+    engine.execute_command(ShowCommand::JumpSlide(1));
+    engine.execute_command(ShowCommand::NextSlide);
+    assert_eq!(live_id(&engine).as_deref(), Some("b"));
+    assert_eq!(engine.snapshot().state.live_slide_index, 0);
+    engine.execute_command(ShowCommand::PrevSlide);
+    assert_eq!(live_id(&engine).as_deref(), Some("a"));
+    assert_eq!(engine.snapshot().state.live_slide_index, 1);
+}
+
 fn simple_item(id: &str, title: &str, texts: &[&str]) -> ScheduleItem {
     ScheduleItem {
         id: id.to_string(),

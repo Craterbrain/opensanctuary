@@ -157,7 +157,10 @@ def run_interactive(exe_cmd, task_user="tester", timeout_sec=180):
         f'Unregister-ScheduledTask -TaskName "{TASK_NAME}" -Confirm:$false -ErrorAction SilentlyContinue; '
         f'Remove-Item "{OUT_LOG}" -ErrorAction SilentlyContinue; '
         f'Remove-Item "{EXIT_FILE}" -ErrorAction SilentlyContinue; '
-        f"$action = New-ScheduledTaskAction -Execute \"cmd.exe\" -Argument '/c {exe_cmd} > {OUT_LOG} 2>&1 & echo %ERRORLEVEL% > {EXIT_FILE}'; "
+        # /v:on + !ERRORLEVEL!, not %ERRORLEVEL%: cmd expands %...% when it
+        # parses the whole line, i.e. before exe_cmd runs, so the exit file
+        # always got 0 and a failing test run reported success.
+        f"$action = New-ScheduledTaskAction -Execute \"cmd.exe\" -Argument '/v:on /c {exe_cmd} > {OUT_LOG} 2>&1 & echo !ERRORLEVEL! > {EXIT_FILE}'; "
         f'$principal = New-ScheduledTaskPrincipal -UserId "{task_user}" -LogonType Interactive -RunLevel Highest; '
         f'Register-ScheduledTask -TaskName "{TASK_NAME}" -Action $action -Principal $principal -Force | Out-Null; '
         f'Start-ScheduledTask -TaskName "{TASK_NAME}"'

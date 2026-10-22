@@ -322,7 +322,7 @@ pub(super) fn classify_probe_response(
         return (false, "Reached a server at this URL, but it returned an error status.".to_string());
     }
     let Some(body) = body else {
-        return (false, "Reached a server at this URL, but it didn't look like OS-Next.".to_string());
+        return (false, "Reached a server at this URL, but it didn't look like OpenSanctuary.".to_string());
     };
     let got_id = body.get("instance_id").and_then(|v| v.as_str()).unwrap_or("");
     if !got_id.is_empty() && got_id == expected_instance_id {
@@ -583,6 +583,6 @@ mod network_tests {
     fn classify_probe_response_not_reachable_when_body_missing() {
         let (reachable, message) = classify_probe_response("abc-123", true, None);
         assert!(!reachable);
-        assert!(message.contains("didn't look like OS-Next"));
+        assert!(message.contains("didn't look like OpenSanctuary"));
     }
 }

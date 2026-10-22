@@ -151,9 +151,28 @@ fn update_section_jump_cursor(state: &mut ShowState) {
     }
 }
 
+/// The nearest schedule index before (`forward == false`) or after `from`
+/// that isn't a section header. Headers carry no slides, so landing on one
+/// while stepping through the service would put an empty item on the live
+/// output -- Next/Prev navigation steps over them instead.
+fn adjacent_content_index(schedule: &Schedule, from: usize, forward: bool) -> Option<usize> {
+    if forward {
+        (from + 1..schedule.items.len()).find(|&i| !schedule.items[i].is_section_header)
+    } else {
+        (0..from.min(schedule.items.len())).rev().find(|&i| !schedule.items[i].is_section_header)
+    }
+}
+
 pub(super) fn plan_live_events(state: &ShowState, schedule: &Schedule, cmd: &ShowCommand) -> Vec<ShowEvent> {
     let mut events = Vec::new();
     match cmd {
+        // An explicit index past the end of the schedule (e.g. a paired remote
+        // still holding an index from before an item was removed) is a no-op,
+        // not ItemWentLive/ItemStaged { item: None } -- that would silently
+        // blank the live output mid-service.
+        ShowCommand::GoLive { item_index: Some(idx), .. }
+        | ShowCommand::StageItem { item_index: Some(idx), .. }
+            if *idx >= schedule.items.len() => {}
         ShowCommand::GoLive { item_index, slide_index } => {
             let uses_staged_item = item_index.is_none() && state.staged_item.is_some();
             let target_item = match item_index {
@@ -222,10 +241,9 @@ pub(super) fn plan_live_events(state: &ShowState, schedule: &Schedule, cmd: &Sho
                     });
                 } else if let Some(curr_idx) = state.selected_item_index {
                     // Advance to next schedule item
-                    if curr_idx + 1 < schedule.items.len() {
-                        let next_item = schedule.items.get(curr_idx + 1).cloned();
+                    if let Some(next_idx) = adjacent_content_index(schedule, curr_idx, true) {
                         events.push(ShowEvent::ItemWentLive {
-                            item: next_item,
+                            item: schedule.items.get(next_idx).cloned(),
                             slide_index: 0,
                         });
                     }
@@ -238,8 +256,8 @@ pub(super) fn plan_live_events(state: &ShowState, schedule: &Schedule, cmd: &Sho
                     slide_index: state.live_slide_index.saturating_sub(1),
                 });
             } else if let Some(curr_idx) = state.selected_item_index {
-                if curr_idx > 0 {
-                    if let Some(prev_item) = schedule.items.get(curr_idx - 1).cloned() {
+                if let Some(prev_idx) = adjacent_content_index(schedule, curr_idx, false) {
+                    if let Some(prev_item) = schedule.items.get(prev_idx).cloned() {
                         let last_slide = effective_arrangement(&prev_item).len().saturating_sub(1);
                         events.push(ShowEvent::ItemWentLive {
                             item: Some(prev_item),
@@ -251,20 +269,18 @@ pub(super) fn plan_live_events(state: &ShowState, schedule: &Schedule, cmd: &Sho
         }
         ShowCommand::NextItem => {
             let current_idx = state.selected_item_index.unwrap_or(0);
-            if current_idx + 1 < schedule.items.len() {
-                let next_item = schedule.items.get(current_idx + 1).cloned();
+            if let Some(next_idx) = adjacent_content_index(schedule, current_idx, true) {
                 events.push(ShowEvent::ItemWentLive {
-                    item: next_item,
+                    item: schedule.items.get(next_idx).cloned(),
                     slide_index: 0,
                 });
             }
         }
         ShowCommand::PrevItem => {
             let current_idx = state.selected_item_index.unwrap_or(0);
-            if current_idx > 0 {
-                let prev_item = schedule.items.get(current_idx - 1).cloned();
+            if let Some(prev_idx) = adjacent_content_index(schedule, current_idx, false) {
                 events.push(ShowEvent::ItemWentLive {
-                    item: prev_item,
+                    item: schedule.items.get(prev_idx).cloned(),
                     slide_index: 0,
                 });
             }
