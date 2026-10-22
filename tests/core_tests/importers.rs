@@ -341,8 +341,8 @@ fn test_ewsx_schedule_roundtrip() {
         assert_eq!(orig.source_slide_index, reload.source_slide_index);
     }
 
-    if std::path::Path::new("LCspring.ewpx").exists() {
-        let lc = EwsxManager::load_schedule_from_ewsx("LCspring.ewpx").expect("LCspring.ewpx must load");
+    if let Some(path) = test_doc("LCspring.ewpx") {
+        let lc = EwsxManager::load_schedule_from_ewsx(&path).expect("LCspring.ewpx must load");
         assert!(!lc.items.is_empty());
         for it in &lc.items {
             assert_eq!(it.arrangement.len(), it.slides.len());
@@ -1411,14 +1411,9 @@ async fn test_freeshow_import_http_route() {
 
 #[tokio::test]
 async fn test_lcspring_ewpx_presentation_bullets_and_transforms() {
-    use std::path::PathBuf;
     use os_next::core::models::SlideElement;
 
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let ewpx_path = manifest_dir.join("LCspring.ewpx");
-    if !ewpx_path.exists() {
-        return;
-    }
+    let Some(ewpx_path) = test_doc("LCspring.ewpx") else { return };
 
     let schedule = EwsxManager::load_schedule_from_ewsx(&ewpx_path).expect("Should load LCspring.ewpx");
     assert!(!schedule.items.is_empty(), "Schedule should contain items");
@@ -2109,10 +2104,8 @@ fn test_odp_export_omits_this_apps_own_placeholder_color_and_font_so_other_tools
 }
 
 /// A real-world ODP, authored by hand in actual LibreOffice Impress using its "Basic Shapes"/
-/// "Symbol Shapes"/"Arrows" gallery (not built via `pyuno` like `testdata/odp/fixture.odp`, and
-/// not committed to the repo -- a human's own test file, not ours to redistribute), via the same
-/// `$OS_TEST_DOCS` convention `docs/workflow.md` already documents for real EasyWorship fixtures:
-/// skip quietly if it isn't present on this machine. Its 9 shapes (a callout, a diamond, an
+/// "Symbol Shapes"/"Arrows" gallery (not built via `pyuno` like `testdata/odp/fixture.odp`):
+/// `testdata/odp/shape-test.odp` (see that folder's README for where it came from). Its 9 shapes (a callout, a diamond, an
 /// MSO-imported blob shape, a trapezoid, a heart, a brace pair, a left-right arrow, a 5-point
 /// star, and a "bang"/explosion) all leave fill/stroke *unset on their own style* and inherit
 /// from a shared parent style (almost universal real-producer behavior for a shape gallery, not
@@ -2124,15 +2117,7 @@ fn test_odp_export_omits_this_apps_own_placeholder_color_and_font_so_other_tools
 /// to not confuse the page-shape scanner into misparsing anything around it.
 #[test]
 fn test_odp_import_against_a_real_world_shape_gallery_file() {
-    let docs_dir = std::env::var("OS_TEST_DOCS")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from(std::env::var("HOME").unwrap()).join("Documents/OpenSanctuary-test-docs"));
-    let path = docs_dir.join("shape-test.odp");
-    if !path.exists() {
-        eprintln!("skipping: {} not present (see docs/workflow.md's $OS_TEST_DOCS)", path.display());
-        return;
-    }
-    let bytes = std::fs::read(&path).unwrap();
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/odp/shape-test.odp")).unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let pres = os_next::storage::OdpImporter::import_odp_bytes(&bytes, "shape-test", &tmp.path().join("media")).expect("a real human-authored file must import");
 
@@ -2162,22 +2147,13 @@ fn test_odp_import_against_a_real_world_shape_gallery_file() {
 /// (every one of its `Shape`s has an explicit literal color; these 9 only have one because
 /// `resolve_graphic_style`'s inheritance walk resolved it, and 5 of the 9 are exotic preset types
 /// this app doesn't natively render, falling back to `shape_enhanced_path`'s plain-rect glyph).
-/// Same `$OS_TEST_DOCS` skip-if-missing convention as that test.
 #[test]
 fn test_odp_export_of_a_real_world_shape_gallery_file_is_accepted_by_real_libreoffice() {
     if std::process::Command::new("soffice").arg("--version").output().is_err() {
         eprintln!("skipping: no `soffice` on PATH");
         return;
     }
-    let docs_dir = std::env::var("OS_TEST_DOCS")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from(std::env::var("HOME").unwrap()).join("Documents/OpenSanctuary-test-docs"));
-    let path = docs_dir.join("shape-test.odp");
-    if !path.exists() {
-        eprintln!("skipping: {} not present (see docs/workflow.md's $OS_TEST_DOCS)", path.display());
-        return;
-    }
-    let bytes = std::fs::read(&path).unwrap();
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/odp/shape-test.odp")).unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let pres = os_next::storage::OdpImporter::import_odp_bytes(&bytes, "shape-test", &tmp.path().join("media")).unwrap();
     let out_bytes = os_next::storage::OdpExporter::export_presentation(&pres, &tmp.path().join("media")).unwrap();
@@ -2654,4 +2630,29 @@ fn test_ewsx_export_reimports_through_easyworships_own_files_not_just_our_manife
     assert_eq!(names(&only_xml), vec!["Schedule.xml".to_string()]);
     let from_xml = EwsxManager::load_schedule_from_bytes(&only_xml, "Sunday").expect("Schedule.xml import");
     assert!(from_xml.items.iter().any(|i| i.title == "Amazing Grace"), "items: {:?}", from_xml.items.iter().map(|i| &i.title).collect::<Vec<_>>());
+}
+
+#[test]
+fn test_ews_import_of_a_real_easyworship_5_schedule() {
+    // testdata/ews/test1.ews: a genuine EasyWorship 5 schedule (testdata/ews/README.md). Until this test,
+    // .ews import only looked for uncompressed RTF, found none in a real file, and imported every one as
+    // a single placeholder slide named after the file.
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/ews/test1.ews")).unwrap();
+    let schedule = EwsxManager::load_schedule_from_bytes(&bytes, "test1").expect("a real .ews must import");
+    assert_eq!(schedule.items.len(), 1);
+    let song = &schedule.items[0];
+    assert_eq!(song.title, "Vi pløjed og vi så'de", "Latin-1 title from the song record");
+    assert_eq!(song.author_or_ref, "Matthias Claudius");
+    assert_eq!(song.item_type, "song");
+
+    // Four sections, the chorus stored once and sung after every verse.
+    let tags: Vec<&str> = song.slides.iter().map(|s| s.tag.as_deref().unwrap()).collect();
+    assert_eq!(tags, ["V1", "C1", "V2", "V3"]);
+    let order: Vec<&str> = song.arrangement.iter().map(|a| a.section_id.as_str()).collect();
+    assert_eq!(order, ["V1", "C1", "V2", "C1", "V3", "C1"]);
+    assert_eq!(song.slides[0].text.lines().next(), Some("Vi pløjed og vi så'de"), "lyrics, not the section name, start each slide");
+    assert_eq!(song.slides[1].text.lines().next(), Some("Alle gode gaver"));
+    assert_eq!(song.slides[0].text.lines().count(), 8);
+    let copyright = song.slides[0].ccli_metadata.as_ref().and_then(|m| m.copyright.as_deref());
+    assert_eq!(copyright, Some("Den Danske"), "the record's copyright field rides along for CCLI reporting");
 }

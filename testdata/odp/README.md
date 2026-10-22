@@ -10,3 +10,11 @@
   `soffice --headless --invisible --accept="socket,host=localhost,port=2002;urp;" "-env:UserInstallation=file:///tmp/lo_profile"`
   listener (a writable, throwaway profile dir is required; the default one isn't writable headless
   in some environments). Not run by any test.
+- `shape-test.odp`: a real ODP hand-authored by a person in actual LibreOffice Impress's shape
+  gallery (not built via `pyuno` like `fixture.odp`): 9 shapes that inherit fill from a shared parent
+  style, plus a 3D cube scene. Copied 2026-10-22 from the project owner's real-world test documents
+  (docs/workflow.md, "Real-world test documents") with their permission to commit it; it has no
+  text or author metadata. Used by `test_odp_import_against_a_real_world_shape_gallery_file` and
+  `test_odp_export_of_a_real_world_shape_gallery_file_is_accepted_by_real_libreoffice`, which until
+  then only ran on machines that had that folder.
+

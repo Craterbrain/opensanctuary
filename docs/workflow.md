@@ -1,6 +1,6 @@
 # Setting up and running the release workflow
 
-_Last edited: 2026-10-21_
+_Last edited: 2026-10-22_
 
 `.github/workflows/release.yml` builds, signs, and publishes a GitHub Release
 (`.deb`, Linux tarball, Windows installer, portable zip, `checksums.txt`,
@@ -25,6 +25,10 @@ publishes, and it deliberately does **not** run tests.
 - Project status: no 1.0 yet. `v0.3.0` is beta 3, the current release.
 - `ci.yml` only started running on 2026-10-21: until then it triggered on
   `master`, but the default branch is `main`, so no push or PR had ever run it.
+- `ci.yml`'s Rust and frontend jobs cache compiled dependencies with
+  `Swatinem/rust-cache` (pinned to a commit, like the other third-party actions;
+  added 2026-10-22). `release.yml` deliberately doesn't: release artifacts are
+  signed, so they're always built from scratch.
 - The throwaway dry-run tags (`v0.2.1-keytest`, `v0.2.2-keytest`) are still on
   the remote (`git ls-remote --tags origin`) and can be deleted
   (`git push origin :refs/tags/v0.2.1-keytest`, same for `.2.2`) — neither has
@@ -189,13 +193,28 @@ locally with no failures (the e2e cases also need Chromium installed for Playwri
 `web/tests/contracts/`, and tests that need something a runner may not have skip themselves
 instead of failing:
 
-- `e2e_unified_schedule_hub` reads real EasyWorship documents from `$OS_TEST_DOCS` (default
-  `~/Documents/OpenSanctuary-test-docs`: `test1.ewsx`, `LCspring.ewpx`) and skips those cases
-  when they're missing.
-- `test_odp_import_against_a_real_world_shape_gallery_file` (Rust, `tests/core_tests/importers.rs`) reads
-  the same `$OS_TEST_DOCS` folder for `shape-test.odp`, a real ODP hand-authored in actual
-  LibreOffice Impress's shape gallery, and skips when it's missing.
+- Tests that need a real-world document that can't be committed read it from `$OS_TEST_DOCS`
+  and skip without it (see "Real-world test documents" below).
 - `e2e_video_picker` makes its own clip with `ffmpeg` and skips without it.
+
+### Real-world test documents
+
+Files produced by the real applications (EasyWorship, LibreOffice) catch what synthetic fixtures
+can't -- `test1.ews` showed `.ews` import had never read a real file. They live in the project
+owner's folder `~/Documents/OpenSanctuary-test-docs`; point `$OS_TEST_DOCS` elsewhere to use another.
+Since 2026-10-22 the owner has allowed using it, and anything in it that's safe to publish is
+committed under `testdata/` so CI runs those tests too:
+
+| File | Where | Why |
+|---|---|---|
+| `test1.ews` | **committed**: `testdata/ews/` | A genuine EasyWorship 5 schedule; one public-domain hymn. |
+| `shape-test.odp` | **committed**: `testdata/odp/` | Hand-made in LibreOffice's shape gallery; shapes only, no text or author. |
+| `LCspring.ewpx` | folder only (`$OS_TEST_DOCS`) | A real church's announcements deck (event and volunteer slides, an image named after a person) -- not published in this public repo. `test_lcspring_ewpx_presentation_bullets_and_transforms`, the LCspring part of `test_ewsx_schedule_roundtrip` and `e2e_unified_schedule_hub` use it and skip without it. |
+| `test1.ewsx` | folder only | This app's own export (it carries our `manifest.json`), so it adds nothing a generated export doesn't: `test_ewsx_export_reimports_through_easyworships_own_files_not_just_our_manifest` builds one. Used by `e2e_unified_schedule_hub`. |
+
+Rust tests find folder-only files with `test_doc(name)` (`tests/core_tests/main.rs`). Before
+committing a new real-world file, check it for personal content (names, contact details, a church's
+own material): the repo is public.
 
 Also fixed on `keytest`: `build.rs` runs `bun run build` on every `cargo build`,
 so `bun install --frozen-lockfile` must run in `web/` first (added to both
