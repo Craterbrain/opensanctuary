@@ -269,8 +269,7 @@ describe("E2E Red Team: hostile plugin cannot break out or take the console down
     expect(await recovers("after request flood")).toBe(true);
     note("hugeMessage", await run("hugeMessage", 30000));
     note("deepMessage", await run("deepMessage", 30000));
-    await page.waitForTimeout(1500);
-    expect(await healthy("after huge messages")).toBe(true);
+    expect(await recovers("after huge messages")).toBe(true);
   }, 180000);
 
   const recovery = () => test("after a hang, the next load pauses plugins and the operator can resume them", async () => {
