@@ -1,6 +1,6 @@
 # OS-Next Plugin System
 
-_Last edited: 2026-10-15_
+_Last edited: 2026-10-21_
 
 A plugin extends OpenSanctuary in one of two ways, and **nothing runs until the operator approves it**
 in Settings > Plugins:
@@ -345,7 +345,7 @@ A plugin page runs in its own frame, but some browsers run that frame on the con
 - **Watchdog.** The console pings every running frame; the SDK (`__os/sdk.js`) answers automatically. A frame that was answering and then goes silent for 15 seconds is removed for the rest of the session and you get a notice. It stays approved; reload to start it again. **Load the SDK**: a page that never answers a ping is not watched.
 - **Safe mode.** If the console itself hangs, nothing on the page can help, so the next load does. Plugins are started behind a marker that is cleared after a clean unload or 8 healthy seconds. If the marker is still there at the next start, a banner says plugins are paused and every plugin (including console scripts) waits until you press **Resume plugins**. Nothing is revoked.
 - **Load shedding.** A frame that does lots of small jobs keeps answering pings while the console crawls, because they share a thread. When the console's own 1-second timer runs late three ticks out of four, plugins are switched off one at a time (newest first) until it recovers. The last one switched off is blamed and stays off for the session with a notice; the ones that were only being tested are started again. If switching them all off doesn't help, the plugins weren't the cause and nothing is blamed. This can take a minute on a badly stalled console.
-- **Limits that always apply:** manifests over 256 KB are rejected, notifications are rate-limited per plugin, and a frame's height is clamped.
+- **Limits that always apply:** manifests over 256 KB are rejected, notifications are rate-limited per plugin, a frame's height is clamped, and a frame may have at most 32 bridge requests outstanding at once (`MAX_IN_FLIGHT` in `web/src/core/plugin_bridge.ts`). Past that, a request fails straight away with `too many requests in flight` instead of queuing, so a flood can't keep the console busy. Run parallel work through a small pool (the Online Bibles download uses 5 workers) rather than firing every call at once.
 
 ---
 

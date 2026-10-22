@@ -45,7 +45,18 @@ interface Running {
   granted: Set<string>;
   commands: string[];
   token: string | null;
+  /** Requests from this frame still being handled (see MAX_IN_FLIGHT). */
+  inFlight: number;
 }
+
+/**
+ * Most bridge requests one plugin may have outstanding at once. Each request can start real work
+ * (a fetch, a JSON parse, a reply), so without a cap one frame posting 20,000 `getState`s queues
+ * 20,000 fetches on the console's own thread and keeps it busy for seconds after the flood stops.
+ * Past the cap a request is refused straight away, which costs next to nothing. The bundled
+ * plugins peak at about 5 (Online Bibles' download workers).
+ */
+export const MAX_IN_FLIGHT = 32;
 
 function grantedList(p: PluginInfo, id: string, field: 'hosts' | 'categories' | 'commands'): string[] {
   return p.granted.filter(g => g.id === id).flatMap(g => (g[field] as string[] | undefined) ?? []);
@@ -388,10 +399,17 @@ function installListener() {
     if (!r || !msg || msg.type !== 'os.request' || typeof msg.method !== 'string') return;
     const reply = (body: Record<string, unknown>) =>
       r.frame.contentWindow?.postMessage({ type: 'os.response', id: msg.id, ...body }, '*');
+    if (r.inFlight >= MAX_IN_FLIGHT) {
+      reply({ ok: false, error: `too many requests in flight (max ${MAX_IN_FLIGHT})` });
+      return;
+    }
+    r.inFlight++;
     try {
       reply({ ok: true, result: await handle(r, msg.method, msg.params) });
     } catch (e: any) {
       reply({ ok: false, error: String(e?.message ?? e) });
+    } finally {
+      r.inFlight--;
     }
   });
 }
@@ -471,7 +489,7 @@ export function startSandboxedPlugin(plugin: PluginInfo): void {
     const register = () => {
       const w = frame.contentWindow;
       if (w) {
-        running.set(w, { plugin, frame, granted, commands: grantedCommands(plugin), token: null });
+        running.set(w, { plugin, frame, granted, commands: grantedCommands(plugin), token: null, inFlight: 0 });
         watched.set(w, { id: plugin.id, alive: Date.now(), everAlive: false });
         startWatchdog();
       }
