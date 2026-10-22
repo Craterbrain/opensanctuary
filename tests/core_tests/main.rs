@@ -112,3 +112,13 @@ fn test_key(name: &str) -> TestKey {
     let b64 = pk_text.lines().nth(1).unwrap().trim().to_string();
     TestKey { sk, b64 }
 }
+
+/// A real-world document that can't be committed (someone's own content, e.g. a church's announcement
+/// deck): looked up in `$OS_TEST_DOCS`, default `~/Documents/OpenSanctuary-test-docs` (docs/workflow.md,
+/// "Real-world test documents"). `None` -- and the caller skips -- when it isn't on this machine (CI).
+fn test_doc(name: &str) -> Option<std::path::PathBuf> {
+    let dir = std::env::var("OS_TEST_DOCS").map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("Documents/OpenSanctuary-test-docs"));
+    let path = dir.join(name);
+    if path.exists() { Some(path) } else { eprintln!("skipping: {} not present ($OS_TEST_DOCS)", path.display()); None }
+}

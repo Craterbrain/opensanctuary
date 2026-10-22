@@ -1,6 +1,6 @@
 # OpenSanctuary
 
-_Last edited: 2026-10-21_
+_Last edited: 2026-10-22_
 
 A next-generation church presentation engine — the software that drives the
 screens during a church service (lyrics, scripture, announcements, video)
@@ -17,7 +17,7 @@ multi-display story, and formats that don't talk to each other. OpenSanctuary is
   served over the LAN. No per-machine install for anything but the one
   server.
 - **Your existing library should still work.** Real import support for
-  EasyWorship (`.ewsx`), OpenLP (`.sqlite`/`.osj`/`.osz`), FreeShow
+  EasyWorship (`.ewsx`, and EasyWorship 5 `.ews` schedules), OpenLP (`.sqlite`/`.osj`/`.osz`), FreeShow
   (`.show`/`.project`), PowerPoint (`.pptx`), and OpenDocument Presentation
   (`.odp`) — moving to OpenSanctuary shouldn't mean rebuilding years of songs
   and slides by hand. `.odp` also exports, so a presentation can leave again.

@@ -84,6 +84,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # Reuses compiled dependencies between runs (keyed on Cargo.lock, the toolchain and the job), which
+      # is most of each job's time. CI only -- release.yml deliberately builds from scratch, so nothing
+      # cached can end up in a signed artifact.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
       - name: Install Bun (build.rs runs `bun run build` on every cargo build)
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -127,6 +132,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev gnome-keyring dbus
 
       - uses: dtolnay/rust-toolchain@stable
+
+      # Reuses compiled dependencies between runs (keyed on Cargo.lock, the toolchain and the job), which
+      # is most of each job's time. CI only -- release.yml deliberately builds from scratch, so nothing
+      # cached can end up in a signed artifact.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:

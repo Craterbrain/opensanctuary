@@ -23,6 +23,123 @@ pub fn ew_type_code_to_prefix(type_code: i64) -> &'static str {
     }
 }
 
+/// EasyWorship 5 `.ews` layout, as found in a real schedule (testdata/ews/test1.ews): after the
+/// "EasyWorship Schedule File Version    5" header, the song count is a u32 at 0x38 and the record size
+/// a u16 at 0x3c; from 0x3e each song is one record (Latin-1 C strings: title at 0, author at 0x133,
+/// copyright at 0x582) followed by a u32 length and that many bytes of zlib-compressed RTF words.
+/// `None` when the numbers don't add up (not this layout), so the caller falls back.
+fn parse_ews_v5_songs(bytes: &[u8]) -> Option<Vec<ScheduleItem>> {
+    use std::io::Read;
+    const AUTHOR: usize = 0x133;
+    const COPYRIGHT: usize = 0x582;
+    let u32_at = |o: usize| bytes.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    let count = u32_at(0x38)?;
+    let record = bytes.get(0x3c..0x3e).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)?;
+    if count == 0 || count > 10_000 || record <= COPYRIGHT {
+        return None;
+    }
+    let latin1 = |b: &[u8]| -> String { b.iter().take_while(|&&c| c != 0).map(|&c| c as char).collect::<String>().trim().to_string() };
+
+    let mut items = Vec::new();
+    let mut pos = 0x3e;
+    for _ in 0..count {
+        let rec = bytes.get(pos..pos + record)?;
+        let len = u32_at(pos + record)?;
+        let compressed = bytes.get(pos + record + 4..pos + record + 4 + len)?;
+        pos += record + 4 + len;
+
+        let mut rtf_bytes = Vec::new();
+        flate2::read::ZlibDecoder::new(compressed).take(crate::storage::media_sniff::MAX_ZIP_TEXT_BYTES).read_to_end(&mut rtf_bytes).ok()?;
+        // RTF is 7-bit ASCII with \'xx escapes; any stray high bytes are Latin-1, like the record strings.
+        let rtf_text: String = rtf_bytes.iter().map(|&c| c as char).collect();
+        let plain = rtf::parse_rtf(&rtf_text).plain_text();
+
+        let title = latin1(&rec[..AUTHOR]);
+        let author = latin1(&rec[AUTHOR..COPYRIGHT]);
+        let copyright = latin1(&rec[COPYRIGHT..]);
+        let (slides, arrangement) = ews_sections_to_slides(&plain);
+        if title.is_empty() && slides.is_empty() {
+            continue;
+        }
+        let ccli = (!copyright.is_empty()).then(|| crate::core::models::CcliMetadata {
+            song_title: Some(title.clone()), author: (!author.is_empty()).then(|| author.clone()), copyright: Some(copyright.clone()), ccli_number: None,
+        });
+        let slides: Vec<Slide> = slides.into_iter().map(|s| Slide { ccli_metadata: ccli.clone(), ..s }).collect();
+        items.push(ScheduleItem {
+            id: format!("item_{}", uuid::Uuid::new_v4()),
+            title,
+            item_type: "song".to_string(),
+            author_or_ref: author,
+            arrangement,
+            slides,
+            background: None,
+            theme_name: None,
+            is_expanded: false,
+            is_section_header: false,
+            subtitle: None,
+            notes: None,
+            default_slide_duration_seconds: None,
+            slideshow_loop: false,
+        });
+    }
+    Some(items)
+}
+
+/// An EasyWorship song's words as master slides plus the order they're sung in. A section starts at a
+/// line that's just a name ("Verse 1", "Chorus") or after a blank line; a repeated section (the chorus
+/// after every verse) becomes one slide played again, not a copy, so editing it edits every repeat.
+fn ews_sections_to_slides(plain: &str) -> (Vec<Slide>, Vec<crate::core::models::ArrangementEntry>) {
+    let header_name = |line: &str| -> Option<String> {
+        let t = line.trim();
+        let name = t.trim_end_matches(|c: char| c.is_ascii_digit() || c.is_whitespace()).to_lowercase();
+        matches!(name.as_str(), "verse" | "chorus" | "bridge" | "ending" | "pre-chorus" | "prechorus" | "tag" | "intro").then(|| t.to_string())
+    };
+    let mut sections: Vec<(Option<String>, Vec<String>)> = Vec::new();
+    let mut open = false;
+    for line in plain.replace("\r\n", "\n").lines() {
+        if let Some(h) = header_name(line) {
+            sections.push((Some(h), Vec::new()));
+            open = true;
+        } else if line.trim().is_empty() {
+            open = false;
+        } else {
+            if !open {
+                sections.push((None, Vec::new()));
+                open = true;
+            }
+            sections.last_mut().unwrap().1.push(line.trim_end().to_string());
+        }
+    }
+
+    let mut slides: Vec<Slide> = Vec::new();
+    let mut arrangement = Vec::new();
+    for (header, lines) in sections.into_iter().filter(|(_, l)| !l.is_empty()) {
+        let text = lines.join("\n");
+        let (type_code, explicit_number) = match &header {
+            Some(h) => {
+                let has_number = h.chars().any(|c| c.is_ascii_digit());
+                let (t, n) = section_id_to_ew_type_and_number(h, 0);
+                (t, has_number.then_some(n))
+            }
+            None => (1, None),
+        };
+        let prefix = ew_type_code_to_prefix(type_code);
+        // The same named section sung again is the existing slide; otherwise number it in order.
+        let existing = slides.iter().position(|s| s.text == text && s.tag.as_deref().is_some_and(|t| t.starts_with(prefix)));
+        let index = match existing {
+            Some(i) => i,
+            None => {
+                let number = explicit_number.unwrap_or_else(|| slides.iter().filter(|s| s.tag.as_deref().is_some_and(|t| t.starts_with(prefix))).count() as i64 + 1);
+                let label = ew_type_code_to_label(type_code, number);
+                slides.push(Slide { text, header: Some(label.clone()), label: Some(label), tag: Some(format!("{prefix}{number}")), ..Default::default() });
+                slides.len() - 1
+            }
+        };
+        arrangement.push(crate::core::models::ArrangementEntry { section_id: slides[index].tag.clone().unwrap(), source_slide_index: index, background_override: None });
+    }
+    (slides, arrangement)
+}
+
 /// EasyWorship type code to section label
 pub fn ew_type_code_to_label(type_code: i64, number: i64) -> String {
     match type_code {
@@ -1268,6 +1385,17 @@ impl EwsxManager {
             is_modified: false,
             schedule_version: 0,
         };
+
+        // A real EasyWorship 5 schedule: a fixed record per song, each followed by its words as
+        // zlib-compressed RTF (testdata/ews/test1.ews). The scans below predate this and never found
+        // those words, importing every real file as one placeholder slide named after the file.
+        if let Some(items) = parse_ews_v5_songs(bytes) {
+            if !items.is_empty() {
+                schedule.items = items;
+                schedule.selected_item_index = Some(0);
+                return Ok(schedule);
+            }
+        }
 
         // Scan for strings / RTF blocks in binary file
         let mut text_blocks: Vec<(String, Option<SlideElement>)> = Vec::new();

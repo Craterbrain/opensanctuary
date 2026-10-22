@@ -154,9 +154,8 @@ into misparsing anything around it.
 
 `testdata/odp/README.md`'s fixture doesn't exercise any of this (it predates it); a second,
 real-world fixture does: `shape-test.odp`, hand-authored in actual LibreOffice Impress's shape
-gallery by a human (not `pyuno`), referenced via the same `$OS_TEST_DOCS` convention
-`docs/workflow.md` already documents for EasyWorship fixtures (not committed to the repo -- a
-human's own test file). It's what caught `resolve_graphic_style` not walking
+gallery by a human (not `pyuno`), committed as `testdata/odp/shape-test.odp` since 2026-10-22 (with
+its author's permission; see `docs/workflow.md`, "Real-world test documents"). It's what caught `resolve_graphic_style` not walking
 `style:parent-style-name`: every one of its 9 shapes leaves fill/stroke completely unset on its own
 style and inherits from a shared parent (`"standard"`, almost universal real-producer behavior for
 a shape gallery) -- the first version of `resolve_graphic_style` only looked at one named style in
