@@ -1,6 +1,6 @@
 # Client discovery & console pairing
 
-_Last edited: 2026-10-15_
+_Last edited: 2026-10-22_
 
 This covers two related things for **permanent display clients** — the
 Roku and Android TV apps, as opposed to someone opening `live.html` in a
@@ -169,6 +169,19 @@ every restart). Fixed by `tls.rs`'s owner-only fallback key file, which keeps
 the private key (and therefore the cert and its fingerprint) stable across
 restarts even with no keyring; see `docs/workflow.md`'s "Known issues" for
 that fix's own history.
+
+The key is also kept **per install**. It used to sit in one keyring entry
+(`OpenSanctuary:System` / `tls_private_key`) shared by every install on the
+machine, so a second install (a portable copy beside an installed one, a test
+server) found a key that didn't match its certificate, minted a new pair over
+it, and the first install did the same on its next start, breaking pinned TVs
+each time. Now each install has a random `tlsKeyId` in its own database (so it
+moves with the data folder) and its key lives in `tls_private_key:<id>`; with
+no keyring, the owner-only fallback file is `tls_private_key.pem` next to that
+install's database. On upgrade an install adopts the old shared key once, only
+if it still matches its own certificate, and leaves the shared entry alone for
+older builds. Test servers set `OS_NEXT_TLS_KEY_STORE=file`, which keeps the
+key in that file and never touches the OS keyring.
 
 ### Critical Invariant: Zero-Auth Open Access for Web *Displays*
 

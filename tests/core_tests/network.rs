@@ -1179,7 +1179,9 @@ async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
 
     // 1. Generate TLS certificate
     let interfaces = os_next::network::NetworkInterfaceInfo::discover_all();
-    let (cert_pem, key_pem) = os_next::network::tls::get_or_create_tls_certificate(&db, "test-sanctuary", &interfaces).unwrap();
+    // A key file in the temp dir, not the developer's real OS keyring.
+    let key_store = os_next::network::tls::TlsKeyStore::File(test_dir.path().join("tls_private_key.pem"));
+    let (cert_pem, key_pem) = os_next::network::tls::get_or_create_tls_certificate_in(&db, "test-sanctuary", &interfaces, &key_store).unwrap();
     assert!(cert_pem.contains("BEGIN CERTIFICATE"));
     assert!(key_pem.contains("PRIVATE KEY"));
 

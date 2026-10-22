@@ -1,0 +1,66 @@
+{
+ "aurora-waves": {
+  "rev": "2b42bfcc",
+  "file": "aurora-waves.webp"
+ },
+ "candle-pulse": {
+  "rev": "c0e69362",
+  "file": "candle-pulse.webp"
+ },
+ "drifting-bokeh": {
+  "rev": "d6330183",
+  "file": "drifting-bokeh.webp"
+ },
+ "drifting-clouds": {
+  "rev": "faa8aac6",
+  "file": "drifting-clouds.webp"
+ },
+ "fireflies": {
+  "rev": "d0f98e44",
+  "file": "fireflies.webp"
+ },
+ "floating-dust": {
+  "rev": "8cc53b33",
+  "file": "floating-dust.webp"
+ },
+ "gentle-snowfall": {
+  "rev": "4fc10843",
+  "file": "gentle-snowfall.webp"
+ },
+ "gold-shimmer": {
+  "rev": "e53c9cef",
+  "file": "gold-shimmer.webp"
+ },
+ "liquid-gradient": {
+  "rev": "955777dc",
+  "file": "liquid-gradient.webp"
+ },
+ "living-mesh": {
+  "rev": "d3127e25",
+  "file": "living-mesh.webp"
+ },
+ "rising-embers": {
+  "rev": "067d7478",
+  "file": "rising-embers.webp"
+ },
+ "slow-waves": {
+  "rev": "eb034eab",
+  "file": "slow-waves.webp"
+ },
+ "soft-rain": {
+  "rev": "a3f46b76",
+  "file": "soft-rain.webp"
+ },
+ "sprouting-leaves": {
+  "rev": "6c8dd340",
+  "file": "sprouting-leaves.webp"
+ },
+ "starfield-drift": {
+  "rev": "daf48275",
+  "file": "starfield-drift.webp"
+ },
+ "swaying-rays": {
+  "rev": "632f8c5b",
+  "file": "swaying-rays.webp"
+ }
+}

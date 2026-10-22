@@ -1,6 +1,7 @@
 import { EditorSlide, SlideElement, SOLID_PALETTE_PRESETS, GRADIENT_PRESETS, PATTERN_PRESETS, FONT_FAMILY_GROUPS } from './types';
 import { ensurePatternClip } from '../core/pattern_render';
-import { applyResolvedBackground, parseAnimatedPatternMarker, backgroundPresetDataString, escapeHtml } from '../core/presentation_helpers';
+import { parseAnimatedPatternMarker, backgroundPresetDataString, escapeHtml } from '../core/presentation_helpers';
+import { applyBackgroundThumbnail } from '../core/pattern_thumbs';
 
 export class PropertiesPanel {
   private panelEl: HTMLElement;
@@ -174,8 +175,8 @@ export class PropertiesPanel {
     }
     gradContainer.appendChild(gradPresetGrid);
 
-    // 3. Animated Mode Container — real, running previews via
-    // applyResolvedBackground, not just a static swatch.
+    // 3. Animated Mode Container — each swatch plays the pattern's pre-rendered preview
+    // (pattern_thumbs.ts), not the live pattern.
     const animContainer = document.createElement('div');
     animContainer.className = `prop-section ${activeMode !== 'animated' ? 'hidden' : ''}`;
     const animPresetGrid = document.createElement('div');
@@ -185,7 +186,7 @@ export class PropertiesPanel {
       aRow.className = 'prop-preset';
       const prev = document.createElement('div');
       prev.className = 'prop-preset-thumb';
-      applyResolvedBackground(prev, backgroundPresetDataString(a));
+      applyBackgroundThumbnail(prev, backgroundPresetDataString(a));
       const lbl = document.createElement('span');
       lbl.className = 'prop-preset-label';
       lbl.textContent = a.name;
