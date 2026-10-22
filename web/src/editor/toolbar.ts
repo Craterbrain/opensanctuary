@@ -4,7 +4,8 @@ import { createDefaultShape } from './shape_library';
 import { createDefaultLine } from './line_tool';
 import { createDefaultTable } from './table';
 import { ensurePatternClip } from '../core/pattern_render';
-import { applyResolvedBackground, parseAnimatedPatternMarker, backgroundPresetDataString } from '../core/presentation_helpers';
+import { parseAnimatedPatternMarker, backgroundPresetDataString } from '../core/presentation_helpers';
+import { applyBackgroundThumbnail } from '../core/pattern_thumbs';
 
 export type ArrangeAction = 'bringToFront' | 'sendToBack' | 'bringForward' | 'sendBackward';
 export type AlignAction = 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom';
@@ -197,10 +198,8 @@ export class EditorToolbar {
     if (bg) {
       if (bg.kind === 'Solid') {
         // Also covers the "pattern:<name>" animated marker (see
-        // PATTERN_PRESETS) — applyResolvedBackground renders the
-        // real drifting background-image + animation here too, not just a
-        // static swatch, so this ribbon indicator matches what's on the slide.
-        applyResolvedBackground(this.currentBgPreview, bg.data);
+        // PATTERN_PRESETS): shown as the pattern's pre-rendered preview.
+        applyBackgroundThumbnail(this.currentBgPreview, bg.data);
       } else if (bg.kind === 'Gradient') {
         this.currentBgPreview.style.animation = '';
         this.currentBgPreview.style.backgroundImage = '';
@@ -218,7 +217,7 @@ export class EditorToolbar {
         this.currentBgPreview.style.background = '#000000';
       }
     } else if (legacyBg) {
-      applyResolvedBackground(this.currentBgPreview, legacyBg);
+      applyBackgroundThumbnail(this.currentBgPreview, legacyBg);
     } else {
       this.currentBgPreview.style.animation = '';
       this.currentBgPreview.style.backgroundImage = '';
@@ -632,9 +631,8 @@ export class EditorToolbar {
       gradPane.appendChild(gRow);
     }
 
-    // 3. Animated Content — real, running previews (not just a static swatch)
-    // via applyResolvedBackground, so picking one is "what you see is what
-    // you get" for the motion, not just the base color.
+    // 3. Animated Content — each swatch plays the pattern's pre-rendered
+    // preview (pattern_thumbs.ts): the motion, without drawing every pattern live.
     const animatedPane = document.createElement('div');
     animatedPane.className = 'bg-popover-pane prop-presets hidden';
     for (const a of PATTERN_PRESETS) {
@@ -642,7 +640,7 @@ export class EditorToolbar {
       aRow.className = 'prop-preset';
       const preview = document.createElement('div');
       preview.className = 'prop-preset-thumb';
-      applyResolvedBackground(preview, backgroundPresetDataString(a));
+      applyBackgroundThumbnail(preview, backgroundPresetDataString(a));
       const label = document.createElement('span');
       label.className = 'prop-preset-label';
       label.textContent = a.name;

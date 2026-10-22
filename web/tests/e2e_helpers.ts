@@ -69,7 +69,9 @@ export async function spawnTestServer(opts: {
       cwd: resolve(import.meta.dir, "../../"),
       stdout: "pipe",
       stderr: "pipe",
-      ...(opts.env ? { env: { ...process.env, ...opts.env } } : {}),
+      // The TLS private key goes in a file in the temp dir, never the developer's real OS
+      // keyring (src/network/tls.rs, OS_NEXT_TLS_KEY_STORE).
+      env: { ...process.env, OS_NEXT_TLS_KEY_STORE: "file", ...(opts.env ?? {}) },
     }
   );
 

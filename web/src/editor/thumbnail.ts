@@ -1,5 +1,6 @@
 import { EditorSlide } from './types';
 import { resolveSlideBackgroundElement } from '../core/presentation_helpers';
+import { applyBackgroundThumbnail } from '../core/pattern_thumbs';
 import { renderSlideVisual } from '../core/slide_render';
 
 export interface ThumbnailCallbacks {
@@ -376,7 +377,7 @@ export class FilmstripSidebar {
     thumbView.style.padding = '4px';
     thumbView.style.boxSizing = 'border-box';
 
-    resolveSlideBackgroundElement(thumbView, slide);
+    resolveSlideBackgroundElement(thumbView, slide, applyBackgroundThumbnail);
 
     // Positioned-elements overlay, matching the Preview/Live canvas structure
     // (see app_core.ts's #preview-canvas-elements / #live-canvas-elements).

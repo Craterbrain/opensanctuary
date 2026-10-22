@@ -131,6 +131,7 @@ for f in index.html live.html stage.html remote.html pairing.html style.css favi
 done
 cp web/dist/*.js "$STAGE/web/dist/"
 cp -r web/icons "$STAGE/web/icons"
+cp -r web/pattern-thumbs "$STAGE/web/pattern-thumbs"  # pre-rendered pattern previews (web/scripts/render_pattern_thumbs.ts)
 cp -r target/bundled-plugins/. "$STAGE/web/plugins/"
 [ "${SKIP_TV_APK:-0}" = "1" ] || cp "$TV_APK" "$STAGE/tv-client/opensanctuary-tv.apk"
 # NOT songs/public_domain.db: same reasoning as the .deb (Cargo.toml comment) --

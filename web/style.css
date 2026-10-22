@@ -1305,6 +1305,11 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: var(--o
 .live-indicator-btn.active .icon {
   animation: pulse-red 1.5s infinite;
 }
+/* Not while a dialog covers it: animating anything under a modal's blurred backdrop makes the
+   browser redraw the blur every frame (a whole CPU core in the slide editor). */
+body:has(.modal-backdrop[style*="flex"]) .live-indicator-btn.active .icon {
+  animation-play-state: paused;
+}
 
 @keyframes pulse-red {
   0% { transform: scale(1); opacity: 1; }

@@ -426,10 +426,14 @@ impl Slide {
         }
     }
 
+    /// The id is derived from the slide's text, not random: this runs while events are applied,
+    /// and Undo/Redo and a restart rebuild the schedule by replaying them, so a random id would
+    /// rename the text box under the console (whose next edit, aimed at the old id, is dropped).
+    /// Only ever one synthesized element per slide, so equal text on two slides can't collide.
     pub fn synthesize_v2_if_needed(&mut self) {
         if self.elements.is_empty() && !self.text.trim().is_empty() {
             let element = SlideElement::TextBlock {
-                id: format!("el_{}", uuid::Uuid::new_v4()),
+                id: format!("el_{}", &crate::core::plugin_permissions::sha256_hex(self.text.as_bytes())[..32]),
                 transform: ElementTransform::default(),
                 block: TextBlock {
                     runs: vec![TextRun {

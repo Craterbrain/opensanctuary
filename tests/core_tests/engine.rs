@@ -1829,3 +1829,42 @@ fn test_undoing_an_unrelated_edit_keeps_existing_group_ids() {
     engine.execute_command(ShowCommand::UngroupSlideElements { item_index: 0, slide_index: 0, group_id: id });
     assert!(engine.snapshot().schedule.items[0].slides[0].elements.iter().all(|el| !matches!(el, SlideElement::Group { .. })));
 }
+
+/// Undo/Redo rebuild the schedule by replaying the event log, and a restart replays it too, so a
+/// replay must give back the same schedule: the same element ids (the console edits elements by
+/// id, and an edit aimed at an id that changed under it is silently dropped) and the same "unsaved
+/// changes" flag. Found by the Qwen soak run (every Undo renamed every auto-made text box).
+#[test]
+fn test_undo_redo_replay_keeps_element_ids_and_the_unsaved_flag() {
+    use os_next::models::TextRun;
+    let log = Arc::new(EventLog::new(100));
+    let engine = ShowEngine::new(log.clone());
+    engine.execute_command(ShowCommand::AddToSchedule(simple_item("a", "A", &["one", "two"])));
+    let element_id = engine.snapshot().schedule.items[0].slides[0].elements[0].id().to_string();
+    assert!(engine.snapshot().schedule.is_modified);
+
+    let before = engine.snapshot().schedule;
+    engine.execute_command(ShowCommand::SetScheduleTitle("Evening".into()));
+    engine.execute_command(ShowCommand::Undo);
+    let after_undo = engine.snapshot().schedule;
+    assert_eq!(after_undo.items, before.items, "Undo must give back the very same items");
+    assert!(after_undo.is_modified, "Undo back to an unsaved schedule must leave it unsaved");
+    engine.execute_command(ShowCommand::Redo);
+    assert_eq!(engine.snapshot().schedule.items, before.items);
+    assert!(engine.snapshot().schedule.is_modified);
+
+    // The edit the console sends next still lands on the text box it was showing.
+    engine.execute_command(ShowCommand::UpdateTextBlockContent {
+        item_index: 0, slide_index: 0, element_id: element_id.clone(),
+        runs: vec![TextRun { text: "edited".into(), ..Default::default() }], paragraph_style: None,
+    });
+    let slide = &engine.snapshot().schedule.items[0].slides[0];
+    assert_eq!(slide.elements[0].id(), element_id);
+    assert!(format!("{:?}", slide.elements[0]).contains("edited"), "the edit was dropped: {:?}", slide.elements[0]);
+
+    // A restart (replaying the same log into a new engine) lands on the same schedule too.
+    let restarted = ShowEngine::new(Arc::new(EventLog::new(100)));
+    restarted.restore_from_events(log.all_events());
+    assert_eq!(restarted.snapshot().schedule.items, engine.snapshot().schedule.items);
+    assert_eq!(restarted.snapshot().schedule.is_modified, engine.snapshot().schedule.is_modified);
+}

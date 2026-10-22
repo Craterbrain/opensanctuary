@@ -936,7 +936,9 @@ export function initRibbonControls() {
   on(btnClear, 'click', () => sendCommand('ToggleClearText'));
   on(btnLogo, 'click', () => sendCommand('ToggleLogo'));
   on(btnLiveStatus, 'click', () => {
-    showToast('Live projection is actively broadcasting to FOH monitors & Stage Foldback.', 'info');
+    showToast(btnLiveStatus?.classList.contains('active')
+      ? 'Live projection is actively broadcasting to FOH monitors & Stage Foldback.'
+      : 'Nothing is live right now.', 'info');
   });
 }
 initRibbonControls();

@@ -12,7 +12,7 @@ use os_next::media::asset_graph::AssetGraph;
 use os_next::storage::Database;
 
 #[derive(Parser, Debug)]
-#[command(name = "os-next", version = "0.2.0", about = "Next-Generation Church Presentation Engine in Rust")]
+#[command(name = "os-next", version, about = "Next-Generation Church Presentation Engine in Rust")]
 struct Args {
     #[arg(short, long, help = "Loopback-only port for the native desktop console window [default: 8080, auto-increments if in use] -- never reachable from the network")]
     port: Option<u16>,
