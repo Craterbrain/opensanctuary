@@ -59,7 +59,10 @@ The operator console (library, schedule, preview and live panes) and the slide b
 - **Android TV client** (`apps/android-tv`) for permanent displays, with
   ADB-driven sideload-and-pair provisioning straight from the console —
   no Play Store listing needed, no typing an IP address on a remote.
-  (Roku support is designed but not built yet.)
+- **Roku channel** (`apps/roku`) also works as a basic client today —
+  type the server's IP into its Settings screen once. It doesn't have
+  Android TV's no-typing sideload-and-pair flow yet; that part of Roku
+  support is still just a documented design (`src/discovery.rs`).
 - Any screen capture tool (OBS Browser Source, etc.) can broadcast the
   Live Output page directly — see `docs/BROADCASTING.md`.
 
@@ -123,10 +126,9 @@ plugins. To write one, start with
 
 ## Releases
 
-Not yet published — see **Status** above. Once this repo is public,
-releases will be published at
-[github.com/Craterbrain/opensanctuary/releases](https://github.com/Craterbrain/opensanctuary/releases)
-as three artifacts per version, all signed:
+Published at
+[github.com/Craterbrain/opensanctuary/releases](https://github.com/Craterbrain/opensanctuary/releases) —
+three artifacts per version, all signed:
 
 - **`.deb`** — Debian/Ubuntu/Mint, installs via `apt`.
 - **Generic Linux tarball** — Fedora, Arch, anything else; fetched and
@@ -138,8 +140,8 @@ signature; the app's own auto-updater (`src/network/updater.rs`) verifies
 both against an embedded public key before ever applying an update, and
 `packaging/install.sh` does the same for a fresh install. See
 `docs/update.md` for the full verification story, and
-`docs/release-signing-key.txt` (once published) for the production public
-key, independent of any single binary.
+`docs/release-signing-key.txt` for the production public key, independent
+of any single binary.
 
 Release signing public key (minisign, key ID `C12205725EA34858`):
 
