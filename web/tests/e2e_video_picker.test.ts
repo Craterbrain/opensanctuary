@@ -123,9 +123,11 @@ describe("E2E Live Test: Background Picker Videos Tab & Video Background Playbac
     expect(await page.isVisible('#video-subview-ytdl')).toBe(true);
     expect(await page.isVisible('#video-subview-url')).toBe(false);
     expect(await page.isVisible('#video-subview-library')).toBe(false);
-    // Downloading is the Video Downloader plugin now: until it's approved this tab points to Settings > Plugins.
+    // This tab exists because an installed plugin (the bundled Video Downloader) declares the
+    // video-picker slot; until it's approved, the tab offers its review instead of its page.
     expect(await page.isVisible('#plugin-picker-hint')).toBe(true);
-    expect(await page.isVisible('#btn-picker-enable-ytdlp')).toBe(true);
+    expect(await page.isVisible('#plugin-picker-hint button[data-plugin-id="ytdlp"]')).toBe(true);
+    expect(await page.textContent('#btn-video-subtab-ytdl')).toContain('Video Downloader');
 
     // 7. Switch back to Library, select video card, and apply to active slide
     await page.click('#btn-video-subtab-library');

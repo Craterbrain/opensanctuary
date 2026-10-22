@@ -226,14 +226,19 @@ export function pluginBridge(frameOf: () => import("playwright").Frame | undefin
  * `plugins/` directory: a copy of the bundled plugins plus `extra` (plugin id -> files). For tests
  * that need plugins the repo doesn't ship, without writing into the repo.
  */
-export function webDirWithPlugins(extra: Record<string, Record<string, string>>): string {
+export function webDirWithPlugins(extra: Record<string, Record<string, string>>, opts: { bundled?: boolean } = {}): string {
   const real = resolve(import.meta.dir, "../");
   const dir = mkdtempSync(join(tmpdir(), "os-next-web-"));
   for (const name of readdirSync(real)) {
     if (name === "plugins" || name === "node_modules" || name === "tests") continue;
     symlinkSync(join(real, name), join(dir, name));
   }
-  cpSync(join(real, "plugins"), join(dir, "plugins"), { recursive: true });
+  if (opts.bundled === false) {
+    // No bundled plugins, only the host's own SDK/theme -- what v0.2.0's packages actually shipped.
+    cpSync(join(real, "plugins", "_shared"), join(dir, "plugins", "_shared"), { recursive: true });
+  } else {
+    cpSync(join(real, "plugins"), join(dir, "plugins"), { recursive: true });
+  }
   for (const [id, files] of Object.entries(extra)) {
     mkdirSync(join(dir, "plugins", id), { recursive: true });
     for (const [file, text] of Object.entries(files)) writeFileSync(join(dir, "plugins", id, file), text);

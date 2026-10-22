@@ -181,15 +181,18 @@ fn view(app: &AppState, row: &PluginGrantRow) -> serde_json::Value {
         }
         out
     };
+    let manifest = read_manifest(row);
     serde_json::json!({
         "shared_with": shared_with,
         "overridden": overridden,
         "override_diff": override_diff,
         "commands": commands,
         "tools": tools,
-        "placements": read_manifest(row).and_then(|m| m.ui).map(|u| u.placements).unwrap_or_default(),
+        "placements": manifest.as_ref().and_then(|m| m.ui.as_ref()).map(|u| u.placements.clone()).unwrap_or_default(),
         // Ribbon buttons come from the manifest, which a sandboxed plugin's digest covers.
-        "toolbar": (row.kind == "sandbox").then(|| read_manifest(row)).flatten().and_then(|m| m.ui).map(|u| u.toolbar).unwrap_or_default(),
+        "toolbar": manifest.as_ref().filter(|_| row.kind == "sandbox").and_then(|m| m.ui.as_ref()).map(|u| u.toolbar.clone()).unwrap_or_default(),
+        // What it says it does, for the console's "available plugins" hints (Store, setup) -- display only.
+        "description": manifest.as_ref().map(|m| m.description.clone()).unwrap_or_default(),
         "entry": entry,
         "id": row.plugin_id,
         "kind": row.kind,

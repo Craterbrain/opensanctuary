@@ -73,7 +73,14 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
 - **Where a sandboxed plugin's page appears, and how it looks.** A manifest's `ui.placements` choose:
   `library-source` (a "plugin" entry in a Resource Library tab's sidebar, shown in place of the list
   and preview, as Genius/Online Bibles/the downloader do), `video-picker` (the background picker's
-  Videos tab) or `dock` (a small floating panel, the default). The page loads `__os/theme.css` and
+  Videos tab) or `dock` (a small floating panel, the default). **Placements are also how the console
+  advertises a plugin before it's approved:** until the operator approves an installed plugin, each
+  `library-source` placement shows a muted "plugin · off" entry with its `label`, a `video-picker`
+  placement makes the picker's plugin tab appear with a note, and the Store lists it with its manifest
+  `description` -- each opening its review card in Settings > Plugins (`web/src/core/plugin_hints.ts`).
+  The console never names a particular plugin, so a plugin that isn't installed leaves no trace, and
+  one the operator denied or revoked isn't advertised again. Give a plugin a `description`: it's what
+  the Store and the first-time setup show. The page loads `__os/theme.css` and
   `__os/sdk.js` (served by the host to any approved sandboxed plugin): the console sends its design
   tokens (`--os-*`) to the frame and again whenever the theme changes, and the stylesheet gives
   `.btn`, inputs, `.os-list`, `.os-tabs`, `.os-badge`, `.card` and so on the console's own look, so

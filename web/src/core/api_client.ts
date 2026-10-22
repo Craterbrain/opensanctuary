@@ -542,6 +542,8 @@ export interface PluginInfo {
   } | null;
   entry?: string | null;
   name: string;
+  /** What the manifest says the plugin does (display only). */
+  description?: string;
   version: string | null;
   /** The highest version ever approved from this same signer (or "" for unsigned), if any -- holds
    * across revoke/re-approve and uninstall/reinstall, unlike `changes.direction`. */

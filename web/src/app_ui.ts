@@ -22,6 +22,7 @@ import {
 } from './ui/library_panel.ts';
 import { parseScriptureReference } from './core/bible_parser.ts';
 import { resetOptionsModal, openSettingsAt, onSettingsSearchInput, saveNetworkSettings, refreshPairedDevicesAfterAdbProvision } from './ui/settings_dialog.ts';
+import { focusPluginOnNextRender } from './ui/plugins_settings.ts';
 import { showToast } from './core/ui_utils.ts';
 import { openThemeEditor } from './ui/theme_editor.ts';
 import {
@@ -1430,11 +1431,6 @@ on('catalog-zoom-slider', 'input', (e: Event) => {
 // Store Modal Handlers
 on('btn-close-store', 'click', () => closeModal(storeModal));
 on('btn-close-store-footer', 'click', () => closeModal(storeModal));
-on('btn-store-open-bibles', 'click', () => {
-  // Online Bibles is a plugin now: take the operator to Settings > Plugins to turn it on.
-  closeModal(storeModal);
-  window.dispatchEvent(new CustomEvent('os-open-plugins-settings'));
-});
 
 // Web Streamer Modal Handlers
 function normalizeWebStreamUrl(rawUrl: string) {
@@ -1865,7 +1861,7 @@ const ARTICLES_DATA: Record<string, string> = {
 
     <h3>5. Mini-Movies & Sermon Illustrations</h3>
     <p>
-      Add videos directly to the schedule for countdowns, offering mini-movies, or sermon illustrations. Supports full playback transport controls (Play, Pause, Scrub bar, Loop toggle, Volume). Download web clips directly via the built-in <strong>📥 yt-dlp Video Importer</strong>.
+      Add videos directly to the schedule for countdowns, offering mini-movies, or sermon illustrations. Supports full playback transport controls (Play, Pause, Scrub bar, Loop toggle, Volume).
     </p>
 
     <h3>6. Websites & Live Web Streams</h3>
@@ -2028,8 +2024,12 @@ on('btn-import-back', 'click', handleImportBack);
 on('btn-close-import', 'click', () => closeModal(importModal));
 on('btn-close-import-footer', 'click', () => closeModal(importModal));
 
-// Something (the Store card, the first-run wizard) asked to land on Settings > Plugins.
-window.addEventListener('os-open-plugins-settings', () => {
+// Something (a plugin hint in the library, picker or Store, the first-run wizard) asked to land on
+// Settings > Plugins -- on one plugin's review card, if it says which.
+window.addEventListener('os-open-plugins-settings', (ev) => {
+  const pluginId = (ev as CustomEvent).detail?.pluginId;
+  if (typeof pluginId === 'string') focusPluginOnNextRender(pluginId);
+  closeModal(storeModal); // no-op unless the Store's card is what asked
   showModal(optionsModal);
   openSettingsAt('plugins');
 });

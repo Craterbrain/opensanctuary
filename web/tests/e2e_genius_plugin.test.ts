@@ -32,9 +32,11 @@ describe("E2E Live Test: Genius Lyrics plugin (sandboxed) imports through the ho
   test("needs approval, then appears as a panel; search and import go through the bridge", async () => {
     await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: "networkidle" });
     // The old built-in Genius search mode and category are gone from the song library.
-    expect(await page.locator("text=Genius Christian Lyrics").count()).toBe(0);
+    expect(await page.locator('.category-node:not(.plugin-source-node--off):has-text("Genius Christian Lyrics")').count()).toBe(0);
     expect((await fetch(`http://127.0.0.1:${PORT}/api/songs/genius/search?q=x`)).status).toBe(404);
-    expect(await page.locator('.category-node:has-text("Genius")').count()).toBe(0); // not until approved
+    // Not until approved -- only its "not turned on" hint (from its manifest), which opens its review card.
+    expect(await page.locator('.category-node:not(.plugin-source-node--off):has-text("Genius")').count()).toBe(0);
+    expect(await page.locator('.plugin-source-node--off[data-plugin-id="genius_lyrics"]').count()).toBe(1);
     expect((await fetch(`http://127.0.0.1:${PORT}/plugin-frame/genius_lyrics/index.html`)).status).toBe(404);
 
     await page.keyboard.press("F2");
@@ -59,7 +61,7 @@ describe("E2E Live Test: Genius Lyrics plugin (sandboxed) imports through the ho
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => document.querySelector('iframe[data-plugin-id="genius_lyrics"]'), null, { timeout: 15000 });
     await page.click('.tab-btn[data-tab="songs"]');
-    const node = page.locator('.category-node:has-text("Genius Christian Lyrics")');
+    const node = page.locator('.category-node:not(.plugin-source-node--off):has-text("Genius Christian Lyrics")');
     await node.waitFor({ state: "visible", timeout: 10000 });
     await node.click();
     const frame = frameOf()!;

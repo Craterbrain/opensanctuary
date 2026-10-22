@@ -746,10 +746,6 @@
               <div id="openlp-import-status" class="store-card-status" style="display: none;"></div>
             </div>
 
-            <div class="store-card">
-              <h4>🎤 Song Lyrics (Genius)</h4>
-              <p>Genius lyrics import is now a plugin: approve “Genius Lyrics” in Settings → Plugins and it appears as a panel in the console.</p>
-            </div>
           </div>
         </div>
         <div class="modal-footer">
@@ -965,13 +961,10 @@
             <div class="store-card">
               <h4>🎬 Motion Background Packs</h4>
               <p>Download dynamic 4K/HD church loop packs & sermon stills.</p>
-              <button class="btn" disabled title="Not yet implemented — turn on the Video Downloader plugin (Settings → Plugins) to fetch clips in the meantime.">Coming Soon</button>
+              <button class="btn" disabled title="Not yet implemented.">Coming Soon</button>
             </div>
-            <div class="store-card">
-              <h4>📖 Online Bibles</h4>
-              <p>Download Bible translations and look up passages online. This is a plugin: turn it on in Settings → Plugins and it appears as a panel.</p>
-              <button class="btn btn-primary" id="btn-store-open-bibles">Open Plugins</button>
-            </div>
+            <!-- One card per installed plugin not turned on yet, from its own manifest (core/plugin_hints.ts) -->
+            <div class="store-plugin-cards" id="store-plugin-cards"></div>
             <div class="store-card">
               <h4>🎨 Presentation Themes</h4>
               <p>Modern typography, gradient masks, and liturgical color palettes.</p>
@@ -1459,13 +1452,13 @@
             <div class="picker-empty-state" id="theme-picker-empty" hidden>No styles found matching your search.</div>
           </div>
 
-          <!-- Videos tab (Video Library, From URL, yt-dlp downloader) -->
+          <!-- Videos tab (Video Library, From URL, and pages from plugins that declare the video-picker slot) -->
           <div id="bg-picker-panel-videos" class="picker-pane" style="display: none;">
             <div class="picker-toolbar">
               <div class="import-mode-tabs" id="video-picker-subtabs">
                 <button class="import-tab-btn active" id="btn-video-subtab-library" data-vtab="library">🎬 Video Library</button>
                 <button class="import-tab-btn" id="btn-video-subtab-url" data-vtab="url">🔗 From URL</button>
-                <button class="import-tab-btn" id="btn-video-subtab-ytdl" data-vtab="ytdl">📥 Download (yt-dlp)</button>
+                <button class="import-tab-btn" id="btn-video-subtab-ytdl" data-vtab="ytdl" hidden>📥 From plugins</button>
               </div>
               <div id="video-library-search-wrap" class="picker-toolbar-end" style="display: flex;">
                 <input type="text" class="search-input picker-search" id="video-picker-search" placeholder="Filter video library...">
@@ -1500,13 +1493,11 @@
               </div>
             </div>
 
-            <!-- Subtab 3: online video download (the Video Downloader plugin's page goes in here) -->
+            <!-- Subtab 3: pages from plugins that declare the video-picker slot. The tab only shows while
+                 one is installed; until it's turned on, the hint below offers its review (core/plugin_hints.ts). -->
             <div id="video-subview-ytdl" class="picker-pane" style="display: none;">
               <div class="plugin-picker-pane" id="plugin-picker-pane">
-                <div class="list-message" id="plugin-picker-hint">
-                  <p>Downloading online video is a plugin. Turn on the Video Downloader to fetch YouTube and other clips right here.</p>
-                  <button class="btn btn-primary" id="btn-picker-enable-ytdlp" type="button">Open Settings → Plugins</button>
-                </div>
+                <div class="list-message plugin-picker-hint" id="plugin-picker-hint" hidden></div>
               </div>
             </div>
             </div>

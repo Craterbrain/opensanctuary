@@ -6053,6 +6053,16 @@ video {
 .plugin-source { display: none; flex: 1 1 auto; min-height: 0; }
 .plugin-source iframe { flex: 1 1 auto; width: 100%; height: 100%; min-height: 240px; border: 0; background: transparent; }
 .plugin-source-node::after { content: "plugin"; margin-left: var(--os-space-3); font-size: var(--os-fs-2xs); color: var(--os-text-tertiary); text-transform: uppercase; letter-spacing: 0.04em; }
+/* A plugin that would add this entry once turned on (core/plugin_hints.ts): muted, opens its review card */
+.plugin-source-node--off { color: var(--os-text-tertiary); }
+.plugin-source-node--off::after { content: "plugin · off"; }
+.plugin-picker-hint[hidden], .import-tab-btn[hidden] { display: none; }
+.plugin-offer + .plugin-offer { margin-top: var(--os-space-5); }
+.store-plugin-cards { display: contents; }
+.fts-plugin-offer { margin: var(--os-space-4) 0; }
+.fts-plugin-offers--after:not(:empty) { margin-top: var(--os-space-6); padding-top: var(--os-space-5); border-top: 1px solid var(--os-border); }
+.fts-plugin-offer .form-help { margin: var(--os-space-2) 0; }
+.plugin-card--focus { outline: 2px solid var(--os-accent); outline-offset: 2px; }
 .plugin-picker-pane { display: flex; flex: 1 1 auto; min-height: 340px; flex-direction: column; }
 .plugin-picker-pane .plugin-source { flex: 1 1 auto; }
 .plugin-source--picker iframe { min-height: 340px; }

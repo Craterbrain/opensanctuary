@@ -318,6 +318,15 @@ export async function loadLibraryTab(tabName?: string, opts: { keepPluginView?: 
 interface LibrarySource { id: string; tab: string; label: string }
 const librarySources: LibrarySource[] = [];
 
+/** Installed plugins not turned on yet that would put a page in a tab (see core/plugin_hints.ts). */
+interface LibrarySourceHint extends LibrarySource { name: string }
+let librarySourceHints: LibrarySourceHint[] = [];
+
+export function setLibrarySourceHints(hints: LibrarySourceHint[]) {
+  librarySourceHints = hints;
+  if (ctx) renderCategoryTree(ctx.getCurrentTab());
+}
+
 export function registerLibrarySource(src: LibrarySource) {
   const i = librarySources.findIndex((s) => s.id === src.id);
   if (i >= 0) librarySources[i] = src; else librarySources.push(src);
@@ -361,6 +370,18 @@ function appendLibrarySourceNodes(tabName: string, container: HTMLElement) {
       document.querySelectorAll('.category-node').forEach((c) => c.classList.remove('active'));
       nodeEl.classList.add('active');
       showLibrarySource(src.id);
+    });
+    container.appendChild(nodeEl);
+  }
+  // Plugins that would add an entry here once turned on: a muted entry that opens their review card.
+  for (const hint of librarySourceHints.filter((h) => h.tab === tabName && !librarySources.some((s) => s.id === h.id))) {
+    const nodeEl = document.createElement('div');
+    nodeEl.className = 'category-node plugin-source-node plugin-source-node--off';
+    nodeEl.dataset.pluginId = hint.id;
+    nodeEl.textContent = hint.label;
+    nodeEl.title = `${hint.name} is a plugin that isn't turned on yet. Click to review it in Settings > Plugins.`;
+    nodeEl.addEventListener('click', () => {
+      window.dispatchEvent(new CustomEvent('os-open-plugins-settings', { detail: { pluginId: hint.id } }));
     });
     container.appendChild(nodeEl);
   }
@@ -458,20 +479,10 @@ export function renderCategoryTree(tabName: string) {
       });
     }
 
-    // 3. Online Bibles (a plugin) at the bottom -- or a pointer to turn it on
+    // 3. Plugins that add Bibles (or would, once turned on), at the bottom
     const actionWrap = document.createElement('div');
     actionWrap.className = 'category-tree-actions';
-    if (librarySources.some((x) => x.tab === 'scriptures')) {
-      appendLibrarySourceNodes('scriptures', actionWrap);
-    } else {
-      const btnInstallBibles = document.createElement('button');
-      btnInstallBibles.className = 'btn btn-sm btn-block';
-      btnInstallBibles.id = 'btn-install-bibles';
-      btnInstallBibles.innerHTML = '➕ Get Bibles online…';
-      btnInstallBibles.title = 'Online Bibles is a plugin: turn it on in Settings > Plugins';
-      btnInstallBibles.addEventListener('click', () => window.dispatchEvent(new CustomEvent('os-open-plugins-settings')));
-      actionWrap.appendChild(btnInstallBibles);
-    }
+    appendLibrarySourceNodes('scriptures', actionWrap);
 
     categoryTreeContainer.appendChild(actionWrap);
     return;
