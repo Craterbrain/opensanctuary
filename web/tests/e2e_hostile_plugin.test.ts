@@ -37,6 +37,20 @@ describe("E2E Red Team: hostile plugin cannot break out or take the console down
     return serverOk && pageOk;
   }
 
+  /**
+   * After a flood, the console may be busy for a while; what matters is that it comes back, not that
+   * it answers within a fixed moment (a slow shared CI runner can take several seconds to drain a
+   * burst a desktop clears instantly). Polls healthy() until it passes or `withinMs` runs out.
+   */
+  async function recovers(label: string, withinMs = 15000): Promise<boolean> {
+    const until = Date.now() + withinMs;
+    for (;;) {
+      if (await healthy(label)) return true;
+      if (Date.now() >= until) return false;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+
   async function run(name: string, timeout = 8000): Promise<string> {
     const f = frameOf();
     if (!f) return "NO FRAME";
@@ -240,12 +254,19 @@ describe("E2E Red Team: hostile plugin cannot break out or take the console down
     expect(items.every((n) => n.source === `plugin:${HOSTILE_ID}`)).toBe(true); // the host stamps it; params.source/plugin are ignored
     note("notification count", String(items.length));
     expect(items.length).toBeLessThanOrEqual(200);
-    expect(await healthy("after granted abuse")).toBe(true);
+    expect(await recovers("after granted abuse")).toBe(true);
     note("logFlood", await run("logFlood", 30000));
-    expect(await healthy("after log flood")).toBe(true);
+    expect(await recovers("after log flood")).toBe(true);
+    // The bridge caps a plugin's outstanding requests (MAX_IN_FLIGHT in plugin_bridge.ts): a burst
+    // past it is refused straight away instead of each starting a fetch on the console's thread.
+    const burst = await run("inFlightBurst", 30000);
+    note("inFlightBurst", burst);
+    const [okN, busyN] = (burst.match(/ok=(\d+) busy=(\d+)/) ?? []).slice(1).map(Number);
+    expect(okN).toBeGreaterThan(0); // the plugin still gets answers...
+    expect(busyN).toBeGreaterThan(0); // ...but not 200 concurrent fetches
+    expect(okN + busyN).toBe(200);
     note("requestFlood", await run("requestFlood", 30000));
-    await page.waitForTimeout(1500);
-    expect(await healthy("after request flood")).toBe(true);
+    expect(await recovers("after request flood")).toBe(true);
     note("hugeMessage", await run("hugeMessage", 30000));
     note("deepMessage", await run("deepMessage", 30000));
     await page.waitForTimeout(1500);
