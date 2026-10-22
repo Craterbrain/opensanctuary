@@ -70,8 +70,14 @@ fi
 # changed upstream today. Re-pin periodically by updating these two values
 # together (check https://github.com/BtbN/FFmpeg-Builds/releases for the
 # current win64-lgpl.zip asset name under a recent autobuild-* tag).
-FFMPEG_RELEASE_TAG="autobuild-2026-10-01-13-06"
-FFMPEG_ASSET_NAME="ffmpeg-N-127054-g9d3f0f2c58-win64-lgpl.zip"
+#
+# Always pin a *month-end* autobuild: BtbN deletes daily autobuilds after
+# about two weeks but keeps the last one of each month indefinitely (back to
+# 2024). The previous pin (autobuild-2026-10-01-13-06) was a daily one and
+# 404'd three weeks later, which would also break re-running an old release
+# tag's build.
+FFMPEG_RELEASE_TAG="autobuild-2026-09-30-13-08"
+FFMPEG_ASSET_NAME="ffmpeg-N-127032-g6ae491a26c-win64-lgpl.zip"
 FFMPEG_CACHE="target/ffmpeg-lgpl-cache"
 FFMPEG_ZIP="$FFMPEG_CACHE/$FFMPEG_ASSET_NAME"
 if [ ! -f "$FFMPEG_ZIP" ]; then
