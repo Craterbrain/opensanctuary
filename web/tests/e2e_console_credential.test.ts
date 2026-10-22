@@ -25,7 +25,7 @@ describe("E2E Live Test: remote console credential survives restarts and is revo
     proc = spawn(
       [binary, "--headless", "--skip-first-time-setup", "--port", String(PORT), "--https-port", String(HTTPS_PORT),
         "--db-path", dbPath, "--web-dir", resolve(import.meta.dir, "../")],
-      { cwd: resolve(import.meta.dir, "../../"), stdout: "pipe", stderr: "ignore", env: { ...process.env, OS_NEXT_PRINT_TOKEN: "1" } },
+      { cwd: resolve(import.meta.dir, "../../"), stdout: "pipe", stderr: "ignore", env: { ...process.env, OS_NEXT_PRINT_TOKEN: "1", OS_NEXT_TLS_KEY_STORE: "file" } },
     );
     // The banner prints the token URL; read stdout until it appears.
     const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();

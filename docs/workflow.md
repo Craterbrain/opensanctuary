@@ -242,12 +242,13 @@ old key cannot verify releases signed with the new one; see `docs/update.md`'s
 
 - ~~**TLS key without an OS keyring.**~~ Fixed: when the OS keyring is
   unavailable (headless Linux, CI, no Secret Service), `src/network/tls.rs`
-  falls back to an owner-only (`0600`) key file under the config dir instead
-  of regenerating the cert every start, which used to break clients that
-  pinned the old fingerprint (Android TV). Covered by
-  `fallback_key_file_round_trips_without_a_keyring` in `tls.rs`'s own tests
-  (deliberately not gated on a real keyring existing, unlike the older
-  `test_tls_private_key_storage_and_legacy_migration`).
+  falls back to an owner-only (`0600`) key file next to the install's database
+  instead of regenerating the cert every start, which used to break clients
+  that pinned the old fingerprint (Android TV). Keys are per install
+  (`tls_private_key:<tlsKeyId>`; docs/CLIENT_PAIRING.md): every install once
+  shared one entry and kept regenerating over each other. Test servers set
+  `OS_NEXT_TLS_KEY_STORE=file` so they never write to the developer's keyring;
+  `tls.rs`'s tests use temp files or a throwaway `OpenSanctuary:Test:*` service.
 - **`ci.yml` web tests** reference files outside the repo (above).
 - **Prerelease replay gap.** The updater binds a release to the signed asset
   filename's `major.minor.patch` only; a prerelease replayed as its own final
