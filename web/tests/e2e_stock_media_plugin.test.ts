@@ -34,7 +34,9 @@ describe("E2E Live Test: Stock Images plugin (Pexels & Pixabay) replaces the bui
     expect((await fetch(`http://127.0.0.1:${PORT}/api/media/online/search?q=sun`)).status).toBe(404);
     expect((await fetch(`http://127.0.0.1:${PORT}/api/media/online/import`, { method: "POST" })).status).not.toBe(200);
     await page.click('.tab-btn[data-tab="media"]');
-    expect(await page.locator('.category-node:has-text("Online Images")').count()).toBe(0); // not until approved
+    // Not until approved -- only its "not turned on" hint.
+    expect(await page.locator('.category-node:not(.plugin-source-node--off):has-text("Online Images")').count()).toBe(0);
+    expect(await page.locator('.plugin-source-node--off[data-plugin-id="stock_media"]').count()).toBe(1);
 
     await page.keyboard.press("F2");
     await page.waitForSelector("#options-modal", { state: "visible", timeout: 5000 });
@@ -52,7 +54,7 @@ describe("E2E Live Test: Stock Images plugin (Pexels & Pixabay) replaces the bui
     );
     await page.keyboard.press("Escape");
 
-    const node = page.locator('.category-node:has-text("Online Images (Pexels/Pixabay)")');
+    const node = page.locator('.category-node:not(.plugin-source-node--off):has-text("Online Images (Pexels/Pixabay)")');
     await node.waitFor({ state: "visible", timeout: 10000 });
     await node.click();
     const frame = frameOf()!;
@@ -108,7 +110,7 @@ describe("E2E Live Test: Stock Images plugin (Pexels & Pixabay) replaces the bui
     await page.waitForSelector("text=forest (Pexels photo by E2E)", { timeout: 10000 });
 
     // Removing a key forgets it.
-    await page.locator('.category-node:has-text("Online Images (Pexels/Pixabay)")').click();
+    await page.locator('.category-node:not(.plugin-source-node--off):has-text("Online Images (Pexels/Pixabay)")').click();
     const again = frameOf()!;
     await again.waitForSelector("#q", { state: "visible", timeout: 15000 });
     await again.locator("#keys").evaluate((el) => { (el as HTMLDetailsElement).open = true; });

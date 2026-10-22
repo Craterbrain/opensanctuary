@@ -36,6 +36,7 @@ import { api, type PluginInfo } from "./api_client.ts";
 import { getCurrentIconSet } from "./icon_sets.ts";
 import { registerLibrarySource, unregisterLibrarySource } from "../ui/library_panel.ts";
 import { addToolbarItems, removeToolbarItems, updateToolbarItem } from "./plugin_toolbar.ts";
+import { syncVideoPickerTab } from "./plugin_hints.ts";
 import { silentFrames, PING_EVERY_MS, LoadShedder, type Watched } from "./plugin_guard.ts";
 import { showToast } from "./ui_utils.ts";
 
@@ -525,10 +526,9 @@ export function startSandboxedPlugin(plugin: PluginInfo): void {
       track(frame);
       registerLibrarySource({ id: plugin.id, tab: placement.tab || 'songs', label: placement.label || plugin.name });
     } else if (placement.slot === 'video-picker') {
-      // The Videos tab of the background picker has a pane for it (and a hint shown until a plugin fills it).
+      // The Videos tab of the background picker has a pane for it (and shows the tab only while some plugin uses it).
       const pane = document.getElementById('plugin-picker-pane');
       if (!pane) continue;
-      document.getElementById('plugin-picker-hint')?.classList.add('hidden');
       const wrapper = document.createElement('div');
       wrapper.className = 'plugin-source plugin-source--picker';
       wrapper.dataset.pluginId = plugin.id;
@@ -537,6 +537,7 @@ export function startSandboxedPlugin(plugin: PluginInfo): void {
       wrapper.appendChild(frame);
       pane.appendChild(wrapper);
       track(frame);
+      syncVideoPickerTab();
     } else if (placement.slot === 'dock') {
       const frame = makeFrame('dock');
       const card = document.createElement('div');
@@ -580,8 +581,5 @@ export function stopSandboxedPlugin(id: string): void {
   unregisterLibrarySource(id);
   removeToolbarItems(id);
   primaryFrame.delete(id);
-  const pickerPane = document.getElementById('plugin-picker-pane');
-  if (pickerPane && !pickerPane.querySelector('.plugin-source')) {
-    document.getElementById('plugin-picker-hint')?.classList.remove('hidden');
-  }
+  syncVideoPickerTab();
 }

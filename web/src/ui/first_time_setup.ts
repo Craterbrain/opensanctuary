@@ -8,7 +8,8 @@
  * so dismissing it early never strands the user.
  */
 
-import { api } from "../core/api_client.ts";
+import { api, type PluginInfo } from "../core/api_client.ts";
+import { openPluginReview, placementsFor, pluginsAddingTo } from "../core/plugin_hints.ts";
 import { showToast } from "../core/ui_utils.ts";
 import { showModal, closeModal, registerModalReset } from "./dialog_manager.ts";
 import { loadSettingsServerInfo } from "./settings_dialog.ts";
@@ -133,15 +134,9 @@ function stepHtml(step: Step): string {
       return `
         <h3 class="fts-step-title">Bible Content</h3>
         <p class="fts-text">
-          No Bible translations are bundled by default (most are copyrighted). Downloading them is
-          done by the <strong>Online Bibles</strong> plugin. Turning it on lets this server fetch Bible
-          text from bolls.life, api.churchapps.org, bible-api.com and GitHub (and nowhere else) and add
-          it to your Bible library. You can review or turn it off any time in Settings &rarr; Plugins.
+          No Bible translations are bundled by default (most are copyrighted).
         </p>
-        <div class="form-row">
-          <button class="btn btn-primary" id="fts-enable-online-bibles" type="button">Turn on Online Bibles</button>
-          <button class="btn" id="fts-open-plugins" type="button">Review in Settings</button>
-        </div>
+        <div class="fts-plugin-offers" data-category="scriptures" data-what="Bibles"></div>
         <div class="os-divider"></div>
         <p class="form-help">Already have Bible files (.db) from another install?</p>
         <div class="form-row">
@@ -160,7 +155,8 @@ function stepHtml(step: Step): string {
         <div class="form-row">
           <input type="text" id="fts-songs-dir" class="search-input" placeholder="Path to a folder of song databases">
           <button class="btn" id="fts-songs-browse" type="button">Browse…</button>
-        </div>`;
+        </div>
+        <div class="fts-plugin-offers fts-plugin-offers--after" data-category="songs" data-what="songs"></div>`;
 
     case "network": {
       const { protocol, hostname, port } = currentOrigin();
@@ -196,14 +192,54 @@ function wireStep(step: Step, body: HTMLElement): void {
     const adoptBtn = body.querySelector("#fts-adopt-legacy-library") as HTMLButtonElement | null;
     adoptBtn?.addEventListener("click", () => adoptLegacyLibrary(adoptBtn));
   } else if (step === "bibles") {
-    const enableBtn = body.querySelector("#fts-enable-online-bibles") as HTMLButtonElement | null;
-    enableBtn?.addEventListener("click", () => enableOnlineBibles(enableBtn));
-    body.querySelector("#fts-open-plugins")?.addEventListener("click", () => {
-      window.dispatchEvent(new CustomEvent("os-open-plugins-settings"));
-    });
+    void renderPluginOffers(body);
     wireDirectoryBrowse(body, "fts-bibles-dir", "fts-bibles-browse");
   } else if (step === "songs") {
+    void renderPluginOffers(body);
     wireDirectoryBrowse(body, "fts-songs-dir", "fts-songs-browse");
+  }
+}
+
+/**
+ * Offers, in this step, each installed plugin not turned on yet that adds this kind of content
+ * (`library.write` on the step's category) -- described from its own manifest, never by name here.
+ * With none installed the step just shows the "point at your own files" part.
+ */
+async function renderPluginOffers(body: HTMLElement): Promise<void> {
+  const box = body.querySelector<HTMLElement>(".fts-plugin-offers");
+  if (!box) return;
+  const category = box.dataset.category ?? "";
+  const what = box.dataset.what ?? category;
+  let offers: PluginInfo[] = [];
+  try {
+    offers = pluginsAddingTo(await api.plugins.list(), category);
+  } catch {
+    return; // no plugin list (no console credential yet): skip the offers rather than fail the step
+  }
+  if (!offers.length) return;
+  box.appendChild(Object.assign(document.createElement("p"), {
+    className: "fts-text",
+    textContent: `${offers.length === 1 ? "This installed plugin can" : "These installed plugins can"} add ${what} for you. You can review or turn one off any time in Settings > Plugins.`,
+  }));
+  for (const p of offers) {
+    const hosts = p.requested.filter((r) => r.id === "network.outbound").flatMap((r) => r.hosts ?? []);
+    const card = document.createElement("div");
+    card.className = "fts-plugin-offer";
+    card.dataset.pluginId = p.id;
+    const title = document.createElement("strong");
+    title.textContent = p.name;
+    const desc = document.createElement("p");
+    desc.className = "form-help";
+    desc.textContent = [p.description, hosts.length ? `It connects to ${hosts.join(", ")} (and nowhere else).` : ""].filter(Boolean).join(" ");
+    const row = document.createElement("div");
+    row.className = "form-row";
+    const on = Object.assign(document.createElement("button"), { className: "btn btn-primary", type: "button", textContent: `Turn on ${p.name}` });
+    on.addEventListener("click", () => enablePlugin(p, on));
+    const review = Object.assign(document.createElement("button"), { className: "btn", type: "button", textContent: "Review first" });
+    review.addEventListener("click", () => openPluginReview(p.id));
+    row.append(on, review);
+    card.append(title, desc, row);
+    box.appendChild(card);
   }
 }
 
@@ -258,25 +294,21 @@ async function adoptLegacyLibrary(btn: HTMLButtonElement): Promise<void> {
   }
 }
 
-/** Approves the bundled Online Bibles plugin with everything it asks for (the step's text says what that is). */
-async function enableOnlineBibles(btn: HTMLButtonElement): Promise<void> {
+/** Approves an offered plugin with everything it asks for (its card above says what that reaches). */
+async function enablePlugin(plugin: PluginInfo, btn: HTMLButtonElement): Promise<void> {
   const originalText = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Turning on…";
   try {
-    const plugins = await api.plugins.list();
-    const plugin = plugins.find((p) => p.id === "online_bibles");
-    if (!plugin) throw new Error("the Online Bibles plugin isn't installed");
-    if (plugin.state !== "active") {
-      const updated = await api.plugins.approve(plugin.id, plugin.digest, plugin.requested.map((r) => r.id));
-      window.dispatchEvent(new CustomEvent("os-plugin-changed", { detail: { plugin: updated } }));
-    }
-    showToast("Online Bibles is on: use its panel at the bottom right to download a translation.", "success");
-    btn.textContent = "✓ Online Bibles is on";
+    const updated = await api.plugins.approve(plugin.id, plugin.digest, plugin.requested.map((r) => r.id));
+    window.dispatchEvent(new CustomEvent("os-plugin-changed", { detail: { plugin: updated } }));
+    const where = placementsFor(plugin).find((pl) => pl.slot === "library-source");
+    showToast(`${plugin.name} is on${where ? `: find "${where.label || plugin.name}" in the ${where.tab} library` : ""}.`, "success");
+    btn.textContent = `✓ ${plugin.name} is on`;
   } catch (e: any) {
-    showToast(`Could not turn on Online Bibles: ${e?.message || e}`, "error");
+    showToast(`Could not turn on ${plugin.name}: ${e?.message || e}`, "error");
     btn.disabled = false;
-    btn.textContent = originalText || "Turn on Online Bibles";
+    btn.textContent = originalText || `Turn on ${plugin.name}`;
   }
 }
 

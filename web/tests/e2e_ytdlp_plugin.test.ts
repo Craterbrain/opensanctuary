@@ -70,7 +70,9 @@ describe("E2E Live Test: Video Downloader plugin (yt-dlp) downloads through the 
     expect((await fetch(`http://127.0.0.1:${PORT}/api/ytdlp-updater/status`)).status).toBe(404);
     expect(await page.locator("#tab-btn-ytdlp").count()).toBe(0);
     await page.click('.tab-btn[data-tab="media"]');
-    expect(await page.locator('.category-node:has-text("yt-dlp")').count()).toBe(0); // not until approved
+    // Not until approved -- only its "not turned on" hint.
+    expect(await page.locator('.category-node:not(.plugin-source-node--off):has-text("yt-dlp")').count()).toBe(0);
+    expect(await page.locator('.plugin-source-node--off[data-plugin-id="ytdlp"]').count()).toBe(1);
 
     await page.keyboard.press("F2");
     await page.waitForSelector("#options-modal", { state: "visible", timeout: 5000 });
@@ -95,7 +97,7 @@ describe("E2E Live Test: Video Downloader plugin (yt-dlp) downloads through the 
 
     // It appears in the Media library sidebar, where "Download Video (yt-dlp)" used to be.
     await page.keyboard.press("Escape");
-    const node = page.locator('.category-node:has-text("Download Video (yt-dlp)")');
+    const node = page.locator('.category-node:not(.plugin-source-node--off):has-text("Download Video (yt-dlp)")');
     await node.waitFor({ state: "visible", timeout: 10000 });
     await node.click();
     const frame = frameOf()!;
@@ -106,7 +108,7 @@ describe("E2E Live Test: Video Downloader plugin (yt-dlp) downloads through the 
     await expectNativeIcons(frame, 5);
     // The same plugin also fills the video background picker's download tab (and the pointer there goes away).
     expect(await page.locator('#plugin-picker-pane iframe[data-slot="video-picker"]').count()).toBe(1);
-    expect(await page.locator("#plugin-picker-hint").evaluate((el) => el.classList.contains("hidden"))).toBe(true);
+    expect(await page.locator("#plugin-picker-hint").evaluate((el) => (el as HTMLElement).hidden)).toBe(true);
 
     // A bad URL never starts anything.
     await frame.fill("#url", "not a url");

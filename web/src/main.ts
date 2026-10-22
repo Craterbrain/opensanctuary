@@ -7,6 +7,7 @@ import { VideoSyncController } from "./core/video_sync.ts";
 import { keyring } from "./core/keyring.ts";
 import { resolveHostSessionToken } from "./core/host_session.ts";
 import { startSandboxedPlugin, stopSandboxedPlugin, isSandboxedPluginRunning } from "./core/plugin_bridge.ts";
+import { refreshPluginHints } from "./core/plugin_hints.ts";
 import { startEmojiIcons } from "./core/emoji_icons.ts";
 import { previousSessionHung, markPluginsStarting, watchConsoleHealth, showSafeModeBanner } from "./core/plugin_guard.ts";
 import { openSettingsAt } from "./ui/settings_dialog.ts";
@@ -18,6 +19,7 @@ startEmojiIcons();
 // A plugin was approved/revoked in Settings > Plugins (or the first-run wizard): a sandboxed
 // plugin starts or stops right away. (A same-realm console script needs a page reload.)
 window.addEventListener("os-plugin-changed", (ev) => {
+  void refreshPluginHints();
   const plugin = (ev as CustomEvent).detail?.plugin;
   if (!plugin || plugin.kind !== "sandbox") return;
   if (plugin.state === "active") {
@@ -57,6 +59,8 @@ clock.synchronize(5).then(async () => {
             if (bell) { initNotificationBell(bell); void startNotificationFeed(); }
             const res = await fetch("/api/plugins?kind=web&active=1");
             if (!res.ok) return; // no console credential on this page (live/stage/remote)
+            // Installed plugins not turned on yet: hints in the places they'd appear (core/plugin_hints.ts).
+            void refreshPluginHints();
             const list = await res.json();
             const approved = (Array.isArray(list) ? list : []).filter((p: any) => p && typeof p.id === "string");
             const startAll = async () => {

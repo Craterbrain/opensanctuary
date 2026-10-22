@@ -5,7 +5,8 @@
  * (#media-image-picker-modal). Integrates:
  * 1. Video Library: Grid of video files with search, durations, and preview
  * 2. From URL: Direct video file path or web stream URL with live preview
- * 3. Online video: the Video Downloader plugin's page (see src/core/plugin_bridge.ts)
+ * 3. Pages from plugins that declare the `video-picker` slot -- the tab only shows while one is
+ *    installed, and offers its review until it's turned on (src/core/plugin_hints.ts)
  */
 
 import { isVideoBackground } from '../core/presentation_helpers.ts';
@@ -121,12 +122,8 @@ export function initVideoPicker(context: VideoPickerContext) {
   if (btnUrlPreview) btnUrlPreview.addEventListener('click', handleUrlUpdate);
   if (urlInput) urlInput.addEventListener('change', handleUrlUpdate);
 
-  // 4. Online video download: the Video Downloader plugin puts its page in #plugin-picker-pane;
-  //    until it is turned on, the pane shows a pointer to Settings > Plugins.
-  document.getElementById('btn-picker-enable-ytdlp')?.addEventListener('click', () => {
-    window.dispatchEvent(new CustomEvent('os-open-plugins-settings'));
-  });
-  // A finished download lands in the library: pick it up without reopening the dialog.
+  // 4. A plugin's page in #plugin-picker-pane (core/plugin_hints.ts keeps that tab and its hint in step).
+  // Something a plugin added lands in the library: pick it up without reopening the dialog.
   window.addEventListener('os-library-changed', (ev) => {
     if ((ev as CustomEvent).detail?.category === 'media') void fetchAvailableVideos().then(() => renderVideoLibraryGrid());
   });

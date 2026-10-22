@@ -8,6 +8,7 @@
 import { api, type PluginAuditEntry, type PluginPublisher, type PluginTrustLevel, type PluginCatalogEntry, type PluginGrantInput, type PluginInfo, type PluginPermissionInfo } from "../core/api_client.ts";
 import { showToast } from "../core/ui_utils.ts";
 import { getCurrentIconSet, iconUrl } from "../core/icon_sets.ts";
+import { applyPluginHints, placementsFor } from "../core/plugin_hints.ts";
 
 const TIER_LABEL: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High', critical: 'Critical' };
 const ENFORCEMENT_NOTE: Record<string, string> = {
@@ -375,8 +376,9 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void, policy: string): 
       card.appendChild(el('pre', 'plugin-command', c.line));
     }
   }
-  if (plugin.placements?.length) {
-    const where = plugin.placements.map((p) => p.slot === 'library-source' ? `the ${p.tab} library ("${p.label}")` : p.slot === 'video-picker' ? 'the video background picker' : 'a floating panel').join(', ');
+  const placements = placementsFor(plugin);
+  if (placements.length) {
+    const where = placements.map((p) => p.slot === 'library-source' ? `the ${p.tab} library ("${p.label}")` : p.slot === 'video-picker' ? 'the video background picker' : 'a floating panel').join(', ');
     card.appendChild(el('div', 'settings-hint', `Appears in: ${where}.`));
   }
 
@@ -671,6 +673,12 @@ function renderPolicyControl(content: HTMLElement, policy: string, refresh: () =
   content.appendChild(row);
 }
 
+/** A plugin whose card the next render should scroll to and highlight (a hint asked for it). */
+let focusPluginId: string | null = null;
+export function focusPluginOnNextRender(id: string): void {
+  focusPluginId = id;
+}
+
 export function renderPluginsSettings(content: HTMLElement) {
   content.innerHTML = '';
   content.classList.add('network-panel');
@@ -703,6 +711,16 @@ export function renderPluginsSettings(content: HTMLElement) {
         content.appendChild(el('div', 'settings-empty', 'No plugins installed.'));
       }
       for (const p of plugins) content.appendChild(renderPlugin(p, refresh, policy));
+      // Every approve/deny/install/remove re-renders through here: keep the console's hints in step.
+      applyPluginHints(plugins);
+      if (focusPluginId) {
+        const card = content.querySelector<HTMLElement>(`.plugin-card[data-plugin-id="${CSS.escape(focusPluginId)}"]`);
+        focusPluginId = null;
+        if (card) {
+          card.classList.add('plugin-card--focus');
+          card.scrollIntoView({ block: 'center' });
+        }
+      }
       void renderPublishers(content, refresh);
       void renderSharedSecrets(content, refresh);
       content.appendChild(renderAudit(audit));

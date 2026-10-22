@@ -54,7 +54,7 @@ describe("E2E Live Test: Online Bibles plugin replaces the built-in Bible downlo
     await page.keyboard.press("Escape");
     // It lives in the Scriptures library sidebar (where "Install Bibles" used to be).
     await page.click('.tab-btn[data-tab="scriptures"]');
-    const node = page.locator('.category-node:has-text("Online Bibles")');
+    const node = page.locator('.category-node:not(.plugin-source-node--off):has-text("Online Bibles")');
     await node.waitFor({ state: "visible", timeout: 10000 });
     await node.click();
     const frame = frameOf()!;
