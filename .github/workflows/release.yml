@@ -137,6 +137,36 @@ jobs:
           path: release-dist/*
           if-no-files-found: error
 
+  build-flatpak:
+    name: Linux (Flatpak bundle)
+    needs: build-linux
+    runs-on: ubuntu-latest
+    # Flathub's own build image: flatpak-builder plus the GNOME runtime the manifest names
+    # (packaging/flatpak/). Keep the tag in step with the manifest's runtime-version.
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions@sha256:1de59efef01a946d9f28f1ec3458bf6f61dcee3507d7fecdd473f8134da4ec77 # gnome-50
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # The bundle repackages the generic tarball build-linux just made, so every Linux
+      # package carries the same binary.
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-release-assets
+          path: target/release-artifacts
+
+      - name: Build the Flatpak bundle
+        run: packaging/build-flatpak.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-release-assets
+          path: target/release-artifacts/*.flatpak
+          if-no-files-found: error
+
   build-windows:
     name: Windows (installer + portable zip)
     needs: check-version
@@ -191,7 +221,7 @@ jobs:
 
   sign-and-publish:
     name: Checksum, sign, and publish release
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-flatpak, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write

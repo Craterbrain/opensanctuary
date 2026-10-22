@@ -1,0 +1,43 @@
+# Flatpak bundle of the Linux release (docs/installer.md "Flatpak"). Built by
+# packaging/build-flatpak.sh from the same generic tarball the release ships: the
+# binary is built once, on the Ubuntu 22.04 floor, and runs unchanged on this
+# runtime (it has WebKitGTK 4.1, libsoup 3, OpenSSL 3, libsecret and ffmpeg).
+id: io.github.craterbrain.OpenSanctuary
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: opensanctuary
+finish-args:
+  # The HTTPS server every TV, remote and stage display connects to, and mDNS discovery.
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Audio of video and audio backgrounds played in the console.
+  - --socket=pulseaudio
+  # The OS keyring (TLS private key, plugin secrets).
+  - --talk-name=org.freedesktop.secrets
+  # The same library as a native (.deb/tarball) install: Flatpak also mounts this host folder
+  # at the app's own $XDG_DATA_HOME/OpenSanctuary, which is where the app keeps its data, so
+  # switching between the two keeps every song, setting and paired device. Nothing else of the
+  # home folder; files the operator picks come through the file-chooser portal.
+  - --filesystem=xdg-data/OpenSanctuary
+modules:
+  - name: opensanctuary
+    buildsystem: simple
+    sources:
+      # Staged by build-flatpak.sh: the tarball's contents plus the desktop file,
+      # metainfo and icons.
+      - type: dir
+        path: ../../target/flatpak-stage
+    build-commands:
+      # FHS layout: resolve_web_dir finds <prefix>/share/opensanctuary/web from /app/bin.
+      - install -Dm755 opensanctuary /app/bin/opensanctuary
+      - mkdir -p /app/share/opensanctuary
+      - cp -r web /app/share/opensanctuary/web
+      - if [ -n "$(ls -A tv-client 2>/dev/null)" ]; then cp -r tv-client /app/share/opensanctuary/tv-client; fi
+      - install -Dm644 io.github.craterbrain.OpenSanctuary.desktop -t /app/share/applications
+      - install -Dm644 io.github.craterbrain.OpenSanctuary.metainfo.xml -t /app/share/metainfo
+      - for s in 16 32 48 64 128 256 512; do install -Dm644 icons/${s}x${s}.png /app/share/icons/hicolor/${s}x${s}/apps/io.github.craterbrain.OpenSanctuary.png; done
+      - install -Dm644 icons/scalable.svg /app/share/icons/hicolor/scalable/apps/io.github.craterbrain.OpenSanctuary.svg

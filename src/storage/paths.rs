@@ -580,6 +580,11 @@ pub fn resolve(
 /// not the db file itself. A zero-byte `library.db` is treated as "nothing
 /// here" rather than a legacy install -- that's what a just-created, never
 /// opened database looks like, not real content worth offering to adopt.
+/// Whether this process runs inside a Flatpak sandbox (Flatpak always provides `/.flatpak-info`).
+pub fn running_in_flatpak() -> bool {
+    Path::new("/.flatpak-info").is_file()
+}
+
 pub fn detect_legacy_portable_library(active_data_dir: &Path) -> Option<PathBuf> {
     let exe_dir = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|p| p.to_path_buf()));
     detect_legacy_portable_library_in(active_data_dir, &PathBuf::from("."), exe_dir.as_deref())
