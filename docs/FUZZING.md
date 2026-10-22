@@ -91,7 +91,7 @@ cargo +nightly fuzz run pptx_import fuzz/artifacts/pptx_import/crash-<hash>
 
 The first run (2026-10-05, ~20s per target from small seed corpora) found four
 panics, all fixed; their crash inputs live in `tests/fixtures/fuzz_regressions/`
-and are replayed by `test_fuzz_regressions_do_not_panic` in `tests/core_tests.rs`:
+and are replayed by `test_fuzz_regressions_do_not_panic` in `tests/core_tests/importers.rs`:
 
 - `ewsx_import`: legacy-header fallback sliced `bytes[38..80]` when the file was 61-79 bytes.
 - `openlp_theme`: `</background>` appearing before the opening tag's `>` produced a reversed slice range.
@@ -111,7 +111,7 @@ e.g. `test1.ewsx` and `tests/fixtures/openlp/*` -- coverage grows much faster.
    missing bounds check, an `unwrap()` that should be a `?` or `.ok()?`),
    not in the fuzz target.
 4. Add the minimized crashing input as a regular `#[test]` case in the
-   relevant file under `tests/core_tests.rs` or the module's own inline
+   relevant module under `tests/core_tests/` or the module's own inline
    tests, so a regression is caught by `cargo test` without needing the
    fuzzer re-run. `fuzz/` is a corpus-generation and crash-discovery tool,
    not a replacement for the deterministic test suite.
@@ -123,7 +123,7 @@ bytes in and produce a value or an error -- exactly what every importer
 above already is. The rest of the app (the Axum router, the `tao`/`wry`
 event loop, SQLite access) either isn't parsing attacker-controlled bytes
 directly, or is a much better target for the existing integration/e2e test
-suite (`tests/core_tests.rs`, `web/tests/e2e_*.test.ts`) than for a fuzzer,
+suite (`tests/core_tests/`, `web/tests/e2e_*.test.ts`) than for a fuzzer,
 which can't drive a real browser or a native window.
 
 ## Open questions

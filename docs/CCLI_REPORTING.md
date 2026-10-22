@@ -25,6 +25,15 @@ actually **went live** — adding a song to a schedule and never presenting it
 doesn't count, since that's exactly what distinguishes `ItemWentLive` from
 `ItemStaged`.
 
+A use is the live item **changing to** a song, not every `ItemWentLive`: the
+engine also emits one when the operator jumps to another slide of the song
+that's already up, and when Undo/Redo replays the log (a `ScheduleLoaded`
+immediately followed by `ItemWentLive` in the same command). Until
+2026-10-21 each of those counted as another use, so every song a church
+presented was over-reported. Going back to a song later in the service does
+count again — it was put up again. The scan starts before the report window,
+so a song already up when the window opens isn't counted for still being up.
+
 ## Public domain / out-of-copyright songs — **implemented**
 
 CCLI doesn't require reporting on PD works. `is_public_domain` is derived

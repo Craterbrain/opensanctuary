@@ -1,6 +1,6 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { spawnTestServer, teardownTestServer, ensureArtifactDir, type SpawnedTestServer } from "./e2e_helpers";
+import { spawnTestServer, teardownTestServer, ensureArtifactDir, nextFrame, type SpawnedTestServer } from "./e2e_helpers";
 
 describe("E2E Live Test: Settings Dialog Network Tab & Option 12 Management", () => {
   let server: SpawnedTestServer;
@@ -106,7 +106,7 @@ describe("E2E Live Test: Settings Dialog Network Tab & Option 12 Management", ()
     await page.locator("#settings-content").evaluate((el: HTMLElement) => {
       el.scrollTop = el.scrollHeight;
     });
-    await page.waitForTimeout(300);
+    await nextFrame(page);
 
     await page.screenshot({
       path: `${artifactDir}/screenshot_settings_network_interfaces.png`,

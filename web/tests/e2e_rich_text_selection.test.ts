@@ -1,6 +1,6 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { spawnTestServer, teardownTestServer, type SpawnedTestServer } from "./e2e_helpers";
+import { spawnTestServer, teardownTestServer, openSlideEditor, type SpawnedTestServer } from "./e2e_helpers";
 
 // Verifies per-run rich text editing works against a REAL browser Selection/
 // Range API — a hand-mocked DOM (as other editor tests use) can't exercise
@@ -33,13 +33,11 @@ describe("E2E Live Test: Per-Run Rich Text Selection Splitting", () => {
   });
 
   test("Bolding a mid-word selection splits the run without losing the rest of the text", async () => {
-    await page.evaluate(() => (window as any).openSlideEditor('song'));
-    await page.waitForSelector('#create-modal', { state: 'visible', timeout: 8000 });
-    await page.waitForTimeout(800);
+    await openSlideEditor(page, 'song');
 
     // Enter edit mode on the lyric text box via a real double-click.
     await page.dblclick('.editor-slide-canvas-stage .slide-canvas-element');
-    await page.waitForTimeout(200);
+    await page.waitForSelector('.editor-slide-canvas-stage .slide-canvas-element[contenteditable="true"]');
 
     const editingId = await page.evaluate(() =>
       (document.querySelector('.editor-slide-canvas-stage .slide-canvas-element[contenteditable="true"]') as HTMLElement | null)?.dataset.elementId ?? null
@@ -75,7 +73,7 @@ describe("E2E Live Test: Per-Run Rich Text Selection Splitting", () => {
     expect(selectionMade).toBe(true);
 
     await page.evaluate(() => (window as any).__debugApplyTextStyle({ bold: true }));
-    await page.waitForTimeout(100);
+    await page.waitForFunction(() => (window as any).getCanvasSlideEditorDebugState().activeSlideElements[0].block.runs.some((r: any) => r.bold));
 
     const after = await page.evaluate(() => {
       const state = (window as any).getCanvasSlideEditorDebugState();

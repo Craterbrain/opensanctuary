@@ -1,6 +1,6 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { spawnTestServer, teardownTestServer, type SpawnedTestServer } from "./e2e_helpers";
+import { spawnTestServer, teardownTestServer, openSlideEditor, pollUntil, type SpawnedTestServer } from "./e2e_helpers";
 
 describe("E2E Live Test: Save/Apply Slide Template Round Trip", () => {
   let server: SpawnedTestServer;
@@ -36,15 +36,13 @@ describe("E2E Live Test: Save/Apply Slide Template Round Trip", () => {
   test("Save current slide as template, apply it to a new slide, verify it persists and renders", async () => {
     // 1. Open a new song (default lyric archetype has one TextBlock) and save
     //    it as a template.
-    await page.evaluate(() => (window as any).openSlideEditor('song'));
-    await page.waitForSelector('#create-modal', { state: 'visible', timeout: 8000 });
-    await page.waitForTimeout(500);
+    await openSlideEditor(page, 'song');
 
     const saveBtn = page.locator('#tb-save-template');
     await saveBtn.click();
-    await page.waitForTimeout(500);
 
-    const templatesAfterSave = await fetch(`http://127.0.0.1:${PORT}/api/slide-templates`).then(r => r.json());
+    const templatesAfterSave = await pollUntil(() => fetch(`http://127.0.0.1:${PORT}/api/slide-templates`).then(r => r.json()),
+      (ts: any[]) => ts.some((t) => t.name === 'E2E Test Template'), 8000, 'the saved template');
     const saved = templatesAfterSave.find((t: any) => t.name === 'E2E Test Template');
     expect(saved).toBeTruthy();
     expect(saved.elements.length).toBeGreaterThan(0);
@@ -52,10 +50,7 @@ describe("E2E Live Test: Save/Apply Slide Template Round Trip", () => {
     // 2. Start a fresh presentation with a blank slide, then apply the
     //    template to replace its content.
     await page.click('#btn-close-create');
-    await page.waitForTimeout(300);
-    await page.evaluate(() => (window as any).openSlideEditor('presentation'));
-    await page.waitForSelector('#create-modal', { state: 'visible', timeout: 8000 });
-    await page.waitForTimeout(500);
+    await openSlideEditor(page, 'presentation');
 
     const elementCountBeforeApply = await page.evaluate(() =>
       (window as any).getCanvasSlideEditorDebugState().activeSlideElements.length
@@ -63,7 +58,7 @@ describe("E2E Live Test: Save/Apply Slide Template Round Trip", () => {
 
     const templateSelect = page.locator('#tb-template-select');
     await templateSelect.selectOption({ label: 'E2E Test Template' });
-    await page.waitForTimeout(300);
+    await page.waitForFunction((n) => (window as any).getCanvasSlideEditorDebugState().activeSlideElements.length === n, saved.elements.length);
 
     const stateAfterApply = await page.evaluate(() =>
       (window as any).getCanvasSlideEditorDebugState().activeSlideElements
@@ -75,9 +70,9 @@ describe("E2E Live Test: Save/Apply Slide Template Round Trip", () => {
     //    renderer) rather than just existing in the data model.
     await page.fill('#create-item-title', 'Template Applied Presentation');
     await page.click('#btn-save-created-item');
-    await page.waitForTimeout(800);
 
-    const presentations = await fetch(`http://127.0.0.1:${PORT}/api/presentations`).then(r => r.json());
+    const presentations = await pollUntil(() => fetch(`http://127.0.0.1:${PORT}/api/presentations`).then(r => r.json()),
+      (ps: any[]) => ps.some((p) => p.title === 'Template Applied Presentation'), 8000, 'the saved presentation');
     const item = presentations.find((p: any) => p.title === 'Template Applied Presentation');
     expect(item).toBeTruthy();
     expect(item.slides[0].elements.length).toBe(saved.elements.length);
@@ -94,17 +89,14 @@ describe("E2E Live Test: Save/Apply Slide Template Round Trip", () => {
     await page.evaluate((itemId: string) => {
       (window as any).sendCommand({ AddToSchedule: { item_type: 'presentation', item_id: itemId } });
     }, item.id);
-    await page.waitForTimeout(300);
-    const state = await fetch(`http://127.0.0.1:${PORT}/api/state`).then(r => r.json());
+    const state = await pollUntil(() => fetch(`http://127.0.0.1:${PORT}/api/state`).then(r => r.json()),
+      (st: any) => st.schedule.items.some((it: any) => it.title === 'Template Applied Presentation'), 8000, 'the scheduled item');
     const itemIndex = state.schedule.items.findIndex((it: any) => it.id.includes(item.id) || it.title === 'Template Applied Presentation');
     await page.evaluate((idx: number) => {
       (window as any).sendCommand({ GoLive: { item_index: idx, slide_index: 0 } });
     }, itemIndex);
-    await page.waitForTimeout(500);
 
-    const renderedCount = await page.evaluate(() =>
-      document.querySelectorAll('#live-canvas-elements .slide-canvas-element').length
-    );
-    expect(renderedCount).toBe(saved.elements.length);
+    // The live preview renders exactly the template's elements.
+    await page.waitForFunction((n) => document.querySelectorAll('#live-canvas-elements .slide-canvas-element').length === n, saved.elements.length, { timeout: 8000 });
   }, 30000);
 });

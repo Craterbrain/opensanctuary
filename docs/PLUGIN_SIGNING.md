@@ -127,7 +127,7 @@ Each phase ships on its own and leaves the previous behavior intact.
 - Trusted key + same permissions = one click; trusted key + wider permissions = full review; revoked key = distrusted and stopped.
 - Revocation list: higher sequence replaces, lower is ignored, bad signature is ignored.
 - Rotation: valid statement accepted silently, forged statement rejected, rotation from a revoked key rejected.
-- ~~Policy modes, including that `require` never blocks a built-in.~~ `core::plugin_policy::tests` (unit) + `test_plugin_signature_policy_and_version_floor` (integration, `tests/core_tests.rs`).
+- ~~Policy modes, including that `require` never blocks a built-in.~~ `core::plugin_policy::tests` (unit) + `test_plugin_signature_policy_and_version_floor` (integration, `tests/core_tests/plugins.rs`).
 - ~~Downgrade across revoke and re-approve.~~ `plugin_registry::tests::version_floor_only_ever_rises_and_is_scoped_per_signer`/`downgrade_from_floor_is_only_reported_for_two_real_comparable_versions` (unit) + the same integration test above.
 - Hostile: a signed package whose signature is valid but whose `publisher_key` field was swapped to the attacker's own key (the signature then verifies, so the *key identity* is what the operator is shown and what is pinned; confirm the card makes this visible).
 

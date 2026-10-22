@@ -140,8 +140,14 @@ fn group_elements(elements: &mut Vec<crate::core::models::SlideElement>, ids: &[
             locked: false,
             opacity: 1.0,
         };
+        // Derived from the members, not random: this runs while *applying* the event, and the engine
+        // rebuilds state by replaying the event log (every Undo/Redo, and a saved show on restart). A
+        // random id made every replay rename every group on the slide, so anything still holding the
+        // old id (the editor's selection, a following Ungroup) pointed at nothing. Two live groups
+        // can't share members, so this stays unique.
+        let member_ids: Vec<&str> = children.iter().map(|c| c.id()).collect();
         let group = crate::core::models::SlideElement::Group {
-            id: format!("group_{}", uuid::Uuid::new_v4()),
+            id: format!("group_{}", &crate::core::plugin_permissions::sha256_hex(member_ids.join("\n").as_bytes())[..16]),
             transform: group_transform,
             children,
         };

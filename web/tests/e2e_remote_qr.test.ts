@@ -50,8 +50,17 @@ describe("E2E Live Test: Desktop Remote QR Barcode Modal", () => {
     const qrCanvas = page.locator("#remote-qr-canvas");
     expect(await qrCanvas.isVisible()).toBe(true);
 
-    // Give QRCode canvas a brief tick to finish rendering pixels
-    await page.waitForTimeout(300);
+    // The QR library draws asynchronously: wait until the canvas actually has dark pixels.
+    await qrCanvas.evaluate((canvas: HTMLCanvasElement) => new Promise<void>((resolve, reject) => {
+      const until = Date.now() + 5000;
+      const check = () => {
+        const d = canvas.getContext("2d")?.getImageData(0, 0, canvas.width, canvas.height).data;
+        if (d && d.some((v, i) => i % 4 !== 3 && v < 128)) return resolve();
+        if (Date.now() > until) return reject(new Error("QR canvas never drew"));
+        requestAnimationFrame(check);
+      };
+      check();
+    }));
 
     // Verify canvas has non-empty pixel data
     const hasPixelData = await qrCanvas.evaluate((canvas: HTMLCanvasElement) => {

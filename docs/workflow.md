@@ -192,11 +192,10 @@ instead of failing:
 - `e2e_unified_schedule_hub` reads real EasyWorship documents from `$OS_TEST_DOCS` (default
   `~/Documents/OpenSanctuary-test-docs`: `test1.ewsx`, `LCspring.ewpx`) and skips those cases
   when they're missing.
-- `test_odp_import_against_a_real_world_shape_gallery_file` (Rust, `tests/core_tests.rs`) reads
+- `test_odp_import_against_a_real_world_shape_gallery_file` (Rust, `tests/core_tests/importers.rs`) reads
   the same `$OS_TEST_DOCS` folder for `shape-test.odp`, a real ODP hand-authored in actual
   LibreOffice Impress's shape gallery, and skips when it's missing.
 - `e2e_video_picker` makes its own clip with `ffmpeg` and skips without it.
-- `e2e_compare_windows_linux` needs `wine` and a cross-built `os-next.exe` and skips without them.
 
 Also fixed on `keytest`: `build.rs` runs `bun run build` on every `cargo build`,
 so `bun install --frozen-lockfile` must run in `web/` first (added to both

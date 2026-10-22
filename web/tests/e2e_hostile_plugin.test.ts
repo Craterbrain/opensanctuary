@@ -172,7 +172,10 @@ describe("E2E Red Team: hostile plugin cannot break out or take the console down
     await page.waitForFunction((id) => document.querySelector(`.plugin-card[data-plugin-id="${id}"] .plugin-state`)?.textContent?.includes("Approved"), HOSTILE_ID, { timeout: 10000 });
     // Approving the one with HTML in its name must also stay inert.
     const html = page.locator('.plugin-card[data-plugin-id="bad_html_name"] button:has-text("Approve")');
-    if (await html.count()) { await html.click(); await page.waitForTimeout(500); }
+    if (await html.count()) {
+      await html.click();
+      await page.waitForFunction(() => document.querySelector('.plugin-card[data-plugin-id="bad_html_name"] .plugin-state')?.textContent?.includes("Approved"), null, { timeout: 10000 });
+    }
     expect(await page.evaluate(() => (window as any).__pwn)).toBeUndefined();
     await openFresh();
     expect(await healthy("after approve")).toBe(true);
@@ -187,7 +190,11 @@ describe("E2E Red Team: hostile plugin cannot break out or take the console down
     note("csp card text", (await card.innerText()).slice(0, 300));
     const btn = card.locator("button:has-text('Approve')").first();
     note("csp approve button", String(await btn.count()));
-    if (await btn.count()) { await btn.click(); await page.waitForTimeout(1200); }
+    if (await btn.count()) {
+      const before = await card.locator(".plugin-state").first().innerText();
+      await btn.click();
+      await page.waitForFunction((b) => document.querySelector('.plugin-card[data-plugin-id="bad_csp_host"] .plugin-state')?.textContent !== b, before, { timeout: 10000 });
+    }
     note("csp card state", (await card.locator(".plugin-state").first().innerText()));
     const r = await fetch(`${BASE}/plugin-frame/bad_csp_host/index.html`);
     note("csp frame status", String(r.status));

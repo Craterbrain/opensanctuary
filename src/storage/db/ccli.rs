@@ -37,39 +37,50 @@ fn looks_public_domain(ccli_number: &Option<String>, copyright: &Option<String>)
 }
 
 impl Database {
-    /// Queries `event_log` for `ItemWentLive` events in `[start_ms, end_ms]`,
-    /// filters to songs, and groups by CCLI number (or title) into one usage
-    /// row per song. Only counts songs that actually *went live* -- adding a
-    /// song to a schedule and never presenting it doesn't count, since
-    /// that's what `ItemWentLive` already means (docs/CCLI_REPORTING.md).
+    /// Counts, per song, the times it was *put up* (docs/CCLI_REPORTING.md) in `[start_ms, end_ms]`,
+    /// grouped by CCLI number (or title). Adding a song to a schedule and never presenting it doesn't
+    /// count. Neither does every `ItemWentLive` event: the engine also emits one when the operator jumps
+    /// to another slide of the song already live, and when Undo/Redo replays the log (a `ScheduleLoaded`
+    /// immediately followed by `ItemWentLive` in the same command) -- counting those over-reported every
+    /// song a church used. So a use is the live item *changing to* that song, outside a replay; the scan
+    /// starts before the window so the song already up when it opens isn't counted again.
     pub fn get_ccli_usage_report(&self, start_ms: i64, end_ms: i64) -> Result<Vec<CcliUsageRow>> {
         let conn = self.conn();
         let mut stmt = conn.prepare_cached(
-            "SELECT payload, timestamp_ms FROM event_log \
-             WHERE event_type = 'ItemWentLive' AND timestamp_ms >= ?1 AND timestamp_ms <= ?2 \
-             ORDER BY timestamp_ms ASC",
+            "SELECT sequence_number, event_type, CASE WHEN event_type = 'ItemWentLive' THEN payload END, timestamp_ms \
+             FROM event_log \
+             WHERE event_type IN ('ItemWentLive', 'ScheduleLoaded') AND timestamp_ms <= ?1 \
+             ORDER BY sequence_number ASC",
         )?;
-        let rows = stmt.query_map((start_ms, end_ms), |row| {
-            let payload: String = row.get(0)?;
-            let ts: i64 = row.get(1)?;
-            Ok((payload, ts))
+        let rows = stmt.query_map([end_ms], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, i64>(3)?))
         })?;
+
+        let mut uses: Vec<(crate::core::models::ScheduleItem, i64)> = Vec::new();
+        let mut live_id: Option<String> = None;
+        let mut last_load_seq: Option<i64> = None;
+        for (seq, event_type, payload, ts) in rows.flatten() {
+            if event_type == "ScheduleLoaded" {
+                last_load_seq = Some(seq);
+                continue;
+            }
+            let item = match payload.and_then(|p| serde_json::from_str::<crate::core::events::ShowEvent>(&p).ok()) {
+                Some(crate::core::events::ShowEvent::ItemWentLive { item, .. }) => item,
+                _ => continue,
+            };
+            let id = item.as_ref().map(|i| i.id.clone());
+            let replay = last_load_seq == Some(seq - 1);
+            if let Some(item) = item {
+                if !replay && id != live_id && ts >= start_ms && item.item_type == "song" {
+                    uses.push((item, ts));
+                }
+            }
+            live_id = id;
+        }
 
         let mut grouped: HashMap<String, CcliUsageRow> = HashMap::new();
 
-        for (payload, ts) in rows.flatten() {
-            let event: crate::core::events::ShowEvent = match serde_json::from_str(&payload) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            let item = match event {
-                crate::core::events::ShowEvent::ItemWentLive { item: Some(item), .. } => item,
-                _ => continue,
-            };
-            if item.item_type != "song" {
-                continue;
-            }
-
+        for (item, ts) in uses {
             let metadata = item.slides.iter().find_map(|s| s.ccli_metadata.clone());
             let ccli_number = metadata.as_ref().and_then(|m| m.ccli_number.clone());
             let copyright = metadata.as_ref().and_then(|m| m.copyright.clone());
@@ -156,8 +167,7 @@ mod tests {
 
     #[test]
     fn get_ccli_usage_report_groups_counts_and_splits_public_domain() {
-        let tmp_db_file = format!("/tmp/test_ccli_report_{}.db", uuid::Uuid::new_v4());
-        let db = Database::new(&tmp_db_file).expect("must open test db");
+        let db = Database::in_memory().expect("must open test db");
 
         let copyrighted = song_item(
             "item-copyrighted",
@@ -175,14 +185,16 @@ mod tests {
             ..song_item("item-slides", "Welcome Slide", None)
         };
 
-        // Two uses of the copyrighted song inside the window, one outside it
-        // (must not be counted), plus one PD use and one non-song use (must
-        // be excluded entirely -- CCLI only cares about songs).
+        // The copyrighted song is put up twice inside the window (with another song in between) and once
+        // after it (must not be counted), plus one PD use and one non-song use (excluded entirely -- CCLI
+        // only cares about songs). Each is a change of what's live: going live again on the song that's
+        // already up isn't another use (see test_ccli_report_counts_a_song_once_per_time_it_is_put_up).
         db.save_event(&went_live(1, 1_000, copyrighted.clone())).expect("save 1");
-        db.save_event(&went_live(2, 2_000, copyrighted.clone())).expect("save 2");
-        db.save_event(&went_live(3, 999_999, copyrighted.clone())).expect("save 3 (out of range)");
-        db.save_event(&went_live(4, 1_500, pd_song.clone())).expect("save 4");
-        db.save_event(&went_live(5, 1_500, non_song)).expect("save 5");
+        db.save_event(&went_live(2, 1_500, pd_song.clone())).expect("save 2");
+        db.save_event(&went_live(3, 1_600, non_song)).expect("save 3");
+        db.save_event(&went_live(4, 2_000, copyrighted.clone())).expect("save 4");
+        db.save_event(&went_live(5, 2_500, pd_song.clone())).expect("save 5");
+        db.save_event(&went_live(6, 999_999, copyrighted.clone())).expect("save 6 (out of range)");
 
         let rows = db.get_ccli_usage_report(0, 10_000).expect("report must succeed");
 
@@ -194,7 +206,7 @@ mod tests {
         assert!(!copyrighted_row.is_public_domain);
 
         let pd_row = rows.iter().find(|r| r.title == "Amazing Grace").expect("PD song must appear");
-        assert_eq!(pd_row.use_count, 1);
+        assert_eq!(pd_row.use_count, 2);
         assert!(pd_row.is_public_domain);
         assert_eq!(pd_row.author, "Fallback Author", "falls back to author_or_ref with no CcliMetadata");
 
@@ -202,5 +214,11 @@ mod tests {
             !rows.iter().any(|r| r.title == "Welcome Slide"),
             "non-song items must never appear in a CCLI report"
         );
+
+        // A window that opens while a song is already up, with only a jump within it inside the window,
+        // has no new use of it (the scan starts before the window for exactly this).
+        db.save_event(&went_live(7, 20_000, copyrighted.clone())).expect("save 7");
+        db.save_event(&went_live(8, 30_000, copyrighted.clone())).expect("save 8 (same song, later slide)");
+        assert!(db.get_ccli_usage_report(25_000, 40_000).unwrap().is_empty());
     }
 }

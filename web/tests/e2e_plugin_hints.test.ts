@@ -1,15 +1,23 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { spawnTestServer, teardownTestServer, webDirWithPlugins, ensureArtifactDir, type SpawnedTestServer } from "./e2e_helpers";
+import { spawnTestServer, teardownTestServer, webDirWithPlugins, ensureArtifactDir, nextFrame, type SpawnedTestServer } from "./e2e_helpers";
 
 // The console never names a plugin: what it shows for one comes from that plugin's manifest
 // (core/plugin_hints.ts). So with the bundled plugins installed but not approved, each declared
 // placement shows a "not turned on" hint that opens its review card; with none installed -- what
 // v0.2.0's packages actually shipped -- nothing plugin-related appears at all.
 
+/** Resolves when the console has fetched the installed-plugin list (what every hint is built from) and used it. */
+async function pluginListLoaded(page: Page, during: () => Promise<unknown>): Promise<void> {
+  const listed = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/plugins" && r.request().method() === "GET");
+  await during();
+  await (await listed).finished();
+  await nextFrame(page);
+}
+
 async function openConsole(browser: Browser, port: number): Promise<Page> {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-  await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
+  await pluginListLoaded(page, () => page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" }));
   return page;
 }
 
@@ -113,20 +121,16 @@ describe("E2E Live Test: plugin hints come from the installed plugins' manifests
   }, 120000);
 
   test("no plugins installed (v0.2.0's packages): no plugin hints, tabs or Store cards anywhere", async () => {
+    // openConsole waits for the plugin list the hints come from; then check every place one could appear.
     const page = await openConsole(browser, PORT_WITHOUT);
-    // Give the hint refresh time to land, then check every place one could appear.
-    await page.waitForFunction(() => (window as any).__APP_READY__ === true, null, { timeout: 10000 });
-    await page.waitForTimeout(1500);
     for (const tab of ["songs", "scriptures", "media"]) {
       await page.click(`.tab-btn[data-tab="${tab}"]`);
-      await page.waitForTimeout(200);
       expect(await page.locator(".category-node.plugin-source-node").count()).toBe(0);
     }
     expect(await hintNodes(page).count()).toBe(0);
     expect(await page.locator("#btn-video-subtab-ytdl").evaluate((el) => (el as HTMLElement).hidden)).toBe(true);
     expect(await page.locator("#plugin-picker-hint").evaluate((el) => (el as HTMLElement).hidden)).toBe(true);
     await page.click("#btn-store");
-    await page.waitForTimeout(300);
     expect(await page.locator("#store-plugin-cards .store-card").count()).toBe(0);
     // Nothing in the console text still points at a plugin by name.
     const text = await page.evaluate(() => document.body.innerText);
@@ -136,13 +140,11 @@ describe("E2E Live Test: plugin hints come from the installed plugins' manifests
     await page.screenshot({ path: `${artifactDir}/screenshot_plugin_hints_none_installed.png` });
     await page.keyboard.press("Escape");
     // First-time setup just explains pointing at your own files: no plugin to offer.
-    await openSetupAt(page, BIBLES_STEP);
-    await page.waitForSelector("#fts-bibles-dir", { state: "visible", timeout: 5000 });
-    await page.waitForTimeout(500);
+    await pluginListLoaded(page, () => openSetupAt(page, BIBLES_STEP)); // each step asks for the list itself
+    expect(await page.locator("#fts-bibles-dir").isVisible()).toBe(true);
     expect(await page.locator(".fts-plugin-offer").count()).toBe(0);
-    await page.click("#btn-first-time-skip");
-    await page.waitForSelector("#fts-songs-dir", { state: "visible", timeout: 5000 });
-    await page.waitForTimeout(500);
+    await pluginListLoaded(page, () => page.click("#btn-first-time-skip"));
+    expect(await page.locator("#fts-songs-dir").isVisible()).toBe(true);
     expect(await page.locator(".fts-plugin-offer").count()).toBe(0);
     await page.close();
   }, 60000);

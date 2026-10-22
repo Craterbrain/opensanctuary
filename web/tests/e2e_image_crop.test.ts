@@ -1,6 +1,6 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { spawnTestServer, teardownTestServer, type SpawnedTestServer } from "./e2e_helpers";
+import { spawnTestServer, teardownTestServer, openSlideEditor, pollUntil, nextFrame, type SpawnedTestServer } from "./e2e_helpers";
 
 describe("E2E Live Test: Interactive Image Crop Tool", () => {
   let server: SpawnedTestServer;
@@ -32,9 +32,7 @@ describe("E2E Live Test: Interactive Image Crop Tool", () => {
   });
 
   test("Dragging a crop handle persists a new CropRect", async () => {
-    await page.evaluate(() => (window as any).openSlideEditor('presentation'));
-    await page.waitForSelector('#create-modal', { state: 'visible', timeout: 8000 });
-    await page.waitForTimeout(500);
+    await openSlideEditor(page, 'presentation');
 
     const inserted = await page.evaluate(() => (window as any).__debugInsertElement({
       type: 'Image',
@@ -44,19 +42,18 @@ describe("E2E Live Test: Interactive Image Crop Tool", () => {
       crop: { x: 0, y: 0, w: 1, h: 1 }
     }));
     expect(inserted).toBe(true);
-    await page.waitForTimeout(300);
+    await page.waitForSelector('.editor-slide-canvas-stage .slide-canvas-element-image');
 
     // Right-click the image element — mousedown-before-contextmenu selects it,
     // satisfying the context menu's isSingleImage check.
     await page.click('.editor-slide-canvas-stage .slide-canvas-element-image', { button: 'right' });
-    await page.waitForTimeout(150);
 
     const cropMenuItem = page.locator('.editor-context-menu >> text=Crop Image');
     await cropMenuItem.waitFor({ state: 'visible', timeout: 5000 });
     await cropMenuItem.click();
-    await page.waitForTimeout(300);
 
     await page.waitForSelector('.editor-image-crop-overlay', { state: 'visible', timeout: 5000 });
+    await nextFrame(page); // the overlay positions its handles in a requestAnimationFrame
 
     // Drag the SE handle inward to shrink the crop window.
     const seHandleBox = await page.evaluate(() => {
@@ -73,17 +70,16 @@ describe("E2E Live Test: Interactive Image Crop Tool", () => {
     await page.mouse.down();
     await page.mouse.move(seHandleBox!.x - 60, seHandleBox!.y - 40, { steps: 10 });
     await page.mouse.up();
-    await page.waitForTimeout(200);
 
     await page.click('.editor-image-crop-overlay button');
-    await page.waitForTimeout(200);
+    await page.waitForSelector('.editor-image-crop-overlay', { state: 'detached' });
 
     await page.fill('#create-item-title', 'Crop Test Presentation');
     await page.click('#btn-save-created-item');
-    await page.waitForTimeout(800);
 
-    const saved = await fetch(`http://127.0.0.1:${PORT}/api/presentations`).then(r => r.json());
-    const list = saved.presentations || saved || [];
+    const listOf = (saved: any) => saved.presentations || saved || [];
+    const list = listOf(await pollUntil(() => fetch(`http://127.0.0.1:${PORT}/api/presentations`).then(r => r.json()),
+      (saved: any) => listOf(saved).some((p: any) => p.title === 'Crop Test Presentation'), 8000, 'the saved presentation'));
     const item = list.find((p: any) => p.title === 'Crop Test Presentation');
     expect(item).toBeTruthy();
     const el = item.slides[0].elements.find((e: any) => e.id === 'img-crop-test');

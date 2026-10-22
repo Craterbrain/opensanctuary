@@ -1,6 +1,6 @@
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import { spawnTestServer, teardownTestServer, ensureArtifactDir, type SpawnedTestServer } from "./e2e_helpers";
+import { spawnTestServer, teardownTestServer, ensureArtifactDir, nextFrame, type SpawnedTestServer } from "./e2e_helpers";
 
 describe("E2E Live Test: Mobile Remote Control Webpage", () => {
   let server: SpawnedTestServer;
@@ -193,7 +193,7 @@ describe("E2E Live Test: Mobile Remote Control Webpage", () => {
     // 9. Landscape View test (rotate mobile device to landscape 844x390)
     await page.setViewportSize({ width: 844, height: 390 });
     await page.click("#tab-slides");
-    await page.waitForTimeout(300);
+    await nextFrame(page);
     await page.screenshot({ path: `${artifactDir}/screenshot_mobile_remote_landscape.png` });
   }, 45000);
 

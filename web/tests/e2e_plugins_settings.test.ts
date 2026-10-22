@@ -27,7 +27,8 @@ describe("E2E Live Test: Settings > Plugins review, approve, load, revoke", () =
     // Nothing is served or loaded before the operator approves.
     expect(await pluginStatus("/plugins/hello_world.js")).toBe(404);
     await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: "networkidle" });
-    await page.waitForTimeout(1500);
+    // networkidle already covers the console's approved-plugin fetch; just be sure the app finished starting.
+    await page.waitForFunction(() => (window as any).__APP_READY__ === true);
     expect(await page.evaluate(() => !!(window as any).OS?.plugins?.hasPlugin?.("hello_world"))).toBe(false);
 
     await page.keyboard.press("F2");

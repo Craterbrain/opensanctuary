@@ -66,7 +66,7 @@ describe("E2E Live Test: keyring.service shares a keyring namespace between plug
 
     // Both plugins run (hidden frames); drive the bridge the way their pages would.
     await page.waitForFunction(() => document.querySelector('iframe[data-plugin-id="kw_writer"]') && document.querySelector('iframe[data-plugin-id="kw_reader"]'), null, { timeout: 15000 });
-    await page.waitForTimeout(500);
+    await Promise.all(["kw_writer", "kw_reader"].map((id) => frameOf(id)()!.waitForLoadState("load")));
     const w = pluginBridge(frameOf("kw_writer"));
     const r = pluginBridge(frameOf("kw_reader"));
 
