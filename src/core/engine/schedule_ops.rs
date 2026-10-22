@@ -184,8 +184,11 @@ pub(super) fn plan_schedule_events(state: &ShowState, schedule: &Schedule, cmd: 
             events.push(ShowEvent::ScheduleCleared);
         }
         ShowCommand::LoadSchedule(sched) => {
+            // A schedule just opened from a file has nothing unsaved. Cleared here, in the event,
+            // rather than when it's applied: Undo/Redo also apply a `ScheduleLoaded` (the replayed
+            // schedule), and that one must keep the flag the replay worked out.
             events.push(ShowEvent::ScheduleLoaded {
-                schedule: sched.clone(),
+                schedule: Schedule { is_modified: false, ..sched.clone() },
             });
         },
         _ => unreachable!("plan_schedule_events called with a non-schedule command"),
@@ -450,7 +453,6 @@ pub(super) fn apply_schedule_event(state: &mut ShowState, schedule: &mut Schedul
             // into ShowState, which is what the engine and clients actually use now.
             state.selected_item_index = new_sched.selected_item_index;
             *schedule = new_sched.clone();
-            schedule.is_modified = false;
         }
         ShowEvent::ScheduleCleared => {
             *schedule = Schedule::default();
