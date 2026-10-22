@@ -125,6 +125,24 @@
   /** The lyrics text of a Genius song page. A page's lyrics are split over several
    *  data-lyrics-container divs, and each may hold nested divs (ads, headers), so each one is
    *  cut at its *matching* close tag rather than the first </div>. */
+  /** Removes every `<div data-exclude-from-selection="true">...</div>` subtree: Genius puts its
+   *  LyricsHeader (contributor count, title, and a song-bio preview) inside the first lyrics
+   *  container under that marker, and the bio otherwise lands on the first slide as a "verse". */
+  function dropExcluded(chunk) {
+    var out = '';
+    var rest = chunk;
+    var re = /<div\b[^>]*data-exclude-from-selection="true"[^>]*>/i;
+    for (;;) {
+      var m = re.exec(rest);
+      if (!m) return out + rest;
+      out += rest.slice(0, m.index);
+      var inside = rest.slice(m.index + m[0].length);
+      var close = matchingDivEnd(inside);
+      if (close === -1) return out; // unbalanced: drop the remainder rather than leak page furniture
+      rest = inside.slice(close + 6);
+    }
+  }
+
   function extractLyrics(html) {
     var marker = 'data-lyrics-container="true"';
     var chunks = [];
@@ -138,7 +156,7 @@
       var inside = after.slice(gt + 1);
       var close = matchingDivEnd(inside);
       if (close === -1) break;
-      chunks.push(inside.slice(0, close));
+      chunks.push(dropExcluded(inside.slice(0, close)));
       rest = inside.slice(close + 6);
     }
     var raw = chunks.join('\n');
