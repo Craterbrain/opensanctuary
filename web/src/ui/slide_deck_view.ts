@@ -78,14 +78,17 @@ export function renderDeckEmptyState(matrixEl: HTMLElement, opts: DeckEmptyState
 }
 
 /**
- * How a Preview/Live deck draws its slides. Songs and scriptures read best as text cards
- * (badge + lyrics); presentations are visual, so by default (grid view) they get rendered
- * thumbnails. The deck's own list view always uses text cards -- that is the override.
+ * How a Preview/Live deck draws its slides. The deck's grid view shows each slide as it will look
+ * (a rendered thumbnail) for the slides that are text on a background: songs, scriptures and
+ * presentations. Everything else (media, headers) has no text slide to show, so keeps the text
+ * cards. The deck's own list view always uses text cards -- that is the override.
  */
 export type SlideDeckStyle = 'cards' | 'thumbnails';
 
+const THUMBNAIL_ITEM_TYPES = new Set(['song', 'scripture', 'presentation']);
+
 export function slideDeckStyle(itemType: string | null | undefined, listMode: boolean): SlideDeckStyle {
-  return !listMode && (itemType || '').toLowerCase() === 'presentation' ? 'thumbnails' : 'cards';
+  return !listMode && THUMBNAIL_ITEM_TYPES.has((itemType || '').toLowerCase()) ? 'thumbnails' : 'cards';
 }
 
 export interface SlideThumbOptions {
