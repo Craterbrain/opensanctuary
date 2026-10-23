@@ -122,14 +122,14 @@ class MainActivity : AppCompatActivity() {
     /// Reads the extras `adb shell am start` supplies (see
     /// `src/network/adb.rs::provision` on the console side): persists
     /// `server_ip`/`server_port`/`is_stage_mode` the same way the manual
-    /// Settings dialog does, pins the console's own certificate fingerprint
+    /// Settings dialog does, remembers the display name for the pairing QR,
+    /// and pins the console's own certificate fingerprint
     /// (`PairingManager.setPinnedCertFingerprint` -- delivered over ADB, not
     /// fetched over the network, so this app's very first HTTPS connection
-    /// below is already a real verification instead of trust-on-first-use),
-    /// then -- if a `pairing_session_token` came along -- self-authorizes
-    /// with it (`PairingManager`) instead of waiting for a phone to scan a
-    /// second QR. Either way, `checkAndConnect()` is the single place that
-    /// decides what to actually show next.
+    /// is already a real verification instead of trust-on-first-use).
+    /// Nothing here pairs the TV: ADB never hands out a credential, the
+    /// operator's phone scans the QR. `checkAndConnect()` is the single
+    /// place that decides what to actually show next.
     private fun handleLaunchIntentExtras(intent: Intent) {
         val extras = intent.extras
         val ip = extras?.getString("server_ip")
@@ -146,27 +146,7 @@ class MainActivity : AppCompatActivity() {
             if (!certFingerprint.isNullOrEmpty()) {
                 pairingManager.setPinnedCertFingerprint(certFingerprint)
             }
-
-            val sessionToken = extras.getString("pairing_session_token")
-            if (!sessionToken.isNullOrEmpty()) {
-                val deviceName = extras.getString("console_name")?.takeIf { it.isNotBlank() } ?: "Sanctuary TV"
-                statusOverlay.visibility = View.VISIBLE
-                statusText.text = "Pairing with console…"
-                statusHint.text = ""
-                activityScope.launch {
-                    val result = pairingManager.selfAuthorize(ip, port, sessionToken, deviceName)
-                    result.onFailure {
-                        // Not fatal -- checkAndConnect() below falls back to
-                        // the manual QR-and-poll bridge when there's still
-                        // no stored device_token, so a transient failure
-                        // here doesn't strand the install.
-                        statusText.text = "Automatic pairing failed"
-                        statusHint.text = it.message ?: "Unknown error"
-                    }
-                    checkAndConnect()
-                }
-                return
-            }
+            extras.getString("console_name")?.takeIf { it.isNotBlank() }?.let { prefs.edit().putString("device_name", it).apply() }
         }
         checkAndConnect()
     }
@@ -388,16 +368,25 @@ class MainActivity : AppCompatActivity() {
         pairingQrImage.visibility = View.VISIBLE
         statusText.text = "Scan to pair this display"
         statusHint.text = "Open the console's \"Pair TV App\" QR and scan this screen with your phone"
-        pairingQrImage.setImageBitmap(pairingManager.buildPairingQrBitmap(android.os.Build.MODEL ?: "Android TV"))
+        pairingQrImage.setImageBitmap(pairingManager.buildPairingQrBitmap(pairingManager.displayName()))
 
         pairingPollJob = activityScope.launch {
             while (isActive) {
-                val token = pairingManager.pollPairingStatus(serverIp, port).getOrNull()
-                if (!token.isNullOrEmpty()) {
-                    pairingQrImage.visibility = View.GONE
-                    progressBar.visibility = View.VISIBLE
-                    loadLiveUrl(serverIp, port, isStageMode)
-                    break
+                when (pairingManager.pollPairingStatus(serverIp, port).getOrNull()) {
+                    is PairingManager.PairingPoll.Paired -> {
+                        pairingQrImage.visibility = View.GONE
+                        progressBar.visibility = View.VISIBLE
+                        loadLiveUrl(serverIp, port, isStageMode)
+                        break
+                    }
+                    is PairingManager.PairingPoll.AlreadyRegistered -> {
+                        statusText.text = getString(R.string.pairing_already_registered_title)
+                        statusHint.text = getString(R.string.pairing_already_registered)
+                    }
+                    else -> {
+                        statusText.text = "Scan to pair this display"
+                        statusHint.text = "Open the console's \"Pair TV App\" QR and scan this screen with your phone"
+                    }
                 }
                 delay(3000)
             }

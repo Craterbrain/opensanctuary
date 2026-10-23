@@ -2202,14 +2202,3 @@ export function renderPairedDevicesSettings(content: HTMLElement) {
   content.appendChild(infoBanner);
 }
 
-// Called from app_ui.ts's ADB-provisioning wizard once a device finishes
-// self-authorizing, so the Paired Devices tab reflects it without the
-// operator needing to close and reopen Settings.
-export async function refreshPairedDevicesAfterAdbProvision() {
-  const content = document.getElementById('settings-content');
-  if (!content || activeSettingsCategory !== 'paired-devices') return;
-  await fetchPairedDevicesState();
-  renderPairedDevicesSettings(content);
-}
-
-

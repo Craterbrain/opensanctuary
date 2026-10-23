@@ -22,7 +22,7 @@ import {
   setActiveResourceViewMode,
 } from './ui/library_panel.ts';
 import { parseScriptureReference } from './core/bible_parser.ts';
-import { resetOptionsModal, openSettingsAt, onSettingsSearchInput, saveNetworkSettings, refreshPairedDevicesAfterAdbProvision } from './ui/settings_dialog.ts';
+import { resetOptionsModal, openSettingsAt, onSettingsSearchInput, saveNetworkSettings } from './ui/settings_dialog.ts';
 import { focusPluginOnNextRender } from './ui/plugins_settings.ts';
 import { showToast } from './core/ui_utils.ts';
 import { openThemeEditor } from './ui/theme_editor.ts';
@@ -1653,11 +1653,50 @@ async function initAdbProvisionPanel() {
   }
 }
 
+/** Polls a provisioning task until it finishes, showing its message; `onDone` runs once on success. */
+function followAdbTask(taskId: string, buttons: Array<HTMLButtonElement | null>, statusEl: HTMLElement | null, onDone?: () => void) {
+  const enable = () => buttons.forEach((b) => { if (b) b.disabled = false; });
+  stopAdbProvisionPolling();
+  let failCount = 0;
+  adbProvisionPollingInterval = setInterval(async () => {
+    try {
+      const progressResult = await api.tvProvision.progress(taskId);
+      failCount = 0;
+      if (!progressResult || !progressResult.progress) return;
+      const { progress } = progressResult;
+
+      if (statusEl) {
+        const color = progress.status === 'failed' ? 'var(--os-danger-text)' : progress.status === 'completed' ? 'var(--os-success-text)' : 'var(--os-accent-text)';
+        statusEl.innerHTML = `<span style="color: ${color};">${escapeHtml(progress.message)}</span>`;
+      }
+
+      if (progress.is_complete) {
+        stopAdbProvisionPolling();
+        enable();
+        if (progress.status === 'completed') {
+          showToast(progress.message, 'success');
+          onDone?.();
+        } else if (progress.error) {
+          showToast(progress.error, 'error');
+        }
+      }
+    } catch (_) {
+      failCount++;
+      if (failCount >= 5) {
+        stopAdbProvisionPolling();
+        enable();
+        if (statusEl) statusEl.innerHTML = '<span style="color: var(--os-danger-text);">❌ Lost connection while checking progress.</span>';
+      }
+    }
+  }, 1500);
+}
+
 async function startAdbProvisioning() {
   const ipInput = document.getElementById('adb-provision-ip') as HTMLInputElement | null;
   const stageCheckbox = document.getElementById('adb-provision-stage-mode') as HTMLInputElement | null;
   const nameInput = document.getElementById('adb-provision-name') as HTMLInputElement | null;
   const startBtn = document.getElementById('btn-adb-provision-start') as HTMLButtonElement | null;
+  const restoreBtn = document.getElementById('btn-adb-restore-home') as HTMLButtonElement | null;
   const statusEl = document.getElementById('adb-provision-status');
 
   const ip = ipInput ? ipInput.value.trim() : '';
@@ -1667,6 +1706,7 @@ async function startAdbProvisioning() {
   }
 
   if (startBtn) startBtn.disabled = true;
+  if (restoreBtn) restoreBtn.disabled = true;
   if (statusEl) statusEl.innerHTML = '<span style="color: var(--os-accent-text);">⏳ Starting…</span>';
 
   try {
@@ -1678,51 +1718,42 @@ async function startAdbProvisioning() {
     if (!startResult || !startResult.task_id) {
       throw new Error('Server did not return a task id for TV provisioning.');
     }
-    const { task_id } = startResult;
-
-    stopAdbProvisionPolling();
-    let failCount = 0;
-    adbProvisionPollingInterval = setInterval(async () => {
-      try {
-        const progressResult = await api.tvProvision.progress(task_id);
-        failCount = 0;
-        if (!progressResult || !progressResult.progress) return;
-        const { progress } = progressResult;
-
-        if (statusEl) {
-          const color = progress.status === 'failed' ? 'var(--os-danger-text)' : progress.status === 'completed' ? 'var(--os-success-text)' : 'var(--os-accent-text)';
-          statusEl.innerHTML = `<span style="color: ${color};">${escapeHtml(progress.message)}</span>`;
-        }
-
-        if (progress.is_complete) {
-          stopAdbProvisionPolling();
-          if (startBtn) startBtn.disabled = false;
-          if (progress.status === 'completed') {
-            showToast(progress.message, 'success');
-            // Refresh the Paired Devices list behind this modal so the
-            // newly self-authorized TV shows up without a manual re-open.
-            refreshPairedDevicesAfterAdbProvision();
-          } else if (progress.error) {
-            showToast(progress.error, 'error');
-          }
-        }
-      } catch (_) {
-        failCount++;
-        if (failCount >= 5) {
-          stopAdbProvisionPolling();
-          if (startBtn) startBtn.disabled = false;
-          if (statusEl) statusEl.innerHTML = '<span style="color: var(--os-danger-text);">❌ Lost connection while checking progress.</span>';
-        }
-      }
-    }, 1500);
+    // The TV is now showing its pairing code: take the operator to the tab where it gets scanned.
+    followAdbTask(startResult.task_id, [startBtn, restoreBtn], statusEl, () => switchToPairingTab());
   } catch (err: any) {
     if (startBtn) startBtn.disabled = false;
+    if (restoreBtn) restoreBtn.disabled = false;
     const message = (err && err.message) || 'Could not start provisioning.';
     if (statusEl) statusEl.innerHTML = `<span style="color: var(--os-danger-text);">❌ ${escapeHtml(message)}</span>`;
   }
 }
 
+async function restoreAdbHome() {
+  const ipInput = document.getElementById('adb-provision-ip') as HTMLInputElement | null;
+  const startBtn = document.getElementById('btn-adb-provision-start') as HTMLButtonElement | null;
+  const restoreBtn = document.getElementById('btn-adb-restore-home') as HTMLButtonElement | null;
+  const statusEl = document.getElementById('adb-provision-status');
+  const ip = ipInput ? ipInput.value.trim() : '';
+  if (!ip) {
+    showToast('Enter the TV\'s IP address first.', 'warning');
+    return;
+  }
+  if (startBtn) startBtn.disabled = true;
+  if (restoreBtn) restoreBtn.disabled = true;
+  if (statusEl) statusEl.innerHTML = '<span style="color: var(--os-accent-text);">⏳ Starting…</span>';
+  try {
+    const r = await api.tvProvision.restoreHome({ ip });
+    if (!r || !r.task_id) throw new Error('Server did not return a task id.');
+    followAdbTask(r.task_id, [startBtn, restoreBtn], statusEl);
+  } catch (err: any) {
+    if (startBtn) startBtn.disabled = false;
+    if (restoreBtn) restoreBtn.disabled = false;
+    if (statusEl) statusEl.innerHTML = `<span style="color: var(--os-danger-text);">❌ ${escapeHtml((err && err.message) || 'Could not start.')}</span>`;
+  }
+}
+
 on('btn-adb-provision-start', 'click', startAdbProvisioning);
+on('btn-adb-restore-home', 'click', restoreAdbHome);
 
 // Settings Modal Handlers (Edit > Options) — rendering is schema-driven (see
 // renderSettingsSidebar/renderSettingsContent in app_core.ts); this just wires the

@@ -1087,10 +1087,13 @@
             3. Note the TV's IP address (Settings → Network & Internet).<br>
             4. The first time you connect, the TV will show a one-time "Allow debugging from this computer?" prompt — accept it with your remote.
           </div>
+          <div class="os-callout os-callout--warning remote-steps">
+            <strong>This makes OpenSanctuary the TV's home app.</strong> The TV's own home screen is switched off, so the TV starts straight into OpenSanctuary and the Home button returns to it. It is not paired automatically: when it finishes, scan the code on the TV with your phone (the Pair TV App tab). <em>Restore home screen</em> below undoes the switch.
+          </div>
           <div id="adb-provision-unavailable" class="os-callout os-callout--danger remote-steps" style="display: none;"></div>
           <div class="form-field">
             <label class="form-label" for="adb-provision-ip">TV IP Address</label>
-            <input type="text" id="adb-provision-ip" class="search-input" placeholder="192.168.1.50">
+            <input type="text" id="adb-provision-ip" class="search-input" placeholder="XXX.XXX.X.XXX">
           </div>
           <div class="form-field">
             <label class="form-label" for="adb-provision-name">Display Name (optional)</label>
@@ -1100,6 +1103,7 @@
             <input type="checkbox" id="adb-provision-stage-mode"> Stage foldback view (instead of front-of-house)
           </label>
           <button class="btn btn-primary btn-block btn-lg remote-adb-start" id="btn-adb-provision-start">📲 Connect &amp; Install</button>
+          <button class="btn btn-secondary btn-block" id="btn-adb-restore-home" title="Turn the TV's own home screen back on">↩ Restore the TV's home screen</button>
           <div id="adb-provision-status" class="status-line status-line--center"></div>
         </div>
 
