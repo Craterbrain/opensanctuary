@@ -24,18 +24,13 @@ import javax.net.ssl.X509TrustManager
 
 /**
  * Implements the pairing half of docs/CLIENT_PAIRING.md's two-way QR bridge
- * on the TV side, plus the instance-hijack check the doc describes but this
- * app never actually enforced before. Two ways a device gets its
- * `device_token`:
- *
- * 1. **Self-authorize** (ADB-provisioned): the console handed this launch a
- *    `pairing_session_token` directly (see MainActivity's intent-extra
- *    handling) -- no phone needed, this app calls `POST /api/pairing/authorize`
- *    itself with that token.
- * 2. **Manual QR** (installed some other way): this app renders its own
- *    pairing QR (`{"device_id","name","platform"}`) and polls
- *    `GET /api/pairing/status` until an operator's phone scans it and
- *    authorizes it, exactly as the doc's two-way bridge describes.
+ * on the TV side, plus the instance-hijack check. A device gets its
+ * `device_token` one way only: this app renders its own pairing QR
+ * (`{"device_id","name","platform"}`) and polls `GET /api/pairing/status`
+ * until an operator's phone scans it and authorizes it. Installing over ADB
+ * does not pair a TV (it only tells it where the console is and which
+ * certificate to expect), so a token is only ever handed to a TV that
+ * someone is looking at.
  *
  * Either way, once paired, every subsequent connect compares
  * `GET /api/server-info`'s `instance_id` against the one stored at pairing
@@ -229,32 +224,9 @@ class PairingManager(context: Context) {
         }
     }
 
-    /** Self-authorize path -- see class doc comment. Stores the resulting
-     * `device_token` and the console's `instance_id` on success. */
-    suspend fun selfAuthorize(serverIp: String, serverPort: Int, sessionToken: String, deviceName: String): Result<String> =
-        withContext(Dispatchers.IO) {
-            try {
-                val payload = JSONObject().apply {
-                    put("session_token", sessionToken)
-                    put("device_id", getOrCreateDeviceId())
-                    put("name", deviceName)
-                    put("platform", "android-tv")
-                }
-                val body = payload.toString().toRequestBody("application/json".toMediaType())
-                val req = Request.Builder().url("${baseUrl(serverIp, serverPort)}/api/pairing/authorize").post(body).build()
-                client.newCall(req).execute().use { resp ->
-                    val respText = resp.body?.string() ?: ""
-                    if (!resp.isSuccessful) return@withContext Result.failure(Exception("HTTP ${resp.code}: $respText"))
-                    val json = JSONObject(respText)
-                    if (!json.optBoolean("success", false)) return@withContext Result.failure(Exception("Console rejected the pairing session"))
-                    val token = json.getString("token")
-                    persistPairing(token, serverIp, serverPort)
-                    Result.success(token)
-                }
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
-        }
+    /** The name this TV shows in the console's Paired Devices list: the one the console gave it at
+     * install time, else the TV's model. */
+    fun displayName(): String = prefs.getString("device_name", null)?.takeIf { it.isNotBlank() } ?: (android.os.Build.MODEL ?: "Android TV")
 
     /** Manual QR path -- renders `{"device_id","name","platform"}` for a
      * phone to scan, matching the payload `docs/CLIENT_PAIRING.md` specifies. */
@@ -274,11 +246,19 @@ class PairingManager(context: Context) {
         return bmp
     }
 
-    /** One poll of `GET /api/pairing/status` -- returns the device_token the
-     * moment an operator's phone has authorized this device, `null` while
-     * still waiting. Caller (`MainActivity`) is responsible for the polling
-     * loop/interval. */
-    suspend fun pollPairingStatus(serverIp: String, serverPort: Int): Result<String?> = withContext(Dispatchers.IO) {
+    /** What one poll of the pairing status found. */
+    sealed class PairingPoll {
+        /** Nobody has authorized this device yet. */
+        object Waiting : PairingPoll()
+        /** The console already has a device with this id (a Reset Pairing on this TV doesn't tell it) and
+         * hands a token out only once, so no scan can pair this TV until the operator removes it. */
+        object AlreadyRegistered : PairingPoll()
+        data class Paired(val token: String) : PairingPoll()
+    }
+
+    /** One poll of `GET /api/pairing/status` -- `Paired` the moment an operator's phone has authorized this
+     * device. Caller (`MainActivity`) is responsible for the polling loop/interval. */
+    suspend fun pollPairingStatus(serverIp: String, serverPort: Int): Result<PairingPoll> = withContext(Dispatchers.IO) {
         try {
             val deviceId = getOrCreateDeviceId()
             val req = Request.Builder()
@@ -287,11 +267,11 @@ class PairingManager(context: Context) {
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext Result.failure(Exception("HTTP ${resp.code}"))
                 val json = JSONObject(resp.body?.string() ?: "{}")
-                val hasToken = json.optBoolean("paired", false) && json.has("token") && !json.isNull("token")
-                if (!hasToken) return@withContext Result.success(null)
+                if (!json.optBoolean("paired", false)) return@withContext Result.success(PairingPoll.Waiting)
+                if (!json.has("token") || json.isNull("token")) return@withContext Result.success(PairingPoll.AlreadyRegistered)
                 val token = json.getString("token")
                 persistPairing(token, serverIp, serverPort)
-                Result.success(token)
+                Result.success(PairingPoll.Paired(token))
             }
         } catch (e: Exception) {
             Result.failure(e)

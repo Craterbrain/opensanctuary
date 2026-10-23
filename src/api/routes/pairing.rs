@@ -179,15 +179,11 @@ pub(super) async fn authorize_pairing_handler(
     // The session token is reusable (one console session pairs several TVs)
     // and travels in QR codes/URLs, so it must not let its holder replace an
     // already-paired device's token. Re-pairing an existing id needs the
-    // console's host token.
-    if matches!(app.db.get_paired_device(device_id), Ok(Some(_))) && require_host_token(&headers, &app).is_err() {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "A device with this ID is already paired. Remove it from the console first."
-            })),
-        ));
-    }
+    // console's host token -- decided once, up front, so the two branches
+    // below can each reach the database in a single atomic call rather than
+    // a separate check-then-write (see `insert_paired_device_if_new`'s doc
+    // comment for the race that shape used to leave open).
+    let has_host_token = require_host_token(&headers, &app).is_ok();
 
     let dev_token = format!("dev_tok_{}", uuid::Uuid::new_v4().simple());
     let now = chrono::Utc::now().timestamp_millis();
@@ -213,13 +209,36 @@ pub(super) async fn authorize_pairing_handler(
         token: dev_token.clone(),
     };
 
-    if let Err(e) = app.db.upsert_paired_device(&device) {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": format!("Database error: {}", e)
-            })),
-        ));
+    if has_host_token {
+        // The caller is already console-authorized to overwrite whatever is there (an operator
+        // explicitly re-pairing a device); no race to resolve, an unconditional write is correct.
+        if let Err(e) = app.db.upsert_paired_device(&device) {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Database error: {}", e) })),
+            ));
+        }
+    } else {
+        match app.db.insert_paired_device_if_new(&device) {
+            Ok(true) => {}
+            Ok(false) => {
+                // Someone else holds this id -- an earlier pairing, or a concurrent caller that won
+                // the same race this atomic insert exists to resolve. Same response either way: the
+                // console's host token is the only way to replace an existing registration.
+                return Err((
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "A device with this ID is already paired. Remove it from the console first."
+                    })),
+                ));
+            }
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("Database error: {}", e) })),
+                ));
+            }
+        }
     }
 
     // Marks this device as owed exactly one token delivery via its own
@@ -366,10 +385,9 @@ pub(super) struct StartTvProvisionRequest {
 
 /// POST /api/tv-provision/start
 ///
-/// Console-only. Mints a pairing session the same way `POST /api/pairing/session`
-/// does (`app.create_pairing_session`, not reimplemented), then hands the
-/// whole connect/install/launch sequence to `crate::network::adb::provision`
-/// as a background task -- returns a `task_id` immediately, same
+/// Console-only. Hands the connect/install/become-the-home-app/launch sequence
+/// to `crate::network::adb::provision` as a background task (the TV is not
+/// paired by it: it shows its QR for the operator's phone) -- returns a `task_id` immediately, same
 /// fire-and-forget-plus-poll shape as a plugin's `process.run` jobs
 /// (`POST /api/plugin-host/process/{start,poll}`).
 pub(super) async fn start_tv_provision_handler(
@@ -436,12 +454,6 @@ pub(super) async fn start_tv_provision_handler(
         }
     };
 
-    // Same session the console-driven "Pair TV App" QR flow mints -- the TV
-    // app self-authorizes with it (see PairingManager.kt) instead of a
-    // phone scanning a second QR, since ADB access already proves the same
-    // level of physical/network trust a phone scan would.
-    let pairing_session_token = app.create_pairing_session(300).await;
-
     let task_id = format!("tvprov_{}", uuid::Uuid::new_v4().simple());
     tokio::spawn(crate::network::adb::provision(
         task_id.clone(),
@@ -451,10 +463,33 @@ pub(super) async fn start_tv_provision_handler(
         server_port,
         req.is_stage_mode,
         device_name,
-        pairing_session_token,
         cert_fingerprint,
     ));
 
+    Ok(Json(serde_json::json!({ "task_id": task_id })))
+}
+
+#[derive(Deserialize)]
+pub(super) struct RestoreTvHomeRequest {
+    ip: String,
+}
+
+/// POST /api/tv-provision/restore-home
+///
+/// Console-only. Re-enables the TV's own launcher (disabled by provisioning) so the TV has its stock home
+/// screen back. Same task/progress shape as `start`.
+pub(super) async fn restore_tv_home_handler(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RestoreTvHomeRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    require_host_token(&headers, &app)?;
+    let ip = req.ip.trim().to_string();
+    if ip.parse::<std::net::IpAddr>().is_err() {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "TV IP address is not a valid IP" }))));
+    }
+    let task_id = format!("tvhome_{}", uuid::Uuid::new_v4().simple());
+    tokio::spawn(crate::network::adb::restore_stock_home(task_id.clone(), ip));
     Ok(Json(serde_json::json!({ "task_id": task_id })))
 }
 
@@ -485,5 +520,6 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/pairing/verify", post(verify_paired_device_handler))
         .route("/api/tv-provision/status", get(get_tv_provision_status_handler))
         .route("/api/tv-provision/start", post(start_tv_provision_handler))
+        .route("/api/tv-provision/restore-home", post(restore_tv_home_handler))
         .route("/api/tv-provision/progress/:task_id", get(get_tv_provision_progress_handler))
 }

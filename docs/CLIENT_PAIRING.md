@@ -8,10 +8,9 @@ random browser tab: how they *find* an OS-Next console on the LAN, and how
 they *stay* pointed at the right one once found. Both halves are
 implemented for **Android TV** (`apps/android-tv`): discovery via mDNS/manual
 IP, and the two-way pairing bridge below via `PairingManager.kt` -- either
-the manual QR flow this doc originally described, or the ADB-provisioned
-self-authorize shortcut (see "ADB-driven provisioning" below), which skips
-the second phone-scan since ADB access already proves the same level of
-trust. **Roku is still just a design** -- no Roku app exists yet; read this
+the QR flow this doc describes. Installing over ADB (see "ADB-driven setup"
+below) makes the app the TV's home app and pins the console's certificate,
+but never pairs: the phone's scan is the only way in. **Roku is still just a design** -- no Roku app exists yet; read this
 before building it.
 
 ---
@@ -113,13 +112,18 @@ pairs every TV in the building from one console-minted session instead of
 `pairing.html` needing to mint follow-up sessions itself (which would mean
 giving the phone console-level trust it was never meant to have).
 
-### ADB-driven provisioning (skips the phone scan entirely)
+### ADB-driven setup (installs the app and makes it the TV's home app)
 
 The Android TV app isn't published to the Play Store while its future is
-uncertain, so it's sideloaded instead — and since sideloading already means
-the console has a direct ADB shell channel to the TV, that channel can hand
-over the *same* pairing session the QR flow mints, instead of requiring a
-second device (a phone) to bridge it over:
+uncertain, so it's sideloaded. The console has a direct ADB channel to the TV
+while it does that, and uses it to turn the TV into a dedicated display: the
+app becomes the TV's **home app** and the stock launcher is switched off, so
+the TV boots straight into OpenSanctuary and the Home button returns to it.
+
+ADB does **not** pair the TV. It carries no session token and no credential;
+the only thing it tells the TV about trust is the console's certificate
+fingerprint (a pin). A TV only ever gets its token from the QR bridge above,
+from an operator looking at both screens.
 
 ```
 [Console] Settings > Paired Devices > "Install via ADB"
@@ -129,25 +133,35 @@ second device (a phone) to bridge it over:
 POST /api/tv-provision/start -- src/network/adb.rs::provision:
       │ 1. `adb connect <ip>:5555`
       │ 2. `adb install -r <bundled APK>`
-      │ 3. Mints a session the same way POST /api/pairing/session does
-      │    (AppState::create_pairing_session -- not a separate code path)
+      │ 3. Asks the TV which apps answer to the HOME action
+      │    (`cmd package query-activities ... android.intent.category.HOME`);
+      │    refuses to go on unless OpenSanctuary is one of them. Then
+      │    `pm disable-user --user 0 <launcher>` for every other launcher
+      │    (never the app itself, never a first-boot setup wizard).
       │ 4. `adb shell am start -n org.opensanctuary.tv/.MainActivity
-      │     --es server_ip ... --ei server_port ... --es pairing_session_token ...`
+      │     --es server_ip ... --ei server_port ... --es cert_fingerprint ...
+      │     --es console_name ...`
       ▼
-[TV App: PairingManager.selfAuthorize]
-      │ Calls POST /api/pairing/authorize itself with that session token --
-      │ no phone needed, since ADB access already proves the same level of
-      │ physical/network trust a phone scan would.
+[TV App] ── Remembers the console address, pins the certificate, and shows
+            its pairing QR. The console jumps to the Pair TV App tab.
       ▼
-[TV App] ── Stores the returned device_token + the console's instance_id,
-             loads live.html/stage.html.
+[Operator's phone] ── scans the TV's QR: the two-way bridge above.
 ```
 
-The manual two-way QR bridge above still works unchanged for a TV installed
-any other way (no console ADB access) — `PairingManager` only takes the
-self-authorize shortcut when a launch actually carries a
-`pairing_session_token`; otherwise it falls back to rendering its own
-pairing QR and polling `GET /api/pairing/status`, exactly as designed above.
+The app declares `MAIN` + `HOME` + `DEFAULT` for its activity, which is what
+makes it eligible. With the stock launcher disabled it is the only home app,
+so Android uses it without asking.
+
+**Undoing it:** the Install-via-ADB tab has *Restore the TV's home screen*
+(`POST /api/tv-provision/restore-home`): it re-enables the launcher packages
+that are disabled on the TV (`pm list packages -d`, filtered to launchers) and
+the TV offers its own home screen again. The app stays installed. If the TV
+can't be reached, `adb shell pm enable --user 0 com.google.android.tvlauncher`
+(Android TV) or `com.google.android.apps.tv.launcherx` (Google TV) does it by
+hand.
+
+A TV installed any other way (no console ADB access) pairs exactly the same
+way: it renders its own pairing QR and polls `GET /api/pairing/status`.
 
 Either path also now enforces the actual hijack-prevention this whole
 design is for, which the app never did before: every connect compares
@@ -352,4 +366,8 @@ the failure mode this whole design exists to prevent.
 
 - Displays have a **"Reset Pairing"** button in their settings dialog.
 - The console operator can revoke pairing at any time from **Settings > Paired Devices**.
+- A display reset on its own side keeps its `device_id`, and the console still lists it. The console hands a token
+  out once, so a scan can't pair it again (`409`, "Remove it from the console first"). The Android TV app notices
+  this (its status poll says `paired` with no token) and shows **"Remove this device from the console to pair
+  again"** with the steps: Settings > Paired Devices, remove it, scan again.
 

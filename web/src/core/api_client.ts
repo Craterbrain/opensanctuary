@@ -453,6 +453,10 @@ export const api = {
       await resolveHostSessionToken();
       return api.post<{ task_id: string }>('/api/tv-provision/start', data, { headers: hostTokenHeader() });
     },
+    restoreHome: async (data: { ip: string }) => {
+      await resolveHostSessionToken();
+      return api.post<{ task_id: string }>('/api/tv-provision/restore-home', data, { headers: hostTokenHeader() });
+    },
     progress: async (taskId: string) => {
       await resolveHostSessionToken();
       return api.get<{

@@ -56,9 +56,12 @@ The operator console (library, schedule, preview and live panes) and the slide b
   monitor) as separate pages, each independently themeable.
 - **Remote Control** — a mobile-friendly page to drive the service from a
   phone or tablet, paired via QR code.
-- **Android TV client** (`apps/android-tv`) for permanent displays, with
-  ADB-driven sideload-and-pair provisioning straight from the console —
-  no Play Store listing needed, no typing an IP address on a remote.
+- **Android TV client** (`apps/android-tv`) for permanent displays. The
+  console installs it over ADB and makes it the TV's home app (the stock
+  launcher is switched off, and can be switched back on from the console),
+  so the TV boots straight into OpenSanctuary — no Play Store listing, no
+  typing an IP address on a remote. Pairing is always a phone scanning the
+  QR code on the TV.
 - **Roku channel** (`apps/roku`) also works as a basic client today —
   type the server's IP into its Settings screen once. It doesn't have
   Android TV's no-typing sideload-and-pair flow yet; that part of Roku

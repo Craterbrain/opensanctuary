@@ -14,4 +14,6 @@
     <string name="not_paired">Not paired to a console yet</string>
     <string name="pairing_qr_description">Pairing QR code — scan with the console operator\'s phone</string>
     <string name="pairing_wrong_console">This TV is paired to a different console.\nPress [MENU] or [BACK] to re-pair.</string>
+    <string name="pairing_already_registered_title">Remove this device from the console to pair again</string>
+    <string name="pairing_already_registered">The console still lists this display as paired.\nOn the console, open Settings &gt; Paired Devices, remove it, then scan this code again.</string>
 </resources>
