@@ -109,6 +109,46 @@ impl Database {
         }
     }
 
+    /// Registers a brand-new device id, atomically: `ON CONFLICT DO NOTHING` under one
+    /// mutex-guarded call means there is no gap between "does this id exist" and "write it" for
+    /// another concurrent call to land in. Returns `true` if this call actually created the row,
+    /// `false` if `id` was already taken (by an earlier pairing, or by a racing call that won).
+    ///
+    /// This is what `authorize_pairing_handler` uses for the common case -- a caller with no host
+    /// token pairing a *new* device. A plain check-then-`upsert_paired_device` (the previous
+    /// shape) has a real window: `get_paired_device` and `upsert_paired_device` are two separate
+    /// calls, each independently locking `main_conn`, so two concurrent `authorize` calls for the
+    /// same new `device_id` could both pass the "does it exist" check before either writes --
+    /// both would report success, each with its own token, and only one of those tokens ends up
+    /// actually stored (last write wins). Whichever caller loses that race still generated and was
+    /// told a token that matches nothing, and if a second, unrelated holder of a valid pairing
+    /// session is racing a legitimate pairing for an id it guessed or observed, it ends up knowing
+    /// whichever token *does* land in storage, including the real device's. This method closes
+    /// that gap by letting SQLite's own uniqueness constraint resolve the race in a single
+    /// statement, with nothing for a second caller to observe in between.
+    pub fn insert_paired_device_if_new(&self, device: &PairedDevice) -> Result<bool> {
+        let conn = self.conn();
+        let rows = conn.execute(
+            "INSERT INTO paired_devices (id, name, platform, paired_at, last_seen, token)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO NOTHING",
+            params![
+                device.id,
+                device.name,
+                device.platform,
+                device.paired_at,
+                device.last_seen,
+                device.token,
+            ],
+        )?;
+        Ok(rows == 1)
+    }
+
+    /// Unconditional create-or-overwrite -- used where the caller's own authorization (a valid
+    /// host token) already makes "this id is already paired" irrelevant: an operator explicitly
+    /// re-pairing a device, or the console's own re-pair path, every one of these race-free
+    /// anyway (the host token itself already gates them to one trusted caller at a time in
+    /// practice, and overwriting is the intended effect, not an accident to prevent).
     pub fn upsert_paired_device(&self, device: &PairedDevice) -> Result<()> {
         let conn = self.conn();
         conn.execute(
@@ -148,5 +188,62 @@ impl Database {
             params![id],
         )?;
         Ok(count > 0)
+    }
+}
+
+#[cfg(test)]
+mod race_tests {
+    use super::*;
+    use crate::storage::Database;
+
+    fn device(id: &str, token: &str) -> PairedDevice {
+        PairedDevice { id: id.to_string(), name: "Race TV".to_string(), platform: "android-tv".to_string(), paired_at: 0, last_seen: 0, token: token.to_string() }
+    }
+
+    /// Real OS threads, not tokio tasks: the race `insert_paired_device_if_new` exists to close
+    /// is two threads actually running the check and the write at the same time (see its doc
+    /// comment) -- `Database` is `Clone` over `Arc<Mutex<Connection>>`, so every thread here holds
+    /// an independent handle to the exact same connection the real server would.
+    #[test]
+    fn concurrent_insert_for_the_same_new_id_lets_exactly_one_thread_win() {
+        let db = Database::in_memory().expect("in-memory db");
+        let n = 32;
+        let handles: Vec<_> = (0..n)
+            .map(|i| {
+                let db = db.clone();
+                std::thread::spawn(move || db.insert_paired_device_if_new(&device("race_tv_1", &format!("tok_{i}"))))
+            })
+            .collect();
+        let results: Vec<bool> = handles.into_iter().map(|h| h.join().unwrap().expect("no db error")).collect();
+        let winners = results.iter().filter(|&&won| won).count();
+        assert_eq!(winners, 1, "exactly one of {n} concurrent inserts for the same id should win, got {winners}");
+
+        // And storage holds exactly one row for it, whichever one that was.
+        let stored = db.get_paired_device("race_tv_1").unwrap().expect("the winning row should exist");
+        assert!(stored.token.starts_with("tok_"));
+    }
+
+    /// Different ids never contend with each other -- same mutex, but no shared key to collide on.
+    #[test]
+    fn concurrent_insert_for_different_ids_all_win() {
+        let db = Database::in_memory().expect("in-memory db");
+        let n = 16;
+        let handles: Vec<_> = (0..n)
+            .map(|i| {
+                let db = db.clone();
+                std::thread::spawn(move || db.insert_paired_device_if_new(&device(&format!("tv_{i}"), &format!("tok_{i}"))))
+            })
+            .collect();
+        let results: Vec<bool> = handles.into_iter().map(|h| h.join().unwrap().expect("no db error")).collect();
+        assert!(results.iter().all(|&won| won), "distinct ids should never conflict with each other: {results:?}");
+        assert_eq!(db.get_paired_devices().unwrap().len(), n);
+    }
+
+    #[test]
+    fn a_second_insert_for_an_already_taken_id_loses_without_touching_the_stored_row() {
+        let db = Database::in_memory().expect("in-memory db");
+        assert!(db.insert_paired_device_if_new(&device("tv_1", "tok_first")).unwrap());
+        assert!(!db.insert_paired_device_if_new(&device("tv_1", "tok_second")).unwrap());
+        assert_eq!(db.get_paired_device("tv_1").unwrap().unwrap().token, "tok_first");
     }
 }

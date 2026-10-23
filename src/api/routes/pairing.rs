@@ -179,15 +179,11 @@ pub(super) async fn authorize_pairing_handler(
     // The session token is reusable (one console session pairs several TVs)
     // and travels in QR codes/URLs, so it must not let its holder replace an
     // already-paired device's token. Re-pairing an existing id needs the
-    // console's host token.
-    if matches!(app.db.get_paired_device(device_id), Ok(Some(_))) && require_host_token(&headers, &app).is_err() {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "A device with this ID is already paired. Remove it from the console first."
-            })),
-        ));
-    }
+    // console's host token -- decided once, up front, so the two branches
+    // below can each reach the database in a single atomic call rather than
+    // a separate check-then-write (see `insert_paired_device_if_new`'s doc
+    // comment for the race that shape used to leave open).
+    let has_host_token = require_host_token(&headers, &app).is_ok();
 
     let dev_token = format!("dev_tok_{}", uuid::Uuid::new_v4().simple());
     let now = chrono::Utc::now().timestamp_millis();
@@ -213,13 +209,36 @@ pub(super) async fn authorize_pairing_handler(
         token: dev_token.clone(),
     };
 
-    if let Err(e) = app.db.upsert_paired_device(&device) {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": format!("Database error: {}", e)
-            })),
-        ));
+    if has_host_token {
+        // The caller is already console-authorized to overwrite whatever is there (an operator
+        // explicitly re-pairing a device); no race to resolve, an unconditional write is correct.
+        if let Err(e) = app.db.upsert_paired_device(&device) {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Database error: {}", e) })),
+            ));
+        }
+    } else {
+        match app.db.insert_paired_device_if_new(&device) {
+            Ok(true) => {}
+            Ok(false) => {
+                // Someone else holds this id -- an earlier pairing, or a concurrent caller that won
+                // the same race this atomic insert exists to resolve. Same response either way: the
+                // console's host token is the only way to replace an existing registration.
+                return Err((
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "A device with this ID is already paired. Remove it from the console first."
+                    })),
+                ));
+            }
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("Database error: {}", e) })),
+                ));
+            }
+        }
     }
 
     // Marks this device as owed exactly one token delivery via its own
