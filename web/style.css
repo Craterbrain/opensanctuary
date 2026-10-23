@@ -2294,20 +2294,14 @@ body:has(.modal-backdrop[style*="flex"]) .live-indicator-btn.active .icon {
 /* ==========================================================================
    LIVE DECK (ZONE_LIVE) [ARCH:zone-live]
    ========================================================================== */
-/* Matrix / Grid Mode */
-.slide-matrix.matrix-mode {
+/* Both views lay their cards out in columns. What differs is what a card is: in the grid (⊞) each slide is
+   drawn as it will look; in the list (☰) it is a text card (badge + lyrics). See ui/deck_view_mode.ts. */
+.slide-matrix.matrix-mode,
+.slide-matrix.list-mode {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(clamp(140px, 13vw, 220px), 1fr));
   gap: clamp(4px, 0.5vw, 10px);
   padding: clamp(4px, 0.5vw, 10px);
-}
-
-/* List Mode */
-.slide-matrix.list-mode {
-  display: flex;
-  flex-direction: column;
-  gap: clamp(3px, 0.35vh, 6px);
-  padding: clamp(4px, 0.5vw, 8px);
 }
 
 .slide-card {

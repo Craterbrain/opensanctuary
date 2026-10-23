@@ -25,6 +25,7 @@ import {
   type ThemeDefinition
 } from './core/presentation_helpers.ts';
 import { applyBackgroundThumbnail } from './core/pattern_thumbs.ts';
+import { deckModeFor, type DeckName } from './ui/deck_view_mode.ts';
 import { showToast, formatMediaTime, copyToClipboard } from './core/ui_utils.ts';
 export { showToast, formatMediaTime, copyToClipboard };
 import { formatSlideLyricsHtml, applyAutoFitLyrics, renderSlideVisual } from './core/slide_render.ts';
@@ -2575,6 +2576,16 @@ function slideBackgroundPainter(item: any, slideIdx: number, state: any): (el: H
 }
 
 /** Re-draws both slide decks now (the deck view toggles call this: cards vs thumbnails depends on the view). */
+/** Shows a deck in the view it should open in for this item (see ui/deck_view_mode.ts) and lights the matching button. */
+function applyDeckMode(matrixEl: HTMLElement, deck: DeckName, itemType: string | null | undefined) {
+  const mode = deckModeFor(deck, itemType);
+  matrixEl.classList.toggle('list-mode', mode === 'list');
+  matrixEl.classList.toggle('matrix-mode', mode === 'matrix');
+  document.getElementById(`btn-${deck}-view-matrix`)?.classList.toggle('active', mode === 'matrix');
+  document.getElementById(`btn-${deck}-view-list`)?.classList.toggle('active', mode === 'list');
+  if (deck === 'live') activeLiveViewMode = mode;
+}
+
 export function refreshSlideDecks() {
   lastRenderedPreviewKey = '';
   lastRenderedLiveKey = '';
@@ -2635,6 +2646,7 @@ function renderPreviewDeck(state: any) {
 
   const stagedItem = state.staged_item;
   if (previewTitleEl) previewTitleEl.textContent = stagedItem ? stagedItem.title : 'No Staged Item';
+  applyDeckMode(previewSlideMatrixEl, 'preview', stagedItem ? stagedItem.item_type : '');
 
   const itemId = stagedItem ? stagedItem.id : '';
   const arr = effectiveArrangement(stagedItem);
@@ -2957,6 +2969,7 @@ function renderLiveDeck(state: any) {
   if (liveTitleEl) liveTitleEl.textContent = state.live_item ? state.live_item.title : 'No Active Item';
 
   const liveItem = state.live_item;
+  applyDeckMode(liveSlideMatrixEl, 'live', liveItem ? liveItem.item_type : '');
   const itemId = liveItem ? liveItem.id : '';
   const arr = effectiveArrangement(liveItem);
   const slideCount = arr ? arr.length : 0;
