@@ -50,8 +50,10 @@ export async function spawnTestServer(opts: {
   readyPath?: string;
   timeoutMs?: number;
   pollIntervalMs?: number;
+  /** Start against an existing data dir (a restart of the same install) instead of a fresh one. */
+  reuseDir?: string;
 }): Promise<SpawnedTestServer> {
-  const testDir = mkdtempSync(join(tmpdir(), opts.tempPrefix ?? "os-next-e2e-"));
+  const testDir = opts.reuseDir ?? mkdtempSync(join(tmpdir(), opts.tempPrefix ?? "os-next-e2e-"));
   const dbPath = join(testDir, "test.db");
   const binaryPath = resolve(import.meta.dir, "../../target/release/os-next");
 
