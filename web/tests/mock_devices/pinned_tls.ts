@@ -33,6 +33,12 @@ export function derToPem(der: Buffer): string {
 /** Reads the certificate a server presents without trusting it (no request is sent). */
 export function peekCertificate(host: string, port: number, timeoutMs = 5000): Promise<PeerCert> {
   return new Promise((resolve, reject) => {
+    // `rejectUnauthorized: false` is the point, not a shortcut: this function's only job is to read
+    // whatever certificate is presented so it can be fingerprinted and pinned (the same trust-on-first-use
+    // model this file's own doc comment describes, mirroring PairingManager.kt's real trust manager). No
+    // request is ever sent over this socket -- it connects, reads the cert, and closes -- so there is
+    // nothing here for an unverified identity to put at risk. Every later connection in PinnedHttps
+    // re-verifies against the pinned fingerprint instead (the real trust decision happens there).
     const sock = tls.connect({ host, port, rejectUnauthorized: false }, () => {
       const raw: Buffer = (sock.getPeerCertificate(true) as any).raw;
       sock.end();

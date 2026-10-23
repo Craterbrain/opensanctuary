@@ -7,8 +7,11 @@ export class MockConsole {
   hostToken = "";
   readonly sessionId: string;
 
-  /** `base` is the plain-HTTP loopback URL: only loopback hands out the host token. */
-  constructor(public base: string, sessionId = `mock-console-${Math.random().toString(36).slice(2, 8)}`) {
+  /** `base` is the plain-HTTP loopback URL: only loopback hands out the host token. `sessionId` just has to
+   * be unique enough to disambiguate concurrent MockConsoles in one test run (any non-empty value works per
+   * `x-console-session-id`'s own contract, see e2e_remote_mobile.test.ts) -- `crypto.randomUUID()` purely
+   * because there's no reason to reach for `Math.random()` even for a non-secret value. */
+  constructor(public base: string, sessionId = `mock-console-${crypto.randomUUID().slice(0, 8)}`) {
     this.sessionId = sessionId;
   }
 
