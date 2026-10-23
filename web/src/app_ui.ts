@@ -5,6 +5,7 @@ import { SETTINGS_SCHEMA } from './core/settings_schema';
 import { setupScheduleDesktopDrop, uploadScheduleFile, fileToBase64 } from './core/schedule_drop';
 import { resolveHostSessionToken, hostTokenHeader } from './core/host_session.ts';
 import { initFirstTimeSetup, maybeShowFirstTimeSetup, showFirstTimeSetup } from './ui/first_time_setup.ts';
+import { rememberDeckMode } from './ui/deck_view_mode.ts';
 import QRCode from 'qrcode';
 import {
   addDualScriptureToSchedule,
@@ -89,10 +90,8 @@ import {
   importModal,
   installedBibles,
   isDualBibleMode,
-  liveSlideMatrixEl,
   openModal,
   optionsModal,
-  previewSlideMatrixEl,
   remoteModal,
   resetLastRenderedScheduleKey,
   saveModal,
@@ -102,7 +101,6 @@ import {
   selectedLibraryItem,
   setActiveBibleVersion,
   setActiveImportMode,
-  setActiveLiveViewMode,
   setCurrentContextMenuTargetState,
   setCurrentEditorType,
   setCurrentSnapshot,
@@ -1125,43 +1123,19 @@ on('btn-preview-to-schedule', 'click', () => {
   }
 });
 
-// Preview View Mode Switching (Matrix vs List)
-on('btn-preview-view-matrix', 'click', () => {
-  const bM = document.getElementById('btn-preview-view-matrix');
-  const bL = document.getElementById('btn-preview-view-list');
-  if (bM) bM.classList.add('active');
-  if (bL) bL.classList.remove('active');
-  if (previewSlideMatrixEl) previewSlideMatrixEl.className = 'slide-matrix matrix-mode';
+// Preview / Live deck view switching (⊞ grid vs ☰ list). A click is the operator's choice for the kind of
+// item that deck is showing (ui/deck_view_mode.ts); the decks apply it, and a different song or scripture
+// then opens the same way.
+function chooseDeckMode(deck: 'preview' | 'live', mode: 'matrix' | 'list') {
+  const state = currentSnapshot && currentSnapshot.state;
+  const item = state ? (deck === 'preview' ? state.staged_item : state.live_item) : null;
+  rememberDeckMode(deck, item ? item.item_type : '', mode);
   refreshSlideDecks();
-});
-on('btn-preview-view-list', 'click', () => {
-  const bM = document.getElementById('btn-preview-view-matrix');
-  const bL = document.getElementById('btn-preview-view-list');
-  if (bL) bL.classList.add('active');
-  if (bM) bM.classList.remove('active');
-  if (previewSlideMatrixEl) previewSlideMatrixEl.className = 'slide-matrix list-mode';
-  refreshSlideDecks();
-});
-
-// Live Deck View Mode Switching (Matrix vs List)
-on('btn-live-view-matrix', 'click', () => {
-  setActiveLiveViewMode('matrix');
-  const bM = document.getElementById('btn-live-view-matrix');
-  const bL = document.getElementById('btn-live-view-list');
-  if (bM) bM.classList.add('active');
-  if (bL) bL.classList.remove('active');
-  if (liveSlideMatrixEl) liveSlideMatrixEl.className = 'slide-matrix matrix-mode';
-  refreshSlideDecks();
-});
-on('btn-live-view-list', 'click', () => {
-  setActiveLiveViewMode('list');
-  const bM = document.getElementById('btn-live-view-matrix');
-  const bL = document.getElementById('btn-live-view-list');
-  if (bL) bL.classList.add('active');
-  if (bM) bM.classList.remove('active');
-  if (liveSlideMatrixEl) liveSlideMatrixEl.className = 'slide-matrix list-mode';
-  refreshSlideDecks();
-});
+}
+on('btn-preview-view-matrix', 'click', () => chooseDeckMode('preview', 'matrix'));
+on('btn-preview-view-list', 'click', () => chooseDeckMode('preview', 'list'));
+on('btn-live-view-matrix', 'click', () => chooseDeckMode('live', 'matrix'));
+on('btn-live-view-list', 'click', () => chooseDeckMode('live', 'list'));
 
 // Resource View Mode Switching (Table vs Grid)
 on('btn-resource-view-table', 'click', () => {
