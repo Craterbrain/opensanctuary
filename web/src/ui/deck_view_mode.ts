@@ -1,6 +1,6 @@
 /**
- * Which view the Preview and Live decks open in: the grid (⊞, each slide as a rendered thumbnail) or the
- * list (☰, one text row per slide).
+ * Which view the Preview and Live decks open in: the grid (⊞, each slide drawn as it will look) or the
+ * list (☰, each slide as a text card: its badge and its lyrics). Both lay their cards out in columns.
  *
  * Songs and scriptures are text, and read best as a list, so they open in the list; everything else
  * (presentations, media, headers) is visual and opens in the grid. Clicking ⊞ or ☰ overrides that for

@@ -23,7 +23,9 @@ describe("E2E: deck view modes (grid = rendered slides, list = text rows)", () =
   }, [method, path, body] as const);
   const deck = (which: "preview" | "live" = "preview") => page.evaluate((which) => {
     const m = document.getElementById(`${which}-slide-matrix`)!;
-    return { mode: m.classList.contains("list-mode") ? "list" : "matrix", thumbs: m.querySelectorAll(".slide-thumb-card").length, textCards: m.querySelectorAll(".slide-card:not(.slide-thumb-card)").length,
+    // How many columns the cards sit in (distinct left edges): the list is text cards in columns, not one stack.
+    const columns = new Set([...m.querySelectorAll(".slide-card")].map((c) => Math.round(c.getBoundingClientRect().left))).size;
+    return { columns, mode: m.classList.contains("list-mode") ? "list" : "matrix", thumbs: m.querySelectorAll(".slide-thumb-card").length, textCards: m.querySelectorAll(".slide-card:not(.slide-thumb-card)").length,
       active: document.querySelector(`#btn-${which}-view-matrix.active`) ? "matrix" : document.querySelector(`#btn-${which}-view-list.active`) ? "list" : "none",
       badges: [...m.querySelectorAll(".slide-badge-pill, .slide-badge, .slide-card .badge")].map((b) => (b.textContent ?? "").trim()).filter(Boolean) };
   }, which);
@@ -31,7 +33,7 @@ describe("E2E: deck view modes (grid = rendered slides, list = text rows)", () =
     await asConsole("POST", "/api/command", { StageItem: { item_index: index, slide_index: 0 } });
     await pollUntil(async () => (await (await fetch(`${base}/api/state`)).json()).state.staged_item?.item_type, (t) => t === type, 8000, `${type} staged`);
   };
-  const isList = (d: any) => d.mode === "list" && d.active === "list" && d.textCards === 2 && d.thumbs === 0;
+  const isList = (d: any) => d.mode === "list" && d.active === "list" && d.textCards === 2 && d.thumbs === 0 && d.columns >= 2; // text cards, in columns
   const isGrid = (d: any) => d.mode === "matrix" && d.active === "matrix" && d.thumbs === 2 && d.textCards === 0;
 
   beforeAll(async () => {
