@@ -62,13 +62,12 @@
     ['BSB', 'Berean Standard Bible', 'English'], ['WEB', 'World English Bible', 'English'],
     ['YLT', "Young's Literal Translation (1898)", 'English'], ['DBY', 'Darby Translation (1890)', 'English'],
     ['DRB', 'Douay-Rheims Bible (1899)', 'English'], ['MSG', 'The Message (2002)', 'English'],
-    ['AMP', 'Amplified Bible (2015)', 'English'], ['RVR1960', 'Reina-Valera 1960', 'Spanish'],
+    ['AMP', 'Amplified Bible (2015)', 'English'],
     ['LSG', 'Louis Segond 1910', 'French'], ['LUT', 'Lutherbibel 1912', 'German'],
     ['CLE', 'Biblia Sacra Vulgata (Clementine Latin)', 'Latin'],
-    ['ALM', 'João Ferreira de Almeida Revista e Corrigida', 'Portuguese'],
     ['SYNOD', 'Синодальный перевод (Russian Synodal 1876)', 'Russian'],
     ['UBIO', 'Біблія в пер. Івана Огієнка (1962)', 'Ukrainian'], ['CUV', '和合本 (Chinese Union Version)', 'Chinese'],
-    ['TAG', 'Ang Biblia (1905)', 'Tagalog'], ['LXXE', 'English Septuagint Bible (Brenton 1851)', 'Greek']
+    ['LXXE', 'English Septuagint Bible (Brenton 1851)', 'Greek']
   ];
 
   /**
@@ -76,22 +75,26 @@
    * de-duplicated by (abbreviation, language) with the sources combined; English first, then by
    * language and name. Entries: { id, name, language, abbreviation, source, provider, sourceKey }.
    */
-  function buildCatalog(bollsLanguages, churchAppsItems) {
+  function buildCatalog(bollsLanguages, churchAppsItems, ownEntries) {
     var map = {};
-    function add(item, label) {
+    function add(item, label, provider) {
       var abbr = String(item.abbreviation || item.id || '').trim().toUpperCase();
       if (!abbr) return;
       var lang = normalizeLanguage(item.language || 'English');
       var key = abbr + '\u0000' + lang.toLowerCase();
       var existing = map[key];
       if (existing) {
-        if (existing.source.indexOf(label) === -1) existing.source = existing.source ? existing.source + ' • ' + label : label;
-        if (String(item.name || '').length > existing.name.length) existing.name = item.name;
+        // (An entry from our own repository says only that: it is downloaded from there whoever else lists it.)
+        if (existing.provider !== 'craterbrain' && existing.source.indexOf(label) === -1) existing.source = existing.source ? existing.source + ' • ' + label : label;
+        // Our own repository's entry keeps its name and its download address; for the rest, the longer title is the more informative.
+        if (existing.provider !== 'craterbrain' && String(item.name || '').length > existing.name.length) existing.name = item.name;
       } else {
         map[key] = { id: String(item.id || abbr), name: String(item.name || abbr), language: lang, abbreviation: abbr,
-                     source: label, provider: 'bolls', sourceKey: item.sourceKey || item.source_key || null };
+                     source: label, provider: provider || 'bolls', sourceKey: item.sourceKey || item.source_key || null };
       }
     }
+    // Added first, so a translation we host is downloaded from our repository whoever else lists it.
+    (Array.isArray(ownEntries) ? ownEntries : []).forEach(function (e) { add(e, OWN_SOURCE_LABEL, 'craterbrain'); });
     CURATED.forEach(function (c) { add({ id: c[0], abbreviation: c[0], name: c[1], language: c[2] }, 'OpenLP Community'); });
     (Array.isArray(bollsLanguages) ? bollsLanguages : []).forEach(function (l) {
       var langName = (l && l.language) || 'English';
@@ -108,11 +111,38 @@
       var aEng = a.language === 'English', bEng = b.language === 'English';
       if (aEng !== bEng) return aEng ? -1 : 1;
       if (a.language !== b.language) return a.language < b.language ? -1 : 1;
+      // Within a language, the public-domain translations we host come first.
+      var aOwn = a.provider === 'craterbrain', bOwn = b.provider === 'craterbrain';
+      if (aOwn !== bOwn) return aOwn ? -1 : 1;
       return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
     });
     return list;
   }
 
+  // The public-domain Bibles the OpenSanctuary project hosts itself (github.com/Craterbrain/opensanctuary-bibles),
+  // so a church is never without scripture if a third-party service changes or disappears.
+  var OWN_RAW_BASE = 'https://raw.githubusercontent.com/Craterbrain/opensanctuary-bibles/main/';
+  var OWN_CATALOG_URL = OWN_RAW_BASE + 'catalog.json';
+  var OWN_SOURCE_LABEL = 'OpenSanctuary Bibles \u00b7 public domain';
+  /** True for a file address inside our own repository (what a catalog entry may point at). */
+  function isOwnBibleUrl(url) {
+    return String(url).indexOf(OWN_RAW_BASE + 'bibles/') === 0 && /^[A-Za-z0-9_.-]+\.json$/.test(String(url).slice((OWN_RAW_BASE + 'bibles/').length));
+  }
+  /** Our repository's catalog.json -> catalog entries (anything malformed is skipped, never trusted as an address). */
+  function ownCatalogEntries(jsonText) {
+    var data;
+    try { data = JSON.parse(jsonText); } catch (e) { return []; }
+    var out = [];
+    ((data && Array.isArray(data.bibles)) ? data.bibles : []).forEach(function (b) {
+      if (!b || typeof b !== 'object') return;
+      var abbr = String(b.abbreviation || '').trim().toUpperCase();
+      var file = String(b.file || '');
+      if (!/^[A-Z0-9][A-Z0-9_-]{0,39}$/.test(abbr) || !/^bibles\/[A-Za-z0-9_.-]+\.json$/.test(file) || !b.name) return;
+      out.push({ id: String(b.id || abbr), name: String(b.name), language: String(b.language || 'English'), abbreviation: abbr,
+                 sourceKey: OWN_RAW_BASE + file });
+    });
+    return out;
+  }
   /** HTML tags and Strong's-number markup out of a Bolls verse. */
   function cleanVerseText(raw) {
     var out = '';
@@ -195,12 +225,12 @@
   }
 
   /** { "Book": { "1": { "1": "text" } } } (+ the file's URL for the version name) -> chapters. */
-  function parseGithubBible(jsonText, url) {
+  function parseGithubBible(jsonText, url, version) {
     var data;
     try { data = JSON.parse(jsonText); } catch (e) { return []; }
     if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
     var file = String(url).split('/').pop().replace(/\.json$/, '');
-    var version = (file && makeAbbreviation(decodeURIComponent(file))) || 'BIBLE';
+    version = (version && String(version).trim().toUpperCase()) || (file && makeAbbreviation(decodeURIComponent(file))) || 'BIBLE';
     var items = [];
     Object.keys(data).forEach(function (book) {
       var chapters = data[book];
@@ -266,6 +296,7 @@
     BOOKS: BOOKS, CURATED: CURATED, normalizeLanguage: normalizeLanguage, buildCatalog: buildCatalog, cleanVerseText: cleanVerseText,
     parseBollsTranslation: parseBollsTranslation, makeAbbreviation: makeAbbreviation, titleCase: titleCase, parseRepo: parseRepo,
     githubContentsUrl: githubContentsUrl, githubCatalogEntries: githubCatalogEntries, isRawGithubUrl: isRawGithubUrl,
+    OWN_CATALOG_URL: OWN_CATALOG_URL, isOwnBibleUrl: isOwnBibleUrl, ownCatalogEntries: ownCatalogEntries,
     parseGithubBible: parseGithubBible, exactBook: exactBook, chapterUrl: chapterUrl, passageUrl: passageUrl, parseBibleApi: parseBibleApi,
     chunk: chunk,
     bollsUrl: function (abbr) { return 'https://bolls.life/static/translations/' + encodeURIComponent(String(abbr).trim().toUpperCase()) + '.json'; },

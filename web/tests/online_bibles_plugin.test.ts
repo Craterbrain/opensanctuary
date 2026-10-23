@@ -44,6 +44,62 @@ describe("Online Bibles plugin: languages and catalog", () => {
   });
 });
 
+describe("Online Bibles plugin: the OpenSanctuary Bibles repository", () => {
+  const OWN = "https://raw.githubusercontent.com/Craterbrain/opensanctuary-bibles/main/";
+  const catalogJson = JSON.stringify({ format: 1, bibles: [
+    { id: "eng-kjv2006", abbreviation: "KJV", name: "King James Version (Authorized Version)", language: "English", file: "bibles/eng-kjv2006.json" },
+    { id: "fraLSG", abbreviation: "LSG", name: "Louis Segond (1910)", language: "French", file: "bibles/fraLSG.json" },
+    { id: "evil", abbreviation: "EVIL", name: "Not from our folder", language: "English", file: "../../evil/x.json" },
+    { id: "bad", abbreviation: "bad abbr!", name: "Bad abbreviation", language: "English", file: "bibles/bad.json" },
+    { id: "nameless", abbreviation: "NONAME", language: "English", file: "bibles/nameless.json" },
+    null, "not an object"] });
+
+  test("reads catalog.json, and never accepts an address outside its bibles/ folder", () => {
+    const entries = Bibles.ownCatalogEntries(catalogJson);
+    expect(entries.map((e: any) => e.abbreviation)).toEqual(["KJV", "LSG"]);
+    expect(entries[0].sourceKey).toBe(OWN + "bibles/eng-kjv2006.json");
+    expect(Bibles.ownCatalogEntries("not json")).toEqual([]);
+    expect(Bibles.ownCatalogEntries(JSON.stringify({ bibles: "nope" }))).toEqual([]);
+    expect(Bibles.OWN_CATALOG_URL).toBe(OWN + "catalog.json");
+  });
+
+  test("only files in our repository's bibles/ folder are ours to download", () => {
+    expect(Bibles.isOwnBibleUrl(OWN + "bibles/engwebp.json")).toBe(true);
+    for (const bad of [OWN + "bibles/../x.json", OWN + "bibles/sub/x.json", OWN + "catalog.json", OWN + "bibles/x.txt",
+      "https://raw.githubusercontent.com/someone-else/opensanctuary-bibles/main/bibles/a.json", "http://raw.githubusercontent.com/Craterbrain/opensanctuary-bibles/main/bibles/a.json"]) {
+      expect(Bibles.isOwnBibleUrl(bad)).toBe(false);
+    }
+  });
+
+  test("a translation we host is downloaded from us whoever else lists it, and our entries come first in their language", () => {
+    const bolls = [{ language: "English", translations: [
+      { short_name: "KJV", full_name: "King James Version with Strong's numbers" }, { short_name: "AAA", full_name: "A Bible that sorts first" }] }];
+    const churchApps = [{ id: "kjv", abbreviation: "KJV", name: "KJV", language: "eng" }];
+    const cat = Bibles.buildCatalog(bolls, churchApps, Bibles.ownCatalogEntries(catalogJson));
+    const kjv = cat.filter((e: any) => e.abbreviation === "KJV" && e.language === "English");
+    expect(kjv.length).toBe(1);
+    expect(kjv[0].provider).toBe("craterbrain");
+    expect(kjv[0].sourceKey).toBe(OWN + "bibles/eng-kjv2006.json");
+    expect(kjv[0].name).toBe("King James Version (Authorized Version)"); // not replaced by the longer Bolls title
+    expect(kjv[0].source).toBe("OpenSanctuary Bibles \u00b7 public domain"); // not "... \u2022 Bolls.life \u2022 ChurchApps"
+    const english = cat.filter((e: any) => e.language === "English");
+    expect(english[0].abbreviation).toBe("KJV");
+    expect(english.findIndex((e: any) => e.abbreviation === "AAA")).toBeGreaterThan(0);
+    expect(cat.find((e: any) => e.abbreviation === "LSG")?.provider).toBe("craterbrain");
+    // Without our repository (offline, or GitHub down) the catalog is exactly what it was.
+    expect(Bibles.buildCatalog(bolls, churchApps).find((e: any) => e.abbreviation === "KJV")?.provider).toBe("bolls");
+  });
+
+  test("our Bible files parse with the translation's own abbreviation as the version", () => {
+    const body = JSON.stringify({ John: { "3": { "16": "For God so loved the world", "17": "For God sent not his Son" } }, Tobit: { "1": { "1": "The book of the words of Tobias" } } });
+    const items = Bibles.parseGithubBible(body, OWN + "bibles/eng-kjv2006.json", "kjv");
+    expect(items.map((i: any) => `${i.book} ${i.chapter} ${i.version}`)).toEqual(["John 3 KJV", "Tobit 1 KJV"]);
+    expect(items[0].verses.map((v: any) => v.verse_number)).toEqual([16, 17]);
+    // Without one (the GitHub-repository import) it is still derived from the file name.
+    expect(Bibles.parseGithubBible(body, "https://raw.githubusercontent.com/o/r/main/versions/en/KJV.json")[0].version).toBe("KJV");
+  });
+});
+
 describe("Online Bibles plugin: downloads", () => {
   test("knows the canonical books", () => {
     expect(Bibles.BOOKS.length).toBe(66);

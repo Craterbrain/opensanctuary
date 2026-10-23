@@ -72,8 +72,9 @@ The operator console (library, schedule, preview and live panes) and the slide b
   backgrounds, and arrangements. YMMV. `.odp` round-trips: export a
   presentation back out, e.g. to hand to someone using LibreOffice Impress.
 - Bible translations you own work out of the box (point at your own `.db`
-  files); downloading public-domain translations and looking up passages
-  online is the **Online Bibles** plugin.
+  files); downloading public-domain translations (64, in 30 languages, hosted in
+  [opensanctuary-bibles](https://github.com/Craterbrain/opensanctuary-bibles))
+  and looking up passages online is the **Online Bibles** plugin.
 - Song lyrics lookup is the **Genius Lyrics** plugin, online video import is
   the **Video Downloader** (`yt-dlp`) plugin and free stock photos are the
   **Stock Images** plugin — see [Plugins](#plugins). Downloaded H.264 video is

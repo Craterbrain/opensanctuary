@@ -512,6 +512,9 @@ function insertTagIntoBulkEditor(tag: string) {
 }
 
 async function saveEditorItem(addToSchedule = false) {
+  // Read now: closing the editor (below, before AddToSchedule) resets currentEditorType to
+  // 'song', so a scripture or presentation used to be scheduled as a song id that doesn't exist.
+  const editorType = currentEditorType;
   const title = createItemTitle ? createItemTitle.value.trim() : '';
   const author = createItemAuthor ? createItemAuthor.value.trim() : '';
   const copyright = createItemCopyright ? createItemCopyright.value.trim() : '';
@@ -598,7 +601,7 @@ async function saveEditorItem(addToSchedule = false) {
     let reqBody = JSON.stringify(payload);
     let savedItemId = payload.id;
 
-    if (currentEditorType === 'presentation') {
+    if (editorType === 'presentation') {
       endpoint = '/api/presentations';
       const presId = editingItemId || `pres_${Date.now()}`;
       savedItemId = presId;
@@ -627,7 +630,7 @@ async function saveEditorItem(addToSchedule = false) {
         modified_date: new Date().toISOString()
       };
       reqBody = JSON.stringify(presPayload);
-    } else if (currentEditorType === 'scripture') {
+    } else if (editorType === 'scripture') {
       endpoint = '/api/scriptures';
       const parsed = parseScriptureReference(title);
       const bookName = (parsed && parsed.isReference && parsed.book) ? parsed.book : (title.replace(/\s+\d+.*$/, '') || title);
@@ -658,7 +661,7 @@ async function saveEditorItem(addToSchedule = false) {
 
     if (res.ok) {
       closeModal(createModal);
-      const targetTab = currentEditorType === 'song' ? 'songs' : (currentEditorType === 'scripture' ? 'scriptures' : 'presentations');
+      const targetTab = editorType === 'song' ? 'songs' : (editorType === 'scripture' ? 'scriptures' : 'presentations');
       try {
         await loadLibraryTab(targetTab);
       } catch (e) {
@@ -666,7 +669,7 @@ async function saveEditorItem(addToSchedule = false) {
       }
 
       if (addToSchedule) {
-        sendCommand({ AddToSchedule: { item_type: currentEditorType, item_id: savedItemId } });
+        sendCommand({ AddToSchedule: { item_type: editorType, item_id: savedItemId } });
         showToast(`✓ Saved "${title}" to Library & added to Schedule`, 'success');
       } else {
         showToast(`✓ Saved "${title}" to Library`, 'success');
