@@ -1,6 +1,6 @@
 # First-time setup
 
-_Last edited: 2026-10-15_
+_Last edited: 2026-10-22_
 
 Status: **implemented** — all 7 steps below are built (`web/src/ui/first_time_setup.ts`).
 What follows is the original plan, kept because it's still the accurate rationale and
@@ -57,7 +57,13 @@ First-Time Setup" lives under Settings → About, per the original plan.
 4. **Bible content.** The load-bearing step (see above). Three options
    presented together, not sequential forced choices:
    - Turn on the **Online Bibles** plugin (one click) and download a
-     translation from its panel — works offline afterward.
+     translation from its panel — works offline afterward. Its list starts
+     with 64 public-domain translations the project hosts itself
+     (`Craterbrain/opensanctuary-bibles`: KJV, WEB, ASV, BSB, Reina-Valera
+     1909, Louis Segond, Luther 1912 and more, in 30 languages), so there is
+     always something to install. An empty Scriptures tab has a **Get
+     Bibles** button that opens the plugin (or its review card, if it isn't
+     turned on yet).
    - Point at existing Bible `.db` files (someone with a prior install, or
      files obtained separately) — sets `biblesDirectory`
      (`paths.md`'s Settings entry).

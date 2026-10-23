@@ -93,13 +93,15 @@
     setStatus('Loading the Bible catalog…');
     var bolls = [];
     var churchApps = [];
+    var own = [];
     // Each source is optional: the curated list always works, and a source that is down just
     // contributes nothing.
     await Promise.all([
+      fetchText(Bibles.OWN_CATALOG_URL).then(function (t) { own = Bibles.ownCatalogEntries(t); }).catch(function () {}),
       fetchText(Bibles.BOLLS_LANGUAGES_URL).then(function (t) { bolls = JSON.parse(t); }).catch(function () {}),
       fetchText(Bibles.CHURCHAPPS_URL).then(function (t) { churchApps = JSON.parse(t); }).catch(function () {})
     ]);
-    catalog = Bibles.buildCatalog(bolls, churchApps);
+    catalog = Bibles.buildCatalog(bolls, churchApps, own);
     var languages = {};
     catalog.forEach(function (e) { languages[e.language] = true; });
     var select = $('catalog-lang');
@@ -134,7 +136,10 @@
     btn.disabled = true;
     try {
       var url, chapters;
-      if (entry.provider === 'github') {
+      if (entry.provider === 'craterbrain') {
+        if (!Bibles.isOwnBibleUrl(entry.sourceKey)) throw new Error('not an OpenSanctuary Bibles file address');
+        url = entry.sourceKey;
+      } else if (entry.provider === 'github') {
         if (!Bibles.isRawGithubUrl(entry.sourceKey)) throw new Error('not a GitHub raw-file address');
         url = entry.sourceKey;
       } else {
@@ -143,7 +148,9 @@
       setStatus('Downloading ' + entry.name + '… (a whole Bible can take a minute)');
       setProgress(0, 100);
       var body = await fetchText(url);
-      chapters = entry.provider === 'github' ? Bibles.parseGithubBible(body, url) : Bibles.parseBollsTranslation(body, entry.abbreviation);
+      chapters = entry.provider === 'craterbrain' ? Bibles.parseGithubBible(body, url, entry.abbreviation)
+        : entry.provider === 'github' ? Bibles.parseGithubBible(body, url)
+        : Bibles.parseBollsTranslation(body, entry.abbreviation);
       if (!chapters.length) throw new Error('that file had no chapters in a format this plugin understands');
       await storeChapters(chapters);
       var verses = chapters.reduce(function (n, c) { return n + c.verses.length; }, 0);

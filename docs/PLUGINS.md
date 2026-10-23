@@ -1,6 +1,6 @@
 # OS-Next Plugin System
 
-_Last edited: 2026-10-21_
+_Last edited: 2026-10-22_
 
 A plugin extends OpenSanctuary in one of two ways, and **nothing runs until the operator approves it**
 in Settings > Plugins:
@@ -63,10 +63,14 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   pinned to the address it checked); every redirect hop is re-checked, bodies are capped at 2 MB, and
   a refusal is audited. `library.addSong {song}` (needs `library.write` on `songs`) stores a song; the
   host mints its id and applies size limits. A sandboxed frame can't submit a `<form>`, so use buttons.
-- **Online Bibles is a plugin.** Downloading translations (ChurchApps / Bolls.life / the OpenLP community
-  list, and any public GitHub repository laid out like `arron-taylor/bible-versions`) and looking up a
+- **Online Bibles is a plugin.** Downloading translations (the project's own public-domain collection,
+  [`Craterbrain/opensanctuary-bibles`](https://github.com/Craterbrain/opensanctuary-bibles): 64 translations
+  in 30 languages, listed first and downloaded from there whoever else lists the same abbreviation; then
+  ChurchApps / Bolls.life / the OpenLP community list, and any public GitHub repository laid out like
+  `arron-taylor/bible-versions`) and looking up a
   passage or a whole book (bible-api.com) is `web/plugins/online_bibles/`. It asks for those five hosts,
-  `library.write` on `scriptures` (`library.addScriptures`: the host derives each chapter's id and verse
+  `library.write` on `scriptures` (`library.addScriptures`: up to 500 chapters per call, each 1-400 verses of up to 16,000 bytes (one
+  oversize verse refuses the whole call); the host derives each chapter's id and verse
   range, so re-downloading a translation replaces its chapters; the same grant can therefore also replace
   chapters of a translation you already have, which its review text says) and optionally `AddToSchedule`.
   The first-run wizard's Bible step turns it on for you, listing what it can reach.

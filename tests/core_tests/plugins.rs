@@ -794,7 +794,10 @@ async fn test_online_bibles_plugin_host_api_adds_chapters() {
     assert_eq!(post(serde_json::json!(many), token.clone()).await.status(), reqwest::StatusCode::BAD_REQUEST);
     let mut no_verses = chapter("John", 3); no_verses["verses"] = serde_json::json!([]);
     assert_eq!(post(serde_json::json!([no_verses]), token.clone()).await.status(), reqwest::StatusCode::BAD_REQUEST);
-    let mut long_text = chapter("John", 3); long_text["verses"][0]["text"] = serde_json::json!("x".repeat(4001));
+    // A long verse is fine (the Greek Esther letters, Burmese text): over the cap is refused, not under it.
+    let mut long_verse = chapter("Esther (Greek)", 8); long_verse["verses"][0]["text"] = serde_json::json!("x".repeat(10_500));
+    assert_eq!(post(serde_json::json!([long_verse]), token.clone()).await.status(), reqwest::StatusCode::OK);
+    let mut long_text = chapter("John", 3); long_text["verses"][0]["text"] = serde_json::json!("x".repeat(16_001));
     assert_eq!(post(serde_json::json!([long_text]), token.clone()).await.status(), reqwest::StatusCode::BAD_REQUEST);
     let mut bad_version = chapter("John", 3); bad_version["version"] = serde_json::json!("");
     assert_eq!(post(serde_json::json!([bad_version]), token.clone()).await.status(), reqwest::StatusCode::BAD_REQUEST);

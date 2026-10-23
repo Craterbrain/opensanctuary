@@ -664,7 +664,11 @@ pub(super) struct PluginScripturesReq {
 /// batches); a verse's text is capped too.
 const MAX_SCRIPTURE_ITEMS: usize = 500;
 const MAX_VERSES_PER_ITEM: usize = 400;
-const MAX_VERSE_TEXT: usize = 4000;
+/// Bytes, not characters. Real scripture needs more than the old 4000: the letters in the Greek Esther
+/// additions run past 4600 bytes, and Burmese (3 bytes a character, plus invisible word-break marks) past
+/// 5800; the longest verse in the OpenSanctuary Bibles repository is 10481. (The whole request is capped
+/// at 32 MB separately.)
+const MAX_VERSE_TEXT: usize = 16_000;
 
 /// POST /api/plugin-host/scriptures -- adds Bible chapters to the library for a plugin granted
 /// `library.write` on `scriptures`. Ids are derived here from (book, chapter, verses, version) --
@@ -709,7 +713,7 @@ pub(super) async fn plugin_add_scriptures(
             || item.verses.len() > MAX_VERSES_PER_ITEM
             || item.verses.iter().any(|v| v.verse_number == 0 || v.verse_number > 1000 || v.text.len() > MAX_VERSE_TEXT)
         {
-            return Err(err(StatusCode::BAD_REQUEST, "a chapter needs 1-400 verses of up to 4000 characters"));
+            return Err(err(StatusCode::BAD_REQUEST, &format!("a chapter needs 1-{MAX_VERSES_PER_ITEM} verses of up to {MAX_VERSE_TEXT} bytes each")));
         }
         item.verses.sort_by_key(|v| v.verse_number);
         item.verse_start = item.verses.first().map(|v| v.verse_number).unwrap_or(1);

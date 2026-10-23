@@ -432,6 +432,26 @@ export function renderCategoryTree(tabName: string) {
       const emptyNote = document.createElement('div');
       emptyNote.className = 'category-tree-note';
       emptyNote.textContent = 'No Bible versions installed.';
+      // With nothing to read from, point at whichever plugin provides Bibles (running, or installed but not
+      // turned on yet): its entry is in the list below, and this opens it the same way. Generic on purpose --
+      // the console doesn't name plugins (core/plugin_hints.ts).
+      const bibleEntry = librarySources.find((s) => s.tab === 'scriptures')
+        ?? librarySourceHints.find((h) => h.tab === 'scriptures' && !librarySources.some((s) => s.id === h.id));
+      if (bibleEntry) {
+        const getBtn = document.createElement('button');
+        getBtn.type = 'button';
+        getBtn.className = 'btn btn-sm btn-primary';
+        getBtn.id = 'btn-get-bibles';
+        getBtn.style.marginTop = 'var(--os-space-3)';
+        getBtn.textContent = `Get Bibles: ${bibleEntry.label}`;
+        getBtn.addEventListener('click', () => {
+          const node = (categoryTreeContainer.querySelector('.category-tree-actions .plugin-source-node:not(.plugin-source-node--off)')
+            ?? categoryTreeContainer.querySelector('.category-tree-actions .plugin-source-node--off')) as HTMLElement | null;
+          node?.click();
+        });
+        emptyNote.appendChild(document.createElement('br'));
+        emptyNote.appendChild(getBtn);
+      }
       categoryTreeContainer.appendChild(emptyNote);
     } else {
       availableBibles.forEach(bible => {
