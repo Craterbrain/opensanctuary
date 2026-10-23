@@ -1,0 +1,61 @@
+# Free, continuous semantic security scanning (GitHub Advanced Security's CodeQL, free for public
+# repos -- this one is) across both languages in the repo: Rust (`src/`) and the web UI
+# (`web/src/`, TypeScript). Findings show up as code-scanning alerts on the repo (Security tab),
+# each with a Copilot Autofix suggestion where one applies -- nothing to install or submit by hand.
+#
+# `build-mode: none` for both languages: CodeQL's no-build scanning (GA for Rust and C/C++ as of
+# 2026-10-14) analyzes the source directly, so this doesn't need this repo's full native build
+# toolchain (BUILDING.md's GTK/WebKit dev headers) just to get a security scan -- ci.yml's `rust`
+# job is still the one that proves the code actually compiles and passes its own tests.
+#
+# `security-extended`: the broader query suite (CodeQL's default is deliberately conservative
+# about false positives); worth the extra noise for a church-presentation server that handles
+# pairing tokens and a plugin trust boundary.
+#
+# Runs on every PR into main (so a new finding blocks review the same way a failing test would),
+# on pushes to main (covers direct pushes and the queries GitHub only runs post-merge), weekly
+# (CodeQL's own query packs update between PRs), and by hand.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 6 * * 1' # Monday, off-peak
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write # upload SARIF results to the Security tab
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: rust
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-extended
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:${{ matrix.language }}'
