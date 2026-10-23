@@ -77,7 +77,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # DEBIAN_FRONTEND/NEEDRESTART_MODE: without these, `apt-get install` on the current
+      # ubuntu-latest image can hang indefinitely -- `needrestart` (triggered by libgtk/webkit's
+      # own dependencies) prompts interactively asking which services to restart, and a
+      # non-TTY CI runner can never answer it. Observed directly: three consecutive runs of this
+      # PR's CI hung on this exact step for 20+ minutes each before this fix.
       - name: Install system dependencies (BUILDING.md) + a keyring for the tests
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev gnome-keyring dbus
@@ -125,8 +133,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # See the `rust` job's identical step for why these two env vars matter here.
       - name: Install system dependencies (BUILDING.md) + a keyring for the tests
         working-directory: .
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev gnome-keyring dbus
