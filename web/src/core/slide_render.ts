@@ -153,7 +153,11 @@ export function renderSlideElements(
       const elNode = hostEl.querySelector(`[data-element-id="${el.id}"]`) as HTMLElement | null;
       const textInner = elNode?.querySelector('.slide-text-inner') as HTMLElement | null;
       if (elNode && textInner) {
-        autoFitLyrics(elNode, textInner, { minFontSize: 14, maxFontSize: 100 });
+        // The 14px floor is for a 1080p slide. In a small box (a filmstrip or deck thumbnail) it forced
+        // longer text to overflow and be cropped, so the floor scales down with the box; the ceiling is
+        // unchanged (the Preview and Live panels size their text from it).
+        const fontScale = projection.contentH > 0 ? projection.contentH / 1080 : 1;
+        autoFitLyrics(elNode, textInner, { minFontSize: Math.min(14, Math.max(2, 14 * fontScale)), maxFontSize: 100 });
       }
     }
   }

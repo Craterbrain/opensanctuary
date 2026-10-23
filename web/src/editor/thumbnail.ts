@@ -406,7 +406,20 @@ export class FilmstripSidebar {
     // Same canonical renderer Preview/Live use — renders positioned elements
     // (images/video/shapes/tables/text) when present, otherwise autofits the
     // flat text. No resolved theme is available in this context.
-    renderSlideVisual(thumbView, elementsEl, lyricsEl, slide, null);
+    //
+    // It measures its container, and this card isn't in the page yet (the caller attaches it after
+    // building it), so drawing now measured 0x0 and laid the text out at full 1080p size: huge
+    // fragments of letters in the thumbnail. Draw once the card has a width, and again if the
+    // sidebar is resized -- as slide_deck_view.ts's buildSlideThumbElement does.
+    let drawnWidth = 0;
+    const draw = () => {
+      const w = thumbView.clientWidth;
+      if (!w || w === drawnWidth) return;
+      drawnWidth = w;
+      renderSlideVisual(thumbView, elementsEl, lyricsEl, slide, null);
+    };
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(draw).observe(thumbView);
+    else draw();
 
     card.appendChild(thumbView);
 
