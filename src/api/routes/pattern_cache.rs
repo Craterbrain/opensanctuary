@@ -122,7 +122,7 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/pattern-cache/status", get(get_status))
         .route("/api/pattern-cache/lookup", get(get_lookup))
         .route("/api/pattern-cache/start", post(post_start))
-        .route("/api/pattern-cache/jobs/:id/frame", post(post_frame))
-        .route("/api/pattern-cache/jobs/:id/finish", post(post_finish))
-        .route("/api/pattern-cache/jobs/:id", delete(delete_job))
+        .route("/api/pattern-cache/jobs/{id}/frame", post(post_frame))
+        .route("/api/pattern-cache/jobs/{id}/finish", post(post_finish))
+        .route("/api/pattern-cache/jobs/{id}", delete(delete_job))
 }

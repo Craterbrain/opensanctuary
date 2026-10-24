@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, State};
+use axum::extract::{ConnectInfo, Extension, State};
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
@@ -346,7 +346,11 @@ pub fn broadcast_snapshot(app: &AppState) -> StateSnapshot {
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(app_state): State<AppState>,
-    connect_info: Option<ConnectInfo<std::net::SocketAddr>>,
+    // axum 0.8 dropped the blanket `Option<T: FromRequestParts>` impl; ConnectInfo's own
+    // FromRequestParts just reads `Extension<ConnectInfo<T>>` under the hood (see its source),
+    // and Extension<T> still implements OptionalFromRequestParts, so this is the same "missing
+    // connect info is fine, not every way of serving this app supplies it" behavior as before.
+    connect_info: Option<Extension<ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     // In "restricted" CORS mode a browser page from a foreign origin must not
@@ -367,7 +371,7 @@ pub async fn ws_handler(
     // sockets, globally and per peer: /ws is readable cross-origin by design,
     // so one unauthenticated peer must not be able to pin memory, the DB
     // mutex, or every slot the real consoles/displays need.
-    let ip_guard = match connect_info.map(|ConnectInfo(a)| IpSlot::acquire(a.ip())) {
+    let ip_guard = match connect_info.map(|Extension(ConnectInfo(a))| IpSlot::acquire(a.ip())) {
         Some(Some(g)) => Some(g),
         // No peer address available (not served with connect info): global cap only.
         None => None,
@@ -449,7 +453,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
     // 1. Send initial StateSnapshot directly (as raw JSON)
     let snapshot = app_state.engine.snapshot();
     if let Ok(json_str) = serde_json::to_string(&snapshot) {
-        let _ = sender.send(Message::Text(json_str)).await;
+        let _ = sender.send(Message::Text(json_str.into())).await;
     }
 
     // 2. Spawn task to broadcast updates to this client. Also carries direct,
@@ -463,14 +467,14 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
         loop {
             tokio::select! {
                 _ = ping.tick() => {
-                    if sender.send(Message::Ping(Vec::new())).await.is_err() {
+                    if sender.send(Message::Ping(Vec::new().into())).await.is_err() {
                         break;
                     }
                 }
                 msg = rx.recv() => {
                     match msg {
                         Ok(msg) => {
-                            if sender.send(Message::Text(msg)).await.is_err() {
+                            if sender.send(Message::Text(msg.into())).await.is_err() {
                                 break;
                             }
                         }
@@ -479,7 +483,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                     }
                 }
                 Some(direct) = direct_rx.recv() => {
-                    if sender.send(Message::Text(direct)).await.is_err() {
+                    if sender.send(Message::Text(direct.into())).await.is_err() {
                         break;
                     }
                 }
