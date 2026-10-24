@@ -24,7 +24,7 @@ impl ProjectionState {
 
         let instance = Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
         let surface = instance.create_surface(window.clone()).expect("Failed to create surface");
@@ -34,6 +34,7 @@ impl ProjectionState {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                ..Default::default()
             })
             .await
             .expect("Failed to find wgpu adapter");
@@ -44,8 +45,8 @@ impl ProjectionState {
                     label: Some("Projection Device"),
                     required_features: wgpu::Features::empty(),
                     required_limits: adapter.limits(),
+                    ..Default::default()
                 },
-                None,
             )
             .await
             .expect("Failed to create device");
@@ -61,6 +62,7 @@ impl ProjectionState {
         let config = SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width,
             height,
             present_mode: wgpu::PresentMode::Fifo,
@@ -90,8 +92,25 @@ impl ProjectionState {
         }
     }
 
-    pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let output = self.surface.get_current_texture()?;
+    /// Draws one frame. wgpu 30 reports a frame it couldn't acquire as a status, not an error: a
+    /// minimized/occluded window or a timeout just skips the frame, and an outdated or lost surface is
+    /// reconfigured so the next frame works.
+    pub fn render(&mut self) {
+        let output = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t) => t,
+            wgpu::CurrentSurfaceTexture::Suboptimal(t) => {
+                self.surface.configure(&self.device, &self.config);
+                t
+            }
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                self.surface.configure(&self.device, &self.config);
+                return;
+            }
+            other => {
+                tracing::debug!("skipping projection frame: {:?}", other);
+                return;
+            }
+        };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -103,6 +122,7 @@ impl ProjectionState {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         // Let's clear to a nice dark blue to prove wgpu is working
@@ -118,12 +138,11 @@ impl ProjectionState {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-
-        Ok(())
+        self.queue.present(output);
     }
 }
