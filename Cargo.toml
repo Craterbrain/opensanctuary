@@ -162,7 +162,7 @@ thiserror = "2.0"
 
 # Storage & Archive
 rusqlite = { version = "0.40", features = ["bundled"] }
-zip = "0.6"
+zip = "9.0"
 # EasyWorship 5 .ews schedules store each song's words zlib-compressed (storage/ewsx.rs). Already in the
 # build through `zip`; declared directly only to call it.
 flate2 = "1"

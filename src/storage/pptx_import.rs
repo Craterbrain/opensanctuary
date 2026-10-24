@@ -172,7 +172,7 @@ impl PptxImporter {
         // Fallback: malformed/unusual package — sort by the numeric suffix in slideN.xml.
         let mut numbered: Vec<(u32, String)> = Vec::new();
         for i in 0..archive.len() {
-            let name = archive.by_index(i)?.name().to_string();
+            let name = archive.by_index(i)?.name()?.to_string();
             if let Some(rest) = name.strip_prefix("ppt/slides/slide") {
                 if let Some(num_str) = rest.strip_suffix(".xml") {
                     if let Ok(n) = num_str.parse::<u32>() {

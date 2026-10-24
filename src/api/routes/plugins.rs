@@ -1372,17 +1372,23 @@ fn unpack_package(app: &AppState, bytes: &[u8], staging: &std::path::Path) -> Re
     let mut files: Vec<(usize, std::path::PathBuf)> = Vec::new();
     for i in 0..zip.len() {
         let entry = zip.by_index(i).map_err(|_| bad("the zip file is damaged"))?;
+        // zip 9's `name()` validates UTF-8 and returns a Result instead of doing a lossy
+        // conversion -- an entry whose name isn't valid UTF-8 is exactly the kind of untrusted
+        // path this function already refuses, so that's one more reason to reject it.
+        let Ok(entry_name) = entry.name() else {
+            return Err(bad("the package contains an entry with an invalid (non-UTF-8) name"));
+        };
         let Some(name) = entry.enclosed_name().map(|p| p.to_path_buf()) else {
-            return Err(bad(format!("unsafe path in the package: {}", entry.name())));
+            return Err(bad(format!("unsafe path in the package: {entry_name}")));
         };
         if name.components().any(|c| matches!(c, std::path::Component::Normal(n) if n == "__MACOSX")) || name.file_name().is_some_and(|n| n == ".DS_Store") {
             continue;
         }
-        if entry.name().contains('\\') {
-            return Err(bad(format!("unsafe path in the package: {}", entry.name())));
+        if entry_name.contains('\\') {
+            return Err(bad(format!("unsafe path in the package: {entry_name}")));
         }
         if entry.unix_mode().is_some_and(|m| m & 0o170000 == 0o120000) {
-            return Err(bad(format!("the package contains a symbolic link ({}); plugins can't", entry.name())));
+            return Err(bad(format!("the package contains a symbolic link ({entry_name}); plugins can't")));
         }
         if entry.is_dir() {
             continue;

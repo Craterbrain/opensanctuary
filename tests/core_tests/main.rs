@@ -86,7 +86,7 @@ fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut buf = std::io::Cursor::new(Vec::new());
     {
         let mut w = zip::ZipWriter::new(&mut buf);
-        let opts = zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let opts = zip::write::FileOptions::<()>::default().compression_method(zip::CompressionMethod::Deflated);
         for (name, data) in entries {
             w.start_file(*name, opts).unwrap();
             w.write_all(data).unwrap();
