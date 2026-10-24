@@ -29,7 +29,7 @@ impl RenderContext {
     pub fn new(dimensions: RenderTargetDimensions) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         
         let adapter = pollster::block_on(instance.request_adapter(
@@ -37,6 +37,7 @@ impl RenderContext {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                ..Default::default()
             },
         )).expect("Failed to find an appropriate adapter");
 
@@ -45,8 +46,8 @@ impl RenderContext {
                 label: Some("OpenSanctuary Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: adapter.limits(),
+                ..Default::default()
             },
-            None,
         )).expect("Failed to create device");
 
         tracing::info!("Real WGPU Device initialized: {:?}", adapter.get_info());

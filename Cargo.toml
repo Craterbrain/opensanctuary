@@ -169,7 +169,7 @@ flate2 = "1"
 keyring = "4.2"
 
 # Graphics & Rendering (wgpu)
-wgpu = { version = "0.20", optional = true }
+wgpu = { version = "30.0", optional = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
 # CLI & Utilities
@@ -180,8 +180,8 @@ base64 = "0.22"
 tempfile = "3.10"
 
 # Desktop Webview (Optional / Platform gated)
-tao = { version = "0.28", optional = true }
-wry = { version = "0.40", optional = true }
+tao = { version = "0.37", optional = true }
+wry = { version = "0.57", optional = true }
 pollster = "1.0.1"
 dirs = "7.0.0"
 rfd = { version = "0.17.2", optional = true }
