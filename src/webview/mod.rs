@@ -349,7 +349,7 @@ fn try_open_display(
                 return;
             }
         };
-        match wry::WebViewBuilder::new_gtk(vbox).with_url(&display_url).build() {
+        match wry::WebViewBuilder::new().with_url(&display_url).build_gtk(vbox) {
             Ok(webview) => {
                 display_manager.statuses.lock().unwrap_or_else(|e| e.into_inner()).insert(
                     req.id.clone(),
@@ -387,7 +387,7 @@ fn try_open_display(
 
     if let Some((win, (w, h))) = build_display_window(target, monitor, &req) {
         let display_url = format!("http://127.0.0.1:{}/{}", port, req.content_path);
-        match wry::WebViewBuilder::new(&win).with_web_context(web_context).with_url(&display_url).build() {
+        match wry::WebViewBuilder::new_with_web_context(web_context).with_url(&display_url).build(&win) {
             Ok(webview) => {
                 display_manager.statuses.lock().unwrap_or_else(|e| e.into_inner()).insert(
                     req.id.clone(),
@@ -436,7 +436,7 @@ fn open_external_window(
             return;
         }
     };
-    match wry::WebViewBuilder::new_gtk(vbox).with_url(url).with_initialization_script(init_script).build() {
+    match wry::WebViewBuilder::new().with_url(url).with_initialization_script(init_script).build_gtk(vbox) {
         Ok(webview) => assist_windows.push((win, webview)),
         Err(e) => tracing::error!("Failed to build external assist webview: {}", e),
     }
@@ -464,11 +464,10 @@ fn open_external_window(
             return;
         }
     };
-    match wry::WebViewBuilder::new(&win)
-        .with_web_context(web_context)
+    match wry::WebViewBuilder::new_with_web_context(web_context)
         .with_url(url)
         .with_initialization_script(init_script)
-        .build()
+        .build(&win)
     {
         Ok(webview) => assist_windows.push((win, webview)),
         Err(e) => tracing::error!("Failed to build external assist webview: {}", e),
@@ -517,12 +516,14 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
     // Same-origin blob: URLs are how the console triggers file downloads.
     let nav_blob = format!("blob:{}", url.trim_end_matches('/'));
 
-    let _webview = wry::WebViewBuilder::new_gtk(vbox)
+    // wry 0.46+ configures first and attaches last: `new()` takes no window, and GTK attaches to its
+    // container with `build_gtk` (WebViewBuilderExtUnix) instead of the old `new_gtk` constructor.
+    let _webview = wry::WebViewBuilder::new()
         .with_url(&url)
         .with_initialization_script(&init_script)
         .with_navigation_handler(move |next| next.starts_with(&nav_origin) || next.starts_with(&nav_blob) || next == "about:blank")
         .with_devtools(true)
-        .build()
+        .build_gtk(vbox)
         .expect("Failed to build wry webview on Linux");
 
     *display_manager.monitors.lock().unwrap_or_else(|e| e.into_inner()) = enumerate_monitors(window.available_monitors(), window.primary_monitor());
@@ -645,13 +646,14 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
     // guarantee docs/installer.md already makes for library.db et al.
     let mut web_context = wry::WebContext::new(Some(data_dir.join("webview2")));
 
-    let _webview = wry::WebViewBuilder::new(&window)
-        .with_web_context(&mut web_context)
+    // wry 0.46+ configures first and attaches last: the web context is the builder's constructor and
+    // the window is passed to `build` instead of `new`.
+    let _webview = wry::WebViewBuilder::new_with_web_context(&mut web_context)
         .with_url(&url)
         .with_initialization_script(&init_script)
         .with_navigation_handler(move |next| next.starts_with(&nav_origin) || next.starts_with(&nav_blob) || next == "about:blank")
         .with_devtools(true)
-        .build()
+        .build(&window)
         .expect("Failed to build wry webview on Windows/macOS");
 
     *display_manager.monitors.lock().unwrap_or_else(|e| e.into_inner()) = enumerate_monitors(window.available_monitors(), window.primary_monitor());
