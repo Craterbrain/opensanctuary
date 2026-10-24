@@ -516,10 +516,10 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/pairing/authorize", post(authorize_pairing_handler))
         .route("/api/pairing/status", get(get_pairing_status_handler))
         .route("/api/pairing/devices", get(get_paired_devices_handler))
-        .route("/api/pairing/devices/:id", delete(delete_paired_device_handler))
+        .route("/api/pairing/devices/{id}", delete(delete_paired_device_handler))
         .route("/api/pairing/verify", post(verify_paired_device_handler))
         .route("/api/tv-provision/status", get(get_tv_provision_status_handler))
         .route("/api/tv-provision/start", post(start_tv_provision_handler))
         .route("/api/tv-provision/restore-home", post(restore_tv_home_handler))
-        .route("/api/tv-provision/progress/:task_id", get(get_tv_provision_progress_handler))
+        .route("/api/tv-provision/progress/{task_id}", get(get_tv_provision_progress_handler))
 }

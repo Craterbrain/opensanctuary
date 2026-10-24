@@ -370,7 +370,7 @@ pub(super) fn router() -> Router<AppState> {
     use axum::routing::{get, post};
     Router::new()
         .route("/api/bibles", get(get_bibles))
-        .route("/api/bibles/:id", axum::routing::delete(delete_bible))
+        .route("/api/bibles/{id}", axum::routing::delete(delete_bible))
         .route("/api/bibles/passage", get(get_bible_passage))
         .route("/api/bibles/parse-ref", get(parse_bible_ref))
         .route("/api/import/openlp", post(import_openlp))
