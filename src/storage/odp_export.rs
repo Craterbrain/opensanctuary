@@ -123,10 +123,13 @@ impl OdpExporter {
             let mut w = ZipWriter::new(&mut buf);
             // The ODF package's own mimetype entry MUST be first and stored (uncompressed) --
             // it's how a generic file-type sniffer identifies the package without inflating it.
-            w.start_file("mimetype", FileOptions::default().compression_method(CompressionMethod::Stored))?;
+            // zip 9's FileOptions is generic over an extension type (only relevant for the
+            // "extended" timestamp/permission metadata this package doesn't use); `()` is the
+            // plain case, same behavior as before this type parameter existed.
+            w.start_file("mimetype", FileOptions::<()>::default().compression_method(CompressionMethod::Stored))?;
             w.write_all(b"application/vnd.oasis.opendocument.presentation")?;
 
-            let text_opts = FileOptions::default().compression_method(CompressionMethod::Deflated);
+            let text_opts = FileOptions::<()>::default().compression_method(CompressionMethod::Deflated);
             w.start_file("META-INF/manifest.xml", text_opts)?;
             w.write_all(manifest_xml.as_bytes())?;
             w.start_file("content.xml", text_opts)?;

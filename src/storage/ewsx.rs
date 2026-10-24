@@ -422,7 +422,7 @@ impl EwsxManager {
 
     fn write_ewsx_zip<W: Write + Seek>(schedule: &Schedule, writer: W) -> Result<W, String> {
         let mut zip_writer = ZipWriter::new(writer);
-        let options = FileOptions::default()
+        let options = FileOptions::<()>::default()
             .compression_method(zip::CompressionMethod::Deflated)
             .unix_permissions(0o755);
 
@@ -674,7 +674,8 @@ impl EwsxManager {
             // Also search all files in archive ending with .db or .sqlite
             for i in 0..archive.len() {
                 if let Ok(mut file) = archive.by_index(i) {
-                    let name = file.name().to_lowercase();
+                    // A non-UTF-8 entry name can't match any of the patterns below either way.
+                    let name = file.name().unwrap_or_default().to_lowercase();
                     if name.ends_with(".db") || name.ends_with(".sqlite") {
                         if let Ok(db_bytes) = crate::storage::media_sniff::read_capped_bytes(&mut file, crate::storage::media_sniff::MAX_ZIP_DB_BYTES) {
                             if let Ok(sched) = Self::parse_ewsx_sqlite(&db_bytes, title_hint) {
@@ -697,7 +698,8 @@ impl EwsxManager {
             // D. Check for OpenLP service files (*.osj or service_data.json)
             for i in 0..archive.len() {
                 if let Ok(mut file) = archive.by_index(i) {
-                    let name = file.name().to_lowercase();
+                    // A non-UTF-8 entry name can't match any of the patterns below either way.
+                    let name = file.name().unwrap_or_default().to_lowercase();
                     if name.ends_with(".osj") || name == "service_data.json" || name.ends_with("/service_data.json") {
                         if let Ok(osj_str) = crate::storage::media_sniff::read_capped_string(&mut file, crate::storage::media_sniff::MAX_ZIP_TEXT_BYTES) {
                             if let Ok(sched) = crate::storage::OpenLPImporter::import_openlp_service_json(&osj_str) {
@@ -713,7 +715,8 @@ impl EwsxManager {
             // E. Check for FreeShow show files (*.show)
             for i in 0..archive.len() {
                 if let Ok(mut file) = archive.by_index(i) {
-                    let name = file.name().to_lowercase();
+                    // A non-UTF-8 entry name can't match any of the patterns below either way.
+                    let name = file.name().unwrap_or_default().to_lowercase();
                     if name.ends_with(".show") || name.ends_with(".project") {
                         if let Ok(show_str) = crate::storage::media_sniff::read_capped_string(&mut file, crate::storage::media_sniff::MAX_ZIP_TEXT_BYTES) {
                             if let Ok(sched) = crate::storage::FreeShowShowImporter::import_show_json_str(&show_str, media_dir) {

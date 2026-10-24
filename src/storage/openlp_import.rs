@@ -808,7 +808,8 @@ impl OpenLPImporter {
         let mut xml_content = String::new();
         for i in 0..archive.len() {
             if let Ok(mut f) = archive.by_index(i) {
-                if f.name().to_lowercase().ends_with(".xml") {
+                // A non-UTF-8 entry name can't match ".xml" either way.
+                if f.name().unwrap_or_default().to_lowercase().ends_with(".xml") {
                     xml_content = crate::storage::media_sniff::read_capped_string(&mut f, crate::storage::media_sniff::MAX_ZIP_TEXT_BYTES).unwrap_or_default();
                     break;
                 }
@@ -840,7 +841,8 @@ impl OpenLPImporter {
         let mdir = media_dir?;
         for i in 0..archive.len() {
             if let Ok(mut f) = archive.by_index(i) {
-                let name = f.name().to_string();
+                // A non-UTF-8 entry name can't match a known (plain ASCII) filename either way.
+                let name = f.name().unwrap_or_default().to_string();
                 if name.ends_with(trimmed_name) || name.rsplit('/').next() == Some(trimmed_name) {
                     if let Ok(img_bytes) = crate::storage::media_sniff::read_capped_bytes(&mut f, crate::storage::media_sniff::MAX_ZIP_MEDIA_BYTES) {
                         let new_filename = crate::storage::media_sniff::write_sniffed_media(mdir, "openlp", &img_bytes)?;

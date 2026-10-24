@@ -148,7 +148,7 @@ fn build_single_slide_pptx(slide_xml: &str) -> Vec<u8> {
 
     let cursor = Cursor::new(Vec::new());
     let mut zip_writer = ZipWriter::new(cursor);
-    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let options = FileOptions::<()>::default().compression_method(zip::CompressionMethod::Stored);
     zip_writer.start_file("ppt/slides/slide1.xml", options).unwrap();
     zip_writer.write_all(slide_xml.as_bytes()).unwrap();
     zip_writer.finish().unwrap().into_inner()
@@ -165,7 +165,7 @@ fn build_test_pptx_bytes() -> Vec<u8> {
 
     let cursor = Cursor::new(Vec::new());
     let mut zip_writer = ZipWriter::new(cursor);
-    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let options = FileOptions::<()>::default().compression_method(zip::CompressionMethod::Stored);
 
     let write_part = |zw: &mut ZipWriter<Cursor<Vec<u8>>>, name: &str, content: &str| {
         zw.start_file(name, options).unwrap();
@@ -299,7 +299,7 @@ fn test_ewsx_schedule_roundtrip() {
 
         let zip_f = std::fs::File::create(&ewpx_path).unwrap();
         let mut zip = zip::ZipWriter::new(zip_f);
-        let opts = zip::write::FileOptions::default();
+        let opts = zip::write::FileOptions::<()>::default();
         zip.start_file("main.db", opts).unwrap();
         zip.write_all(&db_bytes).unwrap();
         zip.finish().unwrap();
@@ -535,7 +535,7 @@ fn test_pptx_import_falls_back_to_file_stem_when_title_missing() {
     // missing-title fallback and the numeric-filename-ordering fallback together.
     let cursor = Cursor::new(Vec::new());
     let mut zip_writer = ZipWriter::new(cursor);
-    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let options = FileOptions::<()>::default().compression_method(zip::CompressionMethod::Stored);
     zip_writer.start_file("ppt/slides/slide1.xml", options).unwrap();
     zip_writer.write_all(br#"<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Only slide</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#).unwrap();
     let bytes = zip_writer.finish().unwrap().into_inner();
@@ -637,7 +637,7 @@ fn test_pptx_import_extracts_picture_background_and_saves_media_file() {
 
     let cursor = std::io::Cursor::new(Vec::new());
     let mut zip_writer = zip::ZipWriter::new(cursor);
-    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let options = FileOptions::<()>::default().compression_method(zip::CompressionMethod::Stored);
     zip_writer.start_file("ppt/slides/slide1.xml", options).unwrap();
     zip_writer.write_all(slide_xml.as_bytes()).unwrap();
     zip_writer.start_file("ppt/slides/_rels/slide1.xml.rels", options).unwrap();
@@ -751,7 +751,7 @@ fn test_pptx_import_emits_positioned_image_element_from_inline_picture() {
 
     let cursor = std::io::Cursor::new(Vec::new());
     let mut zip_writer = zip::ZipWriter::new(cursor);
-    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let options = FileOptions::<()>::default().compression_method(zip::CompressionMethod::Stored);
     zip_writer.start_file("ppt/slides/slide1.xml", options).unwrap();
     zip_writer.write_all(slide_xml.as_bytes()).unwrap();
     zip_writer.start_file("ppt/slides/_rels/slide1.xml.rels", options).unwrap();
@@ -955,7 +955,7 @@ fn test_openlp_theme_xml_resolution_and_backgrounds() {
     // 5. OpenLP .otz zip package
     let otz_cursor = Cursor::new(Vec::new());
     let mut zip_writer = zip::ZipWriter::new(otz_cursor);
-    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let options = FileOptions::<()>::default().compression_method(zip::CompressionMethod::Stored);
     let otz_xml = r#"<theme version="2.0">
   <name>Moss on tree</name>
   <background type="image">
@@ -1324,7 +1324,7 @@ fn test_freeshow_schedule_dispatcher() {
     // 3. Zip archive containing a .show file
     let cursor = std::io::Cursor::new(Vec::new());
     let mut zip_writer = zip::ZipWriter::new(cursor);
-    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let options = FileOptions::<()>::default().compression_method(zip::CompressionMethod::Stored);
     zip_writer.start_file("deck.show", options).unwrap();
     zip_writer.write_all(show_json.as_bytes()).unwrap();
     let zip_bytes = zip_writer.finish().unwrap().into_inner();
@@ -1889,7 +1889,7 @@ fn test_odp_export_round_trips_through_this_apps_own_importer() {
     // It's a real zip whose first entry is the stored, uncompressed mimetype -- the ODF-specific
     // convention a generic sniffer uses, checked directly rather than trusting the writer's intent.
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
-    assert_eq!(archive.by_index(0).unwrap().name(), "mimetype");
+    assert_eq!(archive.by_index(0).unwrap().name().unwrap(), "mimetype");
     assert_eq!(archive.by_index(0).unwrap().compression(), zip::CompressionMethod::Stored);
     let mut mt = String::new();
     std::io::Read::read_to_string(&mut archive.by_name("mimetype").unwrap(), &mut mt).unwrap();
@@ -2602,7 +2602,7 @@ fn test_ewsx_export_reimports_through_easyworships_own_files_not_just_our_manife
         schedule_version: 0,
     };
     let bytes = EwsxManager::save_schedule_to_ewsx_bytes(&schedule).unwrap();
-    let names = |b: &[u8]| { let z = zip::ZipArchive::new(std::io::Cursor::new(b)).unwrap(); z.file_names().map(String::from).collect::<Vec<_>>() };
+    let names = |b: &[u8]| { let z = zip::ZipArchive::new(std::io::Cursor::new(b)).unwrap(); z.file_names().filter_map(|r| r.ok()).map(String::from).collect::<Vec<_>>() };
     assert!(names(&bytes).iter().any(|n| n == "main.db"), "an .ewsx must carry EasyWorship's main.db: {:?}", names(&bytes));
 
     let without = |b: &[u8], drop: &[&str]| -> Vec<u8> {
@@ -2610,10 +2610,10 @@ fn test_ewsx_export_reimports_through_easyworships_own_files_not_just_our_manife
         let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         for i in 0..src.len() {
             let mut f = src.by_index(i).unwrap();
-            if drop.contains(&f.name()) { continue; }
+            if f.name().is_ok_and(|n| drop.contains(&n.as_ref())) { continue; }
             let mut data = Vec::new();
             f.read_to_end(&mut data).unwrap();
-            out.start_file(f.name().to_string(), zip::write::FileOptions::default()).unwrap();
+            out.start_file(f.name().unwrap().to_string(), zip::write::FileOptions::<()>::default()).unwrap();
             out.write_all(&data).unwrap();
         }
         out.finish().unwrap().into_inner()
