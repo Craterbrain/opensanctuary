@@ -390,7 +390,8 @@ impl Database {
 
             let rows = stmt.query_map([], |row| {
                 let ver: String = row.get(0)?;
-                let count: usize = row.get(1)?;
+                // usize no longer has FromSql in rusqlite 0.40; COUNT(*) is never negative.
+                let count: usize = row.get::<_, i64>(1)? as usize;
                 Ok((ver, count))
             });
 

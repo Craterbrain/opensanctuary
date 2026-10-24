@@ -499,7 +499,8 @@ impl EwsxManager {
                 "INSERT INTO presentation (rowid, title, author, copyright, reference_number, presentation_type)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
                 rusqlite::params![
-                    p_idx + 1,
+                    // usize no longer has ToSql in rusqlite 0.40; schedule.items.len() never gets near i64::MAX.
+                    (p_idx + 1) as i64,
                     item.title,
                     item.author_or_ref,
                     "",
@@ -522,7 +523,7 @@ impl EwsxManager {
 
                 tx.execute(
                     "INSERT INTO Verses (presentation_id, Type, Number, Words) VALUES (?1, ?2, ?3, ?4);",
-                    rusqlite::params![p_idx + 1, type_code, num, rtf_content],
+                    rusqlite::params![(p_idx + 1) as i64, type_code, num, rtf_content],
                 ).map_err(|e| e.to_string())?;
 
                 let slide_rowid = next_slide_rowid;
@@ -530,7 +531,7 @@ impl EwsxManager {
                 tx.execute(
                     "INSERT INTO slide (rowid, presentation_id, title, order_index)
                      VALUES (?1, ?2, ?3, ?4);",
-                    rusqlite::params![slide_rowid, p_idx + 1, slide.label.as_deref().unwrap_or(""), s_idx],
+                    rusqlite::params![slide_rowid, (p_idx + 1) as i64, slide.label.as_deref().unwrap_or(""), s_idx as i64],
                 ).map_err(|e| e.to_string())?;
 
                 tx.execute(
@@ -567,7 +568,7 @@ impl EwsxManager {
                 let (type_code, num) = section_id_to_ew_type_and_number(&entry.section_id, entry.source_slide_index);
                 tx.execute(
                     "INSERT INTO PlayOrder (presentation_id, POrder, Type, Number) VALUES (?1, ?2, ?3, ?4);",
-                    rusqlite::params![p_idx + 1, (p_order + 1) as i64, type_code, num],
+                    rusqlite::params![(p_idx + 1) as i64, (p_order + 1) as i64, type_code, num],
                 ).map_err(|e| e.to_string())?;
             }
         }

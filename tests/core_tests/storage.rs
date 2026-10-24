@@ -388,14 +388,14 @@ fn test_split_database_architecture_and_folder_autocreation() {
 
     // Verify physical separation by opening individual SQLite connections directly
     let pd_raw_conn = rusqlite::Connection::open(&pd_db_file).unwrap();
-    let pd_count: usize = pd_raw_conn.query_row("SELECT COUNT(*) FROM songs WHERE id = 'song_pd_01'", [], |r| r.get(0)).unwrap();
-    let pd_cr_count: usize = pd_raw_conn.query_row("SELECT COUNT(*) FROM songs WHERE id = 'song_cr_01'", [], |r| r.get(0)).unwrap();
+    let pd_count: usize = pd_raw_conn.query_row("SELECT COUNT(*) FROM songs WHERE id = 'song_pd_01'", [], |r| r.get::<_, i64>(0)).unwrap() as usize;
+    let pd_cr_count: usize = pd_raw_conn.query_row("SELECT COUNT(*) FROM songs WHERE id = 'song_cr_01'", [], |r| r.get::<_, i64>(0)).unwrap() as usize;
     assert_eq!(pd_count, 1, "public_domain.db must contain the public domain song");
     assert_eq!(pd_cr_count, 0, "public_domain.db must NOT contain the copyrighted song");
 
     let cr_raw_conn = rusqlite::Connection::open(&cr_db_file).unwrap();
-    let cr_count: usize = cr_raw_conn.query_row("SELECT COUNT(*) FROM songs WHERE id = 'song_cr_01'", [], |r| r.get(0)).unwrap();
-    let cr_pd_count: usize = cr_raw_conn.query_row("SELECT COUNT(*) FROM songs WHERE id = 'song_pd_01'", [], |r| r.get(0)).unwrap();
+    let cr_count: usize = cr_raw_conn.query_row("SELECT COUNT(*) FROM songs WHERE id = 'song_cr_01'", [], |r| r.get::<_, i64>(0)).unwrap() as usize;
+    let cr_pd_count: usize = cr_raw_conn.query_row("SELECT COUNT(*) FROM songs WHERE id = 'song_pd_01'", [], |r| r.get::<_, i64>(0)).unwrap() as usize;
     assert_eq!(cr_count, 1, "copyrighted.db must contain the copyrighted song");
     assert_eq!(cr_pd_count, 0, "copyrighted.db must NOT contain the public domain song");
 
