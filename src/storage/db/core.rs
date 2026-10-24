@@ -567,9 +567,13 @@ impl Database {
             .unwrap_or(false);
 
         if has_songs_table {
+            // rusqlite 0.40 dropped usize's FromSql impl (SQLite integers are signed 64-bit, so a
+            // blanket usize impl could silently wrap on a value past i64::MAX) -- COUNT(*) is never
+            // negative or anywhere near that, so reading as i64 and casting is exactly as safe as
+            // the direct usize read was, just explicit about it.
             let song_count: usize = main_conn
-                .query_row("SELECT COUNT(*) FROM songs", [], |r| r.get(0))
-                .unwrap_or(0);
+                .query_row("SELECT COUNT(*) FROM songs", [], |r| r.get::<_, i64>(0))
+                .unwrap_or(0) as usize;
 
             if song_count > 0 {
                 tracing::info!(
@@ -645,9 +649,10 @@ impl Database {
             .unwrap_or(false);
 
         if has_scriptures_table {
+            // See the song_count read above: usize no longer has FromSql in rusqlite 0.40.
             let scrip_count: usize = main_conn
-                .query_row("SELECT COUNT(*) FROM scriptures", [], |r| r.get(0))
-                .unwrap_or(0);
+                .query_row("SELECT COUNT(*) FROM scriptures", [], |r| r.get::<_, i64>(0))
+                .unwrap_or(0) as usize;
 
             if scrip_count > 0 {
                 tracing::info!(

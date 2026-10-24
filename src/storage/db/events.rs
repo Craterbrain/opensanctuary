@@ -35,7 +35,8 @@ impl Database {
             "INSERT INTO event_log (sequence_number, event_type, payload, timestamp_ms)
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(sequence_number) DO NOTHING",
-            (envelope.sequence_number, event_type, payload, envelope.timestamp_ms as i64),
+            // u64 no longer has ToSql in rusqlite 0.40; sequence_number never gets near i64::MAX.
+            (envelope.sequence_number as i64, event_type, payload, envelope.timestamp_ms as i64),
         )?;
         Ok(())
     }
@@ -51,7 +52,8 @@ impl Database {
         let conn = self.conn();
         let mut stmt = conn.prepare_cached("SELECT sequence_number, payload, timestamp_ms FROM event_log ORDER BY sequence_number ASC")?;
         let event_iter = stmt.query_map([], |row| {
-            let seq: u64 = row.get(0)?;
+            // u64 no longer has FromSql in rusqlite 0.40; see the insert above.
+            let seq: u64 = row.get::<_, i64>(0)? as u64;
             let payload_str: String = row.get(1)?;
             let ts: i64 = row.get(2)?;
             match serde_json::from_str::<crate::core::events::ShowEvent>(&payload_str) {

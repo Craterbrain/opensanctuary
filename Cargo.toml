@@ -161,7 +161,7 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
 
 # Storage & Archive
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 zip = "0.6"
 # EasyWorship 5 .ews schedules store each song's words zlib-compressed (storage/ewsx.rs). Already in the
 # build through `zip`; declared directly only to call it.
