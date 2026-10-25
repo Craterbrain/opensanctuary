@@ -126,7 +126,14 @@ pub(super) async fn open_schedule(
         return Err((StatusCode::BAD_REQUEST, "No schedule path, base64 data, or text payload provided".to_string()));
     };
 
-    let events = if payload.mode.as_deref() == Some("append") {
+    Ok(Json(apply_loaded_schedule(&app, schedule, payload.mode.as_deref() == Some("append"))))
+}
+
+/// Puts a schedule that was just read from a file into the live show: replaces the current one, or
+/// appends its items to it. Shared by every way of opening a schedule file (`.ewsx` here, `.osservice`
+/// in `bundle.rs`) so each one persists and broadcasts the change identically.
+pub(super) fn apply_loaded_schedule(app: &AppState, schedule: crate::core::models::Schedule, append: bool) -> crate::core::engine::StateSnapshot {
+    let events = if append {
         let mut all_events = Vec::new();
         for item in schedule.items {
             let evs = app.engine.execute_command(ShowCommand::AddToSchedule(item));
@@ -142,9 +149,7 @@ pub(super) async fn open_schedule(
         }
     }
 
-    let snapshot = crate::api::ws::broadcast_snapshot(&app);
-
-    Ok(Json(snapshot))
+    crate::api::ws::broadcast_snapshot(app)
 }
 
 pub(super) fn router() -> Router<AppState> {

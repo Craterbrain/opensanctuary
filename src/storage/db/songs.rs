@@ -10,8 +10,14 @@ impl Database {
 
     /// Categorizes songs into public domain vs. copyrighted works
     pub fn is_public_domain_song(song: &Song) -> bool {
-        let copyright = song.copyright.as_deref().unwrap_or("").trim().to_lowercase();
-        let ccli = song.ccli_number.as_deref().unwrap_or("").trim();
+        Self::is_public_domain_metadata(song.copyright.as_deref().unwrap_or(""), song.ccli_number.as_deref().unwrap_or(""))
+    }
+
+    /// The same test on bare metadata, for callers that don't hold a `Song` (a schedule item only
+    /// carries its copyright/CCLI on its slides' `ccli_metadata`).
+    pub fn is_public_domain_metadata(copyright: &str, ccli_number: &str) -> bool {
+        let copyright = copyright.trim().to_lowercase();
+        let ccli = ccli_number.trim();
 
         if copyright.contains("public domain") || copyright == "pd" {
             return true;

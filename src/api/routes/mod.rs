@@ -1,3 +1,4 @@
+mod bundle;
 mod common;
 mod displays;
 mod import;
@@ -312,6 +313,7 @@ pub fn create_router(app_state: AppState) -> Router {
         .merge(system::router())
         .merge(schedule::router())
         .merge(import::router())
+        .merge(bundle::router())
         .merge(reports::router())
         .merge(pattern_cache::router())
 
@@ -352,6 +354,16 @@ mod gate_tests {
         for p in ["/api/export/odp/pres_abc123", "/api/export/odp/anything-at-all"] {
             assert!(needs_host_token(&Method::GET, p), "GET {p}");
         }
+    }
+
+    #[test]
+    fn bundle_routes_are_console_only() {
+        // They read and write whole libraries (and a service takes over the show): no token, no bundle.
+        for p in ["/api/bundle/inspect", "/api/bundle/import", "/api/export/bundle"] {
+            assert!(needs_host_token(&Method::POST, p), "POST {p}");
+            assert!(needs_host_token(&Method::GET, p) || p.starts_with("/api/bundle/"), "GET {p}");
+        }
+        assert!(needs_host_token(&Method::GET, "/api/export/bundle"), "the /api/export/ prefix is gated for reads too");
     }
 
     #[test]
