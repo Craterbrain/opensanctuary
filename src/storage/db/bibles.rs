@@ -182,6 +182,34 @@ impl Database {
         Ok(all_items)
     }
 
+    /// Every stored chapter of one Bible translation, in the order it was installed (which is the
+    /// source's own book order, including any deuterocanon -- sorting by reference would put John
+    /// before Genesis). Reads only that translation's database.
+    pub fn get_scriptures_for_version(&self, version: &str) -> Result<Vec<ScriptureItem>> {
+        let conn_arc = self.get_or_create_bible_conn(version)?;
+        let conn = conn_arc.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, book, chapter, verse_start, verse_end, version, reference, verses_json, theme_name
+             FROM scriptures WHERE UPPER(TRIM(version)) = ?1 ORDER BY rowid ASC",
+        )?;
+        let rows = stmt.query_map(params![version.trim().to_uppercase()], |row| {
+            let verses_json: String = row.get(7)?;
+            let verses: Vec<ScriptureVerse> = serde_json::from_str(&verses_json).unwrap_or_default();
+            Ok(ScriptureItem {
+                id: row.get(0)?,
+                book: row.get(1)?,
+                chapter: row.get(2)?,
+                verse_start: row.get(3)?,
+                verse_end: row.get(4)?,
+                version: row.get(5)?,
+                reference: row.get(6)?,
+                verses,
+                theme_name: row.get(8)?,
+            })
+        })?;
+        Ok(rows.flatten().collect())
+    }
+
     pub fn get_scripture_by_id(&self, id: &str) -> Result<Option<ScriptureItem>> {
         let b_conns = self.get_all_bible_conns()?;
         for conn_arc in b_conns {

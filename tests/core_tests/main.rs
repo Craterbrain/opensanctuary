@@ -16,6 +16,7 @@ use os_next::storage::freeshow_show_import::FreeShowShowImporter;
 use os_next::storage::openlp_import::OpenLPImporter;
 use os_next::storage::pptx_import::PptxImporter;
 
+mod bundles;
 mod engine;
 mod importers;
 mod network;

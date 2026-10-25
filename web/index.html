@@ -704,6 +704,26 @@
 
           <div class="import-tab-content import-pane import-pane--scroll active" id="import-view-local" style="display: flex;">
             <div class="store-card">
+              <h4>📦 OpenSanctuary Files</h4>
+              <p>Open songs (<code>.ossong</code>), presentations (<code>.ospres</code>), Bibles (<code>.osbible</code>) or a whole service (<code>.osservice</code>) saved from OpenSanctuary, with their pictures, videos and music:</p>
+              <input type="file" id="file-bundle-import" accept=".ossong,.osbible,.ospres,.osservice">
+              <div id="bundle-import-status" class="store-card-status" style="display: none;"></div>
+            </div>
+
+            <div class="store-card">
+              <h4>📤 Save to Share or Back Up</h4>
+              <p>Save your library as OpenSanctuary files, each with the pictures, videos and music it uses. (To save one song or presentation, right-click it in the library.)</p>
+              <div class="form-row store-card-row">
+                <button class="btn" id="btn-export-all-songs" type="button">🎵 All Songs (.ossong)</button>
+                <button class="btn" id="btn-export-all-presentations" type="button">🖥️ All Presentations (.ospres)</button>
+              </div>
+              <div class="form-row store-card-row">
+                <select class="search-input" id="select-export-bible" aria-label="Bible to save"></select>
+                <button class="btn" id="btn-export-bible" type="button">📖 Save Bible (.osbible)</button>
+              </div>
+            </div>
+
+            <div class="store-card">
               <h4>📁 EasyWorship Services & Presentations</h4>
               <p>Load an EasyWorship service (<code>.ewsx</code>, <code>.ews</code>) or presentation (<code>.ewpx</code>), or an OpenLP service (<code>.osz</code>, <code>.osj</code>), with drag-and-drop and a Replace/Append choice:</p>
               <button class="btn btn-primary" id="btn-open-schedule-hub" type="button">📂 Open Schedule Hub</button>
@@ -899,8 +919,8 @@
           <div class="schedule-dropzone" id="schedule-dropzone">
             <div class="schedule-dropzone-icon">📂</div>
             <div class="schedule-dropzone-title">Click to browse, or drag & drop schedule file here</div>
-            <div class="schedule-dropzone-desc">Supports EasyWorship (.ewsx, .ews, .ewpx) & OpenLP / JSON (.osz, .osj, .json)</div>
-            <input type="file" id="file-schedule-input" accept=".ewsx,.ews,.ewpx,.osz,.osj,.json" style="display: none;">
+            <div class="schedule-dropzone-desc">Supports OpenSanctuary (.osservice), EasyWorship (.ewsx, .ews, .ewpx) & OpenLP / JSON (.osz, .osj, .json)</div>
+            <input type="file" id="file-schedule-input" accept=".osservice,.ewsx,.ews,.ewpx,.osz,.osj,.json" style="display: none;">
           </div>
 
           <div class="sample-schedule-list">
@@ -931,6 +951,7 @@
             <label class="form-label" for="save-format-select">Save Format</label>
             <select class="search-input" id="save-format-select">
               <option value="ewsx">Standard Schedule Archive (.ewsx)</option>
+              <option value="osservice">OpenSanctuary Service, with media (.osservice)</option>
               <option value="json">OpenLP / JSON Service Plan (.osj)</option>
             </select>
           </div>
@@ -1392,6 +1413,7 @@
       <div class="dropdown-divider"></div>
       <div class="context-menu-item" id="ctx-lib-copy">{icon:copy} Copy Content / Lyrics</div>
       <div class="context-menu-item" id="ctx-lib-export-odp">📽️ Export as ODP...</div>
+      <div class="context-menu-item" id="ctx-lib-export-bundle">📦 Save as OpenSanctuary File...</div>
       <div class="dropdown-divider"></div>
       <div class="context-menu-item context-menu-item-danger" id="ctx-lib-delete">🗑️ Delete from Library...</div>
     </div>
@@ -1647,6 +1669,30 @@
           <div class="modal-footer-actions">
             <button class="btn" id="btn-cancel-theme-editor">Cancel</button>
             <button class="btn btn-primary" id="btn-save-theme-editor">💾 Save Theme</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 18b. Copyright advisory shown when opening an OpenSanctuary file that holds copyrighted songs -->
+    <div class="modal-backdrop" id="bundle-advisory-modal" style="display: none; z-index: 10000;">
+      <div class="modal-dialog modal-dialog--sm">
+        <div class="modal-header">
+          <span id="bundle-advisory-title">© Copyright Notice</span>
+          <button class="modal-close-btn" id="btn-close-bundle-advisory">✖</button>
+        </div>
+        <div class="modal-body">
+          <p id="bundle-advisory-lead" class="bundle-advisory-lead">This file includes songs that are under copyright:</p>
+          <ul id="bundle-advisory-list" class="bundle-advisory-list"></ul>
+          <p class="bundle-advisory-note">
+            Churches usually need a license (for example CCLI) to sing or project songs like these.
+            OpenSanctuary doesn't check your license; this is only a heads-up before they are added.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-back" id="btn-cancel-bundle-advisory">⬅ Cancel</button>
+          <div class="modal-footer-actions">
+            <button class="btn btn-primary" id="btn-continue-bundle-advisory">Continue</button>
           </div>
         </div>
       </div>

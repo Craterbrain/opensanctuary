@@ -260,6 +260,18 @@ btnSearchClear?.addEventListener('click', () => {
 
 let currentLibraryTabRequestId = 0;
 
+/**
+ * "Save as OpenSanctuary File" applies to songs, presentations and Bibles only; on a Bible it says so, since
+ * it saves the whole translation the clicked chapter belongs to.
+ */
+function prepareBundleMenuItem(tabName: string, item: any): void {
+  const el = document.getElementById('ctx-lib-export-bundle');
+  if (!el) return;
+  const bundleable = tabName === 'songs' || tabName === 'presentations' || tabName === 'scriptures';
+  el.style.display = bundleable ? '' : 'none';
+  el.textContent = tabName === 'scriptures' && item?.version ? `📦 Save the ${item.version} Bible as OpenSanctuary File...` : '📦 Save as OpenSanctuary File...';
+}
+
 export async function loadLibraryTab(tabName?: string, opts: { keepPluginView?: boolean } = {}) {
   if (!ctx) return;
   const lp = ctx;
@@ -1040,6 +1052,7 @@ export function createCatalogTableRow(item: any, idx: number, tabName: string) {
     highlightCatalogRow(idx);
     selectAndPreviewItem(item, tabName);
     lp.setContextMenuTarget({ type: 'library-item', tab: tabName, item: item });
+    prepareBundleMenuItem(tabName, item);
     lp.showContextMenu(document.getElementById('library-item-context-menu'), e.clientX, e.clientY);
   });
 
@@ -1233,6 +1246,7 @@ export function createCatalogGridCard(item: any, idx: number, tabName: string) {
     card.classList.add('selected');
     selectAndPreviewItem(item, tabName);
     lp.setContextMenuTarget({ type: 'library-item', tab: tabName, item: item });
+    prepareBundleMenuItem(tabName, item);
     lp.showContextMenu(document.getElementById('library-item-context-menu'), e.clientX, e.clientY);
   });
 
