@@ -3,7 +3,7 @@
 _Last edited: 2026-10-15_
 
 Notes from a design conversation about `src/storage`'s importers, whether they should be
-split out as plugins, adopting OpenLP or ODF/ODP as a format, and what the actual fidelity
+adopting OpenLP or ODF/ODP as a format, and what the actual fidelity
 gaps are today — this is a record of the discussion and its conclusions. The PPTX
 importer-fidelity gap (one flattened TextBlock per slide instead of positioned per-shape
 elements) and the autofit-checkbox follow-on decision have both since been implemented —
@@ -21,27 +21,10 @@ see "Import fidelity findings" below for what's actually built and what's still 
 | `pptx_import.rs` | PowerPoint (.pptx) | 444 |
 | `ewsx.rs` | EasyWorship | 1554 |
 | `odp_import.rs` / `odp_export.rs` | OpenDocument Presentation (.odp) | see below |
+| `bundle.rs` | OpenSanctuary's own files (`.ossong`, `.ospres`, `.osservice`, `.osbible`) | see `docs/file-formats.md` |
 
 All the migration-only ones are one-directional (pull data *in* from a format being migrated
 away from); ODP is bidirectional -- the idea below, now implemented.
-
-## Should importers be split into a plugin?
-
-Two different "plugin" concepts got conflated initially — worth keeping separate:
-
-- **`OsPlugin`** (`src/core/plugins.rs`) is a runtime dylib-loading system (`libloading`) for
-  genuine third-party/optional extensions loaded from disk at runtime. Wrong shape for the
-  importers — they're first-party code shipped in every build, not user-installed extensions.
-- **What actually fits:** a lightweight internal `trait Importer { fn detect(...); fn import(...); }`
-  + a static registry, same spirit as the existing `MediaSearchProvider`
-  trait-and-registry patterns already documented in `docs/PLUGINS.md`. Gets the structural win
-  (clean per-format boundary, easy to add a format) without runtime-loading complexity.
-- **"Build without it" (smaller binary):** that's a Cargo feature-flag problem, not a
-  plugin-loading problem — gate each importer's registration behind
-  `#[cfg(feature = "pptx-import")]` etc. Feature flags are compile-time only; if *runtime*
-  toggling (one shipped binary, enable/disable without rebuilding) turns out to be a real
-  requirement, that's what would justify reaching for `OsPlugin` instead. Not needed for the
-  stated goal.
 
 ## OpenLP as the default/native format?
 
@@ -51,7 +34,7 @@ Considered and **not recommended** as the app's native storage format. OS-Next's
 a third-party format means every future feature is constrained by what that schema can represent,
 plus inheriting its migrations forever. Recommendation: keep `openlp_import.rs` as the
 always-compiled-in importer (most common migration source), everything else optional via feature
-flag — but OS-Next's own model stays the source of truth.
+flag — but OS-Next's own model stays the source of truth. That is what the native `.ossong` / `.ospres` / `.osservice` / `.osbible` files now are: the app's own state in a zip (`docs/file-formats.md`).
 
 ## ODF/ODP as an interchange format -- **implemented** (2026-10-14)
 

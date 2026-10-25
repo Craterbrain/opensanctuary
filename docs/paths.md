@@ -130,10 +130,3 @@ real `library.db` server-side, then calls `write_install_config` to point
 essentially empty) database this run already created at the platform-default
 location is simply left in place, unused, and the legacy directory becomes
 the active one after a restart.
-
-## Future Work & Roadmap
-
-No items currently tracked here -- the four capabilities originally listed
-(Move Data Directory wizard, native folder pickers, reveal-in-file-manager,
-legacy import detection) are all now implemented; see "Settings UI &
-Overrides" and "Legacy Import Detection" above.

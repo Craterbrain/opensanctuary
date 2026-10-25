@@ -1,36 +1,12 @@
-# Plan: updater (verified releases from GitHub)
+# Updater (verified releases from GitHub)
 
-_Last edited: 2026-10-15_
+_Last edited: 2026-10-25_
 
-## Resolved: the repo is public, `RELEASES_REPO` points at it for real
-
-`Craterbrain/opensanctuary` was originally private, which blocked this
-feature entirely — GitHub's Releases API requires authentication for a
-private repo, and there's no safe way to embed a credential for that in a
-binary handed out to end users. Of the two options this section used to
-weigh (make the repo public, vs. mirror releases to a second public repo),
-**the repo went public** (`gh repo view Craterbrain/opensanctuary` →
-`"isPrivate": false`), the simpler of the two and what's actually in place
-now.
-
-`crate::network::updater::RELEASES_REPO` and `packaging/install.sh`'s `REPO`
-both point at the real `Craterbrain/opensanctuary` (not a mirror), and
-`RELEASE_PUBLIC_KEY_B64`/`PUBLIC_KEY` hold the real production signing key
-(generated 2026-10-11 — see `docs/release-signing-key.txt` and
-`docs/keys.md`), not a throwaway test key. Real releases (`v0.1.0-alpha`,
-`v0.2.0`) have shipped through this exact path — see `docs/workflow.md`'s
-"Current status" for the up-to-date release history.
-
-**History, kept for context**: before the real repo went public, this flow
-was validated end to end against
-[`Craterbrain/opensanctuary-release-testing`](https://github.com/Craterbrain/opensanctuary-release-testing),
-a disposable public test repo created solely to prove the check/download/
-verify/apply flow worked against a real GitHub Releases API and a real
-signed `.deb`, using a throwaway test keypair (`.test-signing-key/`, since
-replaced). That repo and key are no longer part of the live path — every
-mention of them below is historical, describing what that dry run proved,
-not the current mechanism. It still exists, but ships no real release
-builds for this project.
+The app checks `Craterbrain/opensanctuary` (a public repo, so the anonymous Releases API works) for a newer
+release, downloads the installer for its platform, and verifies it before offering it to the operator.
+`crate::network::updater::RELEASES_REPO` and `packaging/install.sh`'s `REPO` point at that repo, and
+`RELEASE_PUBLIC_KEY_B64` / `PUBLIC_KEY` hold the production signing key (`docs/release-signing-key.txt`,
+`docs/keys.md`). See `docs/workflow.md`'s "Current status" for the release history.
 
 ## Check flow
 
@@ -222,10 +198,8 @@ passphrase from the "Generating it" section above) and one repo *variable*
 (`MINISIGN_PUBLIC_KEY_B64`, not a secret — see "Publishing the public key"
 below) set under Settings → Secrets and variables → Actions before it can
 publish anything; it fails closed with a clear error if either is missing,
-not a confusing partial release. **Exercised for real**: `v0.1.0-alpha` and
-`v0.2.0` both published through this exact workflow, `sign-and-publish`
-green end to end — see `docs/workflow.md`'s "Current status" and "Known
-issues".
+not a confusing partial release. Every release so far has gone through
+this workflow; see `docs/workflow.md`'s "Current status" and "Known issues".
 
 ### If the key is ever lost or compromised
 

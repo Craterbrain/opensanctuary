@@ -5,8 +5,8 @@ _Last edited: 2026-10-22_
 ## Current state
 
 Both platforms have a real installer now (sections below) and both ship as
-part of `.github/workflows/release.yml`'s real releases (`v0.1.0-alpha`,
-`v0.2.0` — see `docs/workflow.md`'s "Current status"): Windows gets
+part of `.github/workflows/release.yml`'s real releases (see
+`docs/workflow.md`'s "Current status"): Windows gets
 `opensanctuary-setup-x64.exe` (Inno Setup) plus a portable zip, Linux gets a
 `.deb`, a generic `.tar.gz` and (since 0.3.3) a Flatpak bundle. Only macOS has no installer story yet (see
 that section below). This doc predates all of that — what follows is kept
@@ -344,7 +344,7 @@ disposable public test repo
 a real signed release (test key, see `update.md`), anonymous `curl` fetch,
 checksum + signature verification, then the exact downloaded `.deb`
 installed the same way. This was the dry run that validated the approach
-before the real repo went public; `v0.1.0-alpha` and `v0.2.0` have since
+before the real repo went public; every release since has
 confirmed the identical path against the real repo and real production key
 (`docs/update.md`, `docs/workflow.md`).
 

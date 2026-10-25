@@ -34,7 +34,7 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 
 ## Decisions waiting on the owner
 
-- [ ] **Plugin signing:** should a built-in plugin have to verify against the release key, where a revocation list is fetched from, and how an author publishes a first key. See `PLUGIN_SIGNING.md` section 12.
-- [ ] **Plugin permissions:** the recommended answers in `PLUGIN_PERMISSIONS.md` (open questions 2, 3, 4, 5 and 8) are still recommendations, not decisions.
+- [ ] **Plugin signing:** how an author publishes a first key so people recognize it. See `PLUGIN_SIGNING.md` section 12.
 - [ ] **Sign commits and tags** with an SSH key so the history shows GitHub's "Verified" badge. Release files are already signed with minisign; this would cover the source history.
+- [ ] **Delete the dry-run tags** `v0.2.1-keytest` and `v0.2.2-keytest` from the remote (`docs/workflow.md`).
 - [ ] **Glib dependency alert.** Dismissed as tolerable risk; revisit when `wry` / `tao` next bump.
