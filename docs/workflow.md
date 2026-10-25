@@ -12,33 +12,14 @@ how the app verifies updates is in `docs/update.md`.
 them for documentation-only PRs) and on demand. Only `release.yml` signs and
 publishes, and it deliberately does **not** run tests.
 
-## Current status (2026-10-21)
+## Current status
 
-- The workflow is **working and has published real releases**: `v0.1.0-alpha`
-  (2026-09-25), `v0.2.0` — beta 2 — (2026-10-13, run 38439712249,
-  `sign-and-publish` green end to end), and `v0.3.0` — beta 3 —
-  (2026-10-21). The `MINISIGN_SECRET_KEY`-loading failure that blocked the
-  dry runs below was the secret not holding the key file verbatim (both the
-  `untrusted comment:` line and the base64 line); resetting it with
-  `gh secret set MINISIGN_SECRET_KEY < opensanctuary_release.key` fixed it for
-  good.
-- Project status: no 1.0 yet. `v0.3.0` is beta 3, the current release.
-- `ci.yml` only started running on 2026-10-21: until then it triggered on
-  `master`, but the default branch is `main`, so no push or PR had ever run it.
-- `ci.yml`'s Rust and frontend jobs cache compiled dependencies with
-  `Swatinem/rust-cache` (pinned to a commit, like the other third-party actions;
-  added 2026-10-22). `release.yml` deliberately doesn't: release artifacts are
-  signed, so they're always built from scratch.
-- The throwaway dry-run tags (`v0.2.1-keytest`, `v0.2.2-keytest`) are still on
-  the remote (`git ls-remote --tags origin`) and can be deleted
-  (`git push origin :refs/tags/v0.2.1-keytest`, same for `.2.2`) — neither has
-  a GitHub Release attached, so there's nothing to `gh release delete` first.
-  A future dry run needs a new tag and a matching throwaway `Cargo.toml`
-  version on a branch (see "First run").
-- The signing secrets/variable are set. The production public key is embedded
-  in `updater.rs` and `install.sh`. `RELEASES_REPO`/`REPO` point at
-  `Craterbrain/opensanctuary`, which is now a **public** repo (the updater's
-  anonymous `/releases/latest` poll needs that).
+- The workflow is **working and has published real releases**, most recently `v0.3.5` (2026-10-25). Each release carries the `.deb`, Linux tarball, Flatpak, Windows installer and portable zip, plus `checksums.txt` and `checksums.txt.minisig`.
+- Project status: no 1.0 yet; the current line is beta 3.
+- `ci.yml` runs on every PR into `main` (the default branch). `main` is protected: a PR must be up to date and green to merge.
+- `ci.yml`'s Rust and frontend jobs cache compiled dependencies with `Swatinem/rust-cache` (pinned to a commit, like the other third-party actions). `release.yml` deliberately doesn't: release artifacts are signed, so they're always built from scratch.
+- The throwaway dry-run tags `v0.2.1-keytest` and `v0.2.2-keytest` are still on the remote and can be deleted (`git push origin :refs/tags/v0.2.1-keytest`, same for `.2.2`); neither has a GitHub Release.
+- The signing secrets and variable are set. The production public key is embedded in `updater.rs` and `install.sh`. `RELEASES_REPO` / `REPO` point at `Craterbrain/opensanctuary`, a **public** repo (the updater's anonymous `/releases/latest` poll needs that).
 - Known and still open: see "Known issues" at the bottom.
 
 ## One-time setup
@@ -106,8 +87,6 @@ workflow requests its own `contents: write` for the publish job only, so
    `build-windows-installer.sh` run), not `web/plugins/`. To ship newer plugins,
    point it at that repo's new merge commit and update the dev copies in
    `web/plugins/` to match; `ci.yml`'s `plugins` job fails while they differ.
-   (Before v0.3.0 the packages bundled only `web/plugins/hello_world.js`, so
-   v0.2.0 shipped with none of the real plugins.)
 3. Land it through a PR and confirm `ci.yml` is green on the PR. `main`'s
    branch rule only lets a PR merge once it's up to date with `main` and its
    checks pass, so the merge commit's code is exactly what that run tested —
@@ -119,8 +98,8 @@ workflow requests its own `contents: write` for the publish job only, so
 ## Cutting a release
 
 ```sh
-git tag v0.3.0
-git push origin v0.3.0
+git tag -a v0.3.5 -m "OpenSanctuary 0.3.5"   # the tag is v<Cargo.toml version>, on the merged release commit
+git push origin v0.3.5
 ```
 
 Watch it under the repo's **Actions** tab → **Release**. Jobs run in this order:
@@ -218,15 +197,11 @@ Rust tests find folder-only files with `test_doc(name)` (`tests/core_tests/main.
 committing a new real-world file, check it for personal content (names, contact details, a church's
 own material): the repo is public.
 
-Also fixed on `keytest`: `build.rs` runs `bun run build` on every `cargo build`,
-so `bun install --frozen-lockfile` must run in `web/` first (added to both
-workflows), and the TLS keyring test now skips itself when no OS keyring exists.
-
 ## Verifying a published release
 
 ```sh
 mkdir check && cd check
-gh release download v0.3.0 -R <owner>/<repo>
+gh release download v0.3.5 -R <owner>/<repo>
 minisign -Vm checksums.txt -P RWRYSKNecgUiwS2YaMPmshtR2/ZAQA/XnunXaOBQw/SRkZPyMspLwhGw
 sha256sum -c checksums.txt --ignore-missing
 ```
@@ -261,16 +236,6 @@ old key cannot verify releases signed with the new one; see `docs/update.md`'s
 
 ## Known issues
 
-- ~~**TLS key without an OS keyring.**~~ Fixed: when the OS keyring is
-  unavailable (headless Linux, CI, no Secret Service), `src/network/tls.rs`
-  falls back to an owner-only (`0600`) key file next to the install's database
-  instead of regenerating the cert every start, which used to break clients
-  that pinned the old fingerprint (Android TV). Keys are per install
-  (`tls_private_key:<tlsKeyId>`; docs/CLIENT_PAIRING.md): every install once
-  shared one entry and kept regenerating over each other. Test servers set
-  `OS_NEXT_TLS_KEY_STORE=file` so they never write to the developer's keyring;
-  `tls.rs`'s tests use temp files or a throwaway `OpenSanctuary:Test:*` service.
-- **`ci.yml` web tests** reference files outside the repo (above).
 - **Prerelease replay gap.** The updater binds a release to the signed asset
   filename's `major.minor.patch` only; a prerelease replayed as its own final
   version isn't caught. Fully closing it needs the version inside the signed

@@ -131,9 +131,8 @@ Each phase ships on its own and leaves the previous behavior intact.
 - ~~Downgrade across revoke and re-approve.~~ `plugin_registry::tests::version_floor_only_ever_rises_and_is_scoped_per_signer`/`downgrade_from_floor_is_only_reported_for_two_real_comparable_versions` (unit) + the same integration test above.
 - Hostile: a signed package whose signature is valid but whose `publisher_key` field was swapped to the attacker's own key (the signature then verifies, so the *key identity* is what the operator is shown and what is pinned; confirm the card makes this visible).
 
-## 12. Open questions
+## 12. Still open
 
-1. ~~Does the manifest parser tolerate unknown fields?~~ Yes at the top level; `files` needs no version bump.
-2. Should a *built-in* plugin be required to verify against the release key, or is "it's in the install folder" enough (an attacker who can write the install folder already owns the machine)? Leaning: verify anyway, for the display consistency.
-3. Where would a revocation list be fetched from, given the app has no service of its own? Likely the same release host as the updater.
-4. How does an author get a first key and publish it so people recognize it? Probably a "publisher card" in the plugin's README, plus the key id shown in the app; there is no way to prevent impersonation of a *name*, only of a *key*.
+How does an author get a first key and publish it so people recognize it? Probably a "publisher card" in the plugin's README, plus the key id shown in the app; there is no way to prevent impersonation of a *name*, only of a *key*.
+
+(Settled while building it: a plugin signed by the release key is the app's own and is never blocked by the policy (section 10, phases 3 and 4); the revocation list is not fetched from anywhere, it is a signed file read from the app's `web/` folder and the data directory.)

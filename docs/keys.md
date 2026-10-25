@@ -15,7 +15,7 @@ ID `C12205725EA34858`) was generated 2026-10-11, replacing a 2026-10-06 key
 whose encrypted secret was lost before any release was ever signed with it
 (so that rotation needed none of "If the key is ever lost or compromised"
 below — nothing had shipped with the old key yet). The current key has
-signed real published releases (`v0.1.0-alpha`, `v0.2.0`); see
+signed real published releases (every release so far); see
 `docs/release-signing-key.txt` for its public half and
 `docs/workflow.md`'s "Current status" for the release history. The steps
 below are kept as the runbook for the *next* rotation, not a still-open

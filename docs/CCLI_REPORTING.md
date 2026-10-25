@@ -203,11 +203,3 @@ whoever first tries this against a real account.
   "if we can't find the field, show the file path" fallback that didn't
   get built (there's no in-page error surfaced; the operator just falls
   back to doing it manually, silently).
-
-~~Where the reminder banner should surface and how far in advance~~ —
-resolved: a persistent operator-console toast, 30 days out (see "Due-date
-reminder" above).
-
-~~Whether the embedded-browser upload-assist window ships as a later
-phase~~ — resolved: built in the same pass as this update, now that the CSV
-export (shipped separately, earlier) was confirmed working first.

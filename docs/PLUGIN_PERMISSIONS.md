@@ -1,35 +1,12 @@
 # Plugin permission system design for OpenSanctuary (OS-Next)
 
-Status: **implemented.** This began as a design (written by an Opus design pass) and is kept as the reference for how plugin permissions work; sections 0, 6 and 8 and the "native" remarks in 5 and 7 are history. What exists today:
+Status: **implemented.** This began as a design (written by an Opus design pass) and is kept as the reference for how plugin permissions work. What exists today:
 
 - **Manifest, grants, digest pinning, signer pinning, audit log, scoped plugin tokens**, and a console review screen (Settings > Plugins) where only the console can approve, deny, revoke or **override** (an Advanced mode that grants exactly the permissions the operator picks, behind a warning; see section 4).
 - **Two kinds of plugin:** *sandboxed web* (an isolated frame behind a permission-checked bridge: the recommended kind) and *console script* (`ui.dom`: runs in the console page, Critical). **There are no native plugins:** loading compiled libraries into the server (the `OsPlugin` trait, the ABI 2 `PluginHost` API, `commands.intercept`, `commands.modify`, `resources.provide`, `native.code` and the filesystem/process/listen permissions that only made sense for them) was removed, as were the pre-manifest forms before it. A manifest with a `backend` section is refused.
 - **Permissions in force:** every id in the table in section 2 marked enforced. (`settings.read` and `settings.write` were reserved ids that nothing ever acted on; they were removed rather than left looking like real grants.)
 - **Features built on it:** placements (`ui.placements`) and ribbon buttons (`ui.toolbar`), `net.fetch` with limited headers, `library.addSong/addScriptures/addMedia/addMediaUrl`, `process.run` with host-managed signed tools, `notifications.post` and shared keyring namespaces (`keyring.service`). The bundled plugins (`web/plugins/`) are the worked examples. The guide for writing a plugin is `docs/PLUGINS.md`; this document is the permission model behind it.
 - **Commands** from REST, WebSocket and a sandboxed plugin's `sendCommand` all go through `src/api/command_pipeline.rs`: shorthand expansion, parse, execute, persist, broadcast.
----
-
-## 0. What existed before this system (history)
-
-> History: this section describes the code before the permission system, including the native plugin loader that has since been removed.
-
-| Surface | Mechanism | Identity | Authorization today |
-|---|---|---|---|
-| Native backend plugins | `PluginManager::load_plugins_from_dir(paths::plugin_dir())` in `main.rs:139`. It loads every `*.so/.dll/.dylib` in `~/.config/OpenSanctuary/plugins/` through `libloading`, calls `create_plugin() -> *mut dyn OsPlugin`, and keeps the libraries mapped forever. | `OsPlugin::name()`, which the plugin chooses itself. | None. Every loaded plugin gets all three hooks: `on_command` (veto), `on_state_change`, and `provide_resources(category)`. |
-| Hook dispatch | `check_command` in `ws.rs:580` and `show.rs:162`. `notify_state_change` in `broadcast_snapshot` (`ws.rs:270`). `collect_resources` in `merge_with_plugin_resources` (`routes/common.rs:23`), called from `library.rs` for songs, scriptures, media, themes and presentations. | n/a | `catch_unwind` per call. Four commands are "safety-critical" and cannot be vetoed. |
-| Web plugins | `web/src/core/plugins.ts`. `main.ts:34` hard-codes `loadLocalPlugin("/plugins/hello_world.js")`, which runs in the console's own JS realm. | `module.default.name` | None. The plugin can read `window.__OS_HOST_TOKEN__` and the `console_tok_…` value in localStorage, and can call `sendCommand`. |
-| Plugin tokens | `POST /api/keyring/plugin/token`, gated by host token through `host_token_gate_middleware`/`needs_host_token`. It checks the name against `web_dir/plugins/<stem>` (`is_known_plugin_name`). `AppState.plugin_tokens: HashMap<token, name>` lives in memory, never expires and has no size cap. | Asserted plugin name | The only thing a token can do is reach the keyring namespace `OpenSanctuary:Plugin:<name>`, with ownership tracked in `keyring_metadata.owner = "plugin:<name>"`. |
-| Console auth | `is_console_credential`: the per-run `host_session_token`, or a persistent `console_tok_…` stored as a SHA-256 in `paired_devices` with `platform='console'`. Paired remotes (`mobile-remote`) may send show commands only. Displays may do nothing. | | All non-GET `/api/*` requests require host-token auth by default (`routes/mod.rs:80`). |
-
-**Problems I found along the way.** They matter to this design:
-
-1. **WS and REST hand plugins different text.** WS calls `check_command(&safe_text)` with the envelope as it was before shorthand expansion, `{"cmd":{…}}` with credentials removed. REST passes the command after expansion. The same plugin therefore sees two different shapes.
-2. **The safety-critical bypass is a substring match** (`cmd.contains("SetAlert")`). For example, `AddToSchedule` with a song titled "SetAlert" skips every veto. It should match on the parsed variant instead.
-3. **`plugin_tokens` grows without bound and has no TTL.**
-4. **Keyring identity mismatch for `hello_world`.** `registerPlugin` scopes the vault with `forPlugin(module.default.name)`, which is `"Hello World Plugin"`. The server only accepts the file stem, `"hello_world"`. As written, `hello_world`'s keyring token request would get a 404.
-5. **The native ABI is already fragile.** `*mut dyn OsPlugin` crosses an `extern "C"` boundary using a Rust trait-object vtable. When `provide_resources` was added, it silently changed the vtable for any `.so` built earlier. Nothing checks for this, so a mismatched plugin is undefined behaviour.
-6. **`examples/` holds no plugin.** It contains only `sign_release.rs`, the minisign release signer. The only in-repo plugin is `web/plugins/hello_world.js`. The native "examples" are the test structs in `tests/core_tests/plugins.rs`.
-
 ---
 
 ## 1. Threat model and honest limits
@@ -40,8 +17,8 @@ Status: **implemented.** This began as a design (written by an Opus design pass)
 
 | Plugin type | Enforceable? | Why |
 |---|---|---|
-| **Same-realm web plugins (today's model)** | **Nothing, beyond whether the script loads at all.** | Same origin and same JS realm as the console. The plugin can take the host token or console credential and act as the console, including approving other plugins. |
-| **Sandboxed web plugins (iframe without `allow-same-origin`, phase 4)** | **Fully.** | Opaque origin with no access to the parent's storage or host token. It only talks through a `postMessage` bridge that the host checks against grants. It authenticates to the server with a scoped plugin token. A per-plugin CSP `connect-src` enforces `network.outbound`. |
+| **Same-realm web plugins (`ui.dom`)** | **Nothing, beyond whether the script loads at all.** | Same origin and same JS realm as the console. The plugin can take the host token or console credential and act as the console, including approving other plugins. |
+| **Sandboxed web plugins (iframe without `allow-same-origin`)** | **Fully.** | Opaque origin with no access to the parent's storage or host token. It only talks through a `postMessage` bridge that the host checks against grants. It authenticates to the server with a scoped plugin token. A per-plugin CSP `connect-src` enforces `network.outbound`. |
 | **Out-of-process HTTP/WS clients holding a plugin token** | **Fully, for the routes that require auth.** | Scoped tokens are checked on each request. Caveat: library and state GETs are deliberately zero-auth (for the live, stage and remote pages), so a `library.read` permission over HTTP restricts nothing. |
 
 **Threats in scope:**
@@ -53,7 +30,6 @@ Status: **implemented.** This began as a design (written by an Opus design pass)
 
 **Threats out of scope (stated in the UI and docs):**
 - A local attacker with the OS user's write access. They can edit `library.db` grants, the plugin directory, or autostart entries.
-- TOCTOU between hashing a file and `dlopen`, which needs the same local-write attacker.
 
 **Recommendation:**
 - **Enforce:** plugin-token scopes, the iframe bridge and frame policy, web-plugin load gating.
@@ -168,7 +144,7 @@ GET    /api/plugins/publishers         // trust store (docs/PLUGIN_SIGNING.md se
 POST   /api/plugins/publishers/{key}/trust|untrust|revoke
 GET    /api/plugins/revocations        // revocation-list status (docs/PLUGIN_SIGNING.md section 5)
 ```
-`/plugin-frame/{id}/*` (the sandboxed iframe, phase 4) and `/api/plugin-host/*` (fetch, library writes, `process.run`, signed-tool status/update) are the plugin-facing side of this, not console grant management; see `docs/PLUGINS.md`.
+`/plugin-frame/{id}/*` (the sandboxed iframe) and `/api/plugin-host/*` (fetch, library writes, `process.run`, signed-tool status/update) are the plugin-facing side of this, not console grant management; see `docs/PLUGINS.md`.
 
 **Who may grant:** only `require_host_token`, meaning the per-run host token or a `console`-platform credential. Device tokens (remotes, displays) and plugin tokens are never accepted on `/api/plugins/*`. That rule is explicit in the handler as well as in the middleware. `decided_by` records `"host"` or `"console:<paired_devices.id>"`.
 
@@ -229,210 +205,18 @@ The normal review grants a subset of what the plugin asked for. For the cases th
 
 ## 5. Enforcement points
 
-> Parts of this section describe the native host API and hook dispatch (`OsPlugin`, `PluginHost`, `check_command`) from the original design; native plugins were removed, so read those as history. The token, bridge and web-loading parts are current.
+**Commands.** REST (`/api/command`), WebSocket (`/ws`) and a sandboxed plugin's `sendCommand` all go through `src/api/command_pipeline.rs`: shorthand expansion, parse, origin check, execute, persist, broadcast. A plugin's origin is checked against its live grant (`commands.send` must allow the parsed variant, not a substring of the text). Plugin commands skip the one-console lock but are attributed in the log and audit table.
 
-**New module `src/core/plugin_permissions.rs`:**
+**Plugin tokens** (`src/api/ws.rs`, `routes/keyring.rs`):
+- A token carries the plugin id, the scopes it was minted with and an expiry (12 hours, at most 8 per plugin).
+- A call is allowed by `scopes ∩ live grant`, so revoking a plugin kills its tokens at once.
+- `/api/command` accepts `x-plugin-token`; `/ws` accepts a `{cmd, plugin_token}` envelope; the keyring routes require `keyring.own` (or `keyring.service` for shared namespaces).
 
-```rust
-pub enum Permission { ShowObserve, LibraryRead(CatSet), ResourcesProvide(CatSet), LibraryWrite(CatSet),
-    CommandsSend(CommandAllow), CommandsIntercept, KeyringOwn, SettingsRead(Vec<String>), SettingsWrite(Vec<String>),
-    NetworkOutbound(Vec<String>), NetworkListen(Vec<u16>), FsPluginData, FsRead(Vec<String>), FsWrite(Vec<String>),
-    ProcessSpawn, UiPanel, UiToolbar, UiDom, NativeCode }
-pub struct PermissionSet(Vec<Permission>);
-impl PermissionSet {
-    pub fn allows_command(&self, variant: &str) -> bool;
-    pub fn provides(&self, category: &str) -> bool;
-    pub fn has(&self, p: PermKind) -> bool;
-}
-pub struct PluginManifest { … }            // serde, + fn validate(&self, host_version) -> Result<(), ManifestError>
-pub fn artifact_digest(dir: &Path, files: &[PathBuf]) -> io::Result<String>;
-pub fn command_variant(v: &serde_json::Value) -> Option<&str>; // externally-tagged: string or single-key object
-```
+**Web loading gate.**
+- The console fetches `GET /api/plugins?kind=web&active=1` with the host token and loads only the listed entries. Nothing is auto-loaded.
+- A middleware ahead of the static file server answers `/plugins/*` only for files that belong to an active, digest-matching plugin; anything else gets a 404.
+- A plugin's keyring is scoped by its manifest `id`, not by its display name.
 
-**`src/core/plugins.rs`:**
-- `struct LoadedPlugin { id: String, grants: Arc<GrantCell>, plugin: Box<dyn OsPlugin> }`, where `GrantCell { enabled: AtomicBool, perms: RwLock<PermissionSet> }`. `PluginManager` stays `Arc` with no `AppState` type change, because mutation goes through `GrantCell`.
-- `load_plugins_from_dir(dir)` becomes `load_approved(&self, candidates: Vec<ApprovedPlugin>)`. Discovery and digest checks move to `plugin_registry.rs`.
-- `check_command(&self, cmd_json: &str, variant: Option<&str>)`:
-  - safety-critical is decided by `variant ∈ {ToggleBlackout, ToggleClearText, ToggleLogo, SetAlert}`, not by substring;
-  - only plugins that are `enabled && has(CommandsIntercept)` are consulted.
-- `notify_state_change` calls only plugins with `ShowObserve`.
-- `collect_resources(category)` calls only plugins with `provides(category)`. Each returned item is stamped `"_plugin": id`, and its `id` gets the prefix `"<plugin_id>:"` if it doesn't already have it.
-- `set_grants(id, PermissionSet)` and `revoke(id)`.
-- **Freeze `OsPlugin` (v1):** doc comment "never add methods; vtable is ABI". Add a separate ABI v2 entry point:
+**Sandbox.** `/plugin-frame/<id>/…` is served with a per-plugin CSP (`default-src 'none'; script-src 'self'; connect-src <network.outbound hosts>`) and `sandbox allow-scripts`. A `postMessage` bridge (`web/src/core/plugin_bridge.ts`) mints a scoped token through the console and proxies `sendCommand` and state events, checking `show.observe` and `commands.send`. Same-realm loading exists only under `ui.dom` (Critical).
 
-```rust
-pub trait PluginHost: Send + Sync {
-    fn plugin_id(&self) -> &str;
-    fn has(&self, perm: PermKind) -> bool;
-    fn snapshot(&self) -> Result<StateSnapshot, PluginError>;              // ShowObserve
-    fn send_command(&self, cmd: ShowCommand) -> Result<(), PluginError>;   // CommandsSend(variant)
-    fn library_list(&self, category: &str) -> Result<Vec<Value>, PluginError>;
-    fn keyring_get(&self, account: &str) -> Result<Option<String>, PluginError>; // KeyringOwn
-    fn keyring_set(&self, account: &str, secret: &str) -> Result<(), PluginError>;
-    fn keyring_delete(&self, account: &str) -> Result<bool, PluginError>;
-    fn data_dir(&self) -> Result<PathBuf, PluginError>;                    // creates data_dir/plugin-data/<id>
-    fn log(&self, level: tracing::Level, msg: &str);
-}
-// v2 constructor symbol:
-// #[no_mangle] extern "C" fn create_plugin_v2(host: *const Arc<dyn PluginHost>) -> *mut dyn OsPlugin
-// plus os_next::export_plugin!(Type) macro emitting the ABI statics + constructor.
-```
-
-- **`send_command` never runs inline.** It does `try_send` into a bounded `tokio::mpsc` (capacity 64, about 20 commands/s per plugin). A task drains it through the shared pipeline below. This prevents re-entrancy (`on_state_change`, then `send_command`, then `notify_state_change`, and so on) and deadlocks.
-- The host handle holds an `AppState` clone. That creates an Arc cycle through `plugin_manager`, which is acceptable because it lives for the whole process. Handles are attached after `AppState` is built in `main.rs`.
-
-**Shared command pipeline.** New function in `src/api/ws.rs`:
-
-```rust
-pub enum CommandOrigin { Console { session_id: String }, Device { id: String }, Plugin { id: String } }
-pub fn run_command_pipeline(app: &AppState, value: Value, origin: CommandOrigin) -> Result<StateSnapshot, CommandRejection>
-```
-
-It does shorthand expansion (the duplicated AddToSchedule/StageItem block in `ws.rs:530–578` and `show.rs`), then `command_variant`, then the origin check (for `Plugin`: enabled and `allows_command(variant)`), then `check_command(redacted_post_expansion_json, variant)`, then parse, `execute_command`, `save_event` and `broadcast_snapshot`. WS, REST and `PluginHost` all call it. This fixes problems 1 and 2 from section 0.
-
-**Plugin tokens (`src/api/ws.rs`, `routes/keyring.rs`):**
-- The `plugin_tokens` value type changes from `String` to `PluginTokenInfo { plugin_id, scopes: PermissionSet, expires_at: i64 }`. TTL is 12 hours, with at most 8 tokens per plugin.
-- The map stays inferred as `HashMap::new()`, so the six or so `AppState { … }` literals in `tests/core_tests/` need no edits.
-- `resolve_plugin_token` becomes `resolve_plugin_token(&self, tok) -> Option<PluginCaller>`. It applies `scopes ∩ live grant`, so revoking a plugin kills its tokens at once even before the purge.
-- `revoke_plugin_tokens(plugin_id)`.
-- New `authenticate_plugin(headers, app, need: PermKind) -> Result<PluginCaller, AppError>`.
-- `keyring.rs`:
-  - `authenticate_keyring_caller`'s plugin branch requires `KeyringOwn`;
-  - `keyring_plugin_token` checks `plugin_grants` (`status='approved'`, digest matches, `KeyringOwn` granted) instead of `is_known_plugin_name`, which is deleted;
-  - the old route stays as an alias of `POST /api/plugins/{id}/token`, with scopes `[keyring.own]`.
-- `/api/command` (`show.rs`): a third credential branch for `x-plugin-token`. `/ws`: a `{cmd, plugin_token}` envelope beside `device_token` and `host_token`. Both go to `run_command_pipeline(…, Plugin{id})`. Plugin commands skip the console lock, but are attributed in logs and audit.
-
-**Web loading gate:**
-- `main.ts` stops hard-coding the plugin. It fetches `GET /api/plugins?kind=web&active=1` with the host token and loads only the listed entries.
-- Server-side, a small middleware ahead of `ServeDir` in `create_router` answers `/plugins/*` only for files that belong to an active, digest-matching web plugin. Anything else gets a 404.
-- `registerPlugin` scopes the keyring by manifest `id`, not by display name (fixes problem 4).
-
----
-
-## 6. Migration and back-compat
-
-**Removed: legacy native files and web scripts.** This section once described synthesizing a plugin
-for each bare `.so/.dll/.dylib` (and a bare `.js` with no manifest) and approving the native ones once
-when permissions first shipped (`plugins.grandfathered_v1`). None of that exists now: those files are
-ignored with a log warning, no plugin is ever approved automatically, and `plugin.json` must declare
-`"abi": 2`. A directory-form plugin without `plugin.json` is also ignored.
-
-**`web/plugins/hello_world.js`:**
-- Ship `web/plugins/hello_world.plugin.json` with `id: "hello_world"` (so existing `plugin:hello_world` keyring rows keep matching), `kind: web`, and permissions `[ui.dom, keyring.own]`.
-- Bundled plugins under the read-only `web_dir` are first-party but still `pending` by default. **Recommendation:** stop auto-loading the demo button. It becomes opt-in in Settings → Plugins, which also makes it a good live demo of the consent flow.
-
-**Keyring:** owner tags `plugin:<id>` stay unchanged. Web plugin ids equal the file stem, which already matches.
-
-**Docs:**
-- `docs/PLUGINS.md` gets a manifest/permissions section and a threat-model box.
-- `docs/CLIENT_PAIRING.md` gets a line saying only console credentials may grant plugin permissions.
-
-**New example:**
-- `examples/plugin_observer/` (or `[[example]] name="plugin_observer" crate-type=["cdylib"]`) with a manifest and `export_plugin!`.
-- It is used by an optional real-dlopen test and as the template in the docs.
-
----
-
-## 7. Testing plan
-
-> Tests for native plugins (hooks, the dlopen test) were removed with them.
-
-**Unit tests**, in `#[cfg(test)]` modules next to the code, like `routes/common.rs`:
-- Manifest parsing and validation:
-  - bad ids, path traversal and symlinks, an unknown permission with the same `manifest_version` (rejected) and a newer one (incompatible), `host_api` semver mismatch, an artifact whose hash differs from the declared hash.
-- `artifact_digest` is deterministic and independent of order. Changing one byte changes it.
-- Signatures: good, bad, wrong key, signed then unsigned. Use the `minisign` dev-dependency pattern already used in `updater.rs:423`.
-- `PermissionSet`:
-  - `allows_command` handles allowlists, `"*"` and navigation-tier classification;
-  - `provides(category)`;
-  - `command_variant` handles both string and object variants.
-- `needs_host_token` covers the new `/api/plugins*` GETs and POSTs. Extend `gate_tests` in `routes/mod.rs`.
-
-**Integration tests** in `tests/core_tests/plugins.rs`, following the existing `register_plugin` and `AppState`+`create_router`+`reqwest` pattern (e.g. `:4748`):
-1. `test_plugin_dispatch_respects_grants`: a plugin without `commands.intercept` is never asked; one without `show.observe` gets no state changes; `resources.provide:[songs]` contributes to songs but not themes; revoking stops dispatch at once.
-2. `test_safety_critical_uses_parsed_variant`: `AddToSchedule` with the title "SetAlert" can now be vetoed, and a real `SetAlert` still cannot.
-3. `test_ws_and_rest_give_plugins_identical_command_text`.
-4. `test_plugin_grant_routes_require_console`:
-   - no credential gets 401, device token 401, plugin token 401;
-   - host token approves;
-   - a stale `digest` gets 409;
-   - an audit row is written with the right `decided_by`.
-5. `test_changed_digest_blocks_load`: build a temp `plugin_dir` with a dummy file, approve it, modify a byte, and check that discovery reports `changed` and the loader skips it.
-6. ~~`test_legacy_grandfathering_runs_once`~~ (removed with grandfathering; replaced by `nothing_is_approved_automatically_and_a_changed_binary_stops_loading_until_reapproved` and `bare_libraries_and_scripts_are_ignored_and_old_rows_are_purged`).
-7. `test_scoped_plugin_token`:
-   - `keyring.own` allows `/api/keyring/set` in its own namespace;
-   - `/api/command` with `NextSlide` (allowlisted) returns 200, `NewSchedule` returns 403, and there is no console-lock interference;
-   - revoking makes the next call 401;
-   - TTL expiry, by injecting `expires_at` in the past.
-8. `test_plugin_host_send_command_is_queued_and_gated`: the in-process `PluginHost` with the queue drained by a test runtime; rejections are recorded as coalesced `denied_call` audit rows.
-9. Optional, `#[ignore]`: `test_real_cdylib_abi_marker`, which builds `examples/plugin_observer` and `dlopen`s it, plus a negative test with an ABI mismatch.
-
-**Web tests** (vitest, `web/tests/plugins_runtime.test.ts` and `keyring.test.ts`):
-- The loader loads only the approved list.
-- `registerPlugin` scopes the keyring by `id`.
-- The token request uses the new route.
-
----
-
-## 8. Phased implementation
-
-> History: phases 1 to 3 include native gating and the native host API, which no longer exist.
-
-Each phase ships on its own.
-
-**Phase 0: hardening (small, no schema change)**
-- `ws.rs`: compute the plugin-visible text after shorthand expansion. `plugins.rs`: safety-critical decided by parsed variant. `ws.rs`: TTL and cap on plugin tokens. `web/src/core/plugins.ts`: fix the keyring name used for `hello_world`.
-- Tests 2 and 3.
-- Risk: a plugin that matched on the `{"cmd":…}` envelope text over WS changes behaviour. That is unlikely and is called out in the changelog.
-
-**Phase 1: manifest, grants and native gating (the core)**
-- New: `src/core/plugin_permissions.rs`, `src/core/plugin_registry.rs` (discovery, digests), `src/storage/db/plugins.rs`, `src/api/routes/plugins.rs`, and a Settings → Plugins UI module in `web/src/`.
-- Changed:
-  - `plugins.rs`: `LoadedPlugin` and `GrantCell`, gated dispatch, `set_grants`/`revoke`;
-  - `main.rs`: discovery and load from approved candidates;
-  - `db/core.rs`: the two tables;
-  - `routes/mod.rs`: merge the router and update `needs_host_token`;
-  - `routes/common.rs`: `merge_with_plugin_resources` provenance stamping;
-  - `web/src/main.ts` and the `/plugins/*` serve gate;
-  - `hello_world.plugin.json`, Cargo deb assets, docs.
-- Tests 1, 4, 5 and 6, plus the unit tests.
-- Risks:
-  - forgetting to grandfather breaks a church's existing plugin on upgrade (covered by test 6);
-  - digest work at startup is cheap (a few MB of SHA-256).
-
-**Phase 2: scoped tokens and signatures**
-- `ws.rs`: the `PluginTokenInfo` and `resolve` changes. `keyring.rs`: grant-based checks; delete `is_known_plugin_name`. `routes/plugins.rs`: the `/token` route. `show.rs` and `ws.rs`: the plugin credential branch. The `run_command_pipeline` refactor goes here.
-- Minisign TOFU in `plugin_registry.rs`.
-- Test 7 and the signature unit tests.
-- Risk: the pipeline refactor touches the live-show hot path. Land it in its own PR with the existing WS and REST command tests unchanged.
-
-**Phase 3: native host API v2**
-- `plugins.rs`: the `PluginHost` trait, `create_plugin_v2`, ABI statics check, `export_plugin!` macro. A new `AppPluginHost` in `src/api/plugin_host.rs` with a bounded command queue task.
-- `examples/plugin_observer` and its manifest. Docs.
-- Tests 8 and 9.
-- Risks:
-  - ABI misuse is still undefined behaviour if someone hand-rolls the statics;
-  - a blocking plugin hook still stalls a tokio worker. A possible follow-up is `spawn_blocking` with a timeout per hook.
-
-**Phase 4: sandboxed web plugins**
-- `/plugin-frame/<id>/…` served with a per-plugin CSP: `default-src 'none'; script-src 'self'; connect-src <network.outbound hosts>`, plus `sandbox allow-scripts`.
-- A `postMessage` bridge in `web/src/core/plugin_bridge.ts`. It mints a scoped token through the console, proxies `sendCommand` and state events, and checks `show.observe` and `commands.send`.
-- `ui.panel` and `ui.toolbar` slots (both implemented).
-- Same-realm loading stays available only under `ui.dom` (Critical).
-- Risks: the largest phase; the `strict` CSP mode and `frame_mode` settings interact with this and need testing.
-
----
-
-## Open questions for the owner, with recommendations
-
-1. **Grandfather existing legacy native plugins on upgrade?** *Was* "yes, once"; the whole legacy path has since been removed, so nothing is grandfathered.
-2. **Must native-plugin approval require the per-run host token, or is a persistent console credential enough?** Recommend **a console credential is enough** for now, because installing still needs file access to the server. If an "install from file" upload API is ever added, that route must require the per-run host token.
-3. **Signed same-key updates that request no new permissions: auto-approve or one-click?** Recommend **one-click**, never silent. A live service shouldn't change code without someone seeing it.
-4. **Do plugin-originated commands bypass the one-console lock?** Recommend **yes**, attributed in audit. Plugins aren't consoles, and a DMX panic button shouldn't fail because a console is connected.
-5. **Should library and state GETs require auth so that `library.read` means something over HTTP?** Recommend **no**. The live, stage and remote pages depend on zero-auth reads, so document it as informational.
-6. ~~Copy the library to a private cache before `dlopen` to close the TOCTOU window?~~ **Moot.** This was about `dlopen`-based native plugins, which no longer exist (confirmed: no `OsPlugin`, `libloading`, `dlopen`, `PluginHost`, or `create_plugin_v2` anywhere in `src/`). Kept here only so the question doesn't look unanswered.
-7. ~~HMAC grant rows with a key in the OS keyring?~~ **Moot**, same reason as question 6 — it was framed as a defense for the native-plugin era that's gone.
-8. **Keep auto-loading `hello_world.js` by default?** Recommend **no**. Make it opt-in through the new consent screen.
-9. **Offer `commands.modify` (rewriting commands) or `keyring.service` (shared namespaces) in v1?** Settled, and the two landed differently: `commands.modify` was dropped for good — it only made sense for the native plugins that were removed, and `plugin_permissions.rs`'s own manifest tests now assert it's rejected as an unknown id ("commands.modify no longer exists"). `keyring.service` was implemented, limited to `OpenSanctuary:Shared:` namespaces, with the owner rules in docs/PLUGINS.md.
-
-**New dependencies: none.** Everything uses serde_json, sha2, minisign-verify (minisign is already a dev-dependency), semver, uuid, rusqlite and libloading, which are all already present.
+**Tests** live next to the code: manifest and digest unit tests in `src/core/plugin_permissions.rs`, the grant, token and gate integration tests in `tests/core_tests/plugins.rs`, and the loader and keyring scoping tests in `web/tests/`.
