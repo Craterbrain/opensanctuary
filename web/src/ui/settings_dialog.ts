@@ -325,8 +325,8 @@ export async function downloadAndInstallUpdate(): Promise<void> {
 
 /** Settings > About > "Install Update from File" (docs/update.md) -- the manual
  * fallback path: pick a release you already downloaded yourself. Useful on
- * platforms the automated download-and-install path doesn't cover yet
- * (Windows/macOS), or for installing without waiting for a check. */
+ * platforms the automated download-and-install path doesn't cover (macOS), or a
+ * Windows install old enough to refuse it (0.3.5 and earlier), or for installing without waiting for a check. */
 async function installUpdateFromFile(btn: HTMLButtonElement): Promise<void> {
   btn.disabled = true;
   try {

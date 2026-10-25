@@ -240,5 +240,6 @@ old key cannot verify releases signed with the new one; see `docs/update.md`'s
   filename's `major.minor.patch` only; a prerelease replayed as its own final
   version isn't caught. Fully closing it needs the version inside the signed
   manifest.
-- **Windows/macOS auto-update** isn't wired; only the Linux `.deb` can be
-  applied by the in-app updater.
+- **macOS auto-update** isn't wired (there is no macOS installer). Windows applies the signed installer
+  interactively. Builds up to and including 0.3.5 refuse to auto-apply a Windows update (the installer's
+  file name carries no version), so a Windows install on one of those must download the installer by hand once.
