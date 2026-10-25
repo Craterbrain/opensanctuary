@@ -1,7 +1,8 @@
 /**
  * schedule_drop.ts
  *
- * Native OS desktop drag-and-drop ingestion handler for schedule files (.ewsx, .ews, .osj, .json).
+ * Native OS desktop drag-and-drop ingestion handler for schedule files (.ewsx, .ews, .osj, .json) and
+ * OpenSanctuary's own files (.osservice, and the song/presentation/Bible kinds, which are filed in the library).
  * Renders an intuitive split drop-target over #schedule-panel:
  * - Top half: "Drop to Replace Schedule"
  * - Bottom half: "Drop to Append to Schedule"
@@ -14,6 +15,15 @@ export interface ScheduleDropOptions {
   panelSelector?: string;
   onLoaded?: (snapshot: any, mode: 'replace' | 'append') => void;
   showToast?: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
+  /** Opens an OpenSanctuary file (`.osservice` etc.) -- injected so this module doesn't depend on the dialogs it needs. */
+  openBundle?: (file: File, mode: 'replace' | 'append') => Promise<void>;
+}
+
+const BUNDLE_EXTENSIONS = ['.ossong', '.ospres', '.osbible', '.osservice'];
+
+export function isBundleFile(filename: string): boolean {
+  const lower = filename.toLowerCase();
+  return BUNDLE_EXTENSIONS.some((e) => lower.endsWith(e));
 }
 
 export function isSupportedScheduleFile(filename: string): boolean {
@@ -172,8 +182,13 @@ export function setupScheduleDesktopDrop(options?: ScheduleDropOptions): () => v
     if (!files || files.length === 0) return;
     const file = files[0];
 
+    if (isBundleFile(file.name) && options?.openBundle) {
+      await options.openBundle(file, mode);
+      return;
+    }
+
     if (!isSupportedScheduleFile(file.name)) {
-      toast(`Unsupported schedule format: "${file.name}". Expected .ewsx, .ews, .ewpx, .osz, or .osj file.`, 'warning');
+      toast(`Unsupported schedule format: "${file.name}". Expected .osservice, .ewsx, .ews, .ewpx, .osz, or .osj file.`, 'warning');
       return;
     }
 

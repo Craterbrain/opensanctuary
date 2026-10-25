@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 tempfile = "3.10"
+zip = "9.0"
 
 [dependencies.os-next]
 path = ".."
@@ -87,3 +88,9 @@ path = "fuzz_targets/rtf_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "bundle_open"
+path = "fuzz_targets/bundle_open.rs"
+test = false
+doc = false

@@ -21,6 +21,9 @@ multi-display story, and formats that don't talk to each other. OpenSanctuary is
   (`.show`/`.project`), PowerPoint (`.pptx`), and OpenDocument Presentation
   (`.odp`) — moving to OpenSanctuary shouldn't mean rebuilding years of songs
   and slides by hand. `.odp` also exports, so a presentation can leave again.
+  OpenSanctuary also has its own files (`.ossong`, `.ospres`, `.osservice`,
+  `.osbible`) that carry a song, presentation, service or Bible together with
+  its pictures, videos and music — see [docs/file-formats.md](docs/file-formats.md).
 - **Cross-platform, not Windows-only.** One Rust binary; Linux, Windows, and (maybe eventually) macOS from the same codebase.
 - **No per-seat licensing.** MIT-licensed. Run it on as many machines as
   your church has.

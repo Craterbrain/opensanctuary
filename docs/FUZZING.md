@@ -32,6 +32,7 @@ one target per hand-rolled parser.
 | `freeshow_fsb` | `FreeShowImporter::import_fsb_content` | JSON text |
 | `scripture_ref` | `parse_scripture_reference` | free-text reference string |
 | `rtf_parse` | `parse_rtf` | raw RTF bytes |
+| `bundle_open` | `bundle::open` + `inspect` + `import` (OpenSanctuary's own `.ossong`/`.ospres`/`.osservice`/`.osbible`, see `docs/file-formats.md`) | raw archive bytes, or an otherwise well-formed zip whose `manifest.json` and `content.json` are fuzzed |
 
 Each target calls the same `pub fn` entry point the real import routes
 (`src/api/routes/schedule.rs` et al.) call, with no mocking -- a crash found
@@ -75,7 +76,7 @@ Run every target for a fixed budget each:
 ```sh
 for t in pptx_import odp_import ewsx_import openlp_service_json openlp_theme \
          openlp_otz freeshow_show_import freeshow_fsb scripture_ref \
-         rtf_parse; do
+         rtf_parse bundle_open; do
   cargo +nightly fuzz run "$t" -- -max_total_time=120 || break
 done
 ```

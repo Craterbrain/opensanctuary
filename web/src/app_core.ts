@@ -1,4 +1,5 @@
 // OpenSanctuary Rust Client Show Controller & Bible Manager (app.js)
+import { exportBundle } from './ui/bundle_ui.ts';
 import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { resolveHostSessionToken, hostTokenHeader, submitManualHostToken, getConsoleSessionId } from './core/host_session.ts';
 import { api } from './core/api_client.ts';
@@ -550,6 +551,16 @@ export function resetSaveModal() {
   if (titleEl) {
     titleEl.value = scheduleTitleEl ? (scheduleTitleEl.textContent || 'Sunday Morning Worship') : 'Sunday Morning Worship';
   }
+  syncSaveFormatLabel();
+}
+
+/** The Save button names the file type the chosen format will download. */
+export function syncSaveFormatLabel() {
+  const select = document.getElementById('save-format-select') as HTMLSelectElement | null;
+  const button = document.getElementById('btn-confirm-save');
+  if (!select || !button) return;
+  const ext = select.value === 'json' ? 'osj' : select.value;
+  button.textContent = `💾 Download & Save (.${ext})`;
 }
 
 export function resetOpenModal() {
@@ -3737,6 +3748,17 @@ on('ctx-lib-export-odp', 'click', async () => {
   } catch (e: any) {
     showToast(`Export failed: ${e?.message ?? e}`, 'error');
   }
+});
+// Songs and presentations save one file each; a Bible saves the whole translation the chapter belongs to.
+// (The menu entry is hidden on the other tabs: see `prepareBundleMenuItem` in library_panel.ts.)
+on('ctx-lib-export-bundle', 'click', async () => {
+  const target = currentContextMenuTarget;
+  hideAllContextMenus();
+  if (!target || !target.item) return;
+  const item = target.item;
+  if (target.tab === 'songs') await exportBundle({ kind: 'song', ids: [item.id] }, item.title || 'Song');
+  else if (target.tab === 'presentations') await exportBundle({ kind: 'presentation', ids: [item.id] }, item.title || 'Presentation');
+  else if (target.tab === 'scriptures' && item.version) await exportBundle({ kind: 'bible', version: item.version }, item.version);
 });
 on('ctx-lib-delete', 'click', () => {
   if (currentContextMenuTarget && currentContextMenuTarget.item) {

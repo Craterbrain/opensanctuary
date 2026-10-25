@@ -262,11 +262,10 @@ pub(super) async fn import_bundle(State(app): State<AppState>, Query(q): Query<I
         .map_err(join_error)?
         .map_err(bundle_error)?;
 
-    if let Some(schedule) = result.schedule.take() {
-        apply_loaded_schedule(&app, schedule, q.mode.as_deref() == Some("append"));
-    }
+    // A service comes back as the new show state, so the console that opened it can draw it straight away.
+    let snapshot = result.schedule.take().map(|schedule| apply_loaded_schedule(&app, schedule, q.mode.as_deref() == Some("append")));
     drop(tmp);
-    Ok(Json(serde_json::json!({ "success": true, "title": title, "result": result })))
+    Ok(Json(serde_json::json!({ "success": true, "title": title, "result": result, "snapshot": snapshot })))
 }
 
 pub(super) fn router() -> Router<AppState> {

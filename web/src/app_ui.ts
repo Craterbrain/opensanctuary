@@ -6,6 +6,7 @@ import { setupScheduleDesktopDrop, uploadScheduleFile, fileToBase64 } from './co
 import { resolveHostSessionToken, hostTokenHeader } from './core/host_session.ts';
 import { initFirstTimeSetup, maybeShowFirstTimeSetup, showFirstTimeSetup } from './ui/first_time_setup.ts';
 import { rememberDeckMode } from './ui/deck_view_mode.ts';
+import { bundleKindForFile, exportBundle, importBundleFile, type BundleKind } from './ui/bundle_ui.ts';
 import QRCode from 'qrcode';
 import {
   addDualScriptureToSchedule,
@@ -41,6 +42,7 @@ import {
   resetImportModal,
   resetOpenModal,
   resetSaveModal,
+  syncSaveFormatLabel,
   resetWebModal,
   saveAppOptions,
   sendCommand,
@@ -1215,7 +1217,27 @@ function getSelectedScheduleMode(): 'replace' | 'append' {
   return appendRadio?.checked ? 'append' : 'replace';
 }
 
+/** Reload the library tab an OpenSanctuary file just added to. */
+function reloadLibraryFor(kind: BundleKind): void {
+  loadLibraryTab(kind === 'song' ? 'songs' : kind === 'presentation' ? 'presentations' : 'scriptures');
+}
+
+/** Opens an OpenSanctuary file wherever it was picked or dropped. A service replaces or extends the schedule. */
+async function openBundle(file: File, mode: 'replace' | 'append'): Promise<boolean> {
+  const done = await importBundleFile(file, { mode, onLibraryChanged: reloadLibraryFor });
+  if (!done) return false;
+  if (done.snapshot) {
+    setCurrentSnapshot(done.snapshot);
+    renderAll(done.snapshot);
+  }
+  return true;
+}
+
 async function loadScheduleFile(file: File, mode: 'replace' | 'append') {
+  if (bundleKindForFile(file.name)) {
+    if (await openBundle(file, mode)) closeModal(openModal);
+    return;
+  }
   showToast(`Loading ${file.name}...`, 'info');
   try {
     const data = await uploadScheduleFile(file, mode);
@@ -1310,6 +1332,9 @@ on('btn-open-schedule-hub', 'click', () => {
 // Setup native OS desktop file drag-and-drop on #schedule-panel
 setupScheduleDesktopDrop({
   showToast,
+  openBundle: async (file, mode) => {
+    await openBundle(file, mode);
+  },
   onLoaded: (snapshot) => {
     setCurrentSnapshot(snapshot);
     renderAll(snapshot);
@@ -1340,6 +1365,14 @@ let lastSavedTitle: string | null = null;
 let lastSavedFormat: string = 'ewsx';
 
 async function performSave(title: string, format: string): Promise<void> {
+  if (format === 'osservice') {
+    // The whole service with its pictures, videos and music (the exporter says what it saved).
+    if (await exportBundle({ kind: 'service', title }, title)) {
+      lastSavedTitle = title;
+      lastSavedFormat = format;
+    }
+    return;
+  }
   const ext = format === 'osj' ? 'osj' : 'ewsx';
   try {
     if (format === 'osj') {
@@ -1386,6 +1419,7 @@ function quickSaveSchedule(): void {
   }
 }
 
+on('save-format-select', 'change', syncSaveFormatLabel);
 on('btn-close-save', 'click', () => closeModal(saveModal));
 on('btn-cancel-save', 'click', () => closeModal(saveModal));
 on('btn-confirm-save', 'click', async () => {
@@ -2019,6 +2053,7 @@ const importViewLocal = document.getElementById('import-view-local');
 function openImportModal(initialMode = 'local') {
   if (importModal) showModal(importModal);
   resetImportModal();
+  void refreshExportBibleChoices();
   if (initialMode) setImportMode(initialMode);
 }
 
@@ -2238,6 +2273,71 @@ on('file-pptx-import', 'change', async (e: Event) => {
     (e.target as HTMLInputElement).value = '';
   }
 });
+
+// OpenSanctuary's own files (.ossong, .ospres, .osbible, .osservice)
+on('file-bundle-import', 'change', async (e: Event) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  const statusEl = document.getElementById('bundle-import-status');
+  const say = (text: string, color: string) => {
+    if (!statusEl) return;
+    statusEl.style.display = 'block';
+    statusEl.style.color = color;
+    statusEl.textContent = text;
+  };
+  say(`Reading ${file.name}...`, 'var(--text-dim)');
+  try {
+    const done = await openBundle(file, 'replace');
+    if (done) {
+      say('Done. See the message above.', 'var(--os-success-text)');
+    } else {
+      if (statusEl) statusEl.style.display = 'none';
+    }
+  } finally {
+    input.value = '';
+  }
+});
+
+on('btn-export-all-songs', 'click', () => { void exportBundle({ kind: 'song' }, 'Songs'); });
+on('btn-export-all-presentations', 'click', () => { void exportBundle({ kind: 'presentation' }, 'Presentations'); });
+on('btn-export-bible', 'click', () => {
+  const select = document.getElementById('select-export-bible') as HTMLSelectElement | null;
+  if (!select || !select.value) {
+    showToast('No Bible is installed to save.', 'info');
+    return;
+  }
+  void exportBundle({ kind: 'bible', version: select.value }, select.value);
+});
+
+/** The installed Bibles, for the "Save Bible" picker (re-read each time the Import dialog opens). */
+async function refreshExportBibleChoices(): Promise<void> {
+  const select = document.getElementById('select-export-bible') as HTMLSelectElement | null;
+  const button = document.getElementById('btn-export-bible') as HTMLButtonElement | null;
+  if (!select) return;
+  let bibles: Array<{ id: string; name?: string }> = [];
+  try {
+    const res = await fetch('/api/bibles');
+    if (res.ok) bibles = await res.json();
+  } catch {
+    /* an empty list below says it */
+  }
+  select.innerHTML = '';
+  for (const b of bibles) {
+    const opt = document.createElement('option');
+    opt.value = b.id;
+    opt.textContent = b.name && b.name !== b.id ? `${b.id} — ${b.name}` : b.id;
+    select.appendChild(opt);
+  }
+  if (!bibles.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No Bibles installed';
+    select.appendChild(opt);
+  }
+  select.disabled = !bibles.length;
+  if (button) button.disabled = !bibles.length;
+}
 
 // OpenDocument Presentation (.odp) Import
 on('file-odp-import', 'change', async (e: Event) => {
