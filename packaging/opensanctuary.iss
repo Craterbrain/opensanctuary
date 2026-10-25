@@ -89,6 +89,127 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}
 ; match", ignored) if it was never added or already gone.
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""OpenSanctuary HTTPS"""; Flags: runhidden; Check: IsAdminInstallMode
 
-; Never touches %APPDATA%\OpenSanctuary (the data dir -- see docs/paths.md) --
+; Leaves %APPDATA%\OpenSanctuary (the data dir -- see docs/paths.md) alone unless the
+; user ticks "Also delete my library and settings" ([Code] below) --
 ; nothing in [Files]/[UninstallDelete] references it, so uninstall leaves it
 ; alone by construction, same guarantee the .deb makes.
+
+[Code]
+// "Also delete my library and settings" on the uninstall confirmation (docs/installer.md "Uninstall").
+// Unchecked by default; a silent uninstall never deletes data.
+var
+  DeleteData: Boolean;
+
+function ConfigDir: String;
+begin
+  Result := ExpandConstant('{userappdata}\OpenSanctuary');
+end;
+
+// install.json holds a data_dir entry when the library was moved (docs/paths.md).
+// A plain text search is enough for that one small file.
+function MovedDataDir: String;
+var
+  Raw: AnsiString;
+  S: String;
+  P, Q: Integer;
+begin
+  Result := '';
+  if not LoadStringFromFile(ConfigDir + '\install.json', Raw) then Exit;
+  S := String(Raw);
+  P := Pos('"data_dir"', S);
+  if P = 0 then Exit;
+  S := Copy(S, P + Length('"data_dir"'), MaxInt);
+  P := Pos('"', S);
+  if P = 0 then Exit;
+  S := Copy(S, P + 1, MaxInt);
+  Q := Pos('"', S);
+  if Q = 0 then Exit;
+  S := Copy(S, 1, Q - 1);
+  StringChangeEx(S, '\\', '\', True);
+  StringChangeEx(S, '/', '\', True);
+  Result := S;
+end;
+
+// Only ever remove a folder that is really an OpenSanctuary library.
+procedure RemoveLibrary(Dir: String);
+begin
+  Dir := RemoveBackslash(Dir);
+  if (Dir <> '') and (Length(Dir) > 3) and FileExists(Dir + '\library.db') then
+    DelTree(Dir, True, True, True);
+end;
+
+function InitializeUninstall: Boolean;
+var
+  Form: TSetupForm;
+  Info: TNewStaticText;
+  Box: TNewCheckBox;
+  Ok, Cancel: TNewButton;
+begin
+  Result := True;
+  DeleteData := False;
+  if UninstallSilent then Exit;
+
+  Form := CreateCustomForm(ScaleX(420), ScaleY(190), False, True);
+  try
+    Form.Caption := 'Uninstall OpenSanctuary';
+    Form.Position := poScreenCenter;
+
+    Info := TNewStaticText.Create(Form);
+    Info.Parent := Form;
+    Info.Left := ScaleX(16);
+    Info.Top := ScaleY(16);
+    Info.Width := Form.ClientWidth - ScaleX(32);
+    Info.AutoSize := False;
+    Info.WordWrap := True;
+    Info.Height := ScaleY(70);
+    Info.Caption := 'This removes the OpenSanctuary program. Your songs, Bibles, media and settings are kept, so a later install picks up where you left off.';
+
+    Box := TNewCheckBox.Create(Form);
+    Box.Parent := Form;
+    Box.Left := ScaleX(16);
+    Box.Top := ScaleY(92);
+    Box.Width := Form.ClientWidth - ScaleX(32);
+    Box.Height := ScaleY(34);
+    Box.Checked := False;
+    Box.Caption := 'Also delete my library and settings (cannot be undone)';
+
+    Cancel := TNewButton.Create(Form);
+    Cancel.Parent := Form;
+    Cancel.Caption := 'Cancel';
+    Cancel.ModalResult := mrCancel;
+    Cancel.Cancel := True;
+    Cancel.Width := ScaleX(80);
+    Cancel.Height := ScaleY(26);
+    Cancel.Left := Form.ClientWidth - Cancel.Width - ScaleX(16);
+    Cancel.Top := Form.ClientHeight - Cancel.Height - ScaleY(14);
+
+    Ok := TNewButton.Create(Form);
+    Ok.Parent := Form;
+    Ok.Caption := 'Uninstall';
+    Ok.ModalResult := mrOk;
+    Ok.Default := True;
+    Ok.Width := ScaleX(80);
+    Ok.Height := ScaleY(26);
+    Ok.Left := Cancel.Left - Ok.Width - ScaleX(8);
+    Ok.Top := Cancel.Top;
+
+    Result := Form.ShowModal = mrOk;
+    DeleteData := Result and Box.Checked;
+  finally
+    Form.Free;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Moved: String;
+begin
+  if (CurUninstallStep = usPostUninstall) and DeleteData then
+  begin
+    Moved := MovedDataDir;
+    if Moved <> '' then RemoveLibrary(Moved);
+    // The config folder (install.json, plugins) is also the default data folder.
+    if FileExists(ConfigDir + '\library.db') or FileExists(ConfigDir + '\install.json') then
+      DelTree(ConfigDir, True, True, True);
+  end;
+end;

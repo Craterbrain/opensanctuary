@@ -26,8 +26,9 @@ result). Verified for real on `vms/win10`, matching the `.deb`'s rigor:
 - Running with zero flags resolves `data_dir` to the real
   `%APPDATA%\OpenSanctuary` and serves the real web UI — confirmed via
   `--headless` and via `/api/server-info`.
-- Uninstall removes the install dir and leaves `%APPDATA%\OpenSanctuary`
-  (the user's library/settings) completely untouched.
+- Uninstall removes the install dir and, by default, leaves `%APPDATA%\OpenSanctuary`
+  (the user's library/settings) untouched. The confirmation has an unchecked
+  "Also delete my library and settings" box; see "Uninstall" below.
 - A real, previously-undiscovered `src/storage/paths.rs` bug got found and
   fixed in the process: the CWD-fallback heuristic checked for a
   `web/index.html` sibling to detect "this is a portable/dev checkout" —
@@ -255,13 +256,26 @@ vetting. Worth investigating free code-signing for open-source projects
 (e.g. SignPath.io) before any wider release, but explicitly out of scope
 here.
 
-### Uninstall
+### Uninstall — **implemented**
 
-- Must stop a running `os-next.exe` before removing install-dir files.
-- Must **not** delete the data dir by default (library, Bible/song content,
-  settings) — offer an explicit, unchecked-by-default "Also delete my
-  library and settings" checkbox on the uninstall flow, matching the
-  convention most desktop apps use.
+- Must stop a running `os-next.exe` before removing install-dir files (Inno's
+  `CloseApplications`).
+- Does **not** delete the data dir by default (library, Bible/song content,
+  settings). The uninstall confirmation (`[Code]` in `packaging/opensanctuary.iss`)
+  has an unchecked **"Also delete my library and settings (cannot be undone)"**
+  box. Ticked, it deletes the config folder (`%APPDATA%\OpenSanctuary`: `install.json`,
+  `plugins/`, and the library when it lives there) and, if `install.json` points
+  the library somewhere else, that folder too.
+- Safeguards: a folder is only deleted if it contains a `library.db` (or, for the
+  config folder, an `install.json`); a silent uninstall (`/SILENT`) never deletes
+  data; Cancel leaves everything in place. It resolves `%APPDATA%` for the user
+  running the uninstaller, so a per-machine uninstall run by a different admin
+  account won't find the first user's library (and so won't delete it).
+- Not removed: secrets in the Windows credential store (the TLS key and any plugin keys).
+- Verified under Wine with a scripted silent run (data kept; and, with a test build that
+  forced the option, both the default and a relocated library removed with an unrelated
+  folder untouched). The checkbox dialog itself wasn't clicked through; look at it once
+  on a real Windows machine.
 
 ### Build pipeline — **implemented**
 
