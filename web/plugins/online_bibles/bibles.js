@@ -3,7 +3,7 @@
 (function (root) {
   'use strict';
 
-  // [name, chapters] in canonical order; a Bolls translation numbers its books 1..66 in this order.
+  // [name, chapters] in canonical order.
   var BOOKS = [
     ['Genesis', 50], ['Exodus', 40], ['Leviticus', 27], ['Numbers', 36], ['Deuteronomy', 34],
     ['Joshua', 24], ['Judges', 21], ['Ruth', 4], ['1 Samuel', 31], ['2 Samuel', 24],
@@ -54,66 +54,29 @@
     return raw.charAt(0).toUpperCase() + raw.slice(1);
   }
 
-  var CURATED = [
-    ['KJV', 'King James Version (Authorized 1769)', 'English'], ['NKJV', 'New King James Version (1982)', 'English'],
-    ['ESV', 'English Standard Version (2001, 2016)', 'English'], ['NIV', 'New International Version (1984)', 'English'],
-    ['NLT', 'New Living Translation (2015)', 'English'], ['CSB17', 'Christian Standard Bible (2017)', 'English'],
-    ['NASB', 'New American Standard Bible (1995)', 'English'], ['ASV', 'American Standard Version (1901)', 'English'],
-    ['BSB', 'Berean Standard Bible', 'English'], ['WEB', 'World English Bible', 'English'],
-    ['YLT', "Young's Literal Translation (1898)", 'English'], ['DBY', 'Darby Translation (1890)', 'English'],
-    ['DRB', 'Douay-Rheims Bible (1899)', 'English'], ['MSG', 'The Message (2002)', 'English'],
-    ['AMP', 'Amplified Bible (2015)', 'English'],
-    ['LSG', 'Louis Segond 1910', 'French'], ['LUT', 'Lutherbibel 1912', 'German'],
-    ['CLE', 'Biblia Sacra Vulgata (Clementine Latin)', 'Latin'],
-    ['SYNOD', 'Синодальный перевод (Russian Synodal 1876)', 'Russian'],
-    ['UBIO', 'Біблія в пер. Івана Огієнка (1962)', 'Ukrainian'], ['CUV', '和合本 (Chinese Union Version)', 'Chinese'],
-    ['LXXE', 'English Septuagint Bible (Brenton 1851)', 'Greek']
-  ];
-
   /**
-   * Merges the curated list, the Bolls.life language index and the ChurchApps list into one catalog,
-   * de-duplicated by (abbreviation, language) with the sources combined; English first, then by
-   * language and name. Entries: { id, name, language, abbreviation, source, provider, sourceKey }.
+   * The catalog: the public-domain Bibles the OpenSanctuary project hosts (`ownEntries`), de-duplicated by
+   * (abbreviation, language); English first, then by language and name. Entries:
+   * { id, name, language, abbreviation, source, provider, sourceKey }. (Other Bibles come from a GitHub
+   * repository the operator names, or, licensed ones, from the YouVersion plugin.)
    */
-  function buildCatalog(bollsLanguages, churchAppsItems, ownEntries) {
+  function buildCatalog(ownEntries) {
     var map = {};
-    function add(item, label, provider) {
+    (Array.isArray(ownEntries) ? ownEntries : []).forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
       var abbr = String(item.abbreviation || item.id || '').trim().toUpperCase();
-      if (!abbr) return;
+      if (!abbr || !item.sourceKey) return;
       var lang = normalizeLanguage(item.language || 'English');
       var key = abbr + '\u0000' + lang.toLowerCase();
-      var existing = map[key];
-      if (existing) {
-        // (An entry from our own repository says only that: it is downloaded from there whoever else lists it.)
-        if (existing.provider !== 'craterbrain' && existing.source.indexOf(label) === -1) existing.source = existing.source ? existing.source + ' • ' + label : label;
-        // Our own repository's entry keeps its name and its download address; for the rest, the longer title is the more informative.
-        if (existing.provider !== 'craterbrain' && String(item.name || '').length > existing.name.length) existing.name = item.name;
-      } else {
-        map[key] = { id: String(item.id || abbr), name: String(item.name || abbr), language: lang, abbreviation: abbr,
-                     source: label, provider: provider || 'bolls', sourceKey: item.sourceKey || item.source_key || null };
-      }
-    }
-    // Added first, so a translation we host is downloaded from our repository whoever else lists it.
-    (Array.isArray(ownEntries) ? ownEntries : []).forEach(function (e) { add(e, OWN_SOURCE_LABEL, 'craterbrain'); });
-    CURATED.forEach(function (c) { add({ id: c[0], abbreviation: c[0], name: c[1], language: c[2] }, 'OpenLP Community'); });
-    (Array.isArray(bollsLanguages) ? bollsLanguages : []).forEach(function (l) {
-      var langName = (l && l.language) || 'English';
-      ((l && l.translations) || []).forEach(function (t) {
-        var short = t && t.short_name;
-        if (short) add({ id: short, abbreviation: short, name: t.full_name || short, language: langName }, 'Bolls.life');
-      });
-    });
-    (Array.isArray(churchAppsItems) ? churchAppsItems : []).forEach(function (it) {
-      if (it && typeof it === 'object') add(it, 'ChurchApps');
+      if (map[key]) return;
+      map[key] = { id: String(item.id || abbr), name: String(item.name || abbr), language: lang, abbreviation: abbr,
+                   source: OWN_SOURCE_LABEL, provider: 'craterbrain', sourceKey: item.sourceKey };
     });
     var list = Object.keys(map).map(function (k) { return map[k]; });
     list.sort(function (a, b) {
       var aEng = a.language === 'English', bEng = b.language === 'English';
       if (aEng !== bEng) return aEng ? -1 : 1;
       if (a.language !== b.language) return a.language < b.language ? -1 : 1;
-      // Within a language, the public-domain translations we host come first.
-      var aOwn = a.provider === 'craterbrain', bOwn = b.provider === 'craterbrain';
-      if (aOwn !== bOwn) return aOwn ? -1 : 1;
       return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
     });
     return list;
@@ -143,52 +106,6 @@
     });
     return out;
   }
-  /**
-   * A Bolls verse as plain text. Bolls marks words up as `Adam<S>121</S>` (the Strong's number is the
-   * *content* of the tag, so removing only the tags leaves "Adam121"), and puts translators' marginal
-   * notes in `<sup>lamb: or, kid</sup>`, which belong beside the verse and not inside it. Both go,
-   * content and all. A `<sup>` that is not a note ("A Psalm of David." titles) is verse text and stays.
-   */
-  function cleanVerseText(raw) {
-    var s = String(raw).replace(/<br\s*\/?>/gi, ' '); // a line break inside a verse is a space, not "beginningGod"
-    s = s.replace(/<S\b[^>]*>[\s\S]*?<\/S>/gi, '');
-    s = s.replace(/<sup\b[^>]*>([\s\S]*?)<\/sup>/gi, function (all, inner) {
-      return /^[^:.]{1,80}:\s/.test(inner) ? '' : inner;
-    });
-    var out = '';
-    var inTag = false;
-    for (var i = 0; i < s.length; i++) {
-      var c = s.charAt(i);
-      if (c === '<') inTag = true;
-      else if (c === '>') inTag = false;
-      else if (!inTag) out += c;
-    }
-    return out.replace(/\s+/g, ' ').trim();
-  }
-
-  /** A Bolls translation file ([{book, chapter, verse, text}, ...]) -> chapters, in book order. */
-  function parseBollsTranslation(jsonText, translation) {
-    var verses;
-    try { verses = JSON.parse(jsonText); } catch (e) { return []; }
-    if (!Array.isArray(verses)) return [];
-    var version = String(translation).trim().toUpperCase();
-    var chapters = {};
-    var order = [];
-    verses.forEach(function (v) {
-      if (!v || v.book < 1 || v.book > 66) return;
-      var key = v.book + ':' + v.chapter;
-      if (!chapters[key]) { chapters[key] = { book: BOOKS[v.book - 1][0], chapter: v.chapter, version: version, verses: [], _b: v.book }; order.push(key); }
-      chapters[key].verses.push({ verse_number: v.verse, text: cleanVerseText(v.text) });
-    });
-    return order.map(function (k) { return chapters[k]; })
-      .sort(function (a, b) { return a._b - b._b || a.chapter - b.chapter; })
-      .map(function (c) {
-        delete c._b;
-        c.verses.sort(function (x, y) { return x.verse_number - y.verse_number; });
-        return c;
-      });
-  }
-
   /** "KING JAMES BIBLE" -> "KJB"; a single word is kept as it is ("KJV" -> "KJV"). */
   function makeAbbreviation(s) {
     var words = String(s).trim().split(/\s+/).filter(Boolean);
@@ -301,15 +218,11 @@
   }
 
   var api = {
-    BOOKS: BOOKS, CURATED: CURATED, normalizeLanguage: normalizeLanguage, buildCatalog: buildCatalog, cleanVerseText: cleanVerseText,
-    parseBollsTranslation: parseBollsTranslation, makeAbbreviation: makeAbbreviation, titleCase: titleCase, parseRepo: parseRepo,
+    BOOKS: BOOKS, normalizeLanguage: normalizeLanguage, buildCatalog: buildCatalog, makeAbbreviation: makeAbbreviation, titleCase: titleCase, parseRepo: parseRepo,
     githubContentsUrl: githubContentsUrl, githubCatalogEntries: githubCatalogEntries, isRawGithubUrl: isRawGithubUrl,
     OWN_CATALOG_URL: OWN_CATALOG_URL, isOwnBibleUrl: isOwnBibleUrl, ownCatalogEntries: ownCatalogEntries,
     parseGithubBible: parseGithubBible, exactBook: exactBook, chapterUrl: chapterUrl, passageUrl: passageUrl, parseBibleApi: parseBibleApi,
-    chunk: chunk,
-    bollsUrl: function (abbr) { return 'https://bolls.life/static/translations/' + encodeURIComponent(String(abbr).trim().toUpperCase()) + '.json'; },
-    BOLLS_LANGUAGES_URL: 'https://bolls.life/static/bolls/app/views/languages.json',
-    CHURCHAPPS_URL: 'https://api.churchapps.org/content/bibles'
+    chunk: chunk
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Bibles = api;

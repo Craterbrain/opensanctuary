@@ -2,9 +2,9 @@
   "manifest_version": 1,
   "id": "online_bibles",
   "name": "Online Bibles",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "publisher": "OpenSanctuary",
-  "description": "Download Bible translations (public-domain Bibles hosted by OpenSanctuary, ChurchApps, Bolls.life, public GitHub repositories) and look up passages online, into your Bible library.",
+  "description": "Download public-domain Bible translations hosted by OpenSanctuary (or from a public GitHub repository you name) into your Bible library, and look up passages online. Licensed Bibles such as the NIV come from the YouVersion plugin.",
   "web": {
     "entry": "index.html",
     "sandbox": true
@@ -17,13 +17,11 @@
     {
       "id": "network.outbound",
       "hosts": [
-        "bolls.life",
-        "api.churchapps.org",
         "bible-api.com",
         "api.github.com",
         "raw.githubusercontent.com"
       ],
-      "reason": "The server fetches Bible catalogs, whole translations and single passages from these hosts on the plugin's behalf, and from no others"
+      "reason": "The server fetches the OpenSanctuary Bibles catalog and Bibles, a GitHub repository's Bible files, and single passages from these hosts on the plugin's behalf, and from no others"
     },
     {
       "id": "library.write",

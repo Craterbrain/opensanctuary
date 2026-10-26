@@ -7,4 +7,4 @@
 # commit's full SHA here, and also update the dev copies in web/plugins/ to
 # match (ci.yml's "Bundled plugins" job fails until they do).
 repo=https://github.com/Craterbrain/opensanctuary-plugins.git
-commit=20aaa4e54ee69679dbc179fe7b6ec5669a0d2999
+commit=2ac9772f7b29b7a68a20eef2edbba6ac4cf08244

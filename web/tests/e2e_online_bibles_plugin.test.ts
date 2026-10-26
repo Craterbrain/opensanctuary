@@ -45,9 +45,10 @@ describe("E2E Live Test: Online Bibles plugin replaces the built-in Bible downlo
     const card = page.locator('.plugin-card[data-plugin-id="online_bibles"]');
     await card.waitFor({ state: "visible", timeout: 10000 });
     const text = await card.innerText();
-    for (const host of ["bolls.life", "api.churchapps.org", "bible-api.com", "api.github.com", "raw.githubusercontent.com"]) {
+    for (const host of ["bible-api.com", "api.github.com", "raw.githubusercontent.com"]) {
       expect(text).toContain(host);
     }
+    for (const gone of ["bolls.life", "api.churchapps.org"]) expect(text).not.toContain(gone);
     await page.screenshot({ path: `${artifactDir}/screenshot_online_bibles_review.png` });
     await card.locator("button:has-text('Approve')").click();
     await page.waitForFunction(() => document.querySelector('iframe[data-plugin-id="online_bibles"]'), null, { timeout: 15000 });

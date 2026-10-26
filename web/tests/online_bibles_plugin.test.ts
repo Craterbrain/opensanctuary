@@ -17,30 +17,29 @@ describe("Online Bibles plugin: languages and catalog", () => {
     expect(Bibles.normalizeLanguage("swahili")).toBe("Swahili");
   });
 
-  test("merges the curated list, Bolls.life and ChurchApps without duplicates", () => {
-    const bolls = [{ language: "English", translations: [
-      { short_name: "KJV", full_name: "King James Version with Strong's numbers" },
-      { short_name: "NKJV", full_name: "NKJV" },
-      { short_name: "BBE", full_name: "Bible in Basic English" }] },
-      { language: "Español", translations: [{ short_name: "RVR1960", full_name: "Reina Valera 1960" }] }];
-    const churchApps = [{ id: "kjv", abbreviation: "KJV", name: "KJV", language: "eng" }, { id: "zz", abbreviation: "ZZZ", name: "Zed", language: "Klingon" }];
-    const cat = Bibles.buildCatalog(bolls, churchApps);
-    const kjv = cat.filter((e: any) => e.abbreviation === "KJV" && e.language === "English");
-    expect(kjv.length).toBe(1);
-    expect(kjv[0].source).toBe("OpenLP Community • Bolls.life • ChurchApps");
-    expect(kjv[0].name).toBe("King James Version with Strong's numbers"); // the longer, more informative title wins
-    expect(cat.find((e: any) => e.abbreviation === "BBE")).toBeDefined();
+  test("the catalog is our own public-domain Bibles, English first, then by language and name, without duplicates", () => {
+    const entries = [
+      { id: "kjv", abbreviation: "KJV", name: "King James Version", language: "eng", sourceKey: "https://x/kjv.json" },
+      { id: "kjv2", abbreviation: "kjv", name: "A duplicate", language: "English", sourceKey: "https://x/dup.json" },
+      { id: "zz", abbreviation: "ZZZ", name: "Zed", language: "Klingon", sourceKey: "https://x/zzz.json" },
+      { id: "lsg", abbreviation: "LSG", name: "Louis Segond", language: "fra", sourceKey: "https://x/lsg.json" },
+      { id: "nokey", abbreviation: "NOKEY", name: "No download address", language: "eng" },
+    ];
+    const cat = Bibles.buildCatalog(entries);
+    expect(cat.filter((e: any) => e.abbreviation === "KJV").length).toBe(1);
+    expect(cat.find((e: any) => e.abbreviation === "KJV").name).toBe("King James Version");
+    expect(cat.find((e: any) => e.abbreviation === "NOKEY")).toBeUndefined(); // nothing to download from: not listed
+    expect(cat.every((e: any) => e.provider === "craterbrain" && e.source === "OpenSanctuary Bibles \u00b7 public domain")).toBe(true);
     // English first, then other languages alphabetically.
-    const langs = cat.map((e: any) => e.language);
-    const firstNonEnglish = langs.findIndex((l: string) => l !== "English");
-    expect(langs.slice(0, firstNonEnglish).every((l: string) => l === "English")).toBe(true);
-    expect(langs.slice(firstNonEnglish).includes("English")).toBe(false);
-    expect(cat.find((e: any) => e.abbreviation === "ZZZ")?.language).toBe("Klingon");
+    expect(cat.map((e: any) => e.language)).toEqual(["English", "French", "Klingon"]);
+    expect(Bibles.buildCatalog(undefined)).toEqual([]); // offline: nothing, not an error
+    expect(Bibles.buildCatalog([])).toEqual([]);
   });
 
   test("survives missing or malformed sources", () => {
-    expect(Bibles.buildCatalog(null, undefined).length).toBe(Bibles.CURATED.length);
-    expect(Bibles.buildCatalog([{}, { translations: [{}, null] }], [null, 5, {}]).length).toBe(Bibles.CURATED.length);
+    expect(Bibles.buildCatalog(null)).toEqual([]);
+    expect(Bibles.buildCatalog("nope")).toEqual([]);
+    expect(Bibles.buildCatalog([{}, null, 5, { translations: [{}, null] }])).toEqual([]);
   });
 });
 
@@ -71,23 +70,16 @@ describe("Online Bibles plugin: the OpenSanctuary Bibles repository", () => {
     }
   });
 
-  test("a translation we host is downloaded from us whoever else lists it, and our entries come first in their language", () => {
-    const bolls = [{ language: "English", translations: [
-      { short_name: "KJV", full_name: "King James Version with Strong's numbers" }, { short_name: "AAA", full_name: "A Bible that sorts first" }] }];
-    const churchApps = [{ id: "kjv", abbreviation: "KJV", name: "KJV", language: "eng" }];
-    const cat = Bibles.buildCatalog(bolls, churchApps, Bibles.ownCatalogEntries(catalogJson));
+  test("our entries are downloaded from our repository, English first", () => {
+    const cat = Bibles.buildCatalog(Bibles.ownCatalogEntries(catalogJson));
     const kjv = cat.filter((e: any) => e.abbreviation === "KJV" && e.language === "English");
     expect(kjv.length).toBe(1);
     expect(kjv[0].provider).toBe("craterbrain");
     expect(kjv[0].sourceKey).toBe(OWN + "bibles/eng-kjv2006.json");
-    expect(kjv[0].name).toBe("King James Version (Authorized Version)"); // not replaced by the longer Bolls title
-    expect(kjv[0].source).toBe("OpenSanctuary Bibles \u00b7 public domain"); // not "... \u2022 Bolls.life \u2022 ChurchApps"
-    const english = cat.filter((e: any) => e.language === "English");
-    expect(english[0].abbreviation).toBe("KJV");
-    expect(english.findIndex((e: any) => e.abbreviation === "AAA")).toBeGreaterThan(0);
+    expect(kjv[0].name).toBe("King James Version (Authorized Version)");
+    expect(kjv[0].source).toBe("OpenSanctuary Bibles \u00b7 public domain");
+    expect(cat[0].language).toBe("English");
     expect(cat.find((e: any) => e.abbreviation === "LSG")?.provider).toBe("craterbrain");
-    // Without our repository (offline, or GitHub down) the catalog is exactly what it was.
-    expect(Bibles.buildCatalog(bolls, churchApps).find((e: any) => e.abbreviation === "KJV")?.provider).toBe("bolls");
   });
 
   test("our Bible files parse with the translation's own abbreviation as the version", () => {
@@ -108,34 +100,6 @@ describe("Online Bibles plugin: downloads", () => {
     expect(Bibles.BOOKS[65]).toEqual(["Revelation", 22]);
     const chapters = Bibles.BOOKS.reduce((n: number, b: any) => n + b[1], 0);
     expect(chapters).toBe(1189);
-  });
-
-  test("Bolls: Strong's numbers and margin notes are dropped with their tags, titles are kept", () => {
-    const clean = Bibles.cleanVerseText;
-    expect(clean("Adam<S>121</S>, Sheth<S>8352</S>, Enosh<S>583</S>,")).toBe("Adam, Sheth, Enosh,");
-    expect(clean("And God<S>430</S> saw<S>7200</S> <S>853</S> the light<S>216</S>")).toBe("And God saw the light");
-    expect(clean("thou shalt not <sup>by: Heb. by the hand of</sup>shed blood<S>1</S>")).toBe("thou shalt not shed blood");
-    expect(clean("<sup>lamb: or, kid</sup>a lamb")).toBe("a lamb");
-    expect(clean("<sup>A Psalm of David.</sup> The LORD is my shepherd")).toBe("A Psalm of David. The LORD is my shepherd");
-    expect(clean("In the beginning<br/>God")).toBe("In the beginning God");
-    expect(clean("Dieu : bon")).toBe("Dieu : bon"); // spacing before punctuation is the language's own
-  });
-
-  test("Bolls translation -> chapters in book order, with markup removed", () => {
-    const rows = [
-      { book: 43, chapter: 3, verse: 16, text: "For God so <S>25</S>loved the <i>world</i>" },
-      { book: 1, chapter: 1, verse: 2, text: "And the earth was without form" },
-      { book: 1, chapter: 1, verse: 1, text: "In the beginning<br>God created" },
-      { book: 99, chapter: 1, verse: 1, text: "not a real book" },
-    ];
-    const chapters = Bibles.parseBollsTranslation(JSON.stringify(rows), " kjv ");
-    expect(chapters.map((c: any) => `${c.book} ${c.chapter}`)).toEqual(["Genesis 1", "John 3"]);
-    expect(chapters[0].version).toBe("KJV");
-    // Verses end up in order whatever order the file listed them in, and a <br> becomes a space.
-    expect(chapters[0].verses.map((v: any) => v.text)).toEqual(["In the beginning God created", "And the earth was without form"]);
-    expect(chapters[1].verses[0].text).toBe("For God so loved the world"); // the Strong's number inside <S> is not text
-    expect(Bibles.parseBollsTranslation("nope", "kjv")).toEqual([]);
-    expect(Bibles.parseBollsTranslation("{}", "kjv")).toEqual([]);
   });
 
   test("GitHub repo names and listings", () => {
