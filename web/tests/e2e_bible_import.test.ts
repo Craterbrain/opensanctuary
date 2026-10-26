@@ -5,7 +5,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { spawnTestServer, teardownTestServer, type SpawnedTestServer } from "./e2e_helpers";
 
-// Import dialog > "Bible from a Link or File": a Bible file is picked, read by the server (USFM, OSIS, Zefania; zip)
+// Import dialog > "Bible from a Link or File": a Bible file is picked, read by the server (USFM, USX, OSIS, Zefania, OpenSong; zip)
 // and appears in the Scriptures sidebar. (The link box needs the internet; its refusals are covered by the
 // server tests, and the same code path runs for a file.)
 describe("E2E: Bible from a file", () => {

@@ -10,8 +10,10 @@ for any website, not only the ones a plugin was granted. It replaced the Online 
 | **USFM** | `\id` / `\c` / `\v` markers, one file per book | ebible.org (`..._usfm.zip`), Paratext |
 | **OSIS XML** | `<verse osisID="Gen.1.1">` (container) or `<verse sID=…/> … <verse eID=…/>` (milestone) | CrossWire, many sites |
 | **Zefania XML** | `<XMLBIBLE><BIBLEBOOK><CHAPTER><VERS>` | Zefania modules, SourceForge |
+| **USX** | `<usx><book code="GEN"/><chapter number="1"/><verse number="1"/>` (USX 2 and 3), one file per book | Paratext, ebible.org (`..._usx.zip`), Digital Bible Library |
+| **OpenSong XML** | `<bible><b n="Genesis"><c n="1"><v n="1">` | OpenSong Bible packs |
 
-Any of them loose, or in a `.zip` (all `.usfm`/`.sfm` files are read as one Bible; an XML Bible inside a zip is read as it is). The format is decided from the
+Any of them loose, or in a `.zip` (all `.usfm`/`.sfm`/`.usx` files are read as one Bible; an XML Bible inside a zip is read as it is). The format is decided from the
 content, never the file name. UTF-8 and UTF-16 (with a byte-order mark) are read.
 
 ## What it does

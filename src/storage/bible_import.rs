@@ -44,6 +44,8 @@ pub enum Format {
     Usfm,
     Osis,
     Zefania,
+    Usx,
+    OpenSong,
 }
 
 impl Format {
@@ -52,6 +54,8 @@ impl Format {
             Format::Usfm => "USFM",
             Format::Osis => "OSIS XML",
             Format::Zefania => "Zefania XML",
+            Format::Usx => "USX",
+            Format::OpenSong => "OpenSong XML",
         }
     }
 }
@@ -726,6 +730,145 @@ fn parse_zefania(xml: &str, c: &mut Collector, d: &mut Details) -> Result<(), Bi
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// USX
+// ---------------------------------------------------------------------------------------------------------
+
+/// USX paragraph styles that are not verse text (headings, titles, introductions, running headers).
+fn usx_skip_para(style: &str) -> bool {
+    usfm_skip_line(style)
+}
+
+/// One USX book (USX 2 or 3). A zip holds one file per book, so this adds to `c` and reports whether it found a book.
+fn parse_usx(xml: &str, c: &mut Collector) -> Result<bool, BibleImportError> {
+    let mut book: Option<(usize, String)> = None;
+    let mut chapter = 0u32;
+    let mut verse: Option<u32> = None;
+    let mut buf = String::new();
+    let mut skip = 0usize;
+    let mut in_book_tag = false;
+    let mut para_skips: Vec<bool> = Vec::new();
+    let mut found = false;
+    let flush = |c: &mut Collector, book: &Option<(usize, String)>, chapter: u32, verse: &mut Option<u32>, buf: &mut String| -> Result<(), BibleImportError> {
+        if let (Some((i, name)), Some(v)) = (book, *verse) {
+            c.add(*i, name, chapter, v, buf)?;
+        }
+        buf.clear();
+        *verse = None;
+        Ok(())
+    };
+    for ev in xml_events(xml) {
+        match ev {
+            Ev::Start { name, attrs, empty } => match name.as_str() {
+                "book" => {
+                    flush(c, &book, chapter, &mut verse, &mut buf)?;
+                    book = attr(&attrs, "code").and_then(book_by_usfm);
+                    found |= book.is_some();
+                    chapter = 0;
+                    in_book_tag = !empty;
+                }
+                "chapter" => {
+                    flush(c, &book, chapter, &mut verse, &mut buf)?;
+                    if attr(&attrs, "eid").is_none() {
+                        chapter = attr(&attrs, "number").and_then(|n| n.trim().parse().ok()).unwrap_or(0);
+                    }
+                }
+                "verse" => {
+                    flush(c, &book, chapter, &mut verse, &mut buf)?;
+                    if attr(&attrs, "eid").is_none() {
+                        verse = attr(&attrs, "number").and_then(|n| n.trim().chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok());
+                    }
+                }
+                "para" => {
+                    let skipped = usx_skip_para(attr(&attrs, "style").unwrap_or(""));
+                    if !empty {
+                        para_skips.push(skipped);
+                        if skipped {
+                            skip += 1;
+                        }
+                    }
+                }
+                "note" | "figure" if !empty => skip += 1,
+                "optbreak" | "ms" | "lb" => buf.push(' '),
+                _ => {}
+            },
+            Ev::End { name } => match name.as_str() {
+                "book" => in_book_tag = false,
+                "para" => {
+                    if para_skips.pop() == Some(true) {
+                        skip = skip.saturating_sub(1);
+                    }
+                    buf.push(' ');
+                }
+                "note" | "figure" => skip = skip.saturating_sub(1),
+                _ => {}
+            },
+            Ev::Text(t) => {
+                // The book element's own text is the book's description, not verse text.
+                if !in_book_tag && verse.is_some() && skip == 0 {
+                    buf.push_str(&t);
+                }
+            }
+        }
+        if buf.len() > MAX_VERSE_BYTES * 4 {
+            return bad("a verse is far longer than any real verse");
+        }
+    }
+    flush(c, &book, chapter, &mut verse, &mut buf)?;
+    Ok(found)
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// OpenSong
+// ---------------------------------------------------------------------------------------------------------
+
+/// OpenSong XML Bible: `<bible><b n="Genesis"><c n="1"><v n="1">text</v>`.
+fn parse_opensong(xml: &str, c: &mut Collector, d: &mut Details) -> Result<(), BibleImportError> {
+    let mut book: Option<(usize, String)> = None;
+    let mut chapter = 0u32;
+    let mut verse: Option<u32> = None;
+    let mut buf = String::new();
+    for ev in xml_events(xml) {
+        match ev {
+            Ev::Start { name, attrs, empty } => match name.as_str() {
+                "bible" => {
+                    if let Some(n) = attr(&attrs, "n").or_else(|| attr(&attrs, "name")) {
+                        d.name = n.chars().take(MAX_NAME).collect();
+                    }
+                }
+                "b" => {
+                    book = attr(&attrs, "n").and_then(|n| book_by_zefania(None, n));
+                    chapter = 0;
+                }
+                "c" => chapter = attr(&attrs, "n").and_then(|n| n.trim().parse().ok()).unwrap_or(0),
+                "v" => {
+                    buf.clear();
+                    verse = if empty { None } else { attr(&attrs, "n").and_then(|n| n.trim().chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()) };
+                }
+                _ => {}
+            },
+            Ev::End { name } => {
+                if name == "v" {
+                    if let (Some((i, bname)), Some(v)) = (&book, verse) {
+                        c.add(*i, bname, chapter, v, &buf)?;
+                    }
+                    verse = None;
+                    buf.clear();
+                }
+            }
+            Ev::Text(t) => {
+                if verse.is_some() {
+                    buf.push_str(&t);
+                }
+            }
+        }
+        if buf.len() > MAX_VERSE_BYTES * 4 {
+            return bad("a verse is far longer than any real verse");
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Files
 // ---------------------------------------------------------------------------------------------------------
 
@@ -749,6 +892,12 @@ fn sniff(text: &str) -> Option<Format> {
     if lower.contains("<xmlbible") {
         return Some(Format::Zefania);
     }
+    if lower.contains("<usx") {
+        return Some(Format::Usx);
+    }
+    if lower.contains("<bible") && lower.contains("<b n=") {
+        return Some(Format::OpenSong);
+    }
     let t = text.trim_start();
     if t.starts_with("\\id ") || t.starts_with("\\ide ") || t.starts_with("\\usfm ") || (t.starts_with('\\') && (t.contains("\n\\c ") || t.contains("\n\\v "))) {
         return Some(Format::Usfm);
@@ -762,7 +911,7 @@ fn name_hint(file_name: &str) -> String {
     let stem = stem.split('.').next().unwrap_or(stem);
     let mut s: String = stem.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(40).collect::<String>().to_uppercase();
     // "engwebp_usfm.zip" is the Bible "ENGWEBP"; the format is not part of its name.
-    for suffix in ["_USFM", "-USFM", "_OSIS", "-OSIS", "_ZEFANIA", "-ZEFANIA", "_XML", "-XML", "_SFM"] {
+    for suffix in ["_USFM", "-USFM", "_USX", "-USX", "_OPENSONG", "-OPENSONG", "_OSIS", "-OSIS", "_ZEFANIA", "-ZEFANIA", "_XML", "-XML", "_SFM"] {
         if let Some(stripped) = s.strip_suffix(suffix).filter(|t| !t.is_empty()) {
             s = stripped.to_string();
             break;
@@ -795,7 +944,7 @@ pub fn parse_bible(bytes: &[u8], file_name: &str) -> Result<ParsedBible, BibleIm
             }
             let name = f.name().unwrap_or_default().into_owned();
             let lower = name.to_ascii_lowercase();
-            if !(lower.ends_with(".usfm") || lower.ends_with(".sfm") || lower.ends_with(".xml") || lower.ends_with(".txt") || lower.ends_with(".osis")) {
+            if !(lower.ends_with(".usfm") || lower.ends_with(".sfm") || lower.ends_with(".xml") || lower.ends_with(".txt") || lower.ends_with(".osis") || lower.ends_with(".usx")) {
                 continue;
             }
             total += f.size();
@@ -826,6 +975,16 @@ pub fn parse_bible(bytes: &[u8], file_name: &str) -> Result<ParsedBible, BibleIm
                 format = Some(Format::Zefania);
                 break;
             }
+            Some(Format::OpenSong) if format.is_none() => {
+                parse_opensong(text, &mut collector, &mut details)?;
+                format = Some(Format::OpenSong);
+                break;
+            }
+            Some(Format::Usx) if format.is_none() || format == Some(Format::Usx) => {
+                if parse_usx(text, &mut collector)? {
+                    format = Some(Format::Usx);
+                }
+            }
             Some(Format::Usfm) => {
                 if parse_usfm(text, &mut collector)? > 0 {
                     format = Some(Format::Usfm);
@@ -837,7 +996,7 @@ pub fn parse_bible(bytes: &[u8], file_name: &str) -> Result<ParsedBible, BibleIm
         }
     }
     let Some(format) = format else {
-        return bad("I couldn't recognise that file as a Bible. Supported: USFM, OSIS XML and Zefania XML (loose or in a zip).");
+        return bad("I couldn't recognise that file as a Bible. Supported: USFM, USX, OSIS XML, Zefania XML and OpenSong XML (loose or in a zip).");
     };
     let chapters = collector.finish();
     if chapters.is_empty() {

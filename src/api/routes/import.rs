@@ -411,7 +411,7 @@ pub struct ImportBibleLinkReq {
     pub replace: bool,
 }
 
-/// POST /api/bibles/import/link -- the operator pastes a link to a Bible file (USFM, OSIS or Zefania, loose or in a
+/// POST /api/bibles/import/link -- the operator pastes a link to a Bible file (USFM, USX, OSIS, Zefania or OpenSong, loose or in a
 /// zip); the server downloads it (public https only, size-capped, see `plugin_net::check_public_url`), reads it and
 /// installs it. Console only: it makes the server fetch an address a person typed.
 pub(super) async fn import_bible_link(

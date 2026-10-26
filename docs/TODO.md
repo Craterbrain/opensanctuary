@@ -26,7 +26,7 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 
 ## Bible import
 
-- [ ] **More formats** for *Bible from a Link or File*: USX, OpenSong XML, SWORD modules (`docs/bible-import.md`).
+- [ ] **More formats** for *Bible from a Link or File*: SWORD modules (`docs/bible-import.md`).
 - [ ] **Copyright note per source:** a few well-known sources (ebible.org, CrossWire) could show their licence text before installing.
 
 ## Small improvements

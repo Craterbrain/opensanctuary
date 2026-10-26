@@ -183,3 +183,50 @@ fn installing_writes_the_chapters_the_way_the_plugin_host_does_and_replace_is_ex
     let info = db.get_setting("bibleInfo_TST").unwrap().unwrap();
     assert!(info.contains("\"abbreviation\":\"TST\""));
 }
+
+const USX_JHN: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<usx version="3.0"><book code="JHN" style="id">World English Bible</book>
+<para style="h">John</para><para style="mt1">The Good News</para>
+<chapter number="3" style="c" sid="JHN 3"/>
+<para style="s1">A heading that is not text</para>
+<para style="p"><verse number="16" style="v" sid="JHN 3:16"/>For God so <char style="w" strong="G25">loved</char> the world<note caller="+" style="f"><char style="fr">3:16 </char><char style="ft">a footnote</char></note>.<verse eid="JHN 3:16"/>
+<verse number="17-18" style="v" sid="JHN 3:17"/>God did not send his Son.<verse eid="JHN 3:17"/></para>
+<chapter eid="JHN 3"/></usx>"#;
+
+const USX2_GEN: &str = r#"<usx version="2.5"><book code="GEN" style="id" />
+<chapter number="1" style="c" />
+<para style="p"><verse number="1" style="v" />In the beginning God created.</para>
+<para style="q1"><verse number="2" style="v" />The earth was formless</para>
+<para style="s1">Not verse text</para>
+<para style="q2">and void.</para></usx>"#;
+
+#[test]
+fn usx_three_skips_headings_and_notes_and_a_zip_of_books_comes_out_in_order() {
+    let b = parse_bible(USX_JHN.as_bytes(), "web.usx").unwrap();
+    assert_eq!(b.format, Format::Usx);
+    assert_eq!(verse(&b, "John", 3, 16), Some("For God so loved the world."));
+    assert_eq!(verse(&b, "John", 3, 17), Some("God did not send his Son."));
+    assert!(!b.chapters.iter().flat_map(|c| &c.verses).any(|v| v.text.contains("heading") || v.text.contains("footnote") || v.text.contains("Good News")));
+
+    let z = zip_of(&[("JHN.usx", USX_JHN), ("GEN.usx", USX2_GEN)]);
+    let b = parse_bible(&z, "web_usx.zip").unwrap();
+    assert_eq!(b.abbreviation, "WEB");
+    assert_eq!(b.chapters[0].book, "Genesis");
+    assert_eq!(b.chapters[1].book, "John");
+}
+
+#[test]
+fn usx_two_verse_runs_across_paragraphs_until_the_next_verse() {
+    let b = parse_bible(USX2_GEN.as_bytes(), "gen.usx").unwrap();
+    assert_eq!(verse(&b, "Genesis", 1, 1), Some("In the beginning God created."));
+    assert_eq!(verse(&b, "Genesis", 1, 2), Some("The earth was formless and void."));
+}
+
+#[test]
+fn opensong_books_by_name() {
+    let x = r#"<?xml version="1.0"?><bible><b n="John"><c n="3"><v n="16">For God so loved</v><v n="17">not to condemn &amp; judge</v></c></b><b n="Genesis"><c n="1"><v n="1">In the beginning</v></c></b></bible>"#;
+    let b = parse_bible(x.as_bytes(), "os.xml").unwrap();
+    assert_eq!(b.format, Format::OpenSong);
+    assert_eq!(b.chapters[0].book, "Genesis");
+    assert_eq!(verse(&b, "John", 3, 17), Some("not to condemn & judge"));
+}
