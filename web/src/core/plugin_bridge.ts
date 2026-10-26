@@ -18,6 +18,8 @@
  *   net.fetch { url, headers? }   network.outbound: the *server* fetches it, only from granted hosts (headers: Authorization,
  *                                 Accept, Accept-Language, and any the plugin's manifest declared under network.outbound.headers)
  *   library.addSong { song }      library.write on "songs"; refreshes the library list
+ *   library.setRemoteBibles { bibles } / library.getRemoteBibles   library.write on "scriptures": the translations this plugin offers in the
+ *                                 Scriptures sidebar (metadata only; text is fetched when a passage is added to the schedule)
  *   library.refreshLicensed { ids, ttlSecs } library.write on "scriptures": renews the lifetime of licensed passages this plugin stored
  *   library.addScriptures { items } library.write on "scriptures": Bible chapters (an item may carry `licensed`, see src/storage/db/licensed.rs); refreshes the Bibles
  *   process.start|poll|cancel|release   process.run: run one of the plugin's manifest-declared commands
@@ -292,6 +294,20 @@ async function handle(r: Running, method: string, params: any): Promise<unknown>
       if (!res.ok) throw new Error(body?.error || `couldn't add the chapters (${res.status})`);
       window.dispatchEvent(new CustomEvent('os-library-changed', { detail: { category: 'scriptures' } }));
       return { chapters: body.chapters, verses: body.verses, ids: body.ids, expiresAtMs: body.expires_at_ms ?? [] };
+    }
+    case 'library.setRemoteBibles':
+    case 'library.getRemoteBibles': {
+      need('library.write');
+      const setting = method === 'library.setRemoteBibles';
+      const res = await withToken(r, (t) => fetch(setting ? '/api/plugin-host/remote-bibles' : '/api/plugin-host/remote-bibles/list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-plugin-token': t },
+        body: JSON.stringify(setting ? { bibles: params?.bibles } : {}),
+      }));
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `couldn't ${setting ? 'save' : 'read'} the translations (${res.status})`);
+      if (setting) window.dispatchEvent(new CustomEvent('os-library-changed', { detail: { category: 'scriptures', bibles: true } }));
+      return setting ? { count: body.count } : { bibles: body.bibles };
     }
     case 'library.refreshLicensed': {
       need('library.write');

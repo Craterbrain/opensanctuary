@@ -56,10 +56,10 @@ pub enum ShowCommand {
 
     // Schedule Manipulation
     AddToSchedule(ScheduleItem),
-    /// Fills in the text of a licensed passage that is already on the schedule (it was looked up again
-    /// after its file was opened, or its lifetime was renewed). Only the REST/WS layer builds this, from
-    /// the `ResolveLicensed` shorthand; the text is never stored (see `ShowEvent::without_licensed_text`).
-    SetLicensedText { item_id: String, texts: Vec<crate::core::models::LicensedSlideText> },
+    /// Puts the text of a licensed passage into the schedule item that stands for it (the item holds a reference
+    /// and a placeholder until the passage is looked up). Only the REST/WS layer builds this, from the
+    /// `ResolveLicensed` shorthand; the text is never stored (see `ShowEvent::without_licensed_text`).
+    SetLicensedPassage { item_id: String, verses: Vec<crate::core::models::LicensedVerse> },
     AddScheduleHeader { title: String, index: Option<usize> },
     RemoveFromSchedule(usize),
     ReorderSchedule { from: usize, to: usize },

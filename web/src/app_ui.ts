@@ -2321,7 +2321,7 @@ async function refreshExportBibleChoices(): Promise<void> {
   let bibles: Array<{ id: string; name?: string }> = [];
   try {
     const res = await fetch('/api/bibles');
-    if (res.ok) bibles = await res.json();
+    if (res.ok) bibles = (await res.json()).filter((b: any) => !b.remote); // only Bibles stored here can be exported
   } catch {
     /* an empty list below says it */
   }

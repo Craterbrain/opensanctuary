@@ -37,6 +37,7 @@ window.addPassage = async function (ttl, toSchedule) {
 };
 window.refresh = function (ids, ttl) { return OS.call('library.refreshLicensed', { ids: ids, ttlSecs: ttl }); };
 window.tryFetch = function (h) { return OS.call('net.fetch', { url: 'https://stub.invalid/', headers: h }).then(function () { return 'ok'; }, function (e) { return String(e.message); }); };
+window.setBibles = function (list) { return OS.call('library.setRemoteBibles', { bibles: list }); };
 window.asked = [];
 // a schedule that names this plugin's passages was opened: look them up again
 OS.on('licensed', async function (d) {
@@ -165,6 +166,80 @@ describe("E2E: licensed passages are kept only as long as their publisher allows
   }, 60000);
 });
 
+describe("E2E: translations a plugin offers are searched by reference only; text arrives when one is added", () => {
+  test("sidebar tag, reference-only results, text on add, no preview", async () => {
+    const PORT3 = 9080;
+    const web = webDirWithPlugins({ lic_stub: PLUGIN });
+    const s = await spawnTestServer({ port: PORT3, tempPrefix: "os-remote-bibles-", webDir: web });
+    const b = await chromium.launch({ headless: true });
+    try {
+      const p = await b.newPage({ viewport: { width: 1400, height: 900 } });
+      const stateItems = async () => ((await (await fetch(`http://127.0.0.1:${PORT3}/api/state`)).json()) as any).schedule?.items ?? [];
+      await p.goto(`http://127.0.0.1:${PORT3}/`, { waitUntil: "networkidle" });
+      await p.keyboard.press("F2");
+      await p.waitForSelector("#options-modal", { state: "visible", timeout: 5000 });
+      await p.locator(".settings-category-btn:has-text('Plugins')").click();
+      const card = p.locator('.plugin-card[data-plugin-id="lic_stub"]');
+      await card.waitFor({ state: "visible", timeout: 10000 });
+      const cs = card.locator('label:has-text("commands.send") input[type=checkbox]').first();
+      if (!(await cs.isChecked())) await cs.check();
+      await card.locator("button:has-text('Approve')").click();
+      await p.waitForFunction(() => document.querySelector('.plugin-card[data-plugin-id="lic_stub"] .plugin-state')?.textContent?.includes("Approved"), null, { timeout: 10000 });
+      await p.keyboard.press("Escape");
+      await p.waitForFunction(() => document.querySelector('iframe[data-plugin-id="lic_stub"]'), null, { timeout: 15000 });
+      const fr = () => p.frames().find((f) => f.url().includes("/plugin-frame/lic_stub/"))!;
+      await fr().waitForFunction(() => typeof (window as any).setBibles === "function", null, { timeout: 15000 });
+
+      // The plugin offers a translation: metadata only, nothing stored but names.
+      const stored: any = await fr().evaluate(() => (window as any).setBibles([{ bible_id: 111, abbreviation: "TST", title: "Test Bible", language: "en", tag: "StubTag", copyright: "(c) Test notice by Tester.", link: "https://example.com", organization: "", max_chapters: 2, max_verses: 25 }]));
+      expect(stored.count).toBe(1);
+      const listed: any[] = await (await fetch(`http://127.0.0.1:${PORT3}/api/bibles`)).json();
+      expect(listed.find((x) => x.id === "remote:lic_stub:111")).toMatchObject({ abbreviation: "TST", remote: { tag: "StubTag", source: "lic_stub", bible_id: 111 } });
+
+      // It is in the Scriptures sidebar with its tag.
+      await p.click('.tab-btn[data-tab="scriptures"]');
+      const node = p.locator('.bible-tree-node[data-bible-id="remote:lic_stub:111"]');
+      await node.waitFor({ state: "visible", timeout: 10000 });
+      expect(await node.locator(".bible-source-tag").innerText()).toBe("StubTag");
+      await node.click();
+
+      // Searching by reference lists the reference only: no text.
+      await p.fill("#resource-search", "John 3:16");
+      const row = p.locator('#catalog-table-body tr').filter({ hasText: "John 3:16 (TST)" }).first();
+      await row.waitFor({ state: "visible", timeout: 10000 });
+      const rowText = await row.innerText();
+      expect(rowText).toContain("StubTag");
+      expect(rowText).toContain("Text loads when added");
+      expect(rowText).not.toContain(PHRASE);
+
+      // A single click does not fetch text: it says how to.
+      await row.click();
+      await p.waitForTimeout(600);
+      const staged = ((await (await fetch(`http://127.0.0.1:${PORT3}/api/state`)).json()) as any).state?.staged_item ?? null;
+      expect(staged).toBeNull();
+
+      // Adding it creates a placeholder, and the plugin fills in the text.
+      await row.dblclick();
+      await pollFor(async () => (await stateItems()).length === 1, 10000);
+      const first = (await stateItems())[0];
+      expect(first.licensed).toMatchObject({ source: "lic_stub", bible_id: 111, usfm: "JHN.3.16", version: "TST", book: "John", chapter: 3 });
+      await pollFor(async () => { const it = (await stateItems())[0]; return !!it?.licensed?.resolved && it.slides.some((x: any) => x.text.includes(PHRASE)); }, 30000);
+      const done = (await stateItems())[0];
+      expect(done.slides.length).toBe(2);                              // the stub supplied verses 16 and 17
+      expect(done.slides[0].reference_label).toContain("John 3:16");
+      expect(onDiskIn(s.dbPath, PHRASE)).toBe(false);
+
+      // It can be taken off the list.
+      const del = await p.evaluate(async () => (await fetch("/api/bibles/" + encodeURIComponent("remote:lic_stub:111"), { method: "DELETE" })).status);
+      expect(del).toBe(200);
+      expect(((await (await fetch(`http://127.0.0.1:${PORT3}/api/bibles`)).json()) as any[]).some((x) => x.remote)).toBe(false);
+    } finally {
+      await b.close();
+      await teardownTestServer(s);
+    }
+  }, 120000);
+});
+
 describe("E2E: expired licensed text is gone at start-up", () => {
   test("a passage past its time limit is deleted when the app starts, before anything can read it", async () => {
     const PORT2 = 9079;
@@ -211,6 +286,10 @@ describe("E2E: expired licensed text is gone at start-up", () => {
     }
   }, 90000);
 });
+
+function onDiskIn(db: string, needle: string): boolean {
+  return [db, db + "-wal"].some((f) => existsSync(f) && readFileSync(f).includes(needle));
+}
 
 async function pollFor(cond: () => Promise<boolean>, ms = 15000) {
   const end = Date.now() + ms;

@@ -831,6 +831,55 @@ fn licensed_meta(v: &serde_json::Value, plugin_id: &str, now: i64) -> Result<cra
 }
 
 #[derive(Deserialize)]
+pub(super) struct PluginRemoteBiblesReq {
+    bibles: Vec<crate::storage::db::RemoteBible>,
+}
+
+/// POST /api/plugin-host/remote-bibles -- the translations this plugin offers (YouVersion's NIV, ...): the
+/// console lists them in the Scriptures sidebar and searches them by reference only; text is fetched when a
+/// passage is added to the schedule. Replaces the plugin's whole set; metadata only, no text.
+pub(super) async fn plugin_set_remote_bibles(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PluginRemoteBiblesReq>,
+) -> Result<impl IntoResponse, ApiErr> {
+    let caller = plugin_caller(&app, &headers).await?;
+    if !caller.scopes.writes("scriptures") {
+        return Err(err(StatusCode::FORBIDDEN, "this plugin wasn't granted write access to scriptures"));
+    }
+    if req.bibles.len() > crate::storage::db::MAX_REMOTE_BIBLES {
+        return Err(err(StatusCode::BAD_REQUEST, &format!("at most {} translations", crate::storage::db::MAX_REMOTE_BIBLES)));
+    }
+    let mut checked = Vec::with_capacity(req.bibles.len());
+    let mut seen = std::collections::HashSet::new();
+    for b in req.bibles {
+        let b = b.checked(&caller.plugin_id).map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+        if !seen.insert(b.bible_id) {
+            return Err(err(StatusCode::BAD_REQUEST, "a translation is listed twice"));
+        }
+        checked.push(b);
+    }
+    let n = checked.len();
+    let (db, plugin) = (app.db.clone(), caller.plugin_id.clone());
+    tokio::task::spawn_blocking(move || db.set_remote_bibles(&plugin, &checked))
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("task failed: {e}")))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {e}")))?;
+    app.db.add_plugin_audit(&caller.plugin_id, &format!("plugin:{}", caller.plugin_id), "remote_bibles_set", &serde_json::json!({ "count": n }).to_string());
+    Ok(Json(serde_json::json!({ "success": true, "count": n })))
+}
+
+/// POST /api/plugin-host/remote-bibles/list -- the set this plugin saved.
+pub(super) async fn plugin_list_remote_bibles(State(app): State<AppState>, headers: HeaderMap) -> Result<impl IntoResponse, ApiErr> {
+    let caller = plugin_caller(&app, &headers).await?;
+    if !caller.scopes.writes("scriptures") {
+        return Err(err(StatusCode::FORBIDDEN, "this plugin wasn't granted write access to scriptures"));
+    }
+    let bibles = app.db.get_remote_bibles(&caller.plugin_id).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {e}")))?;
+    Ok(Json(serde_json::json!({ "success": true, "bibles": bibles })))
+}
+
+#[derive(Deserialize)]
 pub(super) struct PluginRefreshReq {
     ids: Vec<String>,
     ttl_secs: u64,
@@ -1786,6 +1835,8 @@ pub(super) fn router() -> Router<AppState> {
         .route("/plugin-frame/{id}/{*path}", get(serve_plugin_frame))
         .route("/api/plugin-host/fetch", post(plugin_fetch))
         .route("/api/plugin-host/scriptures/refresh", post(plugin_refresh_licensed))
+        .route("/api/plugin-host/remote-bibles", post(plugin_set_remote_bibles))
+        .route("/api/plugin-host/remote-bibles/list", post(plugin_list_remote_bibles))
         .route("/api/plugin-host/songs", post(plugin_add_song))
         .route("/api/plugin-host/scriptures", post(plugin_add_scriptures))
         .route("/api/plugin-host/media", post(plugin_add_media))

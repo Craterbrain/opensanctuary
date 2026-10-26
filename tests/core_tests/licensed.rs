@@ -148,7 +148,7 @@ fn saved_and_exported_schedules_carry_only_the_reference() {
 #[test]
 fn a_reopened_schedule_gets_its_licensed_text_back_everywhere_it_is_shown() {
     use os_next::core::commands::ShowCommand;
-    use os_next::core::models::LicensedSlideText;
+    use os_next::core::models::LicensedVerse;
 
     let event_log = Arc::new(EventLog::new(100));
     let engine = ShowEngine::new(event_log);
@@ -161,12 +161,11 @@ fn a_reopened_schedule_gets_its_licensed_text_back_everywhere_it_is_shown() {
     assert!(before.state.live_item.as_ref().unwrap().slides[0].text.contains("fetching the text"));
     assert!(!before.schedule.items[0].licensed.as_ref().unwrap().resolved);
 
-    let texts = vec![
-        LicensedSlideText { slide_index: 0, text: "FIRST\n\nNIV".into() },
-        LicensedSlideText { slide_index: 1, text: "SECOND\n\nNIV".into() },
-        LicensedSlideText { slide_index: 9, text: "no such slide".into() },
+    let verses = vec![
+        LicensedVerse { verse_number: 16, text: "FIRST\n\nNIV".into() },
+        LicensedVerse { verse_number: 17, text: "SECOND\n\nNIV".into() },
     ];
-    let events = engine.execute_command(ShowCommand::SetLicensedText { item_id: item_id.clone(), texts: texts.clone() });
+    let events = engine.execute_command(ShowCommand::SetLicensedPassage { item_id: item_id.clone(), verses: verses.clone() });
     assert_eq!(events.len(), 1);
     let after = engine.snapshot();
     assert_eq!(after.schedule.items[0].slides[1].text, "SECOND\n\nNIV");
@@ -183,6 +182,38 @@ fn a_reopened_schedule_gets_its_licensed_text_back_everywhere_it_is_shown() {
     ordinary.items[0].licensed = None;
     ordinary.items[0].id = "plain".into();
     engine.execute_command(ShowCommand::LoadSchedule(ordinary));
-    assert!(engine.execute_command(ShowCommand::SetLicensedText { item_id: "plain".into(), texts: texts.clone() }).is_empty());
-    assert!(engine.execute_command(ShowCommand::SetLicensedText { item_id: "missing".into(), texts }).is_empty());
+    assert!(engine.execute_command(ShowCommand::SetLicensedPassage { item_id: "plain".into(), verses: verses.clone() }).is_empty());
+    assert!(engine.execute_command(ShowCommand::SetLicensedPassage { item_id: "missing".into(), verses }).is_empty());
+}
+
+#[test]
+fn a_reference_only_result_becomes_slides_when_its_verses_arrive() {
+    use os_next::core::commands::ShowCommand;
+    use os_next::core::models::{LicensedVerse, ScheduleItem};
+
+    let (item, meta) = passage();
+    let r = licensed_ref(&item, &meta);
+    // A verse range: one placeholder slide per verse asked for, no text, nothing resolved.
+    let range = ScheduleItem::licensed_placeholder(r.clone(), 16, 18);
+    assert_eq!(range.title, "John 3:16-18");
+    assert_eq!(range.slides.iter().map(|s| s.tag.clone().unwrap()).collect::<Vec<_>>(), ["V16", "V17", "V18"]);
+    assert!(range.slides.iter().all(|s| s.text.contains("fetching the text") && !s.text.contains(SECRET)));
+    assert!(!range.licensed.as_ref().unwrap().resolved);
+    assert!(range.id.starts_with("sched_lic_ref_"));
+    // A whole chapter: one placeholder, however many verses the chapter turns out to have.
+    let chapter = ScheduleItem::licensed_placeholder(r, 0, 0);
+    assert_eq!((chapter.title.as_str(), chapter.slides.len()), ("John 3", 1));
+    assert_ne!(chapter.id, ScheduleItem::licensed_placeholder(licensed_ref(&item, &meta), 0, 0).id, "each add is its own item");
+
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    engine.execute_command(ShowCommand::AddToSchedule(chapter.clone()));
+    let verses: Vec<LicensedVerse> = (1..=5).map(|n| LicensedVerse { verse_number: n, text: format!("v{n}\n\nNIV") }).collect();
+    engine.execute_command(ShowCommand::SetLicensedPassage { item_id: chapter.id.clone(), verses });
+    let got = &engine.snapshot().schedule.items[0];
+    assert_eq!(got.slides.len(), 5, "the one placeholder became the five verses");
+    assert_eq!(got.slides[4].text, "v5\n\nNIV");
+    assert_eq!(got.slides[2].header.as_deref(), Some("John 3:3"));
+    assert_eq!(got.slides[2].reference_label.as_deref(), Some("John 3:3 \u{b7} NIV \u{b7} \u{a9} Biblica"));
+    assert_eq!(got.arrangement.len(), 5);
+    assert!(got.licensed.as_ref().unwrap().resolved);
 }
