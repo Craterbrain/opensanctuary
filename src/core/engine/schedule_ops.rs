@@ -43,6 +43,7 @@ pub(super) fn plan_schedule_events(state: &ShowState, schedule: &Schedule, cmd: 
                 arrangement: Vec::new(),
                 default_slide_duration_seconds: None,
                 slideshow_loop: false,
+                licensed: None,
             };
             events.push(ShowEvent::ScheduleItemAdded {
                 item: header_item,
@@ -152,6 +153,7 @@ pub(super) fn plan_schedule_events(state: &ShowState, schedule: &Schedule, cmd: 
                         is_section_header: false,
                         default_slide_duration_seconds: earlier.default_slide_duration_seconds,
                         slideshow_loop: earlier.slideshow_loop,
+                        licensed: None,
                     };
                     events.push(ShowEvent::ScheduleItemsMerged {
                         first_index: earlier_idx,

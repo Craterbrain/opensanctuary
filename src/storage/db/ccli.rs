@@ -153,6 +153,7 @@ mod tests {
             arrangement: Vec::new(),
             default_slide_duration_seconds: None,
             slideshow_loop: false,
+            licensed: None,
         }
     }
 

@@ -1,4 +1,5 @@
 // OpenSanctuary Rust Client Show Controller & Bible Manager (app.js)
+import { stripLicensedText } from './core/licensed';
 import { exportBundle } from './ui/bundle_ui.ts';
 import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { resolveHostSessionToken, hostTokenHeader, submitManualHostToken, getConsoleSessionId } from './core/host_session.ts';
@@ -3893,7 +3894,8 @@ setInterval(() => {
     if (currentSnapshot && currentSnapshot.schedule && currentSnapshot.schedule.items && currentSnapshot.schedule.items.length > 0) {
       localStorage.setItem('opensanctuary_autosave_schedule', JSON.stringify({
         savedAt: new Date().toISOString(),
-        schedule: currentSnapshot.schedule,
+        // Licensed Bible text may be shown but not kept: only its reference is saved.
+        schedule: stripLicensedText(currentSnapshot.schedule),
       }));
     }
   } catch (err) {

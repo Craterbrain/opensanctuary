@@ -43,6 +43,11 @@ pub enum ShowEvent {
     ScheduleItemRemoved {
         index: usize,
     },
+    /// The text of a licensed passage on the schedule was filled in. Stored without the text.
+    LicensedTextSet {
+        item_id: String,
+        texts: Vec<crate::core::models::LicensedSlideText>,
+    },
     ScheduleItemsMerged {
         first_index: usize,
         second_index: usize,
@@ -196,4 +201,38 @@ pub struct EventEnvelope {
     pub event_id: String,
     pub timestamp_ms: u64,
     pub event: ShowEvent,
+}
+
+impl ShowEvent {
+    /// This event as it may be stored: any licensed passage inside it loses its text (it keeps the
+    /// reference, which is what a later look-up needs). See `ScheduleItem::without_licensed_text`.
+    pub fn without_licensed_text(&self) -> std::borrow::Cow<'_, ShowEvent> {
+        use std::borrow::Cow;
+        let licensed = |i: &ScheduleItem| i.licensed.is_some();
+        match self {
+            ShowEvent::ItemWentLive { item: Some(i), slide_index } if licensed(i) => {
+                Cow::Owned(ShowEvent::ItemWentLive { item: Some(i.without_licensed_text()), slide_index: *slide_index })
+            }
+            ShowEvent::ItemStaged { item: Some(i), slide_index } if licensed(i) => {
+                Cow::Owned(ShowEvent::ItemStaged { item: Some(i.without_licensed_text()), slide_index: *slide_index })
+            }
+            ShowEvent::ScheduleItemAdded { item, index } if licensed(item) => {
+                Cow::Owned(ShowEvent::ScheduleItemAdded { item: item.without_licensed_text(), index: *index })
+            }
+            ShowEvent::ScheduleItemsMerged { first_index, second_index, merged_item } if licensed(merged_item) => {
+                Cow::Owned(ShowEvent::ScheduleItemsMerged {
+                    first_index: *first_index,
+                    second_index: *second_index,
+                    merged_item: merged_item.without_licensed_text(),
+                })
+            }
+            ShowEvent::ScheduleLoaded { schedule } if schedule.has_licensed() => {
+                Cow::Owned(ShowEvent::ScheduleLoaded { schedule: schedule.without_licensed_text() })
+            }
+            ShowEvent::LicensedTextSet { item_id, texts } if !texts.is_empty() => {
+                Cow::Owned(ShowEvent::LicensedTextSet { item_id: item_id.clone(), texts: Vec::new() })
+            }
+            other => Cow::Borrowed(other),
+        }
+    }
 }

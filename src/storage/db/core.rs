@@ -25,6 +25,9 @@ pub struct Database {
 
     // In-memory mode flag for fast, isolated testing
     pub(super) is_in_memory: bool,
+
+    // Key that seals licensed Bible text at rest (loaded lazily, see licensed.rs)
+    pub(super) licensed_key: std::sync::OnceLock<[u8; 32]>,
 }
 
 impl Database {
@@ -185,6 +188,7 @@ impl Database {
             songs_cr_conn: Arc::new(Mutex::new(songs_cr_conn)),
             bible_conns: Arc::new(Mutex::new(HashMap::new())),
             is_in_memory: false,
+            licensed_key: std::sync::OnceLock::new(),
         };
 
         db.init_main_schema()?;
@@ -216,6 +220,7 @@ impl Database {
             songs_cr_conn: Arc::new(Mutex::new(songs_cr_conn)),
             bible_conns: Arc::new(Mutex::new(HashMap::new())),
             is_in_memory: true,
+            licensed_key: std::sync::OnceLock::new(),
         };
 
         db.init_main_schema()?;
@@ -357,6 +362,7 @@ impl Database {
 
     fn init_main_schema(&self) -> Result<()> {
         let conn = self.main_conn();
+        Self::init_licensed_schema(&conn)?;
         self.migrate_legacy_themes_table_if_needed(&conn)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS media (

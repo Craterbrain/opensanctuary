@@ -66,6 +66,13 @@ Opening is two steps. The file is first **inspected** (the server describes it a
 * A **service** is not filed into the song library; it opens into the live show exactly as an `.ewsx` does
   (replace, or append), including the "one console at a time" rule.
 
+## Licensed Bible text is not in the file
+
+A passage from a Bible that is licensed to be shown but not kept (the NIV and NASB through YouVersion) is saved as its
+**reference** only: which plugin, which Bible, `JHN.3.16-18`, and the notice. The text is not stored in an `.osservice` or `.ewsx`.
+Opening the file asks the plugin to look the passages up again (it needs to be installed, approved, and have its key). See
+`docs/LICENSED_SCRIPTURE.md`.
+
 ## Safety
 
 A bundle is untrusted input (it may be emailed, downloaded or handed over on a USB stick). The reader:

@@ -5,7 +5,8 @@ use super::Database;
 impl Database {
     pub fn save_event(&self, envelope: &crate::core::events::EventEnvelope) -> Result<()> {
         let conn = self.conn();
-        let payload = serde_json::to_string(&envelope.event).unwrap_or_default();
+        // Licensed passages never reach the event log with their text (see core::events).
+        let payload = serde_json::to_string(&*envelope.event.without_licensed_text()).unwrap_or_default();
         let event_type = match &envelope.event {
             crate::core::events::ShowEvent::ItemWentLive { .. } => "ItemWentLive",
             crate::core::events::ShowEvent::LiveSlideChanged { .. } => "LiveSlideChanged",
@@ -22,6 +23,7 @@ impl Database {
             crate::core::events::ShowEvent::ScheduleSlidesReordered { .. } => "ScheduleSlidesReordered",
             crate::core::events::ShowEvent::ScheduleSlideDuplicated { .. } => "ScheduleSlideDuplicated",
             crate::core::events::ShowEvent::ScheduleSlideRemoved { .. } => "ScheduleSlideRemoved",
+            crate::core::events::ShowEvent::LicensedTextSet { .. } => "LicensedTextSet",
             crate::core::events::ShowEvent::ScheduleItemExpandToggled { .. } => "ScheduleItemExpandToggled",
             crate::core::events::ShowEvent::ScheduleItemThemeSet { .. } => "ScheduleItemThemeSet",
             crate::core::events::ShowEvent::SlideBackgroundSet { .. } => "SlideBackgroundSet",

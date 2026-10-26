@@ -18,7 +18,8 @@
  *   net.fetch { url, headers? }   network.outbound: the *server* fetches it, only from granted hosts (headers: Authorization,
  *                                 Accept, Accept-Language)
  *   library.addSong { song }      library.write on "songs"; refreshes the library list
- *   library.addScriptures { items } library.write on "scriptures": Bible chapters; refreshes the Bibles
+ *   library.refreshLicensed { ids, ttlSecs } library.write on "scriptures": renews the lifetime of licensed passages this plugin stored
+ *   library.addScriptures { items } library.write on "scriptures": Bible chapters (an item may carry `licensed`, see src/storage/db/licensed.rs); refreshes the Bibles
  *   process.start|poll|cancel|release   process.run: run one of the plugin's manifest-declared commands
  *   tool.status|update            process.run: the host-managed tool behind those commands
  *   library.addMedia { job, file, ... } library.write on "media": a finished file from a job's folder
@@ -265,7 +266,7 @@ async function handle(r: Running, method: string, params: any): Promise<unknown>
       }));
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body?.error || `fetch refused (${res.status})`);
-      return { status: body.status, contentType: body.content_type, body: body.body, url: body.url };
+      return { status: body.status, contentType: body.content_type, body: body.body, url: body.url, cacheSecs: body.cache_secs ?? null };
     }
     case 'library.addSong': {
       need('library.write');
@@ -290,7 +291,18 @@ async function handle(r: Running, method: string, params: any): Promise<unknown>
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body?.error || `couldn't add the chapters (${res.status})`);
       window.dispatchEvent(new CustomEvent('os-library-changed', { detail: { category: 'scriptures' } }));
-      return { chapters: body.chapters, verses: body.verses, ids: body.ids };
+      return { chapters: body.chapters, verses: body.verses, ids: body.ids, expiresAtMs: body.expires_at_ms ?? [] };
+    }
+    case 'library.refreshLicensed': {
+      need('library.write');
+      const res = await withToken(r, (t) => fetch('/api/plugin-host/scriptures/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-plugin-token': t },
+        body: JSON.stringify({ ids: params?.ids, ttl_secs: params?.ttlSecs }),
+      }));
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `couldn't renew the passages (${res.status})`);
+      return { refreshed: body.refreshed, expiresAtMs: body.expires_at_ms };
     }
     case 'process.start':
     case 'process.poll':
@@ -415,6 +427,54 @@ function installListener() {
   });
 }
 
+// ---- licensed passages ----------------------------------------------------------------------------
+// A schedule item for licensed Bible text (YouVersion's NIV, ...) is stored and exported without the text:
+// only a reference and a placeholder (src/storage/db/licensed.rs). When one shows up with its text missing
+// (a file was opened, or the app restarted), the plugin named in its reference is asked to look it up again;
+// it answers with the `ResolveLicensed` command. The console only relays the request.
+const LICENSED_RETRY_MS = 20_000;
+const licensedAsked = new Map<string, number>();
+const licensedWarned = new Set<string>();
+let lastSnapshot: any = null;
+
+/** Does this plugin hold the grant that lets it fill licensed text in? */
+function resolvesLicensed(p: PluginInfo): boolean {
+  return grantedCommands(p).includes('ResolveLicensed');
+}
+
+function watchLicensed(data: any) {
+  if (data) lastSnapshot = data;
+  const items = lastSnapshot?.schedule?.items ?? lastSnapshot?.snapshot?.schedule?.items;
+  if (!Array.isArray(items)) return;
+  const now = Date.now();
+  const bySource = new Map<string, any[]>();
+  for (const item of items) {
+    const l = item?.licensed;
+    if (!l || l.resolved) continue;
+    const key = `${item.id}|${l.usfm}`;
+    if (now - (licensedAsked.get(key) ?? 0) < LICENSED_RETRY_MS) continue;
+    const list = bySource.get(l.source) ?? [];
+    list.push({ item_id: item.id, ...l });
+    bySource.set(l.source, list);
+  }
+  for (const [source, requests] of bySource) {
+    const frame = primaryFrame.get(source);
+    const plugin = frame ? [...running.values()].find((r) => r.frame === frame)?.plugin : undefined;
+    if (!frame || !plugin || !resolvesLicensed(plugin)) {
+      if (!licensedWarned.has(source)) {
+        licensedWarned.add(source);
+        showToast(`This schedule has licensed Bible passages (${requests[0].tag}). Turn on the "${source}" plugin to show their text.`, 'warning', 9000);
+      }
+      continue;
+    }
+    for (const q of requests) licensedAsked.set(`${q.item_id}|${q.usfm}`, now);
+    frame.contentWindow?.postMessage({ type: 'os.event', event: 'licensed', data: { requests } }, '*');
+  }
+}
+
+// Frames that were not ready the first time, a lookup that failed: ask again now and then.
+setInterval(() => watchLicensed(null), LICENSED_RETRY_MS / 2);
+
 function ensureStateSocket() {
   if (stateSocket) return;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -435,6 +495,7 @@ function ensureStateSocket() {
         r.frame.contentWindow?.postMessage({ type: 'os.event', event: 'state', data }, '*');
       }
     }
+    watchLicensed(data);
   };
   stateSocket.onclose = () => {
     stateSocket = null;
@@ -501,7 +562,7 @@ export function startSandboxedPlugin(plugin: PluginInfo): void {
       if (frame.contentWindow && !running.has(frame.contentWindow)) register();
       pushTheme(frame.contentWindow ?? undefined);
     });
-    if (granted.has('show.observe')) ensureStateSocket();
+    if (granted.has('show.observe') || resolvesLicensed(plugin)) ensureStateSocket();
   };
   const makeFrame = (slot: string) => {
     const frame = document.createElement('iframe');

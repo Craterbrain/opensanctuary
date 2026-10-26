@@ -9,6 +9,12 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 - [ ] **Planning Center import plugin.** Pull a church's own songs, arrangements and service plans from the [Planning Center Services API](https://developer.planning.center/) (open, OAuth) into the library or a schedule, matched by CCLI number. This brings in content a church already owns; it is not a store. Needs a design pass first: auth flow (OAuth vs. personal access token), what maps to a `Song` arrangement, and rate limits. Build it as a plugin, not core.
 - [ ] **Decide the Store dialog.** The SongSelect card is being removed (PR #56). Remaining "Coming Soon" card: Motion Background Packs. Options: keep the dialog as a list of ways to bring content in (public-domain Bibles, importing files, plugin hints), or drop it. No store API exists to build on: SongSelect's API is partner-only, and media vendors sell through their own sites.
 
+## Licensed scripture (see `LICENSED_SCRIPTURE.md`)
+
+- [ ] **Ask YouVersion support** to confirm that sealed storage for the time in `Cache-Control`, and projecting in church software, are within their terms. The licenses state no cache time of their own.
+- [ ] **Biblica's link:** the NIV license wants a one-step link to Biblica whenever the text is shown. The plugin panel shows the YouVersion link; the projected slide carries only the notice.
+- [ ] **Delete a licensed passage by hand** (a "clear kept passages now" button in the plugin).
+
 ## Unverified (built, never tested for real)
 
 - [ ] **CCLI.com upload autofill.** The selectors were written without ever seeing the live site (it returns 403 to automated fetches). Try it with a real CCLI account. See `CCLI_REPORTING.md`.

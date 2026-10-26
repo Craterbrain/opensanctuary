@@ -80,6 +80,7 @@ fn parse_ews_v5_songs(bytes: &[u8]) -> Option<Vec<ScheduleItem>> {
             notes: None,
             default_slide_duration_seconds: None,
             slideshow_loop: false,
+            licensed: None,
         });
     }
     Some(items)
@@ -421,6 +422,8 @@ impl EwsxManager {
     }
 
     fn write_ewsx_zip<W: Write + Seek>(schedule: &Schedule, writer: W) -> Result<W, String> {
+        // A saved or exported schedule never carries licensed text, only the references to look it up again.
+        let schedule = &schedule.without_licensed_text();
         let mut zip_writer = ZipWriter::new(writer);
         let options = FileOptions::<()>::default()
             .compression_method(zip::CompressionMethod::Deflated)
@@ -1048,6 +1051,7 @@ impl EwsxManager {
                         arrangement: Vec::new(),
                         default_slide_duration_seconds: None,
                         slideshow_loop: false,
+                        licensed: None,
                     };
 
                     // Check if Verses table exists and has rows for this presentation
@@ -1291,6 +1295,7 @@ impl EwsxManager {
                         arrangement: Vec::new(),
                         default_slide_duration_seconds: None,
                         slideshow_loop: false,
+                        licensed: None,
                     };
 
                     if let Some(ref v_tbl) = verses_tbl {
@@ -1343,6 +1348,7 @@ impl EwsxManager {
                 arrangement: Vec::new(),
                 default_slide_duration_seconds: None,
                 slideshow_loop: false,
+                licensed: None,
             };
 
             if let Some(ref v_tbl) = verses_tbl {
@@ -1463,6 +1469,7 @@ impl EwsxManager {
                 notes: None,
                 default_slide_duration_seconds: None,
                 slideshow_loop: false,
+                licensed: None,
             });
             schedule.selected_item_index = Some(0);
             return Ok(schedule);
@@ -1498,6 +1505,7 @@ impl EwsxManager {
                 arrangement,
                 default_slide_duration_seconds: None,
                 slideshow_loop: false,
+                licensed: None,
             });
         schedule.selected_item_index = Some(0);
 
@@ -1638,6 +1646,7 @@ impl EwsxManager {
                 subtitle: None,
                 default_slide_duration_seconds: None,
                 slideshow_loop: false,
+                licensed: None,
             });
         }
 

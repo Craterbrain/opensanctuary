@@ -179,7 +179,7 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   It asks for the two search APIs and their image hosts (`api.pexels.com`, `images.pexels.com`,
   `pixabay.com`, `cdn.pixabay.com`), `library.write` on media, and optionally `notifications.post`.
   Three host features exist for it, available to any plugin with the matching grant:
-  `net.fetch` takes optional `headers` (only `Authorization`, `Accept`, `Accept-Language`, `X-YVP-App-Key`; Pexels
+  `net.fetch` replies with `cacheSecs` as well (how long the publisher lets the response be kept); it takes optional `headers` (only `Authorization`, `Accept`, `Accept-Language`, `X-YVP-App-Key`; Pexels
   wants its key in `Authorization`, YouVersion in `X-YVP-App-Key`); `library.addMediaUrl { url, title, id? }` has the *host*
   download a picture or video from a granted host (https, public addresses, 64 MB cap) into the
   Media library, with the file type taken from the downloaded bytes and the name chosen by the
@@ -376,3 +376,9 @@ A plugin page runs in its own frame, but some browsers run that frame on the con
 | Distribution | A folder in `web/plugins/` | A `.js` file and a `.plugin.json` in `web/plugins/` |
 
 Use a sandboxed plugin unless you genuinely need to reach into the console's own page.
+
+## Licensed Bible text
+
+A plugin that serves text which may be shown but not kept (YouVersion's NIV, NASB...) marks what it stores with a `licensed` block;
+the host then seals, expires and strips it from saved and exported files, and can ask the plugin to look it up again when a schedule
+naming it is opened. How it works, the license terms behind it and the plugin API: [LICENSED_SCRIPTURE.md](LICENSED_SCRIPTURE.md).

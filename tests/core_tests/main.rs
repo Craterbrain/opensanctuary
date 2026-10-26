@@ -19,6 +19,7 @@ use os_next::storage::pptx_import::PptxImporter;
 mod bundles;
 mod engine;
 mod importers;
+mod licensed;
 mod network;
 mod packaging;
 mod plugins;
@@ -70,6 +71,7 @@ fn item(id: &str, title: &str) -> ScheduleItem {
         arrangement: Vec::new(),
         default_slide_duration_seconds: None,
         slideshow_loop: false,
+        licensed: None,
     }
 }
 

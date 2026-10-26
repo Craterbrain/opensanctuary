@@ -8,6 +8,11 @@ use crate::core::models::{ScriptureItem, ScriptureVerse};
 
 use super::Database;
 
+/// Wall-clock milliseconds, for the expiry of licensed passages.
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledBibleInfo {
     pub id: String,
@@ -178,6 +183,11 @@ impl Database {
             }
         }
 
+        // Licensed passages that are still good (sealed on disk, opened here; see licensed.rs).
+        if let Ok(licensed) = self.list_licensed_scriptures(now_ms()) {
+            all_items.extend(licensed.into_iter().map(|(item, _)| item));
+        }
+
         all_items.sort_by(|a, b| a.reference.cmp(&b.reference));
         Ok(all_items)
     }
@@ -238,6 +248,9 @@ impl Database {
                     theme_name: row.get(8)?,
                 }));
             }
+        }
+        if let Some((item, _)) = self.get_licensed_scripture(id, now_ms())? {
+            return Ok(Some(item));
         }
         Ok(None)
     }
@@ -311,6 +324,7 @@ impl Database {
             let conn = conn_arc.lock().unwrap_or_else(|e| e.into_inner());
             let _ = conn.execute("DELETE FROM scriptures WHERE id = ?1", params![id]);
         }
+        self.delete_licensed_scripture(id)?;
         Ok(())
     }
 

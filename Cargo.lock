@@ -3253,6 +3253,7 @@ dependencies = [
  "rcgen",
  "reqwest",
  "rfd",
+ "ring",
  "rusqlite",
  "rustls",
  "rustls-pemfile",

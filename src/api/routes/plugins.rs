@@ -600,6 +600,7 @@ pub(super) async fn plugin_fetch(
     match crate::api::plugin_net::fetch(&hosts, &req.url, &extra).await {
         Ok(f) => Ok(Json(serde_json::json!({
             "success": true, "status": f.status, "content_type": f.content_type, "body": f.body, "url": f.final_url,
+            "cache_secs": f.cache_secs,
         }))),
         Err(e) => {
             app.db.add_plugin_audit(
@@ -688,8 +689,16 @@ pub(super) async fn plugin_add_scriptures(
         return Err(err(StatusCode::BAD_REQUEST, &format!("send 1-{MAX_SCRIPTURE_ITEMS} chapters per call")));
     }
     let mut items: Vec<crate::core::models::ScriptureItem> = Vec::with_capacity(req.items.len());
+    let mut licensed: Vec<(usize, crate::storage::db::LicensedMeta)> = Vec::new();
+    let now = now_ms();
     for raw in req.items {
         let mut raw = raw;
+        // Text the publisher licenses to be shown, not kept, arrives with a `licensed` block (see
+        // storage/db/licensed.rs). It is taken out first: it never reaches the item itself.
+        let lic = raw.as_object_mut().and_then(|o| o.remove("licensed"));
+        if let Some(lic) = lic {
+            licensed.push((items.len(), licensed_meta(&lic, &caller.plugin_id, now).map_err(|e| err(StatusCode::BAD_REQUEST, &e))?));
+        }
         if let Some(obj) = raw.as_object_mut() {
             // Everything derived from the content is the host's to fill in.
             for (k, v) in [("id", ""), ("reference", "")] {
@@ -722,8 +731,9 @@ pub(super) async fn plugin_add_scriptures(
         item.version = version;
         item.theme_name = None;
         item.reference = format!("{} {}", item.book, item.chapter);
+        let id_prefix = if licensed.iter().any(|(i, _)| *i == items.len()) { "lic" } else { "scrip" };
         item.id = format!(
-            "scrip_{}",
+            "{id_prefix}_{}",
             uuid::Uuid::new_v5(
                 &uuid::Uuid::NAMESPACE_OID,
                 format!("{}:{}:{}-{}:{}", item.book, item.chapter, item.verse_start, item.verse_end, item.version).as_bytes()
@@ -736,17 +746,124 @@ pub(super) async fn plugin_add_scriptures(
     let verses: usize = items.iter().map(|i| i.verses.len()).sum();
     let versions: std::collections::BTreeSet<String> = items.iter().map(|i| i.version.clone()).collect();
     let db = app.db.clone();
-    tokio::task::spawn_blocking(move || db.insert_scriptures_batch(&items))
-        .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("task failed: {e}")))?
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {e}")))?;
+    let expires: Vec<i64> = licensed.iter().map(|(_, m)| m.expires_at_ms).collect();
+    tokio::task::spawn_blocking(move || {
+        let (mut plain, mut sealed) = (Vec::new(), Vec::new());
+        for (i, item) in items.into_iter().enumerate() {
+            match licensed.iter().find(|(idx, _)| *idx == i) {
+                Some((_, meta)) => sealed.push((item, meta.clone())),
+                None => plain.push(item),
+            }
+        }
+        if !plain.is_empty() {
+            db.insert_scriptures_batch(&plain)?;
+        }
+        for (item, mut meta) in sealed {
+            meta.id = item.id.clone();
+            db.insert_licensed_scripture(&item, &meta)?;
+        }
+        Ok::<_, rusqlite::Error>(())
+    })
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("task failed: {e}")))?
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {e}")))?;
     app.db.add_plugin_audit(
         &caller.plugin_id,
         &format!("plugin:{}", caller.plugin_id),
         "scriptures_added",
         &serde_json::json!({ "chapters": count, "verses": verses, "versions": versions }).to_string(),
     );
-    Ok(Json(serde_json::json!({ "success": true, "chapters": count, "verses": verses, "ids": ids })))
+    Ok(Json(serde_json::json!({ "success": true, "chapters": count, "verses": verses, "ids": ids, "expires_at_ms": expires })))
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+/// Longest the host will let a plugin keep licensed text, whatever the publisher's `max-age` claims.
+const MAX_LICENSED_TTL_SECS: u64 = 7 * 24 * 3600;
+
+/// Checks a plugin's `licensed` block and turns it into what the host stores. The plugin says how
+/// long the publisher allows the text to be kept (`ttl_secs`, from the API's `Cache-Control`); the
+/// host clamps it, and refuses text the publisher says not to keep (0).
+fn licensed_meta(v: &serde_json::Value, plugin_id: &str, now: i64) -> Result<crate::storage::db::LicensedMeta, String> {
+    let o = v.as_object().ok_or("`licensed` must be an object")?;
+    let text = |k: &str, max: usize| -> Result<String, String> {
+        let s = o.get(k).and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        if s.len() > max || s.chars().any(|c| c.is_control() && c != '\n') {
+            return Err(format!("licensed.{k} is missing or too long"));
+        }
+        Ok(s)
+    };
+    let usfm = text("usfm", 40)?;
+    if usfm.is_empty() || !usfm.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return Err("licensed.usfm must be a reference like JHN.3.16-18".into());
+    }
+    let tag = text("tag", 60)?;
+    if tag.is_empty() {
+        return Err("licensed.tag (the short version name shown with the verses) is required".into());
+    }
+    let link = text("link", 300)?;
+    if !link.is_empty() && !link.starts_with("https://") {
+        return Err("licensed.link must be an https address".into());
+    }
+    let bible_id = o.get("bible_id").and_then(|x| x.as_i64()).filter(|n| *n > 0).ok_or("licensed.bible_id is required")?;
+    let ttl = o.get("ttl_secs").and_then(|x| x.as_u64()).ok_or("licensed.ttl_secs is required")?;
+    if ttl == 0 {
+        return Err("the publisher does not allow this text to be kept".into());
+    }
+    let ttl = ttl.min(MAX_LICENSED_TTL_SECS);
+    Ok(crate::storage::db::LicensedMeta {
+        id: String::new(),
+        source: plugin_id.to_string(),
+        bible_id,
+        usfm,
+        tag,
+        copyright: text("copyright", 4000)?,
+        link,
+        expires_at_ms: now + (ttl as i64) * 1000,
+    })
+}
+
+#[derive(Deserialize)]
+pub(super) struct PluginRefreshReq {
+    ids: Vec<String>,
+    ttl_secs: u64,
+}
+
+/// POST /api/plugin-host/scriptures/refresh -- the plugin asked the publisher again and was told the
+/// passages may still be kept: renew their lifetime. The text is not touched. Only the plugin that
+/// stored a passage can renew it.
+pub(super) async fn plugin_refresh_licensed(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PluginRefreshReq>,
+) -> Result<impl IntoResponse, ApiErr> {
+    let caller = plugin_caller(&app, &headers).await?;
+    if !caller.scopes.writes("scriptures") {
+        return Err(err(StatusCode::FORBIDDEN, "this plugin wasn't granted write access to scriptures"));
+    }
+    if req.ids.is_empty() || req.ids.len() > MAX_SCRIPTURE_ITEMS {
+        return Err(err(StatusCode::BAD_REQUEST, &format!("send 1-{MAX_SCRIPTURE_ITEMS} ids per call")));
+    }
+    if req.ttl_secs == 0 {
+        return Err(err(StatusCode::BAD_REQUEST, "the publisher does not allow this text to be kept"));
+    }
+    let expires = now_ms() + (req.ttl_secs.min(MAX_LICENSED_TTL_SECS) as i64) * 1000;
+    let db = app.db.clone();
+    let plugin = caller.plugin_id.clone();
+    let n = tokio::task::spawn_blocking(move || {
+        let mine: Vec<String> = req
+            .ids
+            .into_iter()
+            .filter(|id| db.licensed_meta(id).ok().flatten().is_some_and(|m| m.source == plugin))
+            .collect();
+        db.refresh_licensed_ttl(&mine, expires)
+    })
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("task failed: {e}")))?
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {e}")))?;
+    Ok(Json(serde_json::json!({ "success": true, "refreshed": n, "expires_at_ms": expires })))
 }
 
 // ---- tools, processes and media for plugins granted `process.run` -----------------------------------
@@ -1663,6 +1780,7 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/plugins/{id}/token", post(mint_plugin_token))
         .route("/plugin-frame/{id}/{*path}", get(serve_plugin_frame))
         .route("/api/plugin-host/fetch", post(plugin_fetch))
+        .route("/api/plugin-host/scriptures/refresh", post(plugin_refresh_licensed))
         .route("/api/plugin-host/songs", post(plugin_add_song))
         .route("/api/plugin-host/scriptures", post(plugin_add_scriptures))
         .route("/api/plugin-host/media", post(plugin_add_media))

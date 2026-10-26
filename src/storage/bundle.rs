@@ -640,7 +640,8 @@ pub fn export_service<W: Write + Seek>(db: &Database, media_dir: &Path, schedule
     if schedule.items.is_empty() {
         return Err(invalid("the schedule is empty, so there is nothing to export"));
     }
-    let mut schedule = schedule.clone();
+    // Licensed passages travel as references only; the opening side looks them up again.
+    let mut schedule = schedule.without_licensed_text();
     schedule.is_modified = false;
     let title = title.map(str::trim).filter(|t| !t.is_empty()).map(str::to_string).unwrap_or_else(|| schedule.title.clone());
     schedule.title = title.clone();

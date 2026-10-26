@@ -167,6 +167,8 @@ zip = "9.0"
 # build through `zip`; declared directly only to call it.
 flate2 = "1"
 keyring = "4.2"
+# AES-256-GCM for licensed Bible text at rest (storage/db/licensed.rs). Already in the tree via rustls/rcgen.
+ring = "0.17"
 
 # Graphics & Rendering (wgpu)
 wgpu = { version = "30.0", optional = true }
