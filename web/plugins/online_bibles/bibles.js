@@ -143,12 +143,20 @@
     });
     return out;
   }
-  /** HTML tags and Strong's-number markup out of a Bolls verse. */
+  /**
+   * A Bolls verse as plain text. Bolls marks words up as `Adam<S>121</S>` (the Strong's number is the
+   * *content* of the tag, so removing only the tags leaves "Adam121"), and puts translators' marginal
+   * notes in `<sup>lamb: or, kid</sup>`, which belong beside the verse and not inside it. Both go,
+   * content and all. A `<sup>` that is not a note ("A Psalm of David." titles) is verse text and stays.
+   */
   function cleanVerseText(raw) {
+    var s = String(raw).replace(/<br\s*\/?>/gi, ' '); // a line break inside a verse is a space, not "beginningGod"
+    s = s.replace(/<S\b[^>]*>[\s\S]*?<\/S>/gi, '');
+    s = s.replace(/<sup\b[^>]*>([\s\S]*?)<\/sup>/gi, function (all, inner) {
+      return /^[^:.]{1,80}:\s/.test(inner) ? '' : inner;
+    });
     var out = '';
     var inTag = false;
-    // A line break inside a verse is a space, not "beginningGod".
-    var s = String(raw).replace(/<br\s*\/?>/gi, ' ');
     for (var i = 0; i < s.length; i++) {
       var c = s.charAt(i);
       if (c === '<') inTag = true;

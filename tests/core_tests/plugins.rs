@@ -623,7 +623,7 @@ async fn test_plugin_host_fetch_and_add_song_for_the_genius_plugin() {
     let ids: Vec<&str> = p["requested"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
     assert_eq!(ids, ["ui.panel", "network.outbound", "library.write", "commands.send"]);
     let hosts: Vec<&str> = p["requested"][1]["hosts"].as_array().unwrap().iter().map(|h| h.as_str().unwrap()).collect();
-    assert_eq!(hosts, ["genius.com", "www.genius.com"], "network access is limited to Genius");
+    assert_eq!(hosts, ["lrclib.net", "genius.com", "www.genius.com"], "network access is limited to LRCLIB and Genius");
 
     // No token, no service.
     let r = c.post(format!("{base}/api/plugin-host/songs")).json(&serde_json::json!({ "song": {} })).send().await.unwrap();

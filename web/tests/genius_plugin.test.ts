@@ -30,13 +30,21 @@ describe("Genius plugin: search", () => {
     expect(hits[0]).toMatchObject({ title: "Way Maker", artist: "Sinach", url: "https://genius.com/sinach-way-maker-lyrics" });
   });
 
-  test("irrelevant hits are kept only to fill the first five", () => {
+  test("lists only results that answer the search, never a padded list of unrelated songs", () => {
     const many = Array.from({ length: 8 }, (_, i) =>
       hit({ id: 10 + i, title: `Pop ${i}`, artist_names: "Band", url: `https://genius.com/band-pop-${i}-lyrics` }));
-    // Nothing here looks Christian, so only the first five are kept as a fallback.
-    expect(Genius.parseSearchResponse(response(many), "pop").length).toBe(5);
-    const mixed = [...many, hit({ id: 99, title: "Amazing Grace", artist_names: "Hymn Choir", url: "https://genius.com/choir-amazing-grace-lyrics" })];
-    expect(Genius.parseSearchResponse(response(mixed), "pop").map((h: any) => h.id)).toContain("genius_99");
+    // Genius always answers with something; a song it doesn't have must not produce five unrelated ones.
+    expect(Genius.parseSearchResponse(response(many), "so much life.church")).toEqual([]);
+    expect(Genius.parseSearchResponse(response(many), "pop").length).toBe(8);
+    const mixed = [...many, hit({ id: 99, title: "So Much", artist_names: "Life.Church Worship", url: "https://genius.com/life-church-worship-so-much-lyrics" })];
+    expect(Genius.parseSearchResponse(response(mixed), "so much life.church").map((h: any) => h.id)).toEqual(["genius_99"]);
+  });
+
+  test("answersQuery: 60% of the typed words, ignoring filler words", () => {
+    expect(Genius.answersQuery("goodness of god", "Goodness of God", "Bethel", "")).toBe(true);
+    expect(Genius.answersQuery("goodness of god", "Way Maker", "Sinach", "")).toBe(false);
+    expect(Genius.answersQuery("the", "Anything", "Anyone", "")).toBe(true); // nothing to match on
+    expect(Genius.answersQuery("so much life.church", "So Much", "Life.Church Worship", "")).toBe(true);
   });
 
   test("tolerates garbage", () => {
@@ -139,5 +147,41 @@ describe("Genius plugin: lyrics -> song", () => {
     expect(song.ccli_number).toBe("7115744");
     expect(song.slides.length).toBe(1);
     expect(Genius.pageToSong("<html></html>", undefined, undefined).title).toBe("Worship Song");
+  });
+});
+
+describe("Lyrics plugin: LRCLIB", () => {
+  const row = (over: any) => ({ id: 1, trackName: "So Much", artistName: "Life.Church Worship", albumName: "The Way",
+    duration: 203, instrumental: false, plainLyrics: "Line a\nLine b", syncedLyrics: "[00:01.00] Line a", ...over });
+
+  test("builds the search URL", () => {
+    expect(Genius.lrclibSearchUrl("So Much Life.Church")).toBe("https://lrclib.net/api/search?q=So%20Much%20Life.Church");
+    expect(Genius.lrclibSearchUrl("  ")).toBe("");
+  });
+
+  test("keeps real matches with words, one per title/artist/album", () => {
+    const body = JSON.stringify([
+      row({ id: 1 }), row({ id: 2 }), // the same recording twice
+      row({ id: 3, albumName: "A Thousand Blessings", duration: 208 }),
+      row({ id: 4, instrumental: true, plainLyrics: "" }),
+      row({ id: 5, plainLyrics: "" }),
+      row({ id: 6, trackName: "Unrelated", artistName: "Someone" }),
+      null,
+    ]);
+    const hits = Genius.parseLrclibResponse(body, "so much life.church");
+    expect(hits.map((h: any) => h.id)).toEqual(["lrclib_1", "lrclib_3"]);
+    expect(hits[0]).toMatchObject({ source: "lrclib", title: "So Much", artist: "Life.Church Worship", album: "The Way", length: "3:23" });
+    expect(Genius.parseLrclibResponse("not json", "x")).toEqual([]);
+    expect(Genius.parseLrclibResponse("{}", "x")).toEqual([]);
+  });
+
+  test("plain lyrics become slides in singing order, with repeated stanzas named as the chorus", () => {
+    const plain = "V one a\nV one b\n\nChorus a\nChorus b\n\nV two a\nV two b\n\nChorus a\nchorus  b\n\nBridge a\nBridge b";
+    const song = Genius.plainLyricsToSong("So Much", "Life.Church Worship", "The Way", plain);
+    expect(song.slides.map((s: any) => s.label)).toEqual(["Verse 1", "Chorus 1", "Verse 2", "Chorus 1", "Verse 3"]);
+    expect(song.slides[1].text).toBe("Chorus a\nChorus b");
+    expect(song).toMatchObject({ title: "So Much", author: "Life.Church Worship", ccli_number: null });
+    expect(song.copyright).toContain("LRCLIB");
+    expect(Genius.plainLyricsToSong("T", "A", "", "").slides).toEqual([]);
   });
 });

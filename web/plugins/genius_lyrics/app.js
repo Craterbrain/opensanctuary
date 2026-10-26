@@ -1,5 +1,5 @@
-// Genius Lyrics: a sandboxed OpenSanctuary plugin. It has no network or console access of its own;
-// the host fetches pages for it (net.fetch, only genius.com), stores the song (library.addSong) and
+// Song Lyrics: a sandboxed OpenSanctuary plugin. It has no network or console access of its own;
+// the host fetches for it (net.fetch, only lrclib.net and genius.com), stores the song (library.addSong) and
 // runs the schedule commands it was granted. See docs/PLUGIN_PERMISSIONS.md.
 (function () {
   'use strict';
@@ -28,12 +28,12 @@
       title.textContent = hit.title;
       var sub = document.createElement('div');
       sub.className = 'sub';
-      sub.textContent = hit.artist;
+      sub.textContent = [hit.artist, hit.album, hit.length].filter(Boolean).join(' \u00b7 ');
       meta.appendChild(title);
       meta.appendChild(sub);
       var badge = document.createElement('span');
       badge.className = 'os-badge os-badge--accent';
-      badge.textContent = 'Genius';
+      badge.textContent = hit.source === 'lrclib' ? 'LRCLIB' : 'Genius';
       var actions = document.createElement('div');
       actions.className = 'actions';
       var add = document.createElement('button');
@@ -57,19 +57,32 @@
     });
   }
 
+  async function fetchHits(label, url, parse, query) {
+    var res = await OS.call('net.fetch', { url: url });
+    if (res.status !== 200) throw new Error(label + ' answered ' + res.status);
+    return parse(res.body, query);
+  }
+
   async function search(query) {
-    var url = Genius.searchUrl(query);
-    if (!url) return;
-    setStatus('✨ Searching Genius for Christian lyrics matching “' + query.trim() + '”…');
+    var q = String(query).trim();
+    if (!q) return;
+    setStatus('\u2728 Searching LRCLIB and Genius for \u201c' + q + '\u201d\u2026');
     listEl.textContent = '';
-    try {
-      var res = await OS.call('net.fetch', { url: url });
-      if (res.status !== 200) throw new Error('Genius answered ' + res.status);
-      var hits = Genius.parseSearchResponse(res.body, query);
-      renderHits(hits);
-      setStatus(hits.length ? hits.length + ' result' + (hits.length === 1 ? '' : 's') : 'No Christian lyrics found for “' + query.trim() + '”. Try another title or artist.');
-    } catch (e) {
-      setStatus('Search failed: ' + e.message, 'error');
+    // LRCLIB is an open lyrics database; Genius sits behind a bot filter that often refuses us, so it is
+    // a bonus: its failure never hides LRCLIB's results.
+    var results = await Promise.all([
+      fetchHits('LRCLIB', Lyrics.lrclibSearchUrl(q), Lyrics.parseLrclibResponse, q).catch(function (e) { return e; }),
+      fetchHits('Genius', Lyrics.searchUrl(q), Lyrics.parseSearchResponse, q).catch(function (e) { return e; })
+    ]);
+    var hits = [], problems = [];
+    results.forEach(function (r) { if (r instanceof Error) problems.push(r.message); else hits = hits.concat(r); });
+    renderHits(hits);
+    if (hits.length) {
+      setStatus(hits.length + ' result' + (hits.length === 1 ? '' : 's') + (problems.length ? ' (' + problems.join('; ') + ')' : ''));
+    } else if (problems.length === results.length) {
+      setStatus('Search failed: ' + problems.join('; '), 'error');
+    } else {
+      setStatus('No song matching \u201c' + q + '\u201d' + (problems.length ? ' (' + problems.join('; ') + ')' : '') + '. Try the title and artist.');
     }
   }
 
@@ -78,11 +91,16 @@
     busy = true;
     setStatus('Importing “' + hit.title + '”…');
     try {
-      if (!Genius.isGeniusUrl(hit.url)) throw new Error('not a Genius page');
-      var page = await OS.call('net.fetch', { url: hit.url });
-      if (page.status !== 200) throw new Error('Genius answered ' + page.status);
-      var song = Genius.pageToSong(page.body, hit.title, hit.artist);
-      if (!song.slides.length) throw new Error('no lyrics found on that page');
+      var song;
+      if (hit.source === 'lrclib') {
+        song = Lyrics.plainLyricsToSong(hit.title, hit.artist, hit.album, hit.plain);
+      } else {
+        if (!Lyrics.isGeniusUrl(hit.url)) throw new Error('not a Genius page');
+        var page = await OS.call('net.fetch', { url: hit.url });
+        if (page.status !== 200) throw new Error('Genius answered ' + page.status);
+        song = Lyrics.pageToSong(page.body, hit.title, hit.artist);
+      }
+      if (!song.slides.length) throw new Error('no lyrics found');
       var added = await OS.call('library.addSong', { song: song });
       var msg = 'Imported “' + song.title + '” with ' + song.slides.length + ' slides' +
         (song.ccli_number ? ' (CCLI #' + song.ccli_number + ')' : '') + '.';

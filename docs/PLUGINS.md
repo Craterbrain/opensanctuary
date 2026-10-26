@@ -8,7 +8,7 @@ in Settings > Plugins:
 - **Sandboxed web plugins** (the recommended kind): a folder in `web/plugins/` with a `plugin.json` and
   an HTML page that runs in an isolated frame and reaches the app only through a permission-checked
   bridge. Everything below about permissions, placements, the notification center, ribbon buttons, shared
-  secrets and running tools is about these. The bundled ones (Genius Lyrics, Online Bibles, Video
+  secrets and running tools is about these. The bundled ones (Song Lyrics, Online Bibles, Video
   Downloader, Stock Images, a demo) are the worked examples.
 - **Console scripts** (`ui.dom`): a plain `.js` module that runs inside the operator console's own page with
   the same access as the operator. Critical tier; see "Frontend plugins" at the end.
@@ -76,7 +76,7 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   The first-run wizard's Bible step turns it on for you, listing what it can reach.
 - **Where a sandboxed plugin's page appears, and how it looks.** A manifest's `ui.placements` choose:
   `library-source` (a "plugin" entry in a Resource Library tab's sidebar, shown in place of the list
-  and preview, as Genius/Online Bibles/the downloader do), `video-picker` (the background picker's
+  and preview, as Song Lyrics/Online Bibles/the downloader do), `video-picker` (the background picker's
   Videos tab) or `dock` (a small floating panel, the default). **Placements are also how the console
   advertises a plugin before it's approved:** until the operator approves an installed plugin, each
   `library-source` placement shows a muted "plugin · off" entry with its `label`, a `video-picker`
@@ -190,9 +190,12 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   browser cookies, SponsorBlock, audio-only) is `web/plugins/ytdlp/`: a sandboxed page in the Media
   library sidebar and in the video picker, built on `process.run` above. The old built-in downloader,
   updater and routes are gone.
-- **Genius lyrics is a plugin.** Searching Genius and importing lyrics used to be built into the
-  server and the Song Library panel; it is now `web/plugins/genius_lyrics/` (a sandboxed panel that
-  asks only for `genius.com`, `library.write` on songs, and optionally `AddToSchedule`/`GoLive`). Approve
+- **Song lyrics is a plugin.** Searching for lyrics and importing them used to be built into the
+  server and the Song Library panel; it is now `web/plugins/genius_lyrics/` (id kept from when it only
+  searched Genius; the name is Song Lyrics). It searches LRCLIB, an open community lyrics database, and
+  Genius together, so Genius's bot filter refusing a request never hides LRCLIB's results. It is a sandboxed
+  panel that asks only for `lrclib.net` and `genius.com`, `library.write` on songs, and optionally
+  `AddToSchedule`/`GoLive`. Approve
   it in Settings > Plugins and it appears as a panel. It is also the worked example of a plugin that
   needs the network.
 - **No pre-manifest or native plugins.** A bare `.js` script in `web/plugins/` with no `.plugin.json`, the
