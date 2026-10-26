@@ -65,10 +65,10 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   host mints its id and applies size limits. A sandboxed frame can't submit a `<form>`, so use buttons.
 - **Online Bibles is a plugin.** Downloading translations (the project's own public-domain collection,
   [`Craterbrain/opensanctuary-bibles`](https://github.com/Craterbrain/opensanctuary-bibles): 64 translations
-  in 30 languages, listed first and downloaded from there whoever else lists the same abbreviation; then
-  ChurchApps / Bolls.life / the OpenLP community list, and any public GitHub repository laid out like
-  `arron-taylor/bible-versions`) and looking up a
-  passage or a whole book (bible-api.com) is `web/plugins/online_bibles/`. It asks for those five hosts,
+  in 30 languages), and any public GitHub repository laid out like `arron-taylor/bible-versions`, and looking up a
+  passage or a whole book (bible-api.com) is `web/plugins/online_bibles/`. (Bolls.life, ChurchApps and the curated list were removed in 1.2.0:
+  licensed Bibles such as the NIV come from the YouVersion plugin.) It asks for three hosts (`bible-api.com`, `api.github.com`,
+  `raw.githubusercontent.com`),
   `library.write` on `scriptures` (`library.addScriptures`: up to 500 chapters per call, each 1-400 verses of up to 16,000 bytes (one
   oversize verse refuses the whole call); the host derives each chapter's id and verse
   range, so re-downloading a translation replaces its chapters; the same grant can therefore also replace

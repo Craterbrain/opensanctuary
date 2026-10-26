@@ -61,7 +61,7 @@ describe("E2E Live Test: plugin hints come from the installed plugins' manifests
     await openSetupAt(page, BIBLES_STEP);
     const bibles = page.locator('.fts-plugin-offer[data-plugin-id="online_bibles"]');
     await bibles.waitFor({ state: "visible", timeout: 5000 });
-    expect(await bibles.innerText()).toContain("bolls.life"); // the hosts it asks for, from its manifest
+    expect(await bibles.innerText()).toContain("raw.githubusercontent.com"); // the hosts it asks for, from its manifest
     expect(await page.locator(".fts-plugin-offer").count()).toBe(1);
     await page.click("#btn-first-time-skip");
     await page.locator('.fts-plugin-offer[data-plugin-id="genius_lyrics"]').waitFor({ state: "visible", timeout: 5000 });

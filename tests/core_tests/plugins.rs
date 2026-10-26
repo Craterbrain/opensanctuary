@@ -752,12 +752,12 @@ async fn test_online_bibles_plugin_host_api_adds_chapters() {
     let host = "bib_host";
     let json = |r: reqwest::Response| async move { r.json::<serde_json::Value>().await.unwrap() };
 
-    // The plugin asks for exactly the hosts the old built-in providers used, and nothing else.
+    // The plugin asks for the project's own Bibles (GitHub), a GitHub repository, and bible-api.com: no Bolls.life, no ChurchApps.
     let list = json(c.get(format!("{base}/api/plugins")).header("x-host-token", host).send().await.unwrap()).await;
     let p = list.as_array().unwrap().iter().find(|p| p["id"] == "online_bibles").unwrap().clone();
     assert_eq!((p["kind"].as_str(), p["error"].is_null()), (Some("sandbox"), true), "{p}");
     let hosts: Vec<&str> = p["requested"][1]["hosts"].as_array().unwrap().iter().map(|h| h.as_str().unwrap()).collect();
-    assert_eq!(hosts, ["bolls.life", "api.churchapps.org", "bible-api.com", "api.github.com", "raw.githubusercontent.com"]);
+    assert_eq!(hosts, ["bible-api.com", "api.github.com", "raw.githubusercontent.com"]);
     assert_eq!(p["requested"][2]["categories"], serde_json::json!(["scriptures"]));
     let r = c.post(format!("{base}/api/plugins/online_bibles/approve")).header("x-host-token", host)
         .json(&serde_json::json!({ "digest": p["digest"], "granted": ["ui.panel", "network.outbound", "library.write"] })).send().await.unwrap();
