@@ -1,6 +1,7 @@
 mod core;
 mod bibles;
 mod licensed;
+mod remote_bibles;
 mod songs;
 mod media;
 mod themes;
@@ -16,6 +17,7 @@ mod ccli;
 pub use core::Database;
 pub use bibles::InstalledBibleInfo;
 pub use licensed::LicensedMeta;
+pub use remote_bibles::{licensed_tag_for, RemoteBible, MAX_REMOTE_BIBLES};
 pub use bibles::now_ms;
 pub use plugins::{ObservedPlugin, PluginAuditRow, PluginGrantRow, PublisherRow};
 pub use paired_devices::{console_credential_hash, PairedDevice, CONSOLE_PLATFORM, REMOTE_CONTROL_PLATFORM};

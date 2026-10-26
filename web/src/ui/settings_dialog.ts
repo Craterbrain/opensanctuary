@@ -212,7 +212,7 @@ export function renderSettingRow(def: SettingDef, highlight: boolean): HTMLEleme
     let opts = def.options || [];
     if (def.key === 'defaultBibleVersion') {
       const bibles = currentContext ? currentContext.getInstalledBibles() : [];
-      opts = (bibles || []).map(b => ({ value: b.id, label: `${b.abbreviation || b.id} - ${b.name || b.id}` }));
+      opts = (bibles || []).filter(b => !b.remote).map(b => ({ value: b.id, label: `${b.abbreviation || b.id} - ${b.name || b.id}` }));
     }
     const currentValue = getSettingValue(def.key);
     opts.forEach(o => {

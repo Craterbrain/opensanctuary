@@ -948,6 +948,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: var(--o
    ========================================================================== */
 .os-badge,
 .bible-lang-badge,
+.bible-source-tag,
 .network-badge,
 .bulk-slide-badge {
   display: inline-flex;
@@ -970,6 +971,12 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: var(--o
   border-color: rgba(var(--os-brand-amber-rgb), 0.35);
 }
 .bible-lang-badge { text-transform: uppercase; letter-spacing: 0.04em; }
+/* the plugin a translation comes from ("YouVersion"): text is fetched when a passage is added to the schedule */
+.bible-source-tag {
+  color: var(--os-text-secondary);
+  background: var(--os-hover);
+  border-color: var(--os-border);
+}
 .os-badge--neutral {
   color: var(--os-text-secondary);
   background: var(--os-hover);

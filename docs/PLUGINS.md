@@ -379,7 +379,7 @@ Use a sandboxed plugin unless you genuinely need to reach into the console's own
 
 ## Licensed Bible text
 
-A plugin that serves text which may be shown but not kept (YouVersion's NIV, NASB...) marks what it stores with a `licensed` block;
+A plugin can also list translations in the Scriptures sidebar without storing them (`library.setRemoteBibles`); the console searches them by reference only and the text is fetched when a result is added to the schedule. A plugin that serves text which may be shown but not kept (YouVersion's NIV, NASB...) marks what it stores with a `licensed` block;
 the host then seals, expires and strips it from saved and exported files, and can ask the plugin to look it up again when a schedule
 naming it is opened. How it works, the license terms behind it, the key release builds carry and the plugin API: [LICENSED_SCRIPTURE.md](LICENSED_SCRIPTURE.md).
 

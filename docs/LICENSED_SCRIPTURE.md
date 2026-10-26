@@ -27,6 +27,24 @@ A text that is **on screen** has to be readable by the app, so none of this is D
 files or an export difficult and short-lived, as the licenses ask. An open schedule keeps showing its text until the app
 closes, even if the stored copy expired, so a service never goes blank.
 
+## Translations in the sidebar, searched by reference
+
+A plugin can offer translations without storing them (`library.setRemoteBibles`; metadata only, `src/storage/db/remote_bibles.rs`).
+The Scriptures sidebar lists them with the plugin's tag ("YouVersion") next to the Bibles stored here.
+
+* **Search** is the ordinary scripture search bar. A reference ("John 3:16", "Ps 23:1-3") lists one result per translation in scope
+  (All Translations, or the one selected): the reference and the tag, **no text**. A text search skips them.
+* **Preview** (a single click) says how to load it instead of fetching anything.
+* **Add or drag to the schedule** (`AddToSchedule` with an id `yvref:<plugin>:<bible id>:<book>:<chapter>:<from>:<to>`) makes a
+  placeholder item at once (`LicensedRef.resolved == false`, one slide per verse asked for, or one for a whole chapter).
+  The console's `watchLicensed` then asks the plugin, which fetches the passage, stores it sealed with the publisher's lifetime and
+  answers `ResolveLicensed`; the host rebuilds the item's slides from the verses that came back (`SetLicensedPassage`,
+  `ScheduleItem::fill_licensed`), with the notice on every slide. Dropped before the text arrives, the placeholder is exactly what a
+  saved or exported schedule would hold, so a reopened schedule fills in the same way.
+* The default Bible and Bible export only ever offer Bibles stored here, never these translations.
+* The YouVersion plugin keeps its own list of added translations (its panel: "Add a translation") and enforces each publisher's
+  limit (below) when it looks a passage up; a single chapter (what a search result names) is always within it.
+
 ## The key release builds carry
 
 Release builds include a YouVersion App Key, so the plugin works without the church registering anything.

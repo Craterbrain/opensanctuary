@@ -23,7 +23,7 @@ impl Database {
             crate::core::events::ShowEvent::ScheduleSlidesReordered { .. } => "ScheduleSlidesReordered",
             crate::core::events::ShowEvent::ScheduleSlideDuplicated { .. } => "ScheduleSlideDuplicated",
             crate::core::events::ShowEvent::ScheduleSlideRemoved { .. } => "ScheduleSlideRemoved",
-            crate::core::events::ShowEvent::LicensedTextSet { .. } => "LicensedTextSet",
+            crate::core::events::ShowEvent::LicensedPassageSet { .. } => "LicensedPassageSet",
             crate::core::events::ShowEvent::ScheduleItemExpandToggled { .. } => "ScheduleItemExpandToggled",
             crate::core::events::ShowEvent::ScheduleItemThemeSet { .. } => "ScheduleItemThemeSet",
             crate::core::events::ShowEvent::SlideBackgroundSet { .. } => "SlideBackgroundSet",

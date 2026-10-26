@@ -198,9 +198,11 @@ export async function refreshInstalledBibles() {
       const dbBibles = await res.json();
       if (Array.isArray(dbBibles)) {
         installedBibles = dbBibles.filter(b => (b.verse_count === undefined || b.verse_count > 0));
-        if (!appOptions.defaultBibleVersion && installedBibles.length > 0) {
-          const defaultObj = installedBibles.find(b => b.is_default || b.isDefault);
-          appOptions.defaultBibleVersion = defaultObj ? defaultObj.id : installedBibles[0].id;
+        // The default is always a Bible that is stored here, never a translation a plugin offers (YouVersion's NIV...).
+        const stored = installedBibles.filter(b => !b.remote);
+        if (!appOptions.defaultBibleVersion && stored.length > 0) {
+          const defaultObj = stored.find(b => b.is_default || b.isDefault);
+          appOptions.defaultBibleVersion = defaultObj ? defaultObj.id : stored[0].id;
         }
         installedBibles.forEach(b => {
           b.isDefault = areTranslationsEquivalent(b.id, appOptions.defaultBibleVersion);

@@ -44,9 +44,9 @@ pub enum ShowEvent {
         index: usize,
     },
     /// The text of a licensed passage on the schedule was filled in. Stored without the text.
-    LicensedTextSet {
+    LicensedPassageSet {
         item_id: String,
-        texts: Vec<crate::core::models::LicensedSlideText>,
+        verses: Vec<crate::core::models::LicensedVerse>,
     },
     ScheduleItemsMerged {
         first_index: usize,
@@ -229,8 +229,8 @@ impl ShowEvent {
             ShowEvent::ScheduleLoaded { schedule } if schedule.has_licensed() => {
                 Cow::Owned(ShowEvent::ScheduleLoaded { schedule: schedule.without_licensed_text() })
             }
-            ShowEvent::LicensedTextSet { item_id, texts } if !texts.is_empty() => {
-                Cow::Owned(ShowEvent::LicensedTextSet { item_id: item_id.clone(), texts: Vec::new() })
+            ShowEvent::LicensedPassageSet { item_id, verses } if !verses.is_empty() => {
+                Cow::Owned(ShowEvent::LicensedPassageSet { item_id: item_id.clone(), verses: Vec::new() })
             }
             other => Cow::Borrowed(other),
         }
