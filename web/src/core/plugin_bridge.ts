@@ -16,7 +16,7 @@
  *                                 with `service` set to a granted shared namespace (`OpenSanctuary:Shared:<name>`);
  *                                 set and delete there need `write` access
  *   net.fetch { url, headers? }   network.outbound: the *server* fetches it, only from granted hosts (headers: Authorization,
- *                                 Accept, Accept-Language)
+ *                                 Accept, Accept-Language, and any the plugin's manifest declared under network.outbound.headers)
  *   library.addSong { song }      library.write on "songs"; refreshes the library list
  *   library.refreshLicensed { ids, ttlSecs } library.write on "scriptures": renews the lifetime of licensed passages this plugin stored
  *   library.addScriptures { items } library.write on "scriptures": Bible chapters (an item may carry `licensed`, see src/storage/db/licensed.rs); refreshes the Bibles
@@ -60,7 +60,7 @@ interface Running {
  */
 export const MAX_IN_FLIGHT = 32;
 
-function grantedList(p: PluginInfo, id: string, field: 'hosts' | 'categories' | 'commands'): string[] {
+function grantedList(p: PluginInfo, id: string, field: 'hosts' | 'categories' | 'commands' | 'headers'): string[] {
   return p.granted.filter(g => g.id === id).flatMap(g => (g[field] as string[] | undefined) ?? []);
 }
 
@@ -177,10 +177,10 @@ function commandName(cmd: unknown): string | null {
 }
 
 async function mintToken(r: Running): Promise<string | null> {
-  const scopes: Array<{ id: string; commands?: string[]; hosts?: string[]; categories?: string[]; services?: string[]; access?: string }> = [];
+  const scopes: Array<{ id: string; commands?: string[]; hosts?: string[]; headers?: string[]; categories?: string[]; services?: string[]; access?: string }> = [];
   if (r.granted.has('keyring.own')) scopes.push({ id: 'keyring.own' });
   if (r.granted.has('commands.send')) scopes.push({ id: 'commands.send', commands: r.commands });
-  if (r.granted.has('network.outbound')) scopes.push({ id: 'network.outbound', hosts: grantedList(r.plugin, 'network.outbound', 'hosts') });
+  if (r.granted.has('network.outbound')) scopes.push({ id: 'network.outbound', hosts: grantedList(r.plugin, 'network.outbound', 'hosts'), headers: grantedList(r.plugin, 'network.outbound', 'headers') });
   if (r.granted.has('library.write')) scopes.push({ id: 'library.write', categories: grantedList(r.plugin, 'library.write', 'categories') });
   const shared = r.plugin.granted.filter((g) => g.id === 'keyring.service');
   if (shared.length) {

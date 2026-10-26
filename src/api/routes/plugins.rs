@@ -578,7 +578,7 @@ pub(super) async fn plugin_caller(app: &AppState, headers: &HeaderMap) -> Result
 #[derive(Deserialize)]
 pub(super) struct PluginFetchReq {
     url: String,
-    /// `Authorization` / `Accept` / `Accept-Language` / `X-YVP-App-Key` only (see `plugin_net::clean_headers`).
+    /// `Authorization` / `Accept` / `Accept-Language`, plus the headers the plugin's grant declares (see `plugin_net::clean_headers`).
     #[serde(default)]
     headers: serde_json::Map<String, serde_json::Value>,
 }
@@ -596,7 +596,7 @@ pub(super) async fn plugin_fetch(
     if hosts.is_empty() {
         return Err(err(StatusCode::FORBIDDEN, "this plugin wasn't granted network access"));
     }
-    let extra = crate::api::plugin_net::clean_headers(&req.headers).map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+    let extra = crate::api::plugin_net::clean_headers(&req.headers, &caller.scopes.outbound_headers()).map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
     match crate::api::plugin_net::fetch(&hosts, &req.url, &extra).await {
         Ok(f) => Ok(Json(serde_json::json!({
             "success": true, "status": f.status, "content_type": f.content_type, "body": f.body, "url": f.final_url,

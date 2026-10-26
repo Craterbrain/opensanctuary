@@ -481,6 +481,8 @@ export interface PluginPermissionInfo {
   categories?: string[];
   commands?: string[];
   hosts?: string[];
+  /** network.outbound: extra request headers the plugin may send to those hosts. */
+  headers?: string[];
   keys?: string[];
   paths?: string[];
   ports?: number[];
