@@ -34,7 +34,8 @@ ANDROID_ARG=1
 packaging/fetch-plugins.sh
 
 echo "==> Building inside the container..."
-"$ENGINE" run --rm -e SKIP_TV_APK="${SKIP_TV_APK:-0}" -v "$PWD":/src:Z -w /src "$IMAGE" packaging/build-deb-in-container.sh
+# YVP_APP_KEY (the YouVersion key, a CI secret) is passed by name, so its value is not on the command line.
+"$ENGINE" run --rm -e SKIP_TV_APK="${SKIP_TV_APK:-0}" ${YVP_APP_KEY:+-e YVP_APP_KEY} -v "$PWD":/src:Z -w /src "$IMAGE" packaging/build-deb-in-container.sh
 
 DEB=$(ls -t target/debian/*.deb | head -1)
 TARBALL=$(ls -t target/release-artifacts/*.tar.gz | head -1)

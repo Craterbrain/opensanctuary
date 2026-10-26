@@ -15,7 +15,45 @@
 use std::path::Path;
 use std::process::Command;
 
+#[path = "src/builtin_key_mask.rs"]
+mod mask;
+
+/// 32 random bytes for the mask. /dev/urandom where there is one (every build host we use);
+/// otherwise the clock and process id, which is enough for obfuscation.
+fn random_pad() -> [u8; 32] {
+    use std::io::Read;
+    let mut pad = [0u8; 32];
+    if std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut pad)).is_ok() {
+        return pad;
+    }
+    let seed = format!("{:?}{}", std::time::SystemTime::now(), std::process::id());
+    use sha2::{Digest, Sha256};
+    pad.copy_from_slice(&Sha256::digest(seed.as_bytes()));
+    pad
+}
+
+/// Writes `$OUT_DIR/yvp_key.rs`: the YouVersion App Key from `YVP_APP_KEY` (a GitHub Actions secret in the
+/// release workflow), masked, or nothing when it isn't set. The key itself is never printed or written
+/// anywhere readable; `cargo:rerun-if-env-changed` only names the variable.
+fn write_youversion_key() {
+    println!("cargo:rerun-if-env-changed=YVP_APP_KEY");
+    let out = Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("yvp_key.rs");
+    let key = std::env::var("YVP_APP_KEY").unwrap_or_default();
+    let key = key.trim();
+    let (pad, masked) = if key.is_empty() {
+        (vec![0u8; 32], Vec::new())
+    } else {
+        let pad = random_pad();
+        (pad.to_vec(), mask::xor_with_pad(key.as_bytes(), &pad))
+    };
+    let list = |b: &[u8]| b.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ");
+    let src = format!("pub static YVP_PAD: [u8; 32] = [{}];\npub static YVP_MASKED: &[u8] = &[{}];\n", list(&pad), list(&masked));
+    std::fs::write(out, src).expect("write yvp_key.rs");
+}
+
 fn main() {
+    write_youversion_key();
+
     let web_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("web");
 
     println!("cargo:rerun-if-changed={}", web_dir.join("src").display());

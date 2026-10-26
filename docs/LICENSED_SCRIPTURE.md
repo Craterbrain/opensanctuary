@@ -27,6 +27,18 @@ A text that is **on screen** has to be readable by the app, so none of this is D
 files or an export difficult and short-lived, as the licenses ask. An open schedule keeps showing its text until the app
 closes, even if the stored copy expired, so a service never goes blank.
 
+## The key release builds carry
+
+Release builds include a YouVersion App Key, so the plugin works without the church registering anything.
+
+* **Where it lives:** the GitHub Actions secret `YVP_APP_KEY` on `Craterbrain/opensanctuary`. It is never in the repository, the plugin repository or the plugin's zip. `release.yml` passes it to the Linux (container) and Windows builds; pull-request and local builds have none unless `YVP_APP_KEY` is set in the environment, and the plugin then asks for the church's own key.
+* **How it is stored:** `build.rs` masks it (XOR with a SHA-256 keystream from a random per-build pad, `src/builtin_key_mask.rs`) into the binary, so `strings`, a text search of an installer or zip, or a git clone does not find it. `packaging/check-key-not-plain.sh` runs after the release builds and fails the release if the key is readable in a `.deb`, tarball or portable zip.
+* **How it is used:** the *server* adds `X-YVP-App-Key` to the YouVersion plugin's requests to `api.youversion.com` (`src/api/builtin_key.rs`), and only to that plugin and that host. A key the church saved in the plugin is sent instead. The plugin, its page and its keyring never see the built-in key.
+* **What this is not:** secrecy. The app has to send the key to YouVersion, so anyone running it can capture the key from the network. If it is abused, rotate it in the YouVersion portal and ship an update (the old builds then ask for the church's own key). YouVersion measures use per app key itself; there is nothing to report to it.
+* **Who the licensee is:** with a built-in key, OpenSanctuary (not each church) is the developer the Biblica and Lockman agreements are with. See the next section.
+
+To make a build with the key locally: `env YVP_APP_KEY="$(cat ~/.config/opensanctuary-dev/youversion_app_key)" cargo build --release`.
+
 ## What the licenses say (YouVersion Platform fast-track licenses, read 2026-10-26)
 
 Nothing here is legal advice; it is what the agreements a developer accepts say, and why the code does what it does.

@@ -122,7 +122,14 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Build .deb + generic tarball in the pinned container
+        env:
+          YVP_APP_KEY: ${{ secrets.YVP_APP_KEY }}   # the YouVersion key; masked in the binary (build.rs)
         run: SKIP_TV_APK=1 CONTAINER_ENGINE=docker packaging/build-deb.sh
+
+      - name: Check the YouVersion key is not readable in the packages
+        env:
+          YVP_APP_KEY: ${{ secrets.YVP_APP_KEY }}
+        run: packaging/check-key-not-plain.sh target/debian/*.deb target/release-artifacts/*.tar.gz
 
       - name: Stage release assets
         run: |
@@ -204,7 +211,14 @@ jobs:
           xvfb-run -a wine /tmp/innosetup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
 
       - name: Build installer + portable zip
+        env:
+          YVP_APP_KEY: ${{ secrets.YVP_APP_KEY }}   # the YouVersion key; masked in the binary (build.rs)
         run: SKIP_TV_APK=1 xvfb-run -a packaging/build-windows-installer.sh
+
+      - name: Check the YouVersion key is not readable in the portable zip
+        env:
+          YVP_APP_KEY: ${{ secrets.YVP_APP_KEY }}
+        run: packaging/check-key-not-plain.sh target/release-artifacts/opensanctuary-windows-x64-*.zip
 
       - name: Stage release assets
         run: |

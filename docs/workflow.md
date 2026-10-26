@@ -18,7 +18,7 @@ publishes, and it deliberately does **not** run tests.
 - Project status: no 1.0 yet; the current line is beta 3.
 - `ci.yml` runs on every PR into `main` (the default branch). `main` is protected: a PR must be up to date and green to merge.
 - `ci.yml`'s Rust and frontend jobs cache compiled dependencies with `Swatinem/rust-cache` (pinned to a commit, like the other third-party actions). `release.yml` deliberately doesn't: release artifacts are signed, so they're always built from scratch.
-- The throwaway dry-run tags `v0.2.1-keytest` and `v0.2.2-keytest` are still on the remote and can be deleted (`git push origin :refs/tags/v0.2.1-keytest`, same for `.2.2`); neither has a GitHub Release.
+- The throwaway dry-run tags from the first runs (`v0.2.1-keytest`, `v0.2.2-keytest`) were deleted on 2026-10-26.
 - The signing secrets and variable are set. The production public key is embedded in `updater.rs` and `install.sh`. `RELEASES_REPO` / `REPO` point at `Craterbrain/opensanctuary`, a **public** repo (the updater's anonymous `/releases/latest` poll needs that).
 - Known and still open: see "Known issues" at the bottom.
 
@@ -32,6 +32,7 @@ GitHub repo → **Settings** → **Secrets and variables** → **Actions**.
 |---|---|---|
 | **Secrets** tab | `MINISIGN_SECRET_KEY` | Entire contents of `opensanctuary_release.key` |
 | **Secrets** tab | `MINISIGN_PASSWORD` | The key's passphrase |
+| **Secrets** tab | `YVP_APP_KEY` | The YouVersion Platform App Key release builds carry (masked in the binary; `docs/LICENSED_SCRIPTURE.md`). Optional: without it the YouVersion plugin asks for the church's own key |
 | **Variables** tab | `MINISIGN_PUBLIC_KEY_B64` | `RWRYSKNecgUiwS2YaMPmshtR2/ZAQA/XnunXaOBQw/SRkZPyMspLwhGw` |
 
 The public key must be a **variable**, not a secret: the workflow reads it as
