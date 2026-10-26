@@ -94,3 +94,9 @@ name = "bundle_open"
 path = "fuzz_targets/bundle_open.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "bible_import"
+path = "fuzz_targets/bible_import.rs"
+test = false
+doc = false

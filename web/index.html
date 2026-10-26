@@ -711,6 +711,20 @@
             </div>
 
             <div class="store-card">
+              <h4>🔗 Bible from a Link or File</h4>
+              <p>Paste a direct link to a Bible file (USFM, USX, OSIS, Zefania or OpenSong XML, loose or in a <code>.zip</code>; for example from ebible.org), or choose one you have. Please make sure you have the right to use it: many Bibles are copyrighted.</p>
+              <div class="form-row store-card-row">
+                <input class="search-input" id="bible-link-url" type="url" placeholder="https://ebible.org/…/eng-web_usfm.zip" autocomplete="off" spellcheck="false">
+                <input class="search-input" id="bible-link-abbr" type="text" maxlength="40" placeholder="Abbreviation (optional)" autocomplete="off" style="max-width: 12rem">
+                <button class="btn btn-primary" id="btn-import-bible-link" type="button">Download &amp; install</button>
+              </div>
+              <div class="form-row store-card-row">
+                <input type="file" id="file-bible-import" accept=".usfm,.sfm,.xml,.osis,.zip,.txt" aria-label="Bible file">
+              </div>
+              <div id="bible-link-status" class="store-card-status" style="display: none;"></div>
+            </div>
+
+            <div class="store-card">
               <h4>📤 Save to Share or Back Up</h4>
               <p>Save your library as OpenSanctuary files, each with the pictures, videos and music it uses. (To save one song or presentation, right-click it in the library.)</p>
               <div class="form-row store-card-row">

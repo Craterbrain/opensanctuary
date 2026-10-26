@@ -7,6 +7,7 @@ import { resolveHostSessionToken, hostTokenHeader } from './core/host_session.ts
 import { initFirstTimeSetup, maybeShowFirstTimeSetup, showFirstTimeSetup } from './ui/first_time_setup.ts';
 import { rememberDeckMode } from './ui/deck_view_mode.ts';
 import { bundleKindForFile, exportBundle, importBundleFile, type BundleKind } from './ui/bundle_ui.ts';
+import { initBibleImportCard } from './ui/bible_import_ui.ts';
 import QRCode from 'qrcode';
 import {
   addDualScriptureToSchedule,
@@ -2298,6 +2299,8 @@ on('file-bundle-import', 'change', async (e: Event) => {
     input.value = '';
   }
 });
+
+initBibleImportCard(() => { void refreshInstalledBibles(); });
 
 on('btn-export-all-songs', 'click', () => { void exportBundle({ kind: 'song' }, 'Songs'); });
 on('btn-export-all-presentations', 'click', () => { void exportBundle({ kind: 'presentation' }, 'Presentations'); });

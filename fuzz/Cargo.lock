@@ -3216,7 +3216,7 @@ dependencies = [
 
 [[package]]
 name = "os-next"
-version = "0.3.4"
+version = "0.3.7"
 dependencies = [
  "axum",
  "axum-server",
@@ -3238,6 +3238,7 @@ dependencies = [
  "rcgen",
  "reqwest",
  "rfd",
+ "ring",
  "rusqlite",
  "rustls",
  "rustls-pemfile",

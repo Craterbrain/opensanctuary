@@ -1,3 +1,4 @@
+pub mod bible_import;
 pub mod bundle;
 pub mod db;
 pub mod ewsx;

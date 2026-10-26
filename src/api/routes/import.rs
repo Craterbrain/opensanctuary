@@ -391,6 +391,92 @@ pub(super) async fn import_freeshow_show(
     }
 }
 
+/// Parses and installs a Bible, off the async runtime. 409 (with `code: "already_installed"`) when one with that
+/// abbreviation is there and `replace` wasn't asked for, so the console can ask before replacing it.
+async fn install_bible_bytes(
+    app: &AppState,
+    bytes: Vec<u8>,
+    file_name: String,
+    abbreviation: Option<String>,
+    replace: bool,
+    source: String,
+) -> impl IntoResponse {
+    use crate::storage::bible_import;
+    let db = app.db.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let parsed = bible_import::parse_bible(&bytes, &file_name)?;
+        let abbr = abbreviation.as_deref().map(bible_import::clean_abbreviation).filter(|a| !a.is_empty()).unwrap_or_else(|| parsed.abbreviation.clone());
+        if !replace && bible_import::is_installed(&db, &abbr).unwrap_or(false) {
+            return Ok::<_, bible_import::BibleImportError>(Err((abbr, parsed)));
+        }
+        bible_import::install(&db, &parsed, &abbr, replace, &source).map(Ok)
+    })
+    .await;
+    match result {
+        Ok(Ok(Ok(installed))) => (StatusCode::OK, Json(serde_json::json!({ "success": true, "bible": installed }))),
+        Ok(Ok(Err((abbr, parsed)))) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "success": false, "code": "already_installed", "abbreviation": abbr,
+                "error": format!("{abbr} is already installed"),
+                "bible": crate::storage::bible_import::describe(&parsed, &abbr),
+            })),
+        ),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "success": false, "error": e.0 }))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "success": false, "error": format!("the import failed: {e}") }))),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ImportBibleLinkReq {
+    pub url: String,
+    #[serde(default)]
+    pub abbreviation: Option<String>,
+    #[serde(default)]
+    pub replace: bool,
+}
+
+/// POST /api/bibles/import/link -- the operator pastes a link to a Bible file (USFM, USX, OSIS, Zefania or OpenSong, loose or in a
+/// zip); the server downloads it (public https only, size-capped, see `plugin_net::check_public_url`), reads it and
+/// installs it. Console only: it makes the server fetch an address a person typed.
+pub(super) async fn import_bible_link(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ImportBibleLinkReq>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    require_host_token(&headers, &app)?;
+    let url = req.url.trim().to_string();
+    let fetched = crate::api::plugin_net::fetch_public_bytes(&url, crate::storage::bible_import::MAX_INPUT_BYTES)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "success": false, "error": e }))))?;
+    if fetched.status != 200 {
+        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "success": false, "error": format!("the site answered {}", fetched.status) }))));
+    }
+    let file_name = reqwest::Url::parse(&url).ok().and_then(|u| u.path_segments().and_then(|s| s.last().map(str::to_string))).unwrap_or_default();
+    Ok(install_bible_bytes(&app, fetched.body, file_name, req.abbreviation, req.replace, url).await)
+}
+
+#[derive(Deserialize)]
+pub struct ImportBibleFileQuery {
+    pub name: Option<String>,
+    pub abbreviation: Option<String>,
+    #[serde(default)]
+    pub replace: bool,
+}
+
+/// POST /api/bibles/import/file?name=&abbreviation=&replace= -- the same importer for a file the operator has
+/// (the raw bytes are the body).
+pub(super) async fn import_bible_file(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<ImportBibleFileQuery>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    require_host_token(&headers, &app)?;
+    let name = q.name.unwrap_or_default();
+    Ok(install_bible_bytes(&app, body.to_vec(), name.clone(), q.abbreviation, q.replace, format!("file {name}")).await)
+}
+
 pub(super) fn router() -> Router<AppState> {
     use axum::routing::{get, post};
     Router::new()
@@ -398,6 +484,11 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/bibles/{id}", axum::routing::delete(delete_bible))
         .route("/api/bibles/passage", get(get_bible_passage))
         .route("/api/bibles/parse-ref", get(parse_bible_ref))
+        .route("/api/bibles/import/link", post(import_bible_link))
+        .route(
+            "/api/bibles/import/file",
+            post(import_bible_file).layer(axum::extract::DefaultBodyLimit::max(crate::storage::bible_import::MAX_INPUT_BYTES + 1024 * 1024)),
+        )
         .route("/api/import/openlp", post(import_openlp))
         .route("/api/import/pptx", post(import_pptx))
         .route("/api/import/odp", post(import_odp))

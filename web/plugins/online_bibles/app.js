@@ -30,7 +30,7 @@
   }
 
   // ---- tabs ---------------------------------------------------------------------------------------
-  var tabs = ['catalog', 'github', 'passage'];
+  var tabs = ['catalog', 'passage'];
   function showTab(name) {
     tabs.forEach(function (t) {
       $('tab-' + t).classList.toggle('active', t === name);
@@ -131,16 +131,13 @@
       if (entry.provider === 'craterbrain') {
         if (!Bibles.isOwnBibleUrl(entry.sourceKey)) throw new Error('not an OpenSanctuary Bibles file address');
         url = entry.sourceKey;
-      } else if (entry.provider === 'github') {
-        if (!Bibles.isRawGithubUrl(entry.sourceKey)) throw new Error('not a GitHub raw-file address');
-        url = entry.sourceKey;
       } else {
         throw new Error('no download address for that translation');
       }
       setStatus('Downloading ' + entry.name + '… (a whole Bible can take a minute)');
       setProgress(0, 100);
       var body = await fetchText(url);
-      chapters = entry.provider === 'craterbrain' ? Bibles.parseGithubBible(body, url, entry.abbreviation) : Bibles.parseGithubBible(body, url);
+      chapters = Bibles.parseGithubBible(body, url, entry.abbreviation);
       if (!chapters.length) throw new Error('that file had no chapters in a format this plugin understands');
       await storeChapters(chapters);
       var verses = chapters.reduce(function (n, c) { return n + c.verses.length; }, 0);
@@ -153,32 +150,6 @@
       setProgress(0, null);
     }
   }
-
-  // ---- GitHub repositories -------------------------------------------------------------------------
-  async function browseGithub() {
-    var repo = Bibles.parseRepo($('gh-repo').value);
-    if (!repo) { setStatus('Enter a repository as owner/repo.'); return; }
-    var path = $('gh-path').value.trim() || 'versions';
-    setStatus('Reading ' + repo.owner + '/' + repo.repo + '…');
-    $('gh-list').textContent = '';
-    try {
-      var langDirs = JSON.parse(await fetchText(Bibles.githubContentsUrl(repo, path)));
-      var entries = [];
-      for (var i = 0; i < langDirs.length; i++) {
-        var dir = langDirs[i];
-        if (!dir || dir.type !== 'dir') continue;
-        try {
-          var files = JSON.parse(await fetchText(Bibles.githubContentsUrl(repo, dir.path)));
-          entries = entries.concat(Bibles.githubCatalogEntries(repo, dir.name, files));
-        } catch (e) { /* skip a folder we can't read */ }
-      }
-      renderEntries($('gh-list'), entries);
-      setStatus(entries.length ? entries.length + ' Bibles in ' + repo.owner + '/' + repo.repo : 'No Bible files found in that folder.');
-    } catch (e) {
-      setStatus('Could not read the repository: ' + e.message, 'error');
-    }
-  }
-  $('gh-browse').addEventListener('click', browseGithub);
 
   // ---- passages -----------------------------------------------------------------------------------
   async function fetchPassage() {

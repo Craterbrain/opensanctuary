@@ -32,6 +32,7 @@ one target per hand-rolled parser.
 | `freeshow_fsb` | `FreeShowImporter::import_fsb_content` | JSON text |
 | `scripture_ref` | `parse_scripture_reference` | free-text reference string |
 | `rtf_parse` | `parse_rtf` | raw RTF bytes |
+| `bible_import` | `bible_import::parse_bible` + `install` (a Bible from a link or file: USFM, USX, OSIS, Zefania, OpenSong; zip; see `docs/bible-import.md`) | raw bytes (loose files or a zip) |
 | `bundle_open` | `bundle::open` + `inspect` + `import` (OpenSanctuary's own `.ossong`/`.ospres`/`.osservice`/`.osbible`, see `docs/file-formats.md`) | raw archive bytes, or an otherwise well-formed zip whose `manifest.json` and `content.json` are fuzzed |
 
 Each target calls the same `pub fn` entry point the real import routes
@@ -76,7 +77,7 @@ Run every target for a fixed budget each:
 ```sh
 for t in pptx_import odp_import ewsx_import openlp_service_json openlp_theme \
          openlp_otz freeshow_show_import freeshow_fsb scripture_ref \
-         rtf_parse bundle_open; do
+         rtf_parse bundle_open bible_import; do
   cargo +nightly fuzz run "$t" -- -max_total_time=120 || break
 done
 ```

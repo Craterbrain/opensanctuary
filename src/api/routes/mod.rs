@@ -370,6 +370,14 @@ mod gate_tests {
     }
 
     #[test]
+    fn bible_import_routes_are_console_only() {
+        // The link route makes the server fetch an address a person typed; the file route writes a whole Bible.
+        for p in ["/api/bibles/import/link", "/api/bibles/import/file"] {
+            assert!(needs_host_token(&Method::POST, p), "POST {p}");
+        }
+    }
+
+    #[test]
     fn import_pptx_and_odp_need_a_host_token_the_same_way() {
         assert_eq!(needs_host_token(&Method::POST, "/api/import/odp"), needs_host_token(&Method::POST, "/api/import/pptx"));
     }
