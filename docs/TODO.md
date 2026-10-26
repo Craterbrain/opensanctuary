@@ -11,7 +11,6 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 
 ## Licensed scripture (see `LICENSED_SCRIPTURE.md`)
 
-- [ ] **Ask YouVersion support** whether projecting licensed Bible text in church presentation software is within their terms. (Caching is settled: the publisher's `Cache-Control` sets the lifetime.)
 - [ ] **Biblica's link:** the NIV license wants a one-step link to Biblica whenever the text is shown. The plugin panel shows the YouVersion link; the projected slide carries only the notice.
 - [ ] **Rotate the YouVersion key before 1.0.** The `YVP_APP_KEY` secret is currently the development key (it was pasted in a chat). Before 1.0: create a separate production app in the YouVersion Platform portal, accept the licenses on it, put its key in the secret (`gh secret set YVP_APP_KEY -R Craterbrain/opensanctuary`), and retire the development key. Also rotate it any time it is thought to have leaked.
 - [ ] **Delete a licensed passage by hand** (a "clear kept passages now" button in the plugin).
