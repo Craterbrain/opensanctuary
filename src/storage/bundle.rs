@@ -38,7 +38,7 @@ use sha2::{Digest, Sha256};
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-use crate::core::models::{Presentation, Schedule, ScriptureItem, ScriptureVerse, Song, Theme};
+use crate::core::models::{MediaItem, Presentation, Schedule, ScriptureItem, ScriptureVerse, Song, Theme};
 use crate::storage::media_sniff::{sniff_audio_ext, sniff_media_ext};
 use crate::storage::Database;
 
@@ -980,6 +980,9 @@ pub struct ImportResult {
     pub added_as_copies: usize,
     pub media_written: usize,
     pub media_reused: usize,
+    /// Pictures newly listed in the Media library, so they can be picked as backgrounds elsewhere.
+    #[serde(default)]
+    pub backgrounds_added: usize,
     pub themes_added: Vec<String>,
     pub bible: Option<String>,
     /// A service is returned for the console to load, not stored.
@@ -1052,6 +1055,37 @@ fn restore_media<R: Read + Seek>(bundle: &mut Bundle<R>, media_dir: &Path, resul
     Ok(paths)
 }
 
+/// Lists each picture the bundle brought in the Media library (as an image), so it shows in the background picker and can be used on
+/// other slides, not only on the slides it came with. A picture already listed (same file) is left alone.
+fn register_pictures<R: Read + Seek>(bundle: &Bundle<R>, db: &Database, paths: &HashMap<String, String>, result: &mut ImportResult) -> Result<(), BundleError> {
+    let listed: BTreeSet<String> = db.get_media().map_err(db_err)?.into_iter().map(|m| m.file_path).collect();
+    for entry in bundle.manifest.media.iter().filter(|e| e.kind == MediaKind::Image) {
+        let Some(path) = paths.get(&entry.id) else { continue };
+        if listed.contains(path) {
+            continue;
+        }
+        let stem = Path::new(&entry.name).file_stem().and_then(|s| s.to_str()).unwrap_or("Picture");
+        // `lc-02-giving-66cd0052.jpg` (a file this app restored earlier) reads as "lc 02 giving": the trailing hash is dropped.
+        let mut words: Vec<String> = stem.chars().map(|c| if matches!(c, '-' | '_') { ' ' } else { c }).collect::<String>().split_whitespace().map(str::to_string).collect();
+        if words.len() > 1 && words.last().is_some_and(|w| w.len() == 8 && w.chars().all(|c| c.is_ascii_hexdigit())) {
+            words.pop();
+        }
+        let name = words.join(" ");
+        let item = MediaItem {
+            id: format!("bundle_{}", &entry.id[..16]),
+            name: if name.is_empty() { "Picture".to_string() } else { name.chars().take(80).collect() },
+            media_type: "image".to_string(),
+            file_path: path.clone(),
+            duration_seconds: None,
+            thumbnail_path: None,
+            loop_playback: false,
+        };
+        db.insert_media(&item).map_err(db_err)?;
+        result.backgrounds_added += 1;
+    }
+    Ok(())
+}
+
 fn add_missing_themes(bundle: &Bundle<impl Read + Seek>, db: &Database, paths: &HashMap<String, String>, result: &mut ImportResult) -> Result<(), BundleError> {
     for theme in &bundle.themes {
         if theme.name.trim().is_empty() || db.get_theme_by_name(&theme.name).map_err(db_err)?.is_some() {
@@ -1115,6 +1149,7 @@ pub fn import<R: Read + Seek>(bundle: &mut Bundle<R>, db: &Database, media_dir: 
     };
 
     let paths = restore_media(bundle, media_dir, &mut result)?;
+    register_pictures(bundle, db, &paths, &mut result)?;
     add_missing_themes(bundle, db, &paths, &mut result)?;
     let mut content = bundle.content.clone();
     let mut collector = Collector::new(media_dir);

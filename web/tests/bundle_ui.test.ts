@@ -47,6 +47,7 @@ describe("what the user is told", () => {
   });
   test("services and Bibles name themselves", () => {
     expect(importMessage("service", "Easter", result({ added: 5, themes_added: ["Advent"] }))).toBe('✓ Opened service "Easter" (5 items), 1 theme added');
+    expect(importMessage("presentation", "Deck", result({ added: 1, backgrounds_added: 17 }))).toContain("17 pictures added to Media as backgrounds");
     expect(importMessage("bible", "World English Bible", result({ added: 1189, bible: "WEB" }))).toBe("✓ Installed WEB (1189 chapters)");
   });
 });

@@ -60,6 +60,8 @@ Opening is two steps. The file is first **inspected** (the server describes it a
   by content, with media compared by hash, so a picture that moved folders still counts as the same), and
   otherwise added as a **separate copy** with a new id. A theme of the same name is kept as it is.
 * **Bibles** that are already installed ask before they are replaced.
+* **Pictures become backgrounds.** Each picture a file brings is also listed in the **Media** library (named after the file, `lc-02-giving.jpg` -> *lc 02 giving*), so it
+  shows in the background picker and can be used on other slides. A picture already listed is not listed twice, and the import message says how many were added.
 * **Media** is written under a readable, stable name (`Easter_Sunrise-3fa9c2b1.jpg`: the original name plus
   eight characters of its hash), so opening the same file twice reuses the first copy instead of piling up
   duplicates.

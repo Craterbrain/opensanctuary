@@ -58,6 +58,7 @@ export interface ImportResult {
   added_as_copies: number;
   media_written: number;
   media_reused: number;
+  backgrounds_added?: number;
   themes_added: string[];
   bible: string | null;
   warnings: string[];
@@ -89,6 +90,7 @@ export function importMessage(kind: BundleKind, title: string, r: ImportResult):
   if (r.skipped_identical) notes.push(`${r.skipped_identical} already in your library`);
   if (r.added_as_copies) notes.push(`${plural(r.added_as_copies, 'added as a copy', 'added as copies')} because yours differ`);
   if (r.themes_added.length) notes.push(`${plural(r.themes_added.length, 'theme', 'themes')} added`);
+  if (r.backgrounds_added) notes.push(`${plural(r.backgrounds_added, 'picture', 'pictures')} added to Media as backgrounds`);
   const tail = notes.length ? ` (${notes.join('; ')})` : '';
   const added = r.added + r.added_as_copies;
   switch (kind) {
