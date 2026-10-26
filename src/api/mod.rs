@@ -1,3 +1,4 @@
+pub mod builtin_key;
 pub mod command_pipeline;
 pub mod error;
 pub mod keyring_policy;

@@ -597,6 +597,11 @@ pub(super) async fn plugin_fetch(
         return Err(err(StatusCode::FORBIDDEN, "this plugin wasn't granted network access"));
     }
     let extra = crate::api::plugin_net::clean_headers(&req.headers, &caller.scopes.outbound_headers()).map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+    // The YouVersion plugin's requests carry the build's own App Key unless it supplied one (api/builtin_key.rs).
+    let mut extra = extra;
+    if let Some(h) = crate::api::builtin_key::header_for(&caller.plugin_id, &req.url, &extra) {
+        extra.push(h);
+    }
     match crate::api::plugin_net::fetch(&hosts, &req.url, &extra).await {
         Ok(f) => Ok(Json(serde_json::json!({
             "success": true, "status": f.status, "content_type": f.content_type, "body": f.body, "url": f.final_url,

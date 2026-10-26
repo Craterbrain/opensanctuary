@@ -381,7 +381,7 @@ Use a sandboxed plugin unless you genuinely need to reach into the console's own
 
 A plugin that serves text which may be shown but not kept (YouVersion's NIV, NASB...) marks what it stores with a `licensed` block;
 the host then seals, expires and strips it from saved and exported files, and can ask the plugin to look it up again when a schedule
-naming it is opened. How it works, the license terms behind it and the plugin API: [LICENSED_SCRIPTURE.md](LICENSED_SCRIPTURE.md).
+naming it is opened. How it works, the license terms behind it, the key release builds carry and the plugin API: [LICENSED_SCRIPTURE.md](LICENSED_SCRIPTURE.md).
 
 ## Extra request headers
 
