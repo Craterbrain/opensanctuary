@@ -5,7 +5,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { spawnTestServer, teardownTestServer, ensureArtifactDir, type SpawnedTestServer, expectNativeIcons } from "./e2e_helpers";
 
-describe("E2E Live Test: Genius Lyrics plugin (sandboxed) imports through the host", () => {
+describe("E2E Live Test: Song Lyrics plugin (sandboxed) imports through the host", () => {
   let server: SpawnedTestServer;
   let browser: Browser;
   let page: Page;
@@ -32,10 +32,10 @@ describe("E2E Live Test: Genius Lyrics plugin (sandboxed) imports through the ho
   test("needs approval, then appears as a panel; search and import go through the bridge", async () => {
     await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: "networkidle" });
     // The old built-in Genius search mode and category are gone from the song library.
-    expect(await page.locator('.category-node:not(.plugin-source-node--off):has-text("Genius Christian Lyrics")').count()).toBe(0);
+    expect(await page.locator('.category-node:not(.plugin-source-node--off):has-text("Song Lyrics")').count()).toBe(0);
     expect((await fetch(`http://127.0.0.1:${PORT}/api/songs/genius/search?q=x`)).status).toBe(404);
     // Not until approved -- only its "not turned on" hint (from its manifest), which opens its review card.
-    expect(await page.locator('.category-node:not(.plugin-source-node--off):has-text("Genius")').count()).toBe(0);
+    expect(await page.locator('.category-node:not(.plugin-source-node--off):has-text("Song Lyrics")').count()).toBe(0);
     expect(await page.locator('.plugin-source-node--off[data-plugin-id="genius_lyrics"]').count()).toBe(1);
     expect((await fetch(`http://127.0.0.1:${PORT}/plugin-frame/genius_lyrics/index.html`)).status).toBe(404);
 
@@ -45,7 +45,8 @@ describe("E2E Live Test: Genius Lyrics plugin (sandboxed) imports through the ho
     const card = page.locator('.plugin-card[data-plugin-id="genius_lyrics"]');
     await card.waitFor({ state: "visible", timeout: 10000 });
     const text = await card.innerText();
-    expect(text).toContain("Genius Lyrics");
+    expect(text).toContain("Song Lyrics");
+    expect(text).toContain("lrclib.net");
     expect(text).toContain("genius.com");
     expect(text).toContain("network.outbound");
     expect(text).toContain("library.write");
@@ -61,7 +62,7 @@ describe("E2E Live Test: Genius Lyrics plugin (sandboxed) imports through the ho
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => document.querySelector('iframe[data-plugin-id="genius_lyrics"]'), null, { timeout: 15000 });
     await page.click('.tab-btn[data-tab="songs"]');
-    const node = page.locator('.category-node:not(.plugin-source-node--off):has-text("Genius Christian Lyrics")');
+    const node = page.locator('.category-node:not(.plugin-source-node--off):has-text("Song Lyrics")');
     await node.waitFor({ state: "visible", timeout: 10000 });
     await node.click();
     const frame = frameOf()!;
@@ -77,11 +78,11 @@ describe("E2E Live Test: Genius Lyrics plugin (sandboxed) imports through the ho
     await frame.click("#search-btn");
     await frame.waitForFunction(() => {
       const t = document.getElementById("status")?.textContent || "";
-      return t !== "" && !t.startsWith("Searching");
+      return t !== "" && !t.includes("Searching");
     }, null, { timeout: 40000 });
 
     // Import path, driven the same way the plugin does it: library.addSong over the bridge.
-    const song = { title: "E2E Bridge Song", author: "Tester", copyright: "Genius Christian Lyrics", ccli_number: null,
+    const song = { title: "E2E Bridge Song", author: "Tester", copyright: "Lyrics from LRCLIB (community-contributed)", ccli_number: null,
       slides: [{ text: "Line one\nLine two", header: "V1", label: "Verse 1", tag: "Verse 1" }], theme_name: null, alternate_title: null };
     const added = await frame.evaluate((s) => new Promise<any>((resolve) => {
       const id = 9001;

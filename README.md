@@ -81,7 +81,7 @@ The operator console (library, schedule, preview and live panes) and the slide b
   files); downloading public-domain translations (64, in 30 languages, hosted in
   [opensanctuary-bibles](https://github.com/Craterbrain/opensanctuary-bibles))
   and looking up passages online is the **Online Bibles** plugin.
-- Song lyrics lookup is the **Genius Lyrics** plugin, online video import is
+- Song lyrics lookup is the **Song Lyrics** plugin (LRCLIB and Genius), online video import is
   the **Video Downloader** (`yt-dlp`) plugin and free stock photos are the
   **Stock Images** plugin — see [Plugins](#plugins). Downloaded H.264 video is
   converted to VP9 automatically for native hardware-decoded playback on the
@@ -114,7 +114,7 @@ Bundled with the app (all sandboxed web plugins, off until you turn them on):
 
 | Plugin | What it does | Where it appears |
 |---|---|---|
-| **Genius Lyrics** | Search Genius and import lyrics as formatted song slides | Songs library |
+| **Song Lyrics** | Search LRCLIB (an open lyrics database) and Genius, and import lyrics as formatted song slides | Songs library |
 | **Online Bibles** | Download public-domain translations, look up passages online | Scriptures library |
 | **Video Downloader (yt-dlp)** | Download video or audio from YouTube and 1000+ sites into your Media library. The app installs and updates `yt-dlp` itself (signature- and checksum-verified) | Media library, and the video background picker |
 | **Stock Images (Pexels & Pixabay)** | Search free stock photos and add them as backgrounds, using your own free API key from each site | Media library |

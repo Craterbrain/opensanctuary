@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "id": "online_bibles",
   "name": "Online Bibles",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "publisher": "OpenSanctuary",
   "description": "Download Bible translations (public-domain Bibles hosted by OpenSanctuary, ChurchApps, Bolls.life, public GitHub repositories) and look up passages online, into your Bible library.",
   "web": {

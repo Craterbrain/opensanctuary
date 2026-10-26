@@ -25,12 +25,30 @@
     return terms ? 'https://genius.com/api/search/multi?q=' + encodeURIComponent(terms) : '';
   }
 
+  var STOP_WORDS = ['the', 'a', 'an', 'of', 'by', 'and', 'in', 'to', 'for', 'with'];
+
+  function words(text) {
+    return String(text).toLowerCase().replace(/[^a-z0-9\u00c0-\uffff]+/g, ' ').split(' ').filter(Boolean);
+  }
+
+  /**
+   * Does a result actually answer the search? At least 60% of the words the user typed (ignoring "the",
+   * "of" ...) have to appear in the result's title, artist or address. Genius always returns *something*,
+   * and listing five unrelated songs for a song it doesn't have is worse than saying nothing was found.
+   */
+  function answersQuery(query, title, artist, url) {
+    var wanted = words(query).filter(function (w) { return STOP_WORDS.indexOf(w) === -1; });
+    if (!wanted.length) return true;
+    var haystack = ' ' + words(title + ' ' + artist + ' ' + url).join(' ') + ' ';
+    var found = wanted.filter(function (w) { return haystack.indexOf(w) !== -1; }).length;
+    return found >= Math.max(1, Math.ceil(wanted.length * 0.6));
+  }
+
   /** Genius multi-search JSON (text) -> [{ id, title, artist, url, thumbnail }]. */
   function parseSearchResponse(jsonText, query) {
     var data;
     try { data = JSON.parse(jsonText); } catch (e) { return []; }
     var sections = (data && data.response && data.response.sections) || [];
-    var alreadyChristian = hasChristianKeyword(query);
     var hits = [];
     var seen = {};
     sections.forEach(function (section) {
@@ -44,10 +62,7 @@
         var title = res.title || 'Unknown Title';
         var artist = res.artist_names || 'Christian Artist';
         if (title.indexOf('Release Calendar') !== -1 || title.indexOf('Tracklist') !== -1) return;
-        var lowerUrl = url.toLowerCase();
-        var relevant = alreadyChristian || hasChristianKeyword(title + ' ' + artist) ||
-          lowerUrl.indexOf('worship') !== -1 || lowerUrl.indexOf('christian') !== -1;
-        if (relevant || hits.length < 5) {
+        if (answersQuery(query, title, artist, url)) {
           seen[url] = true;
           hits.push({
             id: res.id != null ? 'genius_' + res.id : 'genius_' + Math.random().toString(16).slice(2),
@@ -237,10 +252,89 @@
     return song;
   }
 
+
+  // ---- LRCLIB (https://lrclib.net): a free, community-built lyrics database with an open API ----------------
+
+  function lrclibSearchUrl(query) {
+    var q = String(query).trim();
+    return q ? 'https://lrclib.net/api/search?q=' + encodeURIComponent(q) : '';
+  }
+
+  /** "3:25" from seconds, or '' when unknown. */
+  function clock(seconds) {
+    var n = Math.round(Number(seconds));
+    if (!isFinite(n) || n <= 0) return '';
+    var s = n % 60;
+    return Math.floor(n / 60) + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  /**
+   * LRCLIB search JSON (text) -> [{ source:'lrclib', id, title, artist, album, length, plain }]. Only entries
+   * with words (not instrumentals) that answer the search, and one per title/artist/album: LRCLIB often
+   * holds the same recording several times.
+   */
+  function parseLrclibResponse(jsonText, query) {
+    var data;
+    try { data = JSON.parse(jsonText); } catch (e) { return []; }
+    if (!Array.isArray(data)) return [];
+    var hits = [];
+    var seen = {};
+    data.forEach(function (r) {
+      if (!r || r.instrumental) return;
+      var plain = typeof r.plainLyrics === 'string' ? r.plainLyrics.trim() : '';
+      if (!plain) return;
+      var title = String(r.trackName || r.name || '').replace(/\s+/g, ' ').trim();
+      var artist = String(r.artistName || '').replace(/\s+/g, ' ').trim();
+      if (!title || !answersQuery(query, title, artist, '')) return;
+      var album = String(r.albumName || '').replace(/\s+/g, ' ').trim();
+      var key = (title + '|' + artist + '|' + album).toLowerCase();
+      if (seen[key]) return;
+      seen[key] = true;
+      hits.push({ source: 'lrclib', id: 'lrclib_' + r.id, title: title, artist: artist || 'Unknown artist',
+                  album: album, length: clock(r.duration), plain: plain });
+    });
+    return hits;
+  }
+
+  function sameLines(a, b) { return a.replace(/\s+/g, ' ').toLowerCase() === b.replace(/\s+/g, ' ').toLowerCase(); }
+
+  /**
+   * Plain lyrics (stanzas separated by blank lines, no section names) -> a Song. A stanza that comes back
+   * word for word is the chorus; the others are numbered verses. Slides stay in singing order.
+   */
+  function plainLyricsToSong(title, artist, album, plain) {
+    var stanzas = String(plain).replace(/\r/g, '').split(/\n\s*\n/)
+      .map(function (t) { return t.split('\n').map(function (l) { return l.trim(); }).filter(Boolean).join('\n'); })
+      .filter(Boolean);
+    var kinds = stanzas.map(function (t, i) {
+      return stanzas.some(function (u, j) { return j !== i && sameLines(t, u); });
+    });
+    var verse = 0;
+    var song = {
+      title: title, author: artist, copyright: 'Lyrics from LRCLIB (community-contributed)' + (album ? ' \u2014 ' + album : ''),
+      ccli_number: null, slides: [], theme_name: null, alternate_title: null
+    };
+    stanzas.forEach(function (t, i) {
+      var label, tag;
+      if (kinds[i]) {
+        // every copy of the same repeated stanza shares one name; different repeated stanzas get their own
+        var base = stanzas.findIndex(function (u, j) { return kinds[j] && sameLines(u, t); });
+        var n = stanzas.slice(0, base + 1).filter(function (u, j) { return kinds[j] && stanzas.findIndex(function (v, k) { return kinds[k] && sameLines(v, u); }) === j; }).length;
+        label = 'Chorus ' + n; tag = 'C' + n;
+      } else {
+        verse++;
+        label = 'Verse ' + verse; tag = 'V' + verse;
+      }
+      song.slides.push({ text: t, header: tag, label: label, tag: label });
+    });
+    return song;
+  }
+
   var api = {
-    searchTerms: searchTerms, searchUrl: searchUrl, parseSearchResponse: parseSearchResponse, isGeniusUrl: isGeniusUrl,
+    searchTerms: searchTerms, answersQuery: answersQuery, searchUrl: searchUrl, parseSearchResponse: parseSearchResponse, isGeniusUrl: isGeniusUrl,
+    lrclibSearchUrl: lrclibSearchUrl, parseLrclibResponse: parseLrclibResponse, plainLyricsToSong: plainLyricsToSong,
     extractCcli: extractCcli, stripHtml: stripHtml, extractLyrics: extractLyrics, lyricsToSong: lyricsToSong, pageToSong: pageToSong
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
-  else root.Genius = api;
+  else { root.Lyrics = api; root.Genius = api; } // Genius: the name older copies of this page used
 })(typeof self !== 'undefined' ? self : this);

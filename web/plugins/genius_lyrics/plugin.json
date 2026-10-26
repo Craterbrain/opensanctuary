@@ -1,10 +1,10 @@
 {
   "manifest_version": 1,
   "id": "genius_lyrics",
-  "name": "Genius Lyrics",
-  "version": "1.0.0",
+  "name": "Song Lyrics",
+  "version": "1.1.0",
   "publisher": "OpenSanctuary",
-  "description": "Search Genius for Christian and worship song lyrics and import them into your song library as formatted slides.",
+  "description": "Search LRCLIB (an open community lyrics database) and Genius for song lyrics and import them into your song library as slides.",
   "web": {
     "entry": "index.html",
     "sandbox": true
@@ -17,10 +17,11 @@
     {
       "id": "network.outbound",
       "hosts": [
+        "lrclib.net",
         "genius.com",
         "www.genius.com"
       ],
-      "reason": "Searches Genius and downloads the lyrics page for a song you pick (the server makes these requests, only to these hosts)"
+      "reason": "Searches LRCLIB and Genius, and downloads the lyrics page for a Genius song you pick (the server makes these requests, only to these hosts)"
     },
     {
       "id": "library.write",
@@ -44,7 +45,7 @@
       {
         "slot": "library-source",
         "tab": "songs",
-        "label": "✨ Genius Christian Lyrics"
+        "label": "✨ Song Lyrics"
       }
     ]
   }

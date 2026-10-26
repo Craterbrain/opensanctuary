@@ -110,6 +110,17 @@ describe("Online Bibles plugin: downloads", () => {
     expect(chapters).toBe(1189);
   });
 
+  test("Bolls: Strong's numbers and margin notes are dropped with their tags, titles are kept", () => {
+    const clean = Bibles.cleanVerseText;
+    expect(clean("Adam<S>121</S>, Sheth<S>8352</S>, Enosh<S>583</S>,")).toBe("Adam, Sheth, Enosh,");
+    expect(clean("And God<S>430</S> saw<S>7200</S> <S>853</S> the light<S>216</S>")).toBe("And God saw the light");
+    expect(clean("thou shalt not <sup>by: Heb. by the hand of</sup>shed blood<S>1</S>")).toBe("thou shalt not shed blood");
+    expect(clean("<sup>lamb: or, kid</sup>a lamb")).toBe("a lamb");
+    expect(clean("<sup>A Psalm of David.</sup> The LORD is my shepherd")).toBe("A Psalm of David. The LORD is my shepherd");
+    expect(clean("In the beginning<br/>God")).toBe("In the beginning God");
+    expect(clean("Dieu : bon")).toBe("Dieu : bon"); // spacing before punctuation is the language's own
+  });
+
   test("Bolls translation -> chapters in book order, with markup removed", () => {
     const rows = [
       { book: 43, chapter: 3, verse: 16, text: "For God so <S>25</S>loved the <i>world</i>" },
@@ -122,7 +133,7 @@ describe("Online Bibles plugin: downloads", () => {
     expect(chapters[0].version).toBe("KJV");
     // Verses end up in order whatever order the file listed them in, and a <br> becomes a space.
     expect(chapters[0].verses.map((v: any) => v.text)).toEqual(["In the beginning God created", "And the earth was without form"]);
-    expect(chapters[1].verses[0].text).toBe("For God so 25loved the world");
+    expect(chapters[1].verses[0].text).toBe("For God so loved the world"); // the Strong's number inside <S> is not text
     expect(Bibles.parseBollsTranslation("nope", "kjv")).toEqual([]);
     expect(Bibles.parseBollsTranslation("{}", "kjv")).toEqual([]);
   });

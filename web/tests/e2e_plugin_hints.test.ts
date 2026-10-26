@@ -134,7 +134,7 @@ describe("E2E Live Test: plugin hints come from the installed plugins' manifests
     expect(await page.locator("#store-plugin-cards .store-card").count()).toBe(0);
     // Nothing in the console text still points at a plugin by name.
     const text = await page.evaluate(() => document.body.innerText);
-    for (const name of ["Online Bibles", "Genius", "Video Downloader", "yt-dlp", "Pexels", "Pixabay"]) {
+    for (const name of ["Online Bibles", "Genius", "Song Lyrics", "Video Downloader", "yt-dlp", "Pexels", "Pixabay"]) {
       expect(text.includes(name)).toBe(false);
     }
     await page.screenshot({ path: `${artifactDir}/screenshot_plugin_hints_none_installed.png` });
