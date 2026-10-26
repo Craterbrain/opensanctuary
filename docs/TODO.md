@@ -11,7 +11,7 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 
 ## Licensed scripture (see `LICENSED_SCRIPTURE.md`)
 
-- [ ] **Ask YouVersion support** to confirm that sealed storage for the time in `Cache-Control`, and projecting in church software, are within their terms. The licenses state no cache time of their own.
+- [ ] **Ask YouVersion support** whether projecting licensed Bible text in church presentation software is within their terms. (Caching is settled: the publisher's `Cache-Control` sets the lifetime.)
 - [ ] **Biblica's link:** the NIV license wants a one-step link to Biblica whenever the text is shown. The plugin panel shows the YouVersion link; the projected slide carries only the notice.
 - [ ] **Delete a licensed passage by hand** (a "clear kept passages now" button in the plugin).
 

@@ -40,7 +40,8 @@ Nothing here is legal advice; it is what the agreements a developer accepts say,
   * Display "must make downloading of a large portion or the entire work **difficult or impractical**" (the sealed, expiring store above).
   * The copyright notice, or the tag (`NASB 1995`, `AMP`...) after the verses, with a link to lockman.org.
   * Annual report of the **copies distributed**. Exports carry no text, so none are distributed.
-* **Neither document** states a cache time; the lifetime is the `Cache-Control` the API sends with each response.
+* **Cache time:** the licenses leave it to the API: the lifetime is the `Cache-Control` the API sends with each response, which is what the host follows.
+* **Open question:** whether projecting the text in church presentation software is covered. Not stated in either license; to be confirmed with YouVersion support.
 
 ## For plugin authors
 
