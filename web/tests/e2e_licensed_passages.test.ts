@@ -17,6 +17,7 @@ const PLUGIN = {
     permissions: [
       { id: "ui.panel", reason: "panel" },
       { id: "library.write", categories: ["scriptures"], reason: "stores the passage" },
+      { id: "network.outbound", hosts: ["stub.invalid"], headers: ["X-Stub-Key"], reason: "declares one header" },
       { id: "commands.send", commands: ["AddToSchedule", "ResolveLicensed"], optional: true, reason: "schedule" },
     ],
     ui: { placements: [{ slot: "library-source", tab: "scriptures", label: "Licensed stub" }] },
@@ -35,6 +36,7 @@ window.addPassage = async function (ttl, toSchedule) {
   return r;
 };
 window.refresh = function (ids, ttl) { return OS.call('library.refreshLicensed', { ids: ids, ttlSecs: ttl }); };
+window.tryFetch = function (h) { return OS.call('net.fetch', { url: 'https://stub.invalid/', headers: h }).then(function () { return 'ok'; }, function (e) { return String(e.message); }); };
 window.asked = [];
 // a schedule that names this plugin's passages was opened: look them up again
 OS.on('licensed', async function (d) {
@@ -109,6 +111,16 @@ describe("E2E: licensed passages are kept only as long as their publisher allows
     const lib: any[] = await (await fetch(`${base()}/api/scriptures`)).json();
     expect(lib.some((s) => s.id === stored.ids[0])).toBe(true);
   }, 60000);
+
+  test("a plugin sends only the extra headers its manifest declared (and approved)", async () => {
+    const frame = frameOf();
+    const declared: string = await frame.evaluate(() => (window as any).tryFetch({ "X-Stub-Key": "v" }));
+    expect(declared, "a declared header passes the header check (the host then fails to reach the made-up host)").not.toContain("can't be set");
+    const other: string = await frame.evaluate(() => (window as any).tryFetch({ "X-Other": "v" }));
+    expect(other).toContain("can't be set");
+    const routing: string = await frame.evaluate(() => (window as any).tryFetch({ "Host": "evil.test" }));
+    expect(routing).toContain("can't be set");
+  });
 
   test("a plugin can only renew what it stored, and the text is untouched", async () => {
     const frame = frameOf();

@@ -53,6 +53,10 @@ pub struct PermissionRequest {
     pub keys: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hosts: Vec<String>,
+    /// `network.outbound`: extra request headers the plugin may send to its hosts (an API key's header, say),
+    /// beyond `authorization`, `accept` and `accept-language`. Shown on the review screen; see `valid_extra_header`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -128,6 +132,11 @@ impl PermissionSet {
         self.0.iter().filter(|p| p.id == "network.outbound").flat_map(|p| p.hosts.clone()).collect()
     }
 
+    /// The extra request headers granted to `net.fetch` (`network.outbound`), lowercased, across every entry.
+    pub fn outbound_headers(&self) -> Vec<String> {
+        self.0.iter().filter(|p| p.id == "network.outbound").flat_map(|p| p.headers.iter().map(|h| h.to_ascii_lowercase())).collect()
+    }
+
     /// Keeps only what `grant` also allows, narrowing parameter lists. A token's scopes are
     /// intersected with the plugin's *current* grant on every use, so shrinking or revoking the
     /// grant takes effect on tokens already in circulation.
@@ -168,6 +177,8 @@ impl PermissionSet {
                     if p.hosts.is_empty() {
                         continue;
                     }
+                    // Never more headers than the grant lists (compared without regard to case).
+                    p.headers = want.headers.iter().filter(|h| have.headers.iter().any(|g| g.eq_ignore_ascii_case(h))).cloned().collect();
                 }
                 "library.write" => {
                     p.categories = narrow(&want.categories, &have.categories);
@@ -207,8 +218,8 @@ impl PermissionSet {
 /// whose scope (categories, commands, keys, hosts, paths, ports) differs (`changed`).
 pub fn permission_diff(a: &[PermissionRequest], b: &[PermissionRequest]) -> serde_json::Value {
     let same_scope = |x: &PermissionRequest, y: &PermissionRequest| {
-        (&x.categories, &x.commands, &x.keys, &x.hosts, &x.paths, &x.ports, &x.services, &x.access)
-            == (&y.categories, &y.commands, &y.keys, &y.hosts, &y.paths, &y.ports, &y.services, &y.access)
+        (&x.categories, &x.commands, &x.keys, &x.hosts, &x.headers, &x.paths, &x.ports, &x.services, &x.access)
+            == (&y.categories, &y.commands, &y.keys, &y.hosts, &y.headers, &y.paths, &y.ports, &y.services, &y.access)
     };
     let added: Vec<&String> = b.iter().filter(|g| !a.iter().any(|r| r.id == g.id)).map(|g| &g.id).collect();
     let removed: Vec<&String> = a.iter().filter(|r| !b.iter().any(|g| g.id == r.id)).map(|r| &r.id).collect();
@@ -259,6 +270,52 @@ impl Access {
             _ => None,
         }
     }
+}
+
+/// Request headers every plugin with `network.outbound` may send without declaring them.
+pub const BASE_HEADERS: [&str; 3] = ["authorization", "accept", "accept-language"];
+
+/// Headers no plugin may ever send, declared or not: they change where or how a request is routed, carry
+/// the browser's or the app's own credentials, or frame the message (`Host`, `Cookie`, `Proxy-*`,
+/// `X-Forwarded-*`, the app's `x-*-token`s, `Content-Length`, ...). Compared in lowercase.
+pub fn is_forbidden_header(lower: &str) -> bool {
+    const EXACT: [&str; 26] = [
+        "host", "cookie", "set-cookie", "origin", "referer", "user-agent", "connection", "keep-alive", "content-length",
+        "content-type", "content-encoding", "accept-encoding", "transfer-encoding", "upgrade", "te", "trailer", "expect", "via",
+        "forwarded", "x-real-ip", "x-host-token", "x-plugin-token", "x-device-token", "x-console-session-id", "range", "dnt",
+    ];
+    EXACT.contains(&lower) || ["proxy-", "x-forwarded-", "sec-", "if-", "x-http-method"].iter().any(|pre| lower.starts_with(pre))
+}
+
+/// A header a plugin may declare under `network.outbound.headers`: a plain header name (letters, digits and
+/// `-`), not one of the routing, credential or framing headers above, and not one it already has.
+pub fn valid_extra_header(h: &str) -> Result<(), String> {
+    if h.is_empty() || h.len() > 64 || !h.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') || h.starts_with('-') {
+        return Err(format!("'{h}' isn't a plain header name (letters, digits and - only)"));
+    }
+    let lower = h.to_ascii_lowercase();
+    if BASE_HEADERS.contains(&lower.as_str()) {
+        return Err(format!("'{h}' is always allowed; it needn't be declared"));
+    }
+    if is_forbidden_header(&lower) {
+        return Err(format!("the '{h}' header can never be set by a plugin"));
+    }
+    Ok(())
+}
+
+/// The `headers` list of a `network.outbound` entry: at most 8, each valid, none twice.
+pub fn validate_headers_list(headers: &[String]) -> Result<(), String> {
+    if headers.len() > 8 {
+        return Err("'network.outbound' may declare at most 8 headers".to_string());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for h in headers {
+        valid_extra_header(h)?;
+        if !seen.insert(h.to_ascii_lowercase()) {
+            return Err(format!("the '{h}' header is listed twice"));
+        }
+    }
+    Ok(())
 }
 
 /// A granted-host entry: `example.com`, `*.example.com` or either with `:port`.
@@ -336,6 +393,12 @@ pub fn validate_grant(p: &PermissionRequest, kind: &str) -> Result<(), String> {
     }
     if let Some(h) = p.hosts.iter().find(|h| !valid_host_entry(h)) {
         return Err(format!("'{}': '{h}' isn't a valid host (use example.com, *.example.com, optionally :port)", p.id));
+    }
+    if !p.headers.is_empty() {
+        if p.id != "network.outbound" {
+            return Err(format!("'{}' doesn't take a headers list", p.id));
+        }
+        validate_headers_list(&p.headers).map_err(|e| format!("'{}': {e}", p.id))?;
     }
     Ok(())
 }
@@ -742,6 +805,13 @@ impl PluginManifest {
             if p.id == "commands.send" && p.commands.is_empty() {
                 return bad("'commands.send' needs a commands list".to_string());
             }
+            if p.id == "network.outbound" {
+                if let Err(e) = validate_headers_list(&p.headers) {
+                    return bad(format!("'network.outbound': {e}"));
+                }
+            } else if !p.headers.is_empty() {
+                return bad(format!("'{}' doesn't take a headers list", p.id));
+            }
             if p.id == "process.run" {
                 if p.commands.is_empty() {
                     return bad("'process.run' needs a commands list".to_string());
@@ -952,6 +1022,61 @@ mod tests {
         let m = manifest(GOOD).unwrap();
         assert_eq!(m.permissions.len(), 3);
         assert_eq!(m.permissions[1].tier(), Tier::Medium); // navigation-only
+    }
+
+    fn with_net(extra: &str) -> String {
+        GOOD.replace(
+            r#"{"id": "show.observe", "reason": "follow blackout"}"#,
+            &format!(r#"{{"id": "network.outbound", "hosts": ["api.example.org"]{extra}}}"#),
+        )
+    }
+
+    #[test]
+    fn a_plugin_may_declare_the_extra_headers_it_needs() {
+        let m = manifest(&with_net(r#", "headers": ["X-API-Key", "x-yvp-app-key"]"#)).unwrap();
+        let net = m.permissions.iter().find(|p| p.id == "network.outbound").unwrap();
+        assert_eq!(net.headers, ["X-API-Key", "x-yvp-app-key"]);
+        assert_eq!(PermissionSet(m.permissions.clone()).outbound_headers(), ["x-api-key", "x-yvp-app-key"]);
+        // Nothing declared is the same as before.
+        assert!(manifest(&with_net("")).unwrap().permissions[0].headers.is_empty());
+    }
+
+    #[test]
+    fn declared_headers_are_held_to_the_rules() {
+        for bad in [
+            r#", "headers": ["Host"]"#, r#", "headers": ["Cookie"]"#, r#", "headers": ["Proxy-Authorization"]"#,
+            r#", "headers": ["X-Forwarded-For"]"#, r#", "headers": ["X-Host-Token"]"#, r#", "headers": ["User-Agent"]"#,
+            r#", "headers": ["Content-Length"]"#, r#", "headers": ["Sec-Fetch-Site"]"#,
+            r#", "headers": ["authorization"]"#,                        // always allowed: no need to declare
+            r#", "headers": ["X-Key", "x-key"]"#,                       // twice
+            r#", "headers": ["X Key"]"#, r#", "headers": ["X-Key\r\nHost"]"#, r#", "headers": [""]"#, r#", "headers": ["-X"]"#,
+            r#", "headers": ["h1","h2","h3","h4","h5","h6","h7","h8","h9"]"#,
+        ] {
+            assert!(manifest(&with_net(bad)).is_err(), "{bad} should be refused");
+        }
+        // Only network.outbound takes a header list.
+        assert!(manifest(&GOOD.replace(r#""categories": ["songs"]"#, r#""categories": ["songs"], "headers": ["X-Key"]"#)).is_err());
+    }
+
+    #[test]
+    fn headers_narrow_with_the_grant_and_changes_show_in_the_diff() {
+        let ask = |headers: &[&str]| PermissionRequest {
+            id: "network.outbound".into(), hosts: vec!["api.example.org".into()], headers: headers.iter().map(|h| h.to_string()).collect(), ..Default::default()
+        };
+        let granted = PermissionSet(vec![ask(&["X-Key"])]);
+        // A token can't ask for more than was approved, and case doesn't matter.
+        let wide = PermissionSet(vec![ask(&["x-key", "X-Other"])]).narrowed_by(&granted);
+        assert_eq!(wide.outbound_headers(), ["x-key"]);
+        assert!(PermissionSet(vec![ask(&["X-Other"])]).narrowed_by(&granted).outbound_headers().is_empty());
+        // Adding a header is a change the operator has to review again.
+        let changed = permission_diff(&[ask(&["X-Key"])], &[ask(&["X-Key", "X-Other"])]);
+        assert_eq!(changed["changed"], serde_json::json!(["network.outbound"]));
+        // The operator's Advanced override is checked the same way.
+        assert!(validate_grant(&ask(&["X-Key"]), "sandbox").is_ok());
+        assert!(validate_grant(&ask(&["Cookie"]), "sandbox").is_err());
+        let mut other = PermissionRequest::simple("keyring.own");
+        other.headers = vec!["X-Key".into()];
+        assert!(validate_grant(&other, "sandbox").is_err());
     }
 
     #[test]

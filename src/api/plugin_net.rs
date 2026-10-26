@@ -107,21 +107,27 @@ async fn resolve_public(host: &str, port: u16) -> Result<SocketAddr, String> {
         .ok_or_else(|| format!("{host} doesn't resolve to a public address"))
 }
 
-/// Request headers a plugin may add: enough for an API key and a content preference, nothing that
-/// could change where or how the request is routed (no Host, Cookie, Proxy-*, ...). `x-yvp-app-key`
-/// is the YouVersion Platform's API-key header; it only ever reaches the hosts the plugin was granted.
-const ALLOWED_HEADERS: [&str; 4] = ["authorization", "accept", "accept-language", "x-yvp-app-key"];
+/// Request headers every plugin may add: enough for an API key and a content preference. Anything else
+/// must be declared under `network.outbound.headers` in its manifest, approved by the operator, and clear
+/// `plugin_permissions::valid_extra_header` (nothing that could change where or how the request is routed:
+/// no Host, Cookie, Proxy-*, ...).
+use crate::core::plugin_permissions::BASE_HEADERS as ALLOWED_HEADERS;
 
-/// Validates a plugin's header map into `(name, value)` pairs.
-pub fn clean_headers(headers: &serde_json::Map<String, serde_json::Value>) -> Result<Vec<(String, String)>, String> {
-    if headers.len() > 4 {
-        return Err("too many headers".to_string());
-    }
+/// Validates a plugin's header map into `(name, value)` pairs. `declared` are the extra headers its grant
+/// lists (lowercase).
+pub fn clean_headers(headers: &serde_json::Map<String, serde_json::Value>, declared: &[String]) -> Result<Vec<(String, String)>, String> {
     let mut out = Vec::new();
     for (name, value) in headers {
         let lower = name.to_ascii_lowercase();
-        if !ALLOWED_HEADERS.contains(&lower.as_str()) {
-            return Err(format!("the '{name}' header can't be set (allowed: {})", ALLOWED_HEADERS.join(", ")));
+        // Declared headers were checked when approved; the never-allowed list is checked again here.
+        if crate::core::plugin_permissions::is_forbidden_header(&lower)
+            || (!ALLOWED_HEADERS.contains(&lower.as_str()) && !declared.iter().any(|d| *d == lower))
+        {
+            return Err(format!(
+                "the '{name}' header can't be set (allowed: {}{})",
+                ALLOWED_HEADERS.join(", "),
+                if declared.is_empty() { String::new() } else { format!(", and this plugin's declared: {}", declared.join(", ")) }
+            ));
         }
         let v = value.as_str().ok_or("header values must be strings")?;
         if v.len() > 2048 || v.chars().any(|c| c.is_control()) {
@@ -279,9 +285,16 @@ mod tests {
     }
 
     #[test]
-    fn plugins_may_only_set_a_few_headers() {
-        let ok = serde_json::json!({ "Authorization": "key123", "Accept": "application/json", "X-YVP-App-Key": "k" });
-        assert_eq!(clean_headers(ok.as_object().unwrap()).unwrap().len(), 3);
+    fn plugins_may_only_set_a_few_headers_unless_they_declare_more() {
+        let ok = serde_json::json!({ "Authorization": "key123", "Accept": "application/json" });
+        assert_eq!(clean_headers(ok.as_object().unwrap(), &[]).unwrap().len(), 2);
+        // An API-key header is refused until the plugin's grant lists it...
+        let key = serde_json::json!({ "X-YVP-App-Key": "k" });
+        assert!(clean_headers(key.as_object().unwrap(), &[]).is_err());
+        let declared = vec!["x-yvp-app-key".to_string()];
+        assert_eq!(clean_headers(key.as_object().unwrap(), &declared).unwrap(), vec![("x-yvp-app-key".to_string(), "k".to_string())]);
+        // ...and a different one is still refused.
+        assert!(clean_headers(serde_json::json!({ "X-Other": "k" }).as_object().unwrap(), &declared).is_err());
         for bad in [
             serde_json::json!({ "Host": "evil.test" }),
             serde_json::json!({ "Cookie": "a=b" }),
@@ -289,8 +302,11 @@ mod tests {
             serde_json::json!({ "Authorization": "a\r\nHost: x" }),
             serde_json::json!({ "Authorization": 5 }),
         ] {
-            assert!(clean_headers(bad.as_object().unwrap()).is_err(), "{bad}");
+            assert!(clean_headers(bad.as_object().unwrap(), &declared).is_err(), "{bad}");
         }
+        // Even a declared header can't be a routing one (the grant is checked when approved; this is the second lock).
+        let sneaky = vec!["host".to_string()];
+        assert!(clean_headers(serde_json::json!({ "Host": "x" }).as_object().unwrap(), &sneaky).is_err());
     }
 
     #[test]

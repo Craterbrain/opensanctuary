@@ -47,6 +47,7 @@ function paramsText(p: PluginPermissionInfo): string {
   if (p.commands?.length) parts.push(p.commands.join(', '));
   if (p.keys?.length) parts.push(p.keys.join(', '));
   if (p.hosts?.length) parts.push(p.hosts.join(', '));
+  if (p.headers?.length) parts.push(`sends ${p.headers.join(', ')}`);
   if (p.paths?.length) parts.push(p.paths.join(', '));
   if (p.ports?.length) parts.push(p.ports.join(', '));
   if (p.services?.length) parts.push(`${p.services.join(', ')} (${p.access ?? 'read'})`);

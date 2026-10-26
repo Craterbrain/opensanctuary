@@ -48,7 +48,7 @@ Every permission is denied unless granted. A permission is an `id` plus optional
 | `commands.send` | `commands[]`: ShowCommand variant names, or `"*"` | Medium if every listed variant is navigation (`NextSlide`, `PrevSlide`, `NextItem`, `PrevItem`, `JumpSlide`, `JumpSection`, `GoLive`, `StageItem`); otherwise High; `"*"` is High | **E** | `host.send_command()`, `/api/command` and `/ws` with a plugin credential. |
 | `keyring.own` | — | Medium | **E** | The `OpenSanctuary:Plugin:<id>` namespace only. |
 | `keyring.service` | `services[]` (`OpenSanctuary:Shared:<name>`), `access` (`read`\|`write`) | Critical | **E** | Shared keyring namespaces; owner rules in PLUGINS.md. Only the `Shared:` prefix is grantable, never System, another plugin's namespace or a host service. |
-| `network.outbound` | `hosts[]` | Medium | **E** (iframe CSP) | |
+| `network.outbound` | `hosts[]`, optional `headers[]` (extra request headers for `net.fetch`; see PLUGINS.md "Extra request headers") | Medium | **E** (iframe CSP, host fetch) | The server fetches only from these hosts, sending `Authorization`/`Accept`/`Accept-Language` and the declared headers. A header that routes or authenticates the request itself (`Host`, `Cookie`, `Proxy-*`, the app's own tokens...) can never be declared. |
 | `process.run` | `commands[]` (ids of commands declared in the manifest) | Critical | **E** | Sandboxed plugins only: the host runs exactly the manifest's declared command templates, no shell, throwaway job folders, with host-managed signed tools. See PLUGINS.md. |
 | `ui.panel` | — | Medium | **E** (slots) | |
 | `ui.toolbar` | — | Medium | **E** (sandboxed web plugins) | Up to 2 ribbon buttons declared in `ui.toolbar`; see PLUGINS.md |

@@ -179,7 +179,7 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   It asks for the two search APIs and their image hosts (`api.pexels.com`, `images.pexels.com`,
   `pixabay.com`, `cdn.pixabay.com`), `library.write` on media, and optionally `notifications.post`.
   Three host features exist for it, available to any plugin with the matching grant:
-  `net.fetch` replies with `cacheSecs` as well (how long the publisher lets the response be kept); it takes optional `headers` (only `Authorization`, `Accept`, `Accept-Language`, `X-YVP-App-Key`; Pexels
+  `net.fetch` replies with `cacheSecs` as well (how long the publisher lets the response be kept); it takes optional `headers` (`Authorization`, `Accept` and `Accept-Language` always; any other header must be declared in the manifest, see "Extra request headers" below; Pexels
   wants its key in `Authorization`, YouVersion in `X-YVP-App-Key`); `library.addMediaUrl { url, title, id? }` has the *host*
   download a picture or video from a granted host (https, public addresses, 64 MB cap) into the
   Media library, with the file type taken from the downloaded bytes and the name chosen by the
@@ -382,3 +382,19 @@ Use a sandboxed plugin unless you genuinely need to reach into the console's own
 A plugin that serves text which may be shown but not kept (YouVersion's NIV, NASB...) marks what it stores with a `licensed` block;
 the host then seals, expires and strips it from saved and exported files, and can ask the plugin to look it up again when a schedule
 naming it is opened. How it works, the license terms behind it and the plugin API: [LICENSED_SCRIPTURE.md](LICENSED_SCRIPTURE.md).
+
+## Extra request headers
+
+`net.fetch` lets every plugin send `Authorization`, `Accept` and `Accept-Language`. A service that wants its key in another header
+(YouVersion's `X-YVP-App-Key`) is declared in the manifest, next to the hosts:
+
+```json
+{ "id": "network.outbound", "hosts": ["api.youversion.com"], "headers": ["X-YVP-App-Key"], "reason": "..." }
+```
+
+* The operator sees it on the review screen ("sends X-YVP-App-Key") and approves it with the rest; adding a header later is a change that
+  needs review again. The plugin's token carries only the approved headers, and only to the hosts it was granted.
+* At most 8, plain names (letters, digits, `-`). Never allowed, declared or not: `Host`, `Cookie`, `Set-Cookie`, `Origin`, `Referer`,
+  `User-Agent`, `Connection`, `Content-*`, `Accept-Encoding`, `Transfer-Encoding`, `Upgrade`, `TE`, `Via`, `Forwarded`, `Range`, `Proxy-*`,
+  `X-Forwarded-*`, `X-Real-IP`, `Sec-*`, `If-*`, and the app's own `X-Host-Token`, `X-Plugin-Token`, `X-Device-Token`, `X-Console-Session-Id`.
+  Header values are limited to 2048 bytes with no control characters.

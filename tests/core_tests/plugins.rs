@@ -655,6 +655,18 @@ async fn test_plugin_host_fetch_and_add_song_for_the_genius_plugin() {
             .json(&serde_json::json!({ "url": url })).send().await.unwrap();
         assert_eq!(r.status(), reqwest::StatusCode::FORBIDDEN, "{url}");
     }
+    // Headers: this plugin declares none, so a token can't even be minted for an API-key header, an undeclared
+    // header is refused at fetch time, and routing headers never pass.
+    assert_eq!(
+        mint(serde_json::json!([{ "id": "network.outbound", "hosts": ["genius.com"], "headers": ["X-Key"] }])).await.status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    for hdr in ["X-Key", "Cookie", "X-Host-Token"] {
+        let r = c.post(format!("{base}/api/plugin-host/fetch")).header("x-plugin-token", &token)
+            .json(&serde_json::json!({ "url": "https://genius.com/", "headers": { hdr: "v" } })).send().await.unwrap();
+        assert_eq!(r.status(), reqwest::StatusCode::BAD_REQUEST, "{hdr}");
+        assert!(r.text().await.unwrap().contains("can't be set"), "{hdr}");
+    }
     // A granted *name* that resolves to a loopback address is still refused (DNS can't be a way in).
     let err = os_next::api::plugin_net::fetch(&["localhost:9".to_string()], "https://localhost:9/", &[]).await.err().unwrap();
     assert!(err.contains("public address"), "{err}");
