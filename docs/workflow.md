@@ -191,7 +191,7 @@ committed under `testdata/` so CI runs those tests too:
 |---|---|---|
 | `test1.ews` | **committed**: `testdata/ews/` | A genuine EasyWorship 5 schedule; one public-domain hymn. |
 | `shape-test.odp` | **committed**: `testdata/odp/` | Hand-made in LibreOffice's shape gallery; shapes only, no text or author. |
-| `LCspring.ewpx` | folder only (`$OS_TEST_DOCS`) | A real church's announcements deck (event and volunteer slides, an image named after a person) -- not published in this public repo. `test_lcspring_ewpx_presentation_bullets_and_transforms`, the LCspring part of `test_ewsx_schedule_roundtrip` and `e2e_unified_schedule_hub` use it and skip without it. |
+| `LCspring.ewpx` | folder only (`$OS_TEST_DOCS`) | A real church's announcements deck (event and volunteer slides, an image named after a person) -- not published in this public repo. `test_lcspring_ewpx_presentation_bullets_and_transforms`, the `ewpx_import` tests, the LCspring part of `test_ewsx_schedule_roundtrip` and `e2e_unified_schedule_hub` use it and skip without it. |
 | `test1.ewsx` | folder only | This app's own export (it carries our `manifest.json`), so it adds nothing a generated export doesn't: `test_ewsx_export_reimports_through_easyworships_own_files_not_just_our_manifest` builds one. Used by `e2e_unified_schedule_hub`. |
 
 Rust tests find folder-only files with `test_doc(name)` (`tests/core_tests/main.rs`). Before

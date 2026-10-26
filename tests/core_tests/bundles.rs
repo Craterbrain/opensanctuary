@@ -23,6 +23,10 @@ impl Server {
     pub(super) fn url(&self, path: &str) -> String {
         format!("http://{}{}", self.addr, path)
     }
+
+    pub(super) fn media_dir(&self) -> &std::path::Path {
+        &self.media
+    }
 }
 
 pub(super) async fn start() -> Server {

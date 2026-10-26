@@ -771,6 +771,15 @@
             </div>
 
             <div class="store-card">
+              <h4>📋 EasyWorship Presentations</h4>
+              <p>Add an EasyWorship presentation (<code>.ewpx</code>), such as an announcement deck, to the Presentations library to reuse every week. A package does not carry its pictures, so a slide whose background picture isn't in this library uses the theme's background instead:</p>
+              <label for="ewpx-theme">Theme for this deck</label>
+              <select id="ewpx-theme"><option value="">Default presentation theme</option></select>
+              <input type="file" id="file-ewpx-import" accept=".ewpx">
+              <div id="ewpx-import-status" class="store-card-status" style="display: none;"></div>
+            </div>
+
+            <div class="store-card">
               <h4>🔄 OpenLP Library Migration</h4>
               <p>Import songs (<code>songs.sqlite</code>) or Bibles (<code>*.sqlite</code>) from OpenLP:</p>
               <div class="form-row store-card-row">

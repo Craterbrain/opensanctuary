@@ -45,8 +45,12 @@ pub(crate) fn apply_default_theme_if_unset(item: &mut crate::core::models::Sched
     if let Ok(Some(theme)) = db.get_default_theme_for_category(category) {
         item.theme_name = Some(theme.name);
         item.background = Some(theme.background);
-        for slide in item.slides.iter_mut() {
-            slide.background = None;
+        // A song's or scripture's slides follow the theme; a presentation's slides keep their own pictures
+        // (an imported deck, a logo slide) and the theme only shows where a slide has no background.
+        if category != "presentation" {
+            for slide in item.slides.iter_mut() {
+                slide.background = None;
+            }
         }
     }
 }

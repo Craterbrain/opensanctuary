@@ -19,6 +19,7 @@ use os_next::storage::pptx_import::PptxImporter;
 mod bible_import;
 mod bundles;
 mod engine;
+mod ewpx_import;
 mod importers;
 mod licensed;
 mod network;

@@ -2394,6 +2394,60 @@ on('file-odp-import', 'change', async (e: Event) => {
   }
 });
 
+// EasyWorship presentation (.ewpx) Import
+const fillEwpxThemes = async () => {
+  const select = document.getElementById('ewpx-theme') as HTMLSelectElement | null;
+  if (!select || select.dataset.loaded === '1') return;
+  try {
+    const themes = (await api.themes.list()).filter((t: any) => t.category === 'presentation');
+    for (const t of themes) {
+      const o = document.createElement('option');
+      o.value = t.name;
+      o.textContent = t.name;
+      select.appendChild(o);
+    }
+    select.dataset.loaded = '1';
+  } catch { /* the default theme is still offered */ }
+};
+on('ewpx-theme', 'focus', fillEwpxThemes);
+on('ewpx-theme', 'mousedown', fillEwpxThemes);
+on('file-ewpx-import', 'change', async (e: Event) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  const statusEl = document.getElementById('ewpx-import-status');
+  const show = (text: string, color: string) => {
+    if (!statusEl) return;
+    statusEl.style.display = 'block';
+    statusEl.style.color = color;
+    statusEl.textContent = text;
+  };
+  show(`Reading ${file.name}...`, 'var(--text-dim)');
+  try {
+    const b64 = await fileToBase64(file);
+    const theme = (document.getElementById('ewpx-theme') as HTMLSelectElement | null)?.value || undefined;
+    const res = await fetch('/api/import/ewpx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_name: file.name, file_data_base64: b64, theme_name: theme })
+    });
+    const data = await res.json().catch(() => ({} as any));
+    if (res.ok && data.success) {
+      show(`✓ ${data.message}`, 'var(--os-success-text)');
+      showToast(`✓ ${data.message}`, 'success');
+      loadLibraryTab('presentations');
+    } else {
+      const msg = data.message || `HTTP ${res.status}`;
+      show(`Import error: ${msg}`, 'var(--os-danger-text)');
+      showToast(`EasyWorship presentation import error: ${msg}`, 'error');
+    }
+  } catch (err: any) {
+    show(`Error: ${err.message}`, 'var(--os-danger-text)');
+    showToast(`EasyWorship presentation import failed: ${err.message}`, 'error');
+  } finally {
+    (e.target as HTMLInputElement).value = '';
+  }
+});
+
 // OpenLP Auto-Detect Local DB
 on('btn-openlp-autodetect', 'click', async () => {
   const statusEl = document.getElementById('openlp-import-status');

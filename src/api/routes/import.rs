@@ -316,6 +316,157 @@ pub(super) async fn import_odp(
     }
 }
 
+#[derive(Deserialize)]
+pub struct EwpxImportReq {
+    pub file_name: Option<String>,
+    pub file_data_base64: String,
+    /// A presentation theme for the imported deck; its background shows on every slide that has no picture of its own.
+    #[serde(default)]
+    pub theme_name: Option<String>,
+}
+
+/// The first `#rrggbb` in a CSS background (a solid colour, or the first stop of a gradient), as 0.0 (black) to 1.0 (white).
+fn background_lightness(css: &str) -> Option<f64> {
+    let i = css.find('#')?;
+    let hex: String = css[i + 1..].chars().take_while(char::is_ascii_hexdigit).collect();
+    let hex = match hex.len() {
+        3 => hex.chars().flat_map(|c| [c, c]).collect::<String>(),
+        6 | 8 => hex[..6].to_string(),
+        _ => return None,
+    };
+    let c = |k: usize| u8::from_str_radix(&hex[k..k + 2], 16).map(f64::from);
+    Some((0.2126 * c(0).ok()? + 0.7152 * c(2).ok()? + 0.0722 * c(4).ok()?) / 255.0)
+}
+
+/// The share (0.0 to 1.0) of a deck's text, by characters, that is light (a run with no readable colour counts as dark), or `None`
+/// if the deck has no text.
+fn light_text_share(slides: &[crate::core::models::Slide]) -> Option<f64> {
+    use crate::core::models::SlideElement;
+    let (mut light, mut total) = (0usize, 0usize);
+    for run in slides
+        .iter()
+        .flat_map(|s| s.elements.iter())
+        .filter_map(|e| if let SlideElement::TextBlock { block, .. } = e { Some(block) } else { None })
+        .flat_map(|b| b.runs.iter())
+    {
+        let n = run.text.chars().filter(|c| !c.is_whitespace()).count();
+        total += n;
+        if background_lightness(&run.color).is_some_and(|l| l > 0.5) {
+            light += n;
+        }
+    }
+    (total > 0).then(|| light as f64 / total as f64)
+}
+
+/// The theme to give a deck whose own pictures are missing. The default presentation theme is a light page, which would hide a deck
+/// written with light text, so for such a deck the first dark presentation theme is used instead.
+fn theme_for_deck(app: &AppState, slides: &[crate::core::models::Slide]) -> Option<String> {
+    let default = app.db.get_default_theme_for_category("presentation").ok().flatten();
+    let light_deck = light_text_share(slides).is_some_and(|share| share > 0.5);
+    let default_is_light = default.as_ref().and_then(|t| background_lightness(&t.background)).is_none_or(|l| l > 0.5);
+    if light_deck && default_is_light {
+        let themes = app.db.get_themes().unwrap_or_default();
+        if let Some(t) = themes.iter().find(|t| t.category == "presentation" && background_lightness(&t.background).is_some_and(|l| l < 0.35)) {
+            return Some(t.name.clone());
+        }
+    }
+    None
+}
+
+/// Clears the picture or video background of every slide whose file isn't in the library (an EasyWorship package does not carry
+/// its media), so the deck's theme background shows there instead of nothing. Returns how many slides it changed.
+fn clear_missing_backgrounds(slides: &mut [crate::core::models::Slide], media_dir: &std::path::Path) -> usize {
+    use crate::core::models::SlideBackground;
+    let videos = media_dir.parent().map(|p| p.join("videos"));
+    let present = |file: &str| -> bool {
+        let name = file.rsplit(['/', '\\']).next().unwrap_or(file);
+        !name.is_empty() && (media_dir.join(name).is_file() || videos.as_ref().is_some_and(|v| v.join(name).is_file()) || std::path::Path::new(file).is_absolute() && std::path::Path::new(file).is_file())
+    };
+    let mut cleared = 0;
+    for slide in slides.iter_mut() {
+        let file = match &slide.background_v2 {
+            Some(SlideBackground::Image { file_path, .. }) | Some(SlideBackground::Video { file_path, .. }) => Some(file_path.clone()),
+            Some(_) => None,
+            None => slide.background.clone().filter(|b| !b.trim().is_empty() && !b.starts_with('#') && !b.starts_with("rgb") && !b.contains("gradient")),
+        };
+        if file.is_some_and(|f| !present(&f)) {
+            slide.background = None;
+            slide.background_v2 = None;
+            cleared += 1;
+        }
+    }
+    cleared
+}
+
+/// Import an EasyWorship presentation package (`.ewpx`) into the Presentations library. A package holds no pictures, so a slide whose
+/// background picture isn't in the library gets the deck's theme background (the chosen theme, or the default presentation theme).
+pub(super) async fn import_ewpx(
+    State(app): State<AppState>,
+    Json(req): Json<EwpxImportReq>,
+) -> impl IntoResponse {
+    use base64::Engine;
+    let fail = |code: StatusCode, msg: String| (code, Json(serde_json::json!({ "success": false, "message": msg })));
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(req.file_data_base64.trim()) {
+        Ok(b) => b,
+        Err(e) => return fail(StatusCode::BAD_REQUEST, format!("Invalid base64: {}", e)),
+    };
+    let stem = req.file_name.as_deref()
+        .and_then(|f| std::path::Path::new(f).file_stem().and_then(|s| s.to_str()))
+        .unwrap_or("Imported Presentation")
+        .to_string();
+    let theme = req.theme_name.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+    if let Some(t) = &theme {
+        if !app.db.get_themes().map(|all| all.iter().any(|x| &x.name == t)).unwrap_or(false) {
+            return fail(StatusCode::BAD_REQUEST, format!("There is no theme called '{t}'."));
+        }
+    }
+    let media_dir = app.media_dir.join("images");
+    let schedule = match crate::storage::EwsxManager::load_schedule_from_bytes_with_media_dir(&bytes, &stem, &media_dir) {
+        Ok(s) => s,
+        Err(e) => return fail(StatusCode::BAD_REQUEST, format!("Error reading .ewpx: {e}")),
+    };
+    let existing: Vec<String> = app.db.get_presentations().map(|p| p.into_iter().map(|x| x.title).collect()).unwrap_or_default();
+    let (mut imported, mut slides_total, mut cleared_total) = (Vec::new(), 0usize, 0usize);
+    for item in schedule.items.into_iter().filter(|i| i.item_type == "presentation" && !i.slides.is_empty()) {
+        let mut slides = item.slides;
+        let cleared = clear_missing_backgrounds(&mut slides, &media_dir);
+        cleared_total += cleared;
+        let base = if item.title.trim().is_empty() { stem.clone() } else { item.title.trim().to_string() };
+        let mut title = base.clone();
+        let mut n = 2;
+        while existing.contains(&title) || imported.iter().any(|(t, _): &(String, String)| *t == title) {
+            title = format!("{base} {n}");
+            n += 1;
+        }
+        let deck_theme = theme.clone().or(item.theme_name).or_else(|| if cleared > 0 { theme_for_deck(&app, &slides) } else { None });
+        let pres = Presentation {
+            id: format!("pres_{}", uuid::Uuid::new_v4().simple()),
+            title: title.clone(),
+            author: item.author_or_ref,
+            slides,
+            theme_name: deck_theme,
+        };
+        slides_total += pres.slides.len();
+        if let Err(e) = app.db.insert_presentation(&pres) {
+            return fail(StatusCode::INTERNAL_SERVER_ERROR, format!("Database error saving presentation: {e}"));
+        }
+        imported.push((title, pres.id));
+    }
+    if imported.is_empty() {
+        return fail(StatusCode::BAD_REQUEST, "That package has no presentation slides in it.".to_string());
+    }
+    let names = imported.iter().map(|(t, _)| format!("'{t}'")).collect::<Vec<_>>().join(", ");
+    let bg = if cleared_total > 0 { format!(" {cleared_total} slide(s) pointed at a picture that is not in this library, so they use the theme background instead.") } else { String::new() };
+    (StatusCode::OK, Json(serde_json::json!({
+        "success": true,
+        "id": imported[0].1,
+        "title": imported[0].0,
+        "slide_count": slides_total,
+        "backgrounds_replaced": cleared_total,
+        "message": format!("Imported {names} ({slides_total} slides) from EasyWorship.{bg}")
+    })))
+}
+
 #[derive(Deserialize, Default)]
 pub struct FreeShowShowImportReq {
     pub file_data_base64: String,
@@ -492,5 +643,43 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/import/openlp", post(import_openlp))
         .route("/api/import/pptx", post(import_pptx))
         .route("/api/import/odp", post(import_odp))
+        .route("/api/import/ewpx", post(import_ewpx))
         .route("/api/import/freeshow-show", post(import_freeshow_show))
+}
+
+#[cfg(test)]
+mod ewpx_tests {
+    use super::*;
+
+    #[test]
+    fn lightness_reads_hex_colours_and_the_first_gradient_stop() {
+        assert!(background_lightness("#ffffff").unwrap() > 0.999);
+        assert_eq!(background_lightness("#000"), Some(0.0));
+        assert!(background_lightness("#ffff99").unwrap() > 0.5 && background_lightness("#ff0000").unwrap() < 0.5);
+        assert!(background_lightness("linear-gradient(135deg, #0f2027, #203a43)").unwrap() < 0.2);
+        assert_eq!(background_lightness("red"), None);
+        assert_eq!(background_lightness("#12"), None);
+    }
+
+    #[test]
+    fn a_missing_picture_is_cleared_and_a_present_one_or_a_colour_is_kept() {
+        use crate::core::models::{Slide, SlideBackground};
+        let dir = tempfile::tempdir().unwrap();
+        let images = dir.path().join("images");
+        std::fs::create_dir_all(&images).unwrap();
+        std::fs::write(images.join("here.jpg"), b"x").unwrap();
+        let img = |name: &str| Slide { background: Some(name.into()), background_v2: Some(SlideBackground::Image { file_path: name.into(), opacity: 1.0 }), ..Default::default() };
+        let mut slides = vec![
+            img("gone.jpg"),
+            img("/media/images/here.jpg"),
+            img("C:\\Users\\x\\Pictures\\gone.jpg"),
+            Slide { background: Some("#112233".into()), background_v2: Some(SlideBackground::Solid("#112233".into())), ..Default::default() },
+            Slide::default(),
+        ];
+        assert_eq!(clear_missing_backgrounds(&mut slides, &images), 2);
+        assert!(slides[0].background.is_none() && slides[0].background_v2.is_none());
+        assert!(slides[1].background.is_some());
+        assert!(slides[2].background.is_none());
+        assert_eq!(slides[3].background.as_deref(), Some("#112233"));
+    }
 }

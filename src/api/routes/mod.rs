@@ -387,7 +387,7 @@ mod gate_tests {
         for p in [
             "/api/songs", "/api/scriptures", "/api/media", "/api/themes", "/api/themes/default",
             "/api/presentations", "/api/slide-templates", "/api/import/openlp", "/api/import/pptx",
-            "/api/import/freeshow-show",
+            "/api/import/freeshow-show", "/api/import/ewpx",
             "/api/displays/open", "/api/displays/close",
             "/api/displays/refresh", "/api/system/pick-folder", "/api/system/pick-file",
             "/api/network/tls/regenerate", "/api/network/interfaces", "/api/keyring/plugin/token",
