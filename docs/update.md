@@ -238,6 +238,13 @@ something at stake beyond a pre-1.0 beta's own installer.
 
 ## Download & apply (Windows) — built, interactively rather than silently
 
+_Works from the first release after 0.3.5. Earlier builds refused it: the installer's file name,
+`opensanctuary-setup-x64.exe`, has no version in it, and the updater only accepted assets whose signed
+name carried the release version, so a Windows install on 0.2.0–0.3.5 must download the installer by hand
+once._ The version is now bound another way: the signed `checksums.txt` must also list a file named for the
+release's `major.minor.patch` (the portable zip, the `.deb`), so an older signed manifest replayed under a
+newer tag is rejected (`manifest_binds_version` in `src/network/updater.rs`).
+
 `POST /api/updates/download-and-install` covers Windows too now, same as
 Linux: downloads the matching `opensanctuary-setup-x64.exe` asset, verifies
 it against `checksums.txt`/`checksums.txt.minisig` (refusing on any

@@ -332,6 +332,23 @@ fn asset_name_matches_version(asset_name: &str, version: &str, suffix: &str) -> 
     Ok(asset_name.contains(&core))
 }
 
+/// For an installer whose own file name carries no version (Windows `opensanctuary-setup-x64.exe`):
+/// true if the signed `checksums.txt` also lists some *other* file named for `version`'s
+/// `major.minor.patch` (the release's portable zip, for one). The manifest is signed as a whole, so
+/// a manifest replayed from an older release lists the older version's files and fails this.
+fn manifest_binds_version(checksums: &str, version: &str, asset_name: &str) -> bool {
+    let Ok(v) = semver::Version::parse(version.trim_start_matches('v')) else { return false };
+    let core = format!("{}.{}.{}", v.major, v.minor, v.patch);
+    checksums.lines().filter_map(|l| l.split_whitespace().nth(1)).map(|n| n.trim_start_matches('*')).any(|name| {
+        name != asset_name
+            && name.match_indices(&core).any(|(i, _)| {
+                let before = name[..i].chars().next_back();
+                let after = name[i + core.len()..].chars().next();
+                !before.is_some_and(|c| c.is_ascii_digit() || c == '.') && !after.is_some_and(|c| c.is_ascii_digit())
+            })
+    })
+}
+
 /// Downloads `release`'s installer asset plus `checksums.txt` and
 /// `checksums.txt.minisig` into a fresh temp directory, verifies the
 /// manifest's signature against `RELEASE_PUBLIC_KEY_B64` and the asset's
@@ -341,13 +358,10 @@ fn asset_name_matches_version(asset_name: &str, version: &str, suffix: &str) -> 
 /// signature failure, or hash mismatch returns `Err` and leaves nothing
 /// for a caller to install.
 ///
-/// Only ever actually invoked for a Linux `.deb` (or `.flatpak` bundle) today -- `routes.rs`'s
+/// Invoked for a Linux `.deb` (or `.flatpak` bundle) and the Windows installer -- `routes.rs`'s
 /// `/api/updates/download-and-install` handler hands the result straight to
-/// `open_with_system_handler` (`apt`/the desktop's `.deb` installer).
-/// Windows/macOS auto-apply through this automated path isn't built yet
-/// (Windows already has its own manual-download path per `docs/update.md`);
-/// `check_latest_release` still resolves their asset names so a future
-/// auto-apply implementation doesn't need to touch the check step.
+/// `open_with_system_handler` (`apt`/the desktop's `.deb` installer, or Windows running the
+/// downloaded installer). macOS isn't built: there is no installer for it.
 /// The check every downloaded update must pass before it's written anywhere: `checksums.txt` is signed
 /// by `public_key_b64`, it has a line for exactly `asset_name`, and that line's SHA-256 is the asset's.
 /// Split out of `download_and_verify_release` so the tamper cases can be tested without a network.
@@ -381,7 +395,11 @@ pub async fn download_and_verify_release(release: &ReleaseInfo) -> Result<PathBu
             return Err(format!("Refusing release asset outside {}'s release downloads: {}", RELEASES_REPO, url));
         }
     }
-    if !asset_name_matches_version(&release.asset_name, &release.version, platform_asset_suffix())? {
+    // Linux packages carry the version in their file name, which the signed manifest covers. The
+    // Windows installer's name is unversioned, so for it the version is bound through the signed
+    // manifest instead (see `manifest_binds_version`), checked below once the signature is good.
+    let name_binds_version = asset_name_matches_version(&release.asset_name, &release.version, platform_asset_suffix())?;
+    if !name_binds_version && !cfg!(target_os = "windows") {
         return Err(format!(
             "Release asset '{}' does not carry release version {}; refusing possible rollback",
             release.asset_name, release.version
@@ -423,6 +441,12 @@ pub async fn download_and_verify_release(release: &ReleaseInfo) -> Result<PathBu
     // Reject a bad signature before downloading the (large) asset at all; verify_downloaded_asset checks it again.
     verify_signature(checksums_text.as_bytes(), &checksums_sig_text, RELEASE_PUBLIC_KEY_B64)
         .map_err(|e| format!("checksums.txt.minisig did not verify: {}", e))?;
+    if !name_binds_version && !manifest_binds_version(&checksums_text, &release.version, &release.asset_name) {
+        return Err(format!(
+            "The signed checksums for this release don't list any file for version {}; refusing possible rollback",
+            release.version
+        ));
+    }
     let asset_bytes = fetch_bytes(release.download_url.clone()).await?;
     verify_downloaded_asset(&checksums_text, &checksums_sig_text, RELEASE_PUBLIC_KEY_B64, &release.asset_name, &asset_bytes)?;
 
@@ -631,6 +655,12 @@ mod tests {
         assert!(asset_name_matches_version("opensanctuary_0.3.0-1_amd64.deb", "0.3.0", ".deb").unwrap());
         assert!(!asset_name_matches_version("opensanctuary_0.1.0-1_amd64.deb", "v99.0.0", ".deb").unwrap());
         assert!(!asset_name_matches_version("opensanctuary-setup-x64.exe", "0.3.0", "setup-x64.exe").unwrap());
+        // ...so the Windows installer is bound through another file in the signed manifest.
+        let sums = "aaa  opensanctuary-setup-x64.exe\nbbb  opensanctuary-windows-x64-0.3.5.zip\nccc  opensanctuary_0.3.5-1_amd64.deb\n";
+        assert!(manifest_binds_version(sums, "v0.3.5", "opensanctuary-setup-x64.exe"));
+        assert!(!manifest_binds_version(sums, "v0.3.6", "opensanctuary-setup-x64.exe"), "an older manifest replayed under a newer tag");
+        assert!(!manifest_binds_version("aaa  opensanctuary-setup-x64.exe\n", "0.3.5", "opensanctuary-setup-x64.exe"), "the installer alone binds nothing");
+        assert!(!manifest_binds_version("bbb  opensanctuary-windows-x64-10.3.50.zip\n", "0.3.5", "x"), "no partial-number matches");
         assert!(asset_name_matches_version("opensanctuary-0.3.3-x86_64.flatpak", "0.3.3", ".flatpak").unwrap());
         assert!(!asset_name_matches_version("opensanctuary-0.3.2-x86_64.flatpak", "0.3.3", ".flatpak").unwrap());
     }
