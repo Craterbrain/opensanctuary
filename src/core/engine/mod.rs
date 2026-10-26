@@ -136,7 +136,7 @@ impl ShowEngine {
             | ShowCommand::NewSchedule
             | ShowCommand::LoadSchedule(_) => schedule_ops::plan_schedule_events(&state, &schedule, cmd),
 
-            ShowCommand::SetLicensedText { .. } => licensed::plan_licensed_events(&schedule, cmd),
+            ShowCommand::SetLicensedPassage { .. } => licensed::plan_licensed_events(&schedule, cmd),
 
             ShowCommand::SetItemTheme { .. }
             | ShowCommand::SetSlideBackground { .. }
@@ -232,7 +232,7 @@ impl ShowEngine {
             | ShowEvent::ScheduleCleared
             | ShowEvent::ScheduleTitleSet { .. } => schedule_ops::apply_schedule_event(state, schedule, event),
 
-            ShowEvent::LicensedTextSet { .. } => licensed::apply_licensed_event(state, schedule, event),
+            ShowEvent::LicensedPassageSet { .. } => licensed::apply_licensed_event(state, schedule, event),
 
             ShowEvent::ScheduleItemExpandToggled { .. }
             | ShowEvent::ScheduleItemThemeSet { .. }

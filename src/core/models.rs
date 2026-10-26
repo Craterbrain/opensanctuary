@@ -645,10 +645,11 @@ pub struct ScheduleItem {
     pub licensed: Option<LicensedRef>,
 }
 
-/// The text for one slide of a licensed passage, sent to fill in a passage that was looked up again.
+/// One verse of a licensed passage that was looked up (again), sent to fill in a schedule item.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct LicensedSlideText {
-    pub slide_index: usize,
+pub struct LicensedVerse {
+    pub verse_number: u32,
+    /// The publisher's text with the notice already appended (see `ScheduleItem::fill_licensed`).
     pub text: String,
 }
 
@@ -677,6 +678,75 @@ pub struct LicensedRef {
 }
 
 impl ScheduleItem {
+    /// Puts a looked-up licensed passage into this item: one slide per verse, named like any scripture's
+    /// (`V16`, "John 3:16 \u{b7} NIV"), with the publisher's notice as the last line of each. Replaces the
+    /// placeholder slides (there may have been one, or the wrong number); the item's theme and place in the
+    /// schedule stay. No-op for an item that isn't licensed.
+    pub fn fill_licensed(&mut self, verses: &[LicensedVerse]) {
+        let Some(l) = self.licensed.as_mut() else { return };
+        if verses.is_empty() {
+            return;
+        }
+        let (book, chapter, tag) = (l.book.clone(), l.chapter, l.tag.clone());
+        l.resolved = true;
+        let background = self.background.clone();
+        self.slides = verses
+            .iter()
+            .map(|v| {
+                let mut slide = Slide {
+                    text: v.text.clone(),
+                    header: Some(format!("{book} {chapter}:{}", v.verse_number)),
+                    label: Some(format!("V{}", v.verse_number)),
+                    tag: Some(format!("V{}", v.verse_number)),
+                    reference_label: Some(format!("{book} {chapter}:{} \u{b7} {tag}", v.verse_number)),
+                    background: background.clone(),
+                    ..Default::default()
+                };
+                slide.synthesize_v2_if_needed();
+                slide
+            })
+            .collect();
+        self.arrangement = identity_arrangement(&self.slides);
+    }
+
+    /// The schedule item for a reference-only search result: one placeholder slide per verse asked for (or one for a
+    /// whole chapter), named like any scripture's. No publisher text; `resolved` is false until it is filled in.
+    pub fn licensed_placeholder(mut licensed: LicensedRef, from: u32, to: u32) -> ScheduleItem {
+        licensed.resolved = false;
+        let verses: Vec<u32> = if from == 0 { vec![1] } else { (from..=to.max(from)).collect() };
+        let what = |n: u32| if from == 0 { format!("{} {}", licensed.book, licensed.chapter) } else { format!("{} {}:{}", licensed.book, licensed.chapter, n) };
+        let slides: Vec<Slide> = verses
+            .iter()
+            .map(|&n| Slide {
+                text: format!("{} \u{2014} fetching the text\u{2026}", what(n)),
+                header: Some(what(n)),
+                label: Some(format!("V{n}")),
+                tag: Some(format!("V{n}")),
+                reference_label: Some(format!("{} \u{b7} {}", what(n), licensed.tag)),
+                ..Default::default()
+            })
+            .collect();
+        let arrangement = identity_arrangement(&slides);
+        let title = if from == 0 { what(0) } else if to > from { format!("{} {}:{}-{}", licensed.book, licensed.chapter, from, to) } else { what(from) };
+        ScheduleItem {
+            id: format!("sched_lic_ref_{}", uuid::Uuid::new_v4()),
+            title,
+            item_type: "scripture".to_string(),
+            author_or_ref: licensed.version.clone(),
+            slides,
+            background: None,
+            theme_name: None,
+            is_expanded: false,
+            is_section_header: false,
+            notes: None,
+            subtitle: None,
+            arrangement,
+            default_slide_duration_seconds: None,
+            slideshow_loop: false,
+            licensed: Some(licensed),
+        }
+    }
+
     /// A copy that is safe to store or export: for a licensed passage the text is replaced by a
     /// one-line placeholder and the reference stays. Anything else is returned unchanged.
     pub fn without_licensed_text(&self) -> ScheduleItem {

@@ -13,7 +13,18 @@ use crate::storage::freeshow_import;
 
 pub(super) async fn get_bibles(State(app): State<AppState>) -> impl IntoResponse {
     let bibles = app.db.get_installed_bibles().unwrap_or_default();
-    Json(bibles)
+    let mut out: Vec<serde_json::Value> = bibles.into_iter().filter_map(|b| serde_json::to_value(b).ok()).collect();
+    // Translations a plugin offers without storing them (YouVersion's NIV...): listed like any other, with a
+    // `remote` block the console reads for the tag and for how to look them up. Metadata only.
+    for r in app.db.all_remote_bibles().unwrap_or_default() {
+        out.push(serde_json::json!({
+            "id": format!("remote:{}:{}", r.source, r.bible_id),
+            "name": r.title, "abbreviation": r.abbreviation, "language": r.language,
+            "is_default": false, "is_licensed": true,
+            "remote": r,
+        }));
+    }
+    Json(out)
 }
 
 #[derive(Deserialize)]
@@ -82,6 +93,20 @@ pub(super) async fn delete_bible(
     require_host_token(&headers, &app).map_err(|(status, Json(body))| {
         (status, body.get("error").and_then(|v| v.as_str()).unwrap_or("Unauthorized").to_string())
     })?;
+    // A translation a plugin offers (remote:<plugin>:<id>) is taken off the list; there is no text to delete.
+    if let Some(rest) = id.strip_prefix("remote:") {
+        let removed = rest.rsplit_once(':').and_then(|(plugin, bible)| {
+            let bible: i64 = bible.parse().ok()?;
+            let mut list = app.db.get_remote_bibles(plugin).ok()?;
+            let before = list.len();
+            list.retain(|b| b.bible_id != bible);
+            (list.len() != before).then(|| app.db.set_remote_bibles(plugin, &list).is_ok())
+        });
+        return Ok(Json(match removed {
+            Some(true) => serde_json::json!({ "success": true, "deleted": id }),
+            _ => serde_json::json!({ "success": false, "error": format!("Translation '{}' not found", id) }),
+        }));
+    }
     match app.db.delete_installed_bible(&id) {
         Ok(true) => Ok(Json(serde_json::json!({ "success": true, "deleted": id }))),
         Ok(false) => Ok(Json(serde_json::json!({ "success": false, "error": format!("Bible translation '{}' not found", id) }))),

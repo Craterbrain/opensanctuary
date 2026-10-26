@@ -119,6 +119,9 @@ pub struct Executed {
 /// A scripture for the schedule. A licensed passage (still within its publisher's time limit) carries
 /// the notice on every slide and a reference to look it up again; see `storage/db/licensed.rs`.
 fn scripture_item(app: &AppState, id: &str) -> Option<crate::core::models::ScheduleItem> {
+    if id.starts_with("yvref:") {
+        return remote_reference_item(app, id);
+    }
     if id.starts_with("lic_") {
         let (item, meta) = app.db.get_licensed_scripture(id, crate::storage::db::now_ms()).ok().flatten()?;
         let r = crate::core::models::LicensedRef {
@@ -190,10 +193,12 @@ pub fn expand_shorthand(app: &AppState, value: Value) -> Value {
     value
 }
 
-/// `{"ResolveLicensed":{"item_id","passage_id"}}` -> `SetLicensedText`: the schedule item holds only a
-/// reference and a placeholder; the passage (looked up again by the plugin and stored sealed, with its time
-/// limit) supplies the text, and the host adds the publisher's notice as the last line of every slide.
-/// `None` when either is missing, the passage has expired, or it is not the one the item refers to.
+/// `{"ResolveLicensed":{"item_id","passage_id"}}` -> `SetLicensedPassage`: the schedule item holds only a
+/// reference and a placeholder; the passage (looked up by the plugin and stored sealed, with its time limit)
+/// supplies the verses, and the host adds the publisher's notice as the last line of every slide. The slides are
+/// rebuilt from the passage, so an item that began as "the whole chapter" or "a verse range" ends up with
+/// exactly the verses the publisher returned. `None` when either is missing, the passage has expired, or it is
+/// not the one the item refers to.
 fn resolve_licensed(app: &AppState, r: &Value) -> Option<Value> {
     let item_id = r.get("item_id")?.as_str()?;
     let passage_id = r.get("passage_id")?.as_str()?;
@@ -204,21 +209,62 @@ fn resolve_licensed(app: &AppState, r: &Value) -> Option<Value> {
     if meta.source != wanted.source || meta.bible_id != wanted.bible_id || passage.book != wanted.book || passage.chapter != wanted.chapter {
         return None;
     }
-    let texts: Vec<crate::core::models::LicensedSlideText> = item
-        .slides
+    let verses: Vec<crate::core::models::LicensedVerse> = passage
+        .verses
         .iter()
-        .enumerate()
-        .filter_map(|(i, slide)| {
-            // Slides are named V<verse number> (to_schedule_item); duplicates and splits keep the prefix.
-            let n: u32 = slide.tag.as_deref()?.strip_prefix('V')?.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok()?;
-            let verse = passage.verses.iter().find(|v| v.verse_number == n)?;
-            Some(crate::core::models::LicensedSlideText { slide_index: i, text: format!("{}\n\n{}", verse.text, meta.tag) })
-        })
+        .map(|v| crate::core::models::LicensedVerse { verse_number: v.verse_number, text: format!("{}\n\n{}", v.text, meta.tag) })
         .collect();
-    if texts.is_empty() {
+    if verses.is_empty() {
         return None;
     }
-    Some(serde_json::json!({ "SetLicensedText": { "item_id": item_id, "texts": texts } }))
+    Some(serde_json::json!({ "SetLicensedPassage": { "item_id": item_id, "verses": verses } }))
+}
+
+/// USFM code (`JHN`) of a canonical book name (`John`), in the order the Bible lists them.
+const USFM_CODES: [&str; 66] = [
+    "GEN", "EXO", "LEV", "NUM", "DEU", "JOS", "JDG", "RUT", "1SA", "2SA", "1KI", "2KI", "1CH", "2CH", "EZR", "NEH", "EST", "JOB", "PSA", "PRO",
+    "ECC", "SNG", "ISA", "JER", "LAM", "EZK", "DAN", "HOS", "JOL", "AMO", "OBA", "JON", "MIC", "NAM", "HAB", "ZEP", "HAG", "ZEC", "MAL", "MAT",
+    "MRK", "LUK", "JHN", "ACT", "ROM", "1CO", "2CO", "GAL", "EPH", "PHP", "COL", "1TH", "2TH", "1TI", "2TI", "TIT", "PHM", "HEB", "JAS", "1PE",
+    "2PE", "1JN", "2JN", "3JN", "JUD", "REV",
+];
+
+/// A search result for a translation a plugin offers without storing it, turned into a schedule item the moment
+/// it is added or dragged: `yvref:<plugin>:<bible id>:<book>:<chapter>:<from>:<to>` (verses 0 = the whole
+/// chapter). It carries a reference and a placeholder, not text; the plugin named in it is asked to look the
+/// passage up (`LicensedRef.resolved == false`, see the console's `watchLicensed`).
+fn remote_reference_item(app: &AppState, id: &str) -> Option<crate::core::models::ScheduleItem> {
+    let parts: Vec<&str> = id.strip_prefix("yvref:")?.split(':').collect();
+    let [source, bible_id, book, chapter, from, to] = parts.as_slice() else { return None };
+    let bible = app.db.find_remote_bible(source, bible_id.parse().ok()?).ok().flatten()?;
+    // The console's quick parser may hand over the book as typed ("Psalm", "jn"): the server's own parser names it.
+    let canonical = crate::storage::freeshow_import::parse_scripture_reference(book).filter(|p| p.is_reference).map(|p| p.book).unwrap_or_else(|| book.to_string());
+    let (index, meta) = crate::storage::freeshow_import::BIBLE_BOOKS_META.iter().enumerate().find(|(_, m)| m.name == canonical)?;
+    let chapter: u32 = chapter.parse().ok().filter(|c| (1..=meta.chapters as u32).contains(c))?;
+    let (from, to): (u32, u32) = (from.parse().ok()?, to.parse().ok()?);
+    if from > to || to > 200 || (from == 0 && to != 0) {
+        return None;
+    }
+    let usfm = if from == 0 {
+        format!("{}.{chapter}", USFM_CODES[index])
+    } else if to > from {
+        format!("{}.{chapter}.{from}-{to}", USFM_CODES[index])
+    } else {
+        format!("{}.{chapter}.{from}", USFM_CODES[index])
+    };
+    let tag = crate::storage::db::licensed_tag_for(&bible);
+    let licensed = crate::core::models::LicensedRef {
+        source: bible.source.clone(),
+        bible_id: bible.bible_id,
+        usfm,
+        tag,
+        copyright: bible.copyright.clone(),
+        link: bible.link.clone(),
+        version: bible.abbreviation.clone(),
+        book: meta.name.to_string(),
+        chapter,
+        resolved: false,
+    };
+    Some(crate::core::models::ScheduleItem::licensed_placeholder(licensed, from, to))
 }
 
 /// Runs an already-authenticated command. `value` is the bare command (not an envelope).

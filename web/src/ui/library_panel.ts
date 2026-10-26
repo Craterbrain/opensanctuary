@@ -57,8 +57,51 @@ export function setCurrentDualSecondaryVerses(verses: any[]): void {
   currentDualSecondaryVerses = verses || [];
 }
 
+/** The translation a plugin offers (YouVersion's NIV...) that the Bible context menu was opened on, if any. */
+let remoteMenuTarget: any = null;
+
+/**
+ * Reference-only results for the translations a plugin offers (YouVersion's NIV...): a search like "John 3:16"
+ * lists "John 3:16 (NIV)" for each of them in scope, with no text. The text is fetched when the result is added to
+ * the schedule or dragged there (the server makes a placeholder item and the plugin fills it in).
+ */
+export function remoteReferenceItems(parsedRef: any, activeVersion: unknown): any[] {
+  if (!ctx || !parsedRef?.isReference || !parsedRef.book || !parsedRef.chapter) return [];
+  const all = ctx.getInstalledBibles().filter((b: any) => b.remote);
+  const scope = (!activeVersion || activeVersion === 'all') ? all : all.filter((b: any) => b.id === activeVersion);
+  const from = parsedRef.hasSpecificVerse ? (parsedRef.verseStart || 0) : 0;
+  const to = parsedRef.hasSpecificVerse ? (parsedRef.verseEnd || from) : 0;
+  const verses = from ? (to > from ? `:${from}-${to}` : `:${from}`) : '';
+  return scope.map((b: any) => ({
+    id: `yvref:${b.remote.source}:${b.remote.bible_id}:${parsedRef.book}:${parsedRef.chapter}:${from}:${to}`,
+    book: parsedRef.book,
+    chapter: parsedRef.chapter,
+    verse_start: from || 1,
+    verse_end: to || from || 1,
+    version: b.abbreviation,
+    reference: `${parsedRef.book} ${parsedRef.chapter}${verses} (${b.abbreviation})`,
+    verses: [],
+    remote: b.remote,
+  }));
+}
+
 export function initLibraryPanel(context: LibraryPanelContext) {
   ctx = context;
+
+  document.getElementById('ctx-remove-remote-bible')?.addEventListener('click', async () => {
+    const b = remoteMenuTarget;
+    document.getElementById('bible-version-context-menu')!.style.display = 'none';
+    if (!b || !ctx) return;
+    try {
+      const res = await fetch(`/api/bibles/${encodeURIComponent(b.id)}`, { method: 'DELETE' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body.success === false) throw new Error(body.error || `status ${res.status}`);
+      ctx.showToast(`Removed ${b.abbreviation} from the list.`, 'success');
+      window.dispatchEvent(new CustomEvent('os-library-changed', { detail: { category: 'scriptures', bibles: true } }));
+    } catch (e: any) {
+      ctx.showToast(`Could not remove ${b.abbreviation}: ${e?.message ?? e}`, 'error');
+    }
+  });
 
   // A plugin added something (e.g. an imported song): reload the tab if it's the one on screen.
   window.addEventListener('os-library-changed', (ev) => {
@@ -483,8 +526,9 @@ export function renderCategoryTree(tabName: string) {
             <span class="bible-tree-node-name">${lp.escapeHtml(bible.name || bible.id)}</span>
           </div>
           <div class="bible-tree-node-meta">
+            ${bible.remote ? `<span class="bible-source-tag" title="Text is fetched from ${lp.escapeHtml(bible.remote.tag)} when a passage is added to the schedule">${lp.escapeHtml(bible.remote.tag)}</span>` : ''}
             ${bible.language ? `<span class="bible-lang-badge">${lp.escapeHtml(bible.language)}</span>` : ''}
-            ${isDefault ? '<span class="bible-default-badge" title="Default Translation">⭐</span>' : ''}
+            ${isDefault && !bible.remote ? '<span class="bible-default-badge" title="Default Translation">⭐</span>' : ''}
           </div>
         `;
 
@@ -504,6 +548,14 @@ export function renderCategoryTree(tabName: string) {
           e.preventDefault();
           e.stopPropagation();
           lp.setContextMenuTargetBible(bible);
+          remoteMenuTarget = bible.remote ? bible : null;
+          // A translation a plugin offers can't be the default or compared (it has no text of its own); it can be removed.
+          for (const id of ['ctx-set-default-bible', 'ctx-compare-bible']) {
+            const el = document.getElementById(id);
+            if (el) el.style.display = bible.remote ? 'none' : '';
+          }
+          const rm = document.getElementById('ctx-remove-remote-bible');
+          if (rm) rm.style.display = bible.remote ? '' : 'none';
           lp.showContextMenu(document.getElementById('bible-version-context-menu'), e.clientX, e.clientY);
         });
 
@@ -767,6 +819,7 @@ export function filterAndRenderCatalog() {
             matchingItems.push(sc);
           }
         });
+        matchingItems.push(...remoteReferenceItems(parsedRef, lp.getActiveBibleVersion()));
         filteredLibraryItems = matchingItems;
       } else {
         filteredLibraryItems = activeLibraryItems.filter(sc => {
@@ -965,10 +1018,10 @@ export function createCatalogTableRow(item: any, idx: number, tabName: string) {
       <td class="cell-meta">${escapeUserHtml(item.ccli_number || item.copyright || '')}</td>
     `;
   } else if (tabName === 'scriptures') {
-    const snippet = item.verses && item.verses.length > 0 ? item.verses[0].text : '';
+    const snippet = item.remote ? 'Text loads when added to the schedule' : (item.verses && item.verses.length > 0 ? item.verses[0].text : '');
     tr.innerHTML = `
       <td class="cell-title">📖 ${escapeUserHtml(item.reference)}</td>
-      <td><span class="bible-lang-badge">${lp.escapeHtml(item.version)}</span></td>
+      <td><span class="bible-lang-badge">${lp.escapeHtml(item.version)}</span>${item.remote ? ` <span class="bible-source-tag">${lp.escapeHtml(item.remote.tag)}</span>` : ''}</td>
       <td class="cell-snippet">${lp.escapeHtml(snippet)}</td>
     `;
   } else if (tabName === 'media') {
@@ -1296,6 +1349,12 @@ const STAGEABLE_TAB_TYPES: Record<string, string> = {
  * use the lightweight ad-hoc preview. */
 export function selectAndPreviewItem(item: any, tabName: string) {
   if (!ctx) return;
+  if (item?.remote) {
+    // Reference-only result: the text is fetched when it is added or dragged to the schedule, not for a preview.
+    ctx.setSelectedLibraryItem(item);
+    ctx.showToast(`${item.reference}: add it to the schedule (double-click, or drag it) to load its text.`, 'info');
+    return;
+  }
   ctx.setSelectedLibraryItem(item);
   renderAssetPreview(item, tabName);
   const itemType = STAGEABLE_TAB_TYPES[tabName];
@@ -1325,7 +1384,10 @@ export function renderAssetPreview(item: any, tabName: string) {
     if (t) { bgStyle = t.bg; theme = t; }
   }
 
-  if (tabName === 'scriptures' && item.verses && item.verses.length > 0) {
+  if (tabName === 'scriptures' && item.remote) {
+    // A translation a plugin offers: the reference only, until the passage is added to the schedule.
+    sampleText = `${item.reference}\n\n${item.remote.tag} \u00b7 text loads when added`;
+  } else if (tabName === 'scriptures' && item.verses && item.verses.length > 0) {
     const qLower = (resourceSearchInput ? resourceSearchInput.value : '').trim().toLowerCase();
     let targetVerseIdx = 0;
     if (qLower && item.verses.length > 1) {
@@ -1649,7 +1711,7 @@ export async function addItemToSchedule(tabName: string, itemId: string) {
 
   if (tabName === 'scriptures' || itemType === 'scripture') {
     const found = (filteredLibraryItems || []).find(it => it.id === itemId) || (activeLibraryItems || []).find(it => it.id === itemId);
-    if (found && found.verses && found.verses.length > 0) {
+    if (found && !found.remote && found.verses && found.verses.length > 0) {
       try {
         await fetch('/api/scriptures', {
           method: 'POST',
