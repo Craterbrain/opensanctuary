@@ -139,6 +139,12 @@ fn a_song_with_pictures_survives_a_round_trip_into_another_library() {
 
     let result = import(&mut bundle, &db_b, lib_b.path(), &ImportOptions::default()).unwrap();
     assert_eq!((result.added, result.media_written), (1, 3));
+    // The two pictures (not the video) are listed in the Media library, so they can be picked as backgrounds elsewhere.
+    assert_eq!(result.backgrounds_added, 2);
+    let listed = db_b.get_media().unwrap();
+    assert_eq!(listed.len(), 2);
+    assert!(listed.iter().all(|m| m.media_type == "image" && m.file_path.starts_with("/media/images/")));
+    assert!(listed.iter().any(|m| m.name == "Easter Sunrise"), "{:?}", listed.iter().map(|m| &m.name).collect::<Vec<_>>());
 
     let got = db_b.get_song_by_id("song_1").unwrap().unwrap();
     assert_eq!(got.title, "Amazing Grace");
@@ -161,6 +167,8 @@ fn a_song_with_pictures_survives_a_round_trip_into_another_library() {
     assert_eq!(summary.library.as_ref().unwrap().identical, 1);
     let result = import(&mut again, &db_b, lib_b.path(), &ImportOptions::default()).unwrap();
     assert_eq!((result.added, result.skipped_identical, result.media_written, result.media_reused), (0, 1, 0, 3));
+    assert_eq!(result.backgrounds_added, 0, "a picture already listed is not listed twice");
+    assert_eq!(db_b.get_media().unwrap().len(), 2);
     assert_eq!(db_b.get_songs().unwrap().len(), 1);
 }
 
