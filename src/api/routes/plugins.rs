@@ -578,7 +578,7 @@ pub(super) async fn plugin_caller(app: &AppState, headers: &HeaderMap) -> Result
 #[derive(Deserialize)]
 pub(super) struct PluginFetchReq {
     url: String,
-    /// `Authorization` / `Accept` / `Accept-Language` only (see `plugin_net::clean_headers`).
+    /// `Authorization` / `Accept` / `Accept-Language` / `X-YVP-App-Key` only (see `plugin_net::clean_headers`).
     #[serde(default)]
     headers: serde_json::Map<String, serde_json::Value>,
 }

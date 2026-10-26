@@ -106,8 +106,9 @@ async fn resolve_public(host: &str, port: u16) -> Result<SocketAddr, String> {
 }
 
 /// Request headers a plugin may add: enough for an API key and a content preference, nothing that
-/// could change where or how the request is routed (no Host, Cookie, Proxy-*, ...).
-const ALLOWED_HEADERS: [&str; 3] = ["authorization", "accept", "accept-language"];
+/// could change where or how the request is routed (no Host, Cookie, Proxy-*, ...). `x-yvp-app-key`
+/// is the YouVersion Platform's API-key header; it only ever reaches the hosts the plugin was granted.
+const ALLOWED_HEADERS: [&str; 4] = ["authorization", "accept", "accept-language", "x-yvp-app-key"];
 
 /// Validates a plugin's header map into `(name, value)` pairs.
 pub fn clean_headers(headers: &serde_json::Map<String, serde_json::Value>) -> Result<Vec<(String, String)>, String> {
@@ -237,8 +238,8 @@ mod tests {
 
     #[test]
     fn plugins_may_only_set_a_few_headers() {
-        let ok = serde_json::json!({ "Authorization": "key123", "Accept": "application/json" });
-        assert_eq!(clean_headers(ok.as_object().unwrap()).unwrap().len(), 2);
+        let ok = serde_json::json!({ "Authorization": "key123", "Accept": "application/json", "X-YVP-App-Key": "k" });
+        assert_eq!(clean_headers(ok.as_object().unwrap()).unwrap().len(), 3);
         for bad in [
             serde_json::json!({ "Host": "evil.test" }),
             serde_json::json!({ "Cookie": "a=b" }),
