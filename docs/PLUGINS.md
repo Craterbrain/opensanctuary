@@ -179,8 +179,8 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   It asks for the two search APIs and their image hosts (`api.pexels.com`, `images.pexels.com`,
   `pixabay.com`, `cdn.pixabay.com`), `library.write` on media, and optionally `notifications.post`.
   Three host features exist for it, available to any plugin with the matching grant:
-  `net.fetch` takes optional `headers` (only `Authorization`, `Accept`, `Accept-Language`; Pexels
-  wants its key in `Authorization`); `library.addMediaUrl { url, title, id? }` has the *host*
+  `net.fetch` takes optional `headers` (only `Authorization`, `Accept`, `Accept-Language`, `X-YVP-App-Key`; Pexels
+  wants its key in `Authorization`, YouVersion in `X-YVP-App-Key`); `library.addMediaUrl { url, title, id? }` has the *host*
   download a picture or video from a granted host (https, public addresses, 64 MB cap) into the
   Media library, with the file type taken from the downloaded bytes and the name chosen by the
   host; and a plugin frame's `img-src` allows `https://` pictures from the hosts it was granted
