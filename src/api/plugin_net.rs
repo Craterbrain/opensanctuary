@@ -23,6 +23,8 @@ pub struct Fetched {
     pub content_type: String,
     pub body: String,
     pub final_url: String,
+    /// How much longer the publisher lets this response be kept, from its `Cache-Control`/`Age`.
+    pub cache_secs: Option<u64>,
 }
 
 /// A granted host: `example.com`, `*.example.com` (subdomains only), optionally `:port`.
@@ -135,6 +137,26 @@ pub struct FetchedBytes {
     pub content_type: String,
     pub body: Vec<u8>,
     pub final_url: String,
+    pub cache_secs: Option<u64>,
+}
+
+/// Seconds a response may still be kept: `max-age` minus `Age` (what a CDN already used up), or 0 for
+/// `no-store` / `no-cache` / `private`. `None` when the response says nothing about caching.
+pub fn cache_lifetime(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    let cc = headers.get(reqwest::header::CACHE_CONTROL).and_then(|v| v.to_str().ok())?.to_ascii_lowercase();
+    let mut max_age: Option<u64> = None;
+    for part in cc.split(',').map(str::trim) {
+        if matches!(part, "no-store" | "no-cache" | "private") {
+            return Some(0);
+        }
+        if let Some(n) = part.strip_prefix("s-maxage=").or_else(|| part.strip_prefix("max-age=")) {
+            if let Ok(n) = n.trim_matches('"').parse::<u64>() {
+                max_age = Some(max_age.map_or(n, |m| m.min(n)));
+            }
+        }
+    }
+    let age = headers.get(reqwest::header::AGE).and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
+    max_age.map(|m| m.saturating_sub(age))
 }
 
 /// GET `url` on behalf of a plugin allowed to reach `allowed` hosts, reading at most `max_bytes`.
@@ -170,6 +192,7 @@ pub async fn fetch_bytes(allowed: &[String], url: &str, headers: &[(String, Stri
             continue;
         }
         let status = resp.status().as_u16();
+        let cache_secs = cache_lifetime(resp.headers());
         let content_type = resp
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -186,7 +209,7 @@ pub async fn fetch_bytes(allowed: &[String], url: &str, headers: &[(String, Stri
             }
             body.extend_from_slice(&chunk);
         }
-        return Ok(FetchedBytes { status, content_type, body, final_url: current.to_string() });
+        return Ok(FetchedBytes { status, content_type, body, final_url: current.to_string(), cache_secs });
     }
     Err("too many redirects".to_string())
 }
@@ -194,7 +217,7 @@ pub async fn fetch_bytes(allowed: &[String], url: &str, headers: &[(String, Stri
 /// GET `url` as text (lossy UTF-8) on behalf of a plugin allowed to reach `allowed` hosts.
 pub async fn fetch(allowed: &[String], url: &str, headers: &[(String, String)]) -> Result<Fetched, String> {
     let f = fetch_bytes(allowed, url, headers, MAX_BODY_BYTES).await?;
-    Ok(Fetched { status: f.status, content_type: f.content_type, body: String::from_utf8_lossy(&f.body).into_owned(), final_url: f.final_url })
+    Ok(Fetched { status: f.status, content_type: f.content_type, body: String::from_utf8_lossy(&f.body).into_owned(), final_url: f.final_url, cache_secs: f.cache_secs })
 }
 
 #[cfg(test)]
@@ -234,6 +257,25 @@ mod tests {
         assert!(check_url(&w, &url("https://www.genius.com/")).is_ok());
         assert!(check_url(&w, &url("https://genius.com/")).is_err());
         assert!(check_url(&[], &url("https://genius.com/")).is_err());
+    }
+
+    #[test]
+    fn cache_lifetime_is_max_age_minus_age() {
+        use reqwest::header::{HeaderMap, HeaderValue, AGE, CACHE_CONTROL};
+        let h = |cc: Option<&str>, age: Option<&str>| {
+            let mut m = HeaderMap::new();
+            if let Some(c) = cc { m.insert(CACHE_CONTROL, HeaderValue::from_str(c).unwrap()); }
+            if let Some(a) = age { m.insert(AGE, HeaderValue::from_str(a).unwrap()); }
+            m
+        };
+        assert_eq!(cache_lifetime(&h(Some("public, max-age=3600"), None)), Some(3600));
+        assert_eq!(cache_lifetime(&h(Some("public, max-age=3600"), Some("600"))), Some(3000));
+        assert_eq!(cache_lifetime(&h(Some("max-age=60"), Some("500"))), Some(0), "already used up");
+        assert_eq!(cache_lifetime(&h(Some("public, max-age=3600, s-maxage=120"), None)), Some(120), "the shorter wins");
+        assert_eq!(cache_lifetime(&h(Some("private, max-age=3600"), None)), Some(0));
+        assert_eq!(cache_lifetime(&h(Some("no-store"), None)), Some(0));
+        assert_eq!(cache_lifetime(&h(Some("public"), None)), None);
+        assert_eq!(cache_lifetime(&h(None, Some("5"))), None);
     }
 
     #[test]

@@ -146,6 +146,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|| resolved_paths.media_dir.clone());
 
+    // Licensed Bible text (YouVersion's NIV etc.) is kept only as long as its publisher allows: whatever
+    // expired while the app was closed goes before anything can read it.
+    match db.purge_expired_licensed(os_next::storage::db::now_ms()) {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("Removed {} expired licensed passage(s)", n),
+        Err(e) => tracing::warn!("Could not clear expired licensed passages: {}", e),
+    }
+
     let max_seq = db.get_max_event_sequence().unwrap_or(0);
     let event_log = Arc::new(EventLog::with_initial_sequence(2000, max_seq));
     let engine = Arc::new(ShowEngine::new(event_log));
@@ -545,6 +553,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Err(e) = app_state.db.sync_media_videos_folder(&app_state.media_dir.join("videos")) {
                 tracing::warn!("Failed to sync media videos folder: {}", e);
             }
+
+            // Expired licensed passages are removed hourly while the app runs (and once at start-up, above).
+            let licensed_db = app_state.db.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+                interval.tick().await;
+                loop {
+                    interval.tick().await;
+                    let db = licensed_db.clone();
+                    let _ = tokio::task::spawn_blocking(move || db.purge_expired_licensed(os_next::storage::db::now_ms())).await;
+                }
+            });
 
             // Deletes pre-rendered background clips unused for 3 months (and stuck renders).
             tokio::spawn(os_next::storage::pattern_cache::maintenance_loop(app_state.media_dir.clone()));

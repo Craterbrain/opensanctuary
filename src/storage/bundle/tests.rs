@@ -232,6 +232,7 @@ fn a_service_carries_its_items_media_and_copyright_notes() {
         arrangement: vec![crate::core::models::ArrangementEntry { section_id: "V1".into(), source_slide_index: 0, background_override: Some("/media/images/Photo (1).png".into()) }],
         default_slide_duration_seconds: None,
         slideshow_loop: false,
+        licensed: None,
     };
     item.slides[0].ccli_metadata = Some(CcliMetadata { song_title: None, author: Some("Someone".into()), copyright: Some("© 2020 Label".into()), ccli_number: Some("123".into()) });
     let schedule = Schedule { id: "sch".into(), title: "Sunday".into(), items: vec![item], selected_item_index: None, is_modified: true, schedule_version: 4 };

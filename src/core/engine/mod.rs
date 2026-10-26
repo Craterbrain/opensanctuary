@@ -12,6 +12,7 @@ mod themes;
 mod media;
 mod elements;
 mod history;
+mod licensed;
 
 pub use live::{effective_arrangement, resolve_slide_at, resolve_background_at, reconcile_arrangement};
 
@@ -135,6 +136,8 @@ impl ShowEngine {
             | ShowCommand::NewSchedule
             | ShowCommand::LoadSchedule(_) => schedule_ops::plan_schedule_events(&state, &schedule, cmd),
 
+            ShowCommand::SetLicensedText { .. } => licensed::plan_licensed_events(&schedule, cmd),
+
             ShowCommand::SetItemTheme { .. }
             | ShowCommand::SetSlideBackground { .. }
             | ShowCommand::SetSlideDuration { .. }
@@ -228,6 +231,8 @@ impl ShowEngine {
             | ShowEvent::ScheduleLoaded { .. }
             | ShowEvent::ScheduleCleared
             | ShowEvent::ScheduleTitleSet { .. } => schedule_ops::apply_schedule_event(state, schedule, event),
+
+            ShowEvent::LicensedTextSet { .. } => licensed::apply_licensed_event(state, schedule, event),
 
             ShowEvent::ScheduleItemExpandToggled { .. }
             | ShowEvent::ScheduleItemThemeSet { .. }

@@ -638,6 +638,79 @@ pub struct ScheduleItem {
     /// the end, instead of stopping.
     #[serde(default)]
     pub slideshow_loop: bool,
+    /// Set on a scripture whose text is licensed to be shown but not kept (YouVersion's NIV etc., see
+    /// `storage/db/licensed.rs`). Everything that stores or exports the item drops its text and keeps
+    /// this, which is enough to look the passage up again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub licensed: Option<LicensedRef>,
+}
+
+/// The text for one slide of a licensed passage, sent to fill in a passage that was looked up again.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LicensedSlideText {
+    pub slide_index: usize,
+    pub text: String,
+}
+
+/// How to get a licensed passage again: who supplied it, where it is, and the notice that goes with it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LicensedRef {
+    /// The plugin that looks it up (`youversion`).
+    pub source: String,
+    pub bible_id: i64,
+    /// The reference in the publisher's form, `JHN.3.16-18`.
+    pub usfm: String,
+    /// Short notice printed on every slide, e.g. "NIV · © Biblica".
+    pub tag: String,
+    /// The publisher's full copyright notice.
+    #[serde(default)]
+    pub copyright: String,
+    #[serde(default)]
+    pub link: String,
+    /// The version name the passage is filed under (`NIV`), for the lookup's `library.addScriptures`.
+    pub version: String,
+    pub book: String,
+    pub chapter: u32,
+    /// True while the slides hold the publisher's text; false for the stripped copy that is stored or exported.
+    #[serde(default)]
+    pub resolved: bool,
+}
+
+impl ScheduleItem {
+    /// A copy that is safe to store or export: for a licensed passage the text is replaced by a
+    /// one-line placeholder and the reference stays. Anything else is returned unchanged.
+    pub fn without_licensed_text(&self) -> ScheduleItem {
+        let Some(r) = &self.licensed else { return self.clone() };
+        let mut item = self.clone();
+        for slide in &mut item.slides {
+            let what = slide.reference_label.clone().or_else(|| slide.header.clone()).unwrap_or_else(|| item.title.clone());
+            slide.text = format!("{what} \u{2014} fetching the text\u{2026}");
+            slide.elements.clear();
+            slide.speaker_notes = None;
+        }
+        if let Some(l) = item.licensed.as_mut() {
+            l.resolved = false;
+        }
+        let _ = r;
+        item
+    }
+}
+
+impl Schedule {
+    /// Does any item hold licensed text?
+    pub fn has_licensed(&self) -> bool {
+        self.items.iter().any(|i| i.licensed.is_some())
+    }
+
+    /// A copy safe to store or export: licensed passages keep their reference and lose their text.
+    pub fn without_licensed_text(&self) -> Schedule {
+        if !self.has_licensed() {
+            return self.clone();
+        }
+        let mut s = self.clone();
+        s.items = s.items.iter().map(|i| i.without_licensed_text()).collect();
+        s
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1109,7 +1182,24 @@ impl ToScheduleItem for Song {
             arrangement,
             default_slide_duration_seconds: None,
             slideshow_loop: false,
+            licensed: None,
         }
+    }
+}
+
+impl ScriptureItem {
+    /// A schedule item for a licensed passage: the publisher's notice is the last line of every slide
+    /// (and the pinned reference), and the item carries what is needed to look it up again.
+    pub fn to_licensed_schedule_item(&self, mut licensed: LicensedRef) -> ScheduleItem {
+        let mut item = self.to_schedule_item();
+        for (slide, v) in item.slides.iter_mut().zip(&self.verses) {
+            slide.text = format!("{}\n\n{}", v.text, licensed.tag);
+            slide.reference_label = Some(format!("{} {}:{} \u{b7} {}", self.book, self.chapter, v.verse_number, licensed.tag));
+        }
+        licensed.resolved = true;
+        item.id = format!("sched_lic_{}", self.id);
+        item.licensed = Some(licensed);
+        item
     }
 }
 
@@ -1142,6 +1232,7 @@ impl ToScheduleItem for ScriptureItem {
             arrangement,
             default_slide_duration_seconds: None,
             slideshow_loop: false,
+            licensed: None,
         }
     }
 }
@@ -1164,6 +1255,7 @@ impl ToScheduleItem for Presentation {
             arrangement,
             default_slide_duration_seconds: None,
             slideshow_loop: false,
+            licensed: None,
         }
     }
 }
@@ -1195,6 +1287,7 @@ impl ToScheduleItem for MediaItem {
             arrangement,
             default_slide_duration_seconds: None,
             slideshow_loop: false,
+            licensed: None,
         }
     }
 }
@@ -1259,6 +1352,7 @@ impl ScheduleItem {
             arrangement: Vec::new(),
             default_slide_duration_seconds: None,
             slideshow_loop: false,
+            licensed: None,
         }
     }
 }

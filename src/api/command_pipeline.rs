@@ -116,10 +116,32 @@ pub struct Executed {
     pub events: Vec<EventEnvelope>,
 }
 
+/// A scripture for the schedule. A licensed passage (still within its publisher's time limit) carries
+/// the notice on every slide and a reference to look it up again; see `storage/db/licensed.rs`.
+fn scripture_item(app: &AppState, id: &str) -> Option<crate::core::models::ScheduleItem> {
+    if id.starts_with("lic_") {
+        let (item, meta) = app.db.get_licensed_scripture(id, crate::storage::db::now_ms()).ok().flatten()?;
+        let r = crate::core::models::LicensedRef {
+            source: meta.source,
+            bible_id: meta.bible_id,
+            usfm: meta.usfm,
+            tag: meta.tag,
+            copyright: meta.copyright,
+            link: meta.link,
+            version: item.version.clone(),
+            book: item.book.clone(),
+            chapter: item.chapter,
+            resolved: true,
+        };
+        return Some(item.to_licensed_schedule_item(r));
+    }
+    app.db.get_scripture_by_id(id).ok().flatten().map(|i| i.to_schedule_item())
+}
+
 fn item_for(app: &AppState, item_type: &str, item_id: &str) -> Option<crate::core::models::ScheduleItem> {
     match item_type {
         "song" => app.db.get_song_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
-        "scripture" => app.db.get_scripture_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
+        "scripture" => scripture_item(app, item_id),
         "media" => app.db.get_media_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
         "presentation" => app.db.get_presentation_by_id(item_id).ok().flatten().map(|i| i.to_schedule_item()),
         _ => None,
@@ -146,6 +168,12 @@ pub fn expand_shorthand(app: &AppState, value: Value) -> Value {
             }
         }
     }
+    if let Some(r) = value.get("ResolveLicensed") {
+        match resolve_licensed(app, r) {
+            Some(cmd) => return cmd,
+            None => tracing::warn!("ResolveLicensed ignored: the item or its stored passage isn't there (or has expired)"),
+        }
+    }
     if let Some(stage) = value.get("StageItem") {
         if stage.get("item_type").is_some() && stage.get("item_id").is_some() {
             let (t, id) = (stage["item_type"].as_str().unwrap_or(""), stage["item_id"].as_str().unwrap_or(""));
@@ -162,12 +190,45 @@ pub fn expand_shorthand(app: &AppState, value: Value) -> Value {
     value
 }
 
+/// `{"ResolveLicensed":{"item_id","passage_id"}}` -> `SetLicensedText`: the schedule item holds only a
+/// reference and a placeholder; the passage (looked up again by the plugin and stored sealed, with its time
+/// limit) supplies the text, and the host adds the publisher's notice as the last line of every slide.
+/// `None` when either is missing, the passage has expired, or it is not the one the item refers to.
+fn resolve_licensed(app: &AppState, r: &Value) -> Option<Value> {
+    let item_id = r.get("item_id")?.as_str()?;
+    let passage_id = r.get("passage_id")?.as_str()?;
+    let schedule = app.engine.snapshot().schedule;
+    let item = schedule.items.iter().find(|i| i.id == item_id)?;
+    let wanted = item.licensed.as_ref()?;
+    let (passage, meta) = app.db.get_licensed_scripture(passage_id, crate::storage::db::now_ms()).ok().flatten()?;
+    if meta.source != wanted.source || meta.bible_id != wanted.bible_id || passage.book != wanted.book || passage.chapter != wanted.chapter {
+        return None;
+    }
+    let texts: Vec<crate::core::models::LicensedSlideText> = item
+        .slides
+        .iter()
+        .enumerate()
+        .filter_map(|(i, slide)| {
+            // Slides are named V<verse number> (to_schedule_item); duplicates and splits keep the prefix.
+            let n: u32 = slide.tag.as_deref()?.strip_prefix('V')?.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok()?;
+            let verse = passage.verses.iter().find(|v| v.verse_number == n)?;
+            Some(crate::core::models::LicensedSlideText { slide_index: i, text: format!("{}\n\n{}", verse.text, meta.tag) })
+        })
+        .collect();
+    if texts.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({ "SetLicensedText": { "item_id": item_id, "texts": texts } }))
+}
+
 /// Runs an already-authenticated command. `value` is the bare command (not an envelope).
 pub fn run_command_pipeline(app: &AppState, value: Value, origin: &CommandOrigin) -> Result<Executed, CommandRejection> {
     let value = expand_shorthand(app, value);
 
     let cmd: ShowCommand = serde_json::from_value(value.clone()).map_err(|e| {
-        tracing::warn!("command from {:?} failed to parse, dropped: {} (payload: {})", origin, e, value);
+        // Only the start of the payload: it may carry licensed Bible text, which is never written to a log.
+        let shown: String = value.to_string().chars().take(160).collect();
+        tracing::warn!("command from {:?} failed to parse, dropped: {} (payload starts: {})", origin, e, shown);
         CommandRejection::Unparseable(e.to_string())
     })?;
 
