@@ -46,7 +46,7 @@ Nothing here is legal advice; it is what the agreements a developer accepts say,
 * **Biblica (NIV)**
   * Displayed to one user at a time: no more than **two chapters or twenty-five verses**, whichever is greater. The plugin allows exactly that for the NIV family (publisher id `05a9aa40-...`): up to two chapters of any length, or more chapters while the total stays within 25 verses (it stops fetching as soon as it passes that).
   * The copyright notice, and a one-step link to Biblica ("Biblica" in its text), must be shown with the text. The notice is on every slide; the link is in the plugin panel.
-  * No bulk transfer of the text; electronic rights are text display only. The plugin never downloads a whole Bible or book, and a lookup across chapters is one call per chapter.
+  * No bulk transfer of the text; electronic rights are text display only. The plugin never downloads a whole Bible. A book named on its own is looked up whole only when it fits the publisher's limit (for the NIV: Obadiah, Philemon, 2 John, 3 John, Jude and Haggai), and a lookup across chapters is one call per chapter.
   * Files containing the content are to be destroyed within 72 hours of the agreement ending.
 * **Any other publisher (and Lockman's NASB and AMP, whose terms give no number):** the plugin allows a loose **five chapters** at a time.
 * **Lockman (NASB, AMP)**
