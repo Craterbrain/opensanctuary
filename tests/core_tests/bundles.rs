@@ -9,10 +9,10 @@ use std::path::{Path, PathBuf};
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfake-but-recognisable-png-bytes";
 
-struct Server {
-    addr: SocketAddr,
-    token: String,
-    db: Database,
+pub(super) struct Server {
+    pub(super) addr: SocketAddr,
+    pub(super) token: String,
+    pub(super) db: Database,
     engine: Arc<ShowEngine>,
     media: PathBuf,
     data: PathBuf,
@@ -20,12 +20,12 @@ struct Server {
 }
 
 impl Server {
-    fn url(&self, path: &str) -> String {
+    pub(super) fn url(&self, path: &str) -> String {
         format!("http://{}{}", self.addr, path)
     }
 }
 
-async fn start() -> Server {
+pub(super) async fn start() -> Server {
     let dirs = tempfile::tempdir().unwrap();
     let media = dirs.path().join("media");
     let data = dirs.path().join("data");

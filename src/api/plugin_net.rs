@@ -165,11 +165,46 @@ pub fn cache_lifetime(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     max_age.map(|m| m.saturating_sub(age))
 }
 
+/// A link the *operator* typed into the console (not a plugin's request): https on the standard port, no
+/// credentials, a host name (not an address), and, when it is fetched, only public addresses (`resolve_public`).
+pub fn check_public_url(url: &reqwest::Url) -> Result<(String, u16), String> {
+    if url.scheme() != "https" {
+        return Err("only https:// links can be downloaded".to_string());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("links with a user name or password are refused".to_string());
+    }
+    let host = url.host_str().ok_or("the link has no host")?.to_string();
+    if host.parse::<IpAddr>().is_ok() || host.eq_ignore_ascii_case("localhost") || !host.contains('.') {
+        return Err("the link has to name a public website, not an address or a local name".to_string());
+    }
+    let port = url.port_or_known_default().unwrap_or(443);
+    if port != 443 {
+        return Err("only the standard https port is allowed".to_string());
+    }
+    Ok((host, port))
+}
+
+/// GET a link the operator typed (see `check_public_url`), reading at most `max_bytes`. Redirects are followed
+/// (each hop checked again), and the connection goes to exactly the public address that was checked.
+pub async fn fetch_public_bytes(url: &str, max_bytes: usize) -> Result<FetchedBytes, String> {
+    fetch_bytes_with(&check_public_url, url, &[], max_bytes).await
+}
+
 /// GET `url` on behalf of a plugin allowed to reach `allowed` hosts, reading at most `max_bytes`.
 pub async fn fetch_bytes(allowed: &[String], url: &str, headers: &[(String, String)], max_bytes: usize) -> Result<FetchedBytes, String> {
+    fetch_bytes_with(&|u| check_url(allowed, u), url, headers, max_bytes).await
+}
+
+async fn fetch_bytes_with(
+    check: &(dyn Fn(&reqwest::Url) -> Result<(String, u16), String> + Send + Sync),
+    url: &str,
+    headers: &[(String, String)],
+    max_bytes: usize,
+) -> Result<FetchedBytes, String> {
     let mut current = reqwest::Url::parse(url.trim()).map_err(|e| format!("bad URL: {e}"))?;
     for _ in 0..=MAX_REDIRECTS {
-        let (host, port) = check_url(allowed, &current)?;
+        let (host, port) = check(&current)?;
         let addr = resolve_public(&host, port).await?;
         let client = reqwest::Client::builder()
             .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -263,6 +298,20 @@ mod tests {
         assert!(check_url(&w, &url("https://www.genius.com/")).is_ok());
         assert!(check_url(&w, &url("https://genius.com/")).is_err());
         assert!(check_url(&[], &url("https://genius.com/")).is_err());
+    }
+
+    #[test]
+    fn a_link_the_operator_typed_has_to_be_a_public_https_site() {
+        let ok = |u: &str| check_public_url(&reqwest::Url::parse(u).unwrap());
+        assert_eq!(ok("https://ebible.org/Scriptures/eng-web_usfm.zip").unwrap(), ("ebible.org".to_string(), 443));
+        assert_eq!(ok("https://raw.githubusercontent.com/o/r/main/b.zip").unwrap().1, 443);
+        for bad in [
+            "http://ebible.org/a.zip", "ftp://ebible.org/a.zip", "https://127.0.0.1/a.zip", "https://[::1]/a.zip", "https://10.0.0.5/a.zip",
+            "https://169.254.169.254/latest/meta-data", "https://localhost/a.zip", "https://intranet/a.zip", "https://user:pw@ebible.org/a.zip",
+            "https://ebible.org:8443/a.zip", "file:///etc/passwd",
+        ] {
+            assert!(ok(bad).is_err(), "{bad} must be refused");
+        }
     }
 
     #[test]

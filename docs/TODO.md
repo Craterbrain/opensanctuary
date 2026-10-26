@@ -24,6 +24,11 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 - [ ] **In-app update between two Flatpak releases.** The Flatpak bundle builds and installs, but updating from one `.flatpak` to the next hasn't been exercised. See `installer.md`.
 - [ ] **Bundle files on real installers.** `.ossong`/`.ospres`/`.osbible`/`.osservice` are covered by unit, HTTP, e2e and fuzz tests, but haven't been opened on a Windows install or the Flatpak. See `file-formats.md`.
 
+## Bible import
+
+- [ ] **More formats** for *Bible from a Link or File*: USX, OpenSong XML, SWORD modules (`docs/bible-import.md`).
+- [ ] **Copyright note per source:** a few well-known sources (ebible.org, CrossWire) could show their licence text before installing.
+
 ## Small improvements
 
 - [ ] **Manual "public domain" override on a song.** Today a song is corrected by adding a `CcliMetadata` entry in the notes pane. A checkbox on the song would be easier to find. See `CCLI_REPORTING.md`.

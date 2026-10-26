@@ -57,8 +57,8 @@
   /**
    * The catalog: the public-domain Bibles the OpenSanctuary project hosts (`ownEntries`), de-duplicated by
    * (abbreviation, language); English first, then by language and name. Entries:
-   * { id, name, language, abbreviation, source, provider, sourceKey }. (Other Bibles come from a GitHub
-   * repository the operator names, or, licensed ones, from the YouVersion plugin.)
+   * { id, name, language, abbreviation, source, provider, sourceKey }. (Other Bibles: Import > "Bible from a Link or
+   * File" in OpenSanctuary reads USFM, OSIS and Zefania; licensed ones come from the YouVersion plugin.)
    */
   function buildCatalog(ownEntries) {
     var map = {};
@@ -115,38 +115,6 @@
 
   function titleCase(s) {
     return String(s).trim().split(/\s+/).filter(Boolean).map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }).join(' ');
-  }
-
-  /** "owner/repo" -> { owner, repo } or null. */
-  function parseRepo(text) {
-    var parts = String(text).trim().replace(/^\/+|\/+$/g, '').split('/');
-    if (parts.length !== 2 || !/^[A-Za-z0-9_.-]+$/.test(parts[0]) || !/^[A-Za-z0-9_.-]+$/.test(parts[1])) return null;
-    // "." and ".." would be path segments in the API URL, not names.
-    if (/^\.+$/.test(parts[0]) || /^\.+$/.test(parts[1])) return null;
-    return { owner: parts[0], repo: parts[1] };
-  }
-
-  function githubContentsUrl(repo, path) {
-    var clean = String(path).split('/').filter(function (p) { return p && p !== '..' && p !== '.'; }).map(encodeURIComponent).join('/');
-    return 'https://api.github.com/repos/' + repo.owner + '/' + repo.repo + '/contents/' + clean;
-  }
-
-  /** Entries of a GitHub "versions/<lang>/<NAME>.json" listing -> catalog entries. */
-  function githubCatalogEntries(repo, langCode, files) {
-    var out = [];
-    (Array.isArray(files) ? files : []).forEach(function (f) {
-      if (!f || f.type !== 'file' || !/\.json$/.test(f.name || '')) return;
-      var stem = f.name.replace(/\.json$/, '').trim();
-      var abbr = makeAbbreviation(stem);
-      var url = f.download_url || ('https://raw.githubusercontent.com/' + repo.owner + '/' + repo.repo + '/main/' + f.path);
-      out.push({ id: 'gh_' + langCode + '_' + abbr.toLowerCase(), name: titleCase(stem), language: normalizeLanguage(langCode),
-                 abbreviation: abbr, source: 'GitHub: ' + repo.owner + '/' + repo.repo, provider: 'github', sourceKey: url });
-    });
-    return out;
-  }
-
-  function isRawGithubUrl(url) {
-    return /^https:\/\/raw\.githubusercontent\.com\//.test(String(url));
   }
 
   /** { "Book": { "1": { "1": "text" } } } (+ the file's URL for the version name) -> chapters. */
@@ -218,8 +186,7 @@
   }
 
   var api = {
-    BOOKS: BOOKS, normalizeLanguage: normalizeLanguage, buildCatalog: buildCatalog, makeAbbreviation: makeAbbreviation, titleCase: titleCase, parseRepo: parseRepo,
-    githubContentsUrl: githubContentsUrl, githubCatalogEntries: githubCatalogEntries, isRawGithubUrl: isRawGithubUrl,
+    BOOKS: BOOKS, normalizeLanguage: normalizeLanguage, buildCatalog: buildCatalog, makeAbbreviation: makeAbbreviation, titleCase: titleCase,
     OWN_CATALOG_URL: OWN_CATALOG_URL, isOwnBibleUrl: isOwnBibleUrl, ownCatalogEntries: ownCatalogEntries,
     parseGithubBible: parseGithubBible, exactBook: exactBook, chapterUrl: chapterUrl, passageUrl: passageUrl, parseBibleApi: parseBibleApi,
     chunk: chunk

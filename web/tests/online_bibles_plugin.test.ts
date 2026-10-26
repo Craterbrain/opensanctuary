@@ -87,7 +87,7 @@ describe("Online Bibles plugin: the OpenSanctuary Bibles repository", () => {
     const items = Bibles.parseGithubBible(body, OWN + "bibles/eng-kjv2006.json", "kjv");
     expect(items.map((i: any) => `${i.book} ${i.chapter} ${i.version}`)).toEqual(["John 3 KJV", "Tobit 1 KJV"]);
     expect(items[0].verses.map((v: any) => v.verse_number)).toEqual([16, 17]);
-    // Without one (the GitHub-repository import) it is still derived from the file name.
+    // Without one it is still derived from the file name.
     expect(Bibles.parseGithubBible(body, "https://raw.githubusercontent.com/o/r/main/versions/en/KJV.json")[0].version).toBe("KJV");
   });
 });
@@ -102,27 +102,16 @@ describe("Online Bibles plugin: downloads", () => {
     expect(chapters).toBe(1189);
   });
 
-  test("GitHub repo names and listings", () => {
-    expect(Bibles.parseRepo("arron-taylor/bible-versions")).toEqual({ owner: "arron-taylor", repo: "bible-versions" });
-    expect(Bibles.parseRepo("/a/b/")).toEqual({ owner: "a", repo: "b" });
-    for (const bad of ["nope", "a/b/c", "a/", "/", "a b/c", "../x"]) expect(Bibles.parseRepo(bad)).toBeNull();
-    expect(Bibles.githubContentsUrl({ owner: "o", repo: "r" }, "versions/en")).toBe("https://api.github.com/repos/o/r/contents/versions/en");
-    expect(Bibles.githubContentsUrl({ owner: "o", repo: "r" }, "../../etc/passwd")).toBe("https://api.github.com/repos/o/r/contents/etc/passwd");
+  test("abbreviations and titles from file names", () => {
     expect(Bibles.makeAbbreviation("KING JAMES BIBLE")).toBe("KJB");
     expect(Bibles.makeAbbreviation("WORLD ENGLISH BIBLE")).toBe("WEB");
     expect(Bibles.makeAbbreviation("KJV")).toBe("KJV");
     expect(Bibles.titleCase("KING JAMES BIBLE")).toBe("King James Bible");
-    const entries = Bibles.githubCatalogEntries({ owner: "o", repo: "r" }, "en", [
-      { type: "file", name: "KING JAMES BIBLE.json", path: "versions/en/KING JAMES BIBLE.json", download_url: "https://raw.githubusercontent.com/o/r/main/versions/en/KING%20JAMES%20BIBLE.json" },
-      { type: "file", name: "README.md", path: "x" }, { type: "dir", name: "sub", path: "y" }]);
-    expect(entries.length).toBe(1);
-    expect(entries[0]).toMatchObject({ id: "gh_en_kjb", name: "King James Bible", language: "English", abbreviation: "KJB", provider: "github" });
-    expect(Bibles.isRawGithubUrl(entries[0].sourceKey)).toBe(true);
-    expect(Bibles.isRawGithubUrl("https://evil.test/raw.githubusercontent.com/")).toBe(false);
-    expect(Bibles.isRawGithubUrl("http://raw.githubusercontent.com/x")).toBe(false);
+    // The GitHub-repository browser is gone (Import > Bible from a Link or File replaced it).
+    for (const gone of ["parseRepo", "githubContentsUrl", "githubCatalogEntries", "isRawGithubUrl"]) expect((Bibles as any)[gone]).toBeUndefined();
   });
 
-  test("GitHub nested-JSON Bible -> chapters, sorted numerically", () => {
+  test("nested-JSON Bible (our own format) -> chapters, sorted numerically", () => {
     const bible = { Genesis: { "10": { "1": "ten", "2": "ten-two" }, "2": { "10": "b", "9": "a" }, bad: "x" }, Junk: 5 };
     const chapters = Bibles.parseGithubBible(JSON.stringify(bible), "https://raw.githubusercontent.com/o/r/main/versions/en/KING%20JAMES%20BIBLE.json");
     expect(chapters.map((c: any) => c.chapter)).toEqual([2, 10]);

@@ -10,7 +10,7 @@
     .page-head h4 { margin-bottom: var(--os-space-2); }
     .page-head p { margin: 0; font-size: var(--os-fs-sm); }
     section { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
-    #catalog-list, #gh-list { flex: 1 1 auto; min-height: 120px; }
+    #catalog-list { flex: 1 1 auto; min-height: 120px; }
     .form-row select { flex: 0 0 200px; }
     .flex-grow { flex: 1 1 auto; }
     .abbr { display: inline-block; min-width: 56px; margin-right: var(--os-space-3); color: var(--os-accent-text); font-weight: var(--os-fw-semibold); }
@@ -19,12 +19,11 @@
 <body>
   <div class="page-head">
     <h4>🌐 Online Bibles</h4>
-    <p>Download whole translations into your Bible library, browse a GitHub Bible repository, or look up a passage or book.</p>
+    <p>Download the public-domain translations OpenSanctuary hosts into your Bible library, or look up a passage or book. For any other Bible file or link (USFM, OSIS, Zefania), use <strong>Import &rarr; Bible from a Link or File</strong>.</p>
   </div>
 
   <div class="os-tabs" role="tablist">
     <button type="button" id="tab-catalog" class="tab active" role="tab">🌐 Online Bibles</button>
-    <button type="button" id="tab-github" class="tab" role="tab">🐙 GitHub Repos</button>
     <button type="button" id="tab-passage" class="tab" role="tab">📖 Passage</button>
   </div>
 
@@ -36,19 +35,6 @@
     </div>
     <div class="list-meta"><span id="catalog-count"></span><span>Source: OpenSanctuary Bibles (public domain)</span></div>
     <ul id="catalog-list" class="os-list"></ul>
-  </section>
-
-  <section id="view-github" class="hidden">
-    <div class="card">
-      <h4>🐙 Import from a GitHub Bible repository</h4>
-      <p>Browse a public repository laid out like <strong>arron-taylor/bible-versions</strong> to find and download Bible translations.</p>
-      <div class="form-row">
-        <input id="gh-repo" class="mono" type="text" placeholder="owner/repo" value="arron-taylor/bible-versions" autocomplete="off">
-        <input id="gh-path" class="mono" type="text" placeholder="versions path" value="versions" autocomplete="off" style="flex: 0 0 140px">
-        <button type="button" id="gh-browse" class="btn btn-primary">🔍 Browse</button>
-      </div>
-    </div>
-    <ul id="gh-list" class="os-list"></ul>
   </section>
 
   <section id="view-passage" class="hidden">
