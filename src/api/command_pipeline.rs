@@ -226,7 +226,9 @@ pub fn run_command_pipeline(app: &AppState, value: Value, origin: &CommandOrigin
     let value = expand_shorthand(app, value);
 
     let cmd: ShowCommand = serde_json::from_value(value.clone()).map_err(|e| {
-        tracing::warn!("command from {:?} failed to parse, dropped: {} (payload: {})", origin, e, value);
+        // Only the start of the payload: it may carry licensed Bible text, which is never written to a log.
+        let shown: String = value.to_string().chars().take(160).collect();
+        tracing::warn!("command from {:?} failed to parse, dropped: {} (payload starts: {})", origin, e, shown);
         CommandRejection::Unparseable(e.to_string())
     })?;
 
