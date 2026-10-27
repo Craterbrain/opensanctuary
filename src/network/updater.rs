@@ -54,8 +54,11 @@ pub fn verify_signature(data: &[u8], signature_text: &str, public_key_b64: &str)
         .map_err(|e| format!("Invalid public key: {}", e))?;
     let signature = Signature::decode(signature_text)
         .map_err(|e| format!("Invalid signature: {}", e))?;
+    // Legacy (non-prehashed, "Ed") signatures are accepted: they are still a full Ed25519 signature over the whole file, and the release
+    // workflow's minisign signs `checksums.txt` that way unless told to prehash. Refusing them made every in-app update fail with
+    // "Unexpected signature algorithm" (found by updating a real 0.3.8 install to 0.3.9).
     public_key
-        .verify(data, &signature, false)
+        .verify(data, &signature, true)
         .map_err(|e| format!("Signature verification failed: {}", e))
 }
 
@@ -722,5 +725,30 @@ mod tests {
         assert!(path.exists());
         assert_eq!(path.file_name().and_then(|n| n.to_str()), Some(release.asset_name.as_str()));
         fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+}
+
+#[cfg(test)]
+mod real_release_signature_tests {
+    use super::*;
+
+    const V039_SUMS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/release/v0.3.9-checksums.txt");
+    const V039_SIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/release/v0.3.9-checksums.txt.minisig");
+
+    /// The real `checksums.txt` and `.minisig` the release workflow published for v0.3.9 (a legacy "Ed" signature) must verify
+    /// against the embedded release key, or no installed copy can update.
+    #[test]
+    fn the_checksums_signature_published_for_v0_3_9_verifies() {
+        let data = std::fs::read(V039_SUMS).unwrap();
+        let sig = std::fs::read_to_string(V039_SIG).unwrap();
+        verify_signature(&data, &sig, RELEASE_PUBLIC_KEY_B64).expect("a real release signature verifies");
+    }
+
+    #[test]
+    fn a_changed_checksums_file_does_not_verify_against_the_real_signature() {
+        let mut data = std::fs::read(V039_SUMS).unwrap();
+        data.extend_from_slice(b"0000  evil.exe\n");
+        let sig = std::fs::read_to_string(V039_SIG).unwrap();
+        assert!(verify_signature(&data, &sig, RELEASE_PUBLIC_KEY_B64).is_err());
     }
 }

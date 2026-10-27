@@ -278,7 +278,9 @@ jobs:
       - name: Sign checksums.txt
         uses: thomasdesr/minisign-action@5b0c52ffbc0ddf2210273cd2f13d5cfb8c5d32dd # v1
         with:
-          args: -Sm dist/checksums.txt
+          # -H: sign the prehashed form ("ED"). Without it this action's minisign writes the legacy "Ed" form, which copies of the app
+          # built before the verifier accepted it (0.3.8, 0.3.9) refuse ("Unexpected signature algorithm").
+          args: -SHm dist/checksums.txt
           minisign_key: ${{ secrets.MINISIGN_SECRET_KEY }}
           password: ${{ secrets.MINISIGN_PASSWORD }}
 
