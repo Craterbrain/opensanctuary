@@ -413,6 +413,7 @@ export const createItemTitle = document.getElementById('create-item-title') as H
 export const createItemAuthor = document.getElementById('create-item-author') as HTMLInputElement | null;
 const createItemTheme = document.getElementById('create-item-theme');
 export const createItemCopyright = document.getElementById('create-item-copyright') as HTMLInputElement | null;
+export const createItemPublicDomain = document.getElementById('create-item-public-domain') as HTMLInputElement | null;
 export const createItemContent = document.getElementById('create-item-content') as HTMLInputElement | null;
 const editorPreviewCanvas = document.getElementById('editor-preview-canvas');
 const editorPreviewText = document.getElementById('editor-preview-text');
@@ -496,6 +497,7 @@ function resetCreateModal() {
   if (createItemAuthor) createItemAuthor.value = '';
   if (createItemContent) createItemContent.value = '';
   if (createItemCopyright) createItemCopyright.value = '';
+  if (createItemPublicDomain) createItemPublicDomain.checked = false;
   currentEditorType = 'song';
   document.querySelectorAll<HTMLElement>('.type-pill').forEach(pill => {
     pill.classList.toggle('active', pill.dataset.type === 'song');

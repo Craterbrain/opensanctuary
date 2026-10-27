@@ -873,7 +873,7 @@ fn service_item_note(item: &crate::core::models::ScheduleItem) -> Option<Copyrig
     let meta = item.slides.iter().find_map(|s| s.ccli_metadata.as_ref())?;
     let copyright = meta.copyright.clone().unwrap_or_default();
     let ccli = meta.ccli_number.clone().unwrap_or_default();
-    if Database::is_public_domain_metadata(&copyright, &ccli) {
+    if meta.public_domain == Some(true) || Database::is_public_domain_metadata(&copyright, &ccli) {
         return None;
     }
     Some(CopyrightNote { title: item.title.clone(), author: meta.author.clone().unwrap_or_else(|| item.author_or_ref.clone()), copyright, ccli_number: ccli })

@@ -65,3 +65,22 @@ async fn the_hymn_library_is_downloaded_added_once_and_gated() {
     assert_eq!((j["added"].as_u64(), j["already_present"].as_u64()), (Some(0), Some(2)));
     assert_eq!(s.db.get_songs().unwrap().len(), 2);
 }
+
+#[tokio::test]
+async fn the_song_override_travels_over_the_api_and_kept_bible_passages_can_be_deleted_with_the_token() {
+    let s = start().await;
+    let http = reqwest::Client::new();
+
+    let mut song = hymn("mine", "Our Arrangement", "Church choir", "Arr. © 2001 Example Music, based on a public domain hymn");
+    song["public_domain_override"] = true.into();
+    let post = http.post(s.url("/api/songs")).header("x-host-token", &s.token).json(&song).send().await.unwrap();
+    assert!(post.status().is_success(), "{}", post.status());
+    let back: Vec<serde_json::Value> = http.get(s.url("/api/songs")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(back.iter().find(|x| x["id"] == "mine").unwrap()["public_domain_override"], true);
+    assert!(s.db.get_songs().unwrap().iter().any(|x| x.id == "mine"));
+
+    // Deleting the kept Bible passages changes the library, so it needs the token.
+    assert_eq!(http.delete(s.url("/api/licensed-scripture")).send().await.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+    let j: serde_json::Value = http.delete(s.url("/api/licensed-scripture")).header("x-host-token", &s.token).send().await.unwrap().json().await.unwrap();
+    assert_eq!((j["success"].as_bool(), j["removed"].as_u64()), (Some(true), Some(0)));
+}

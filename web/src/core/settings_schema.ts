@@ -319,6 +319,14 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
     actionLabel: 'Reveal in File Manager',
   },
   {
+    key: 'clearLicensedScripture',
+    label: 'Kept Bible passages',
+    description: 'Licensed Bible text (the NIV and others from a publisher) is shown but only kept for the time the publisher allows, and is deleted by itself when that is up. This deletes whatever is kept right now. A service that names a passage just asks for it again.',
+    category: 'storage',
+    control: 'action',
+    actionLabel: 'Delete kept passages now',
+  },
+  {
     key: 'biblesDirectory',
     label: 'Bibles Directory',
     description: 'Where installed Bible translation files (.db) are read from. Leave blank to use the default alongside the data directory. Requires a restart to take effect.',

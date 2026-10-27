@@ -30,6 +30,7 @@ fn song(id: &str, title: &str, copyright: Option<&str>, ccli: Option<&str>, slid
         copyright: copyright.map(str::to_string),
         ccli_number: ccli.map(str::to_string),
         slides,
+        public_domain_override: None,
         theme_name: None,
     }
 }
@@ -242,7 +243,7 @@ fn a_service_carries_its_items_media_and_copyright_notes() {
         slideshow_loop: false,
         licensed: None,
     };
-    item.slides[0].ccli_metadata = Some(CcliMetadata { song_title: None, author: Some("Someone".into()), copyright: Some("© 2020 Label".into()), ccli_number: Some("123".into()) });
+    item.slides[0].ccli_metadata = Some(CcliMetadata { song_title: None, author: Some("Someone".into()), copyright: Some("© 2020 Label".into()), ccli_number: Some("123".into()), public_domain: None });
     let schedule = Schedule { id: "sch".into(), title: "Sunday".into(), items: vec![item], selected_item_index: None, is_modified: true, schedule_version: 4 };
 
     let (bytes, report) = export_to_vec(|out| export_service(&db, lib.path(), &schedule, Some("Easter Service"), out));

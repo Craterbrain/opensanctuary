@@ -10,7 +10,8 @@ impl Database {
 
     /// Categorizes songs into public domain vs. copyrighted works
     pub fn is_public_domain_song(song: &Song) -> bool {
-        Self::is_public_domain_metadata(song.copyright.as_deref().unwrap_or(""), song.ccli_number.as_deref().unwrap_or(""))
+        song.public_domain_override == Some(true)
+            || Self::is_public_domain_metadata(song.copyright.as_deref().unwrap_or(""), song.ccli_number.as_deref().unwrap_or(""))
     }
 
     /// The same test on bare metadata, for callers that don't hold a `Song` (a schedule item only
@@ -19,7 +20,7 @@ impl Database {
         let copyright = copyright.trim().to_lowercase();
         let ccli = ccli_number.trim();
 
-        if copyright.contains("public domain") || copyright == "pd" {
+        if crate::core::models::copyright_text_is_public_domain(&copyright) {
             return true;
         }
         // Traditional hymns or songs with no copyright/CCLI metadata default to public domain
@@ -35,7 +36,7 @@ impl Database {
         let read_songs = |conn_arc: &Arc<Mutex<Connection>>| -> Result<Vec<Song>> {
             let conn = conn_arc.lock().unwrap_or_else(|e| e.into_inner());
             let mut stmt = conn.prepare_cached(
-                "SELECT id, title, author, copyright, ccli_number, slides_json, theme_name FROM songs ORDER BY title ASC",
+                "SELECT id, title, author, copyright, ccli_number, slides_json, theme_name, public_domain_override FROM songs ORDER BY title ASC",
             )?;
             let song_iter = stmt.query_map([], |row| {
                 let slides_json: String = row.get(5)?;
@@ -48,6 +49,7 @@ impl Database {
                     ccli_number: row.get(4)?,
                     slides,
                     theme_name: row.get(6)?,
+                    public_domain_override: row.get::<_, Option<i64>>(7)?.map(|v| v != 0),
                     alternate_title: None,
                 })
             })?;
@@ -75,7 +77,7 @@ impl Database {
         {
             let conn = self.songs_pd_conn.lock().unwrap_or_else(|e| e.into_inner());
             let mut stmt = conn.prepare_cached(
-                "SELECT id, title, author, copyright, ccli_number, slides_json, theme_name FROM songs WHERE id = ?1",
+                "SELECT id, title, author, copyright, ccli_number, slides_json, theme_name, public_domain_override FROM songs WHERE id = ?1",
             )?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
@@ -89,6 +91,7 @@ impl Database {
                     ccli_number: row.get(4)?,
                     slides,
                     theme_name: row.get(6)?,
+                    public_domain_override: row.get::<_, Option<i64>>(7)?.map(|v| v != 0),
                     alternate_title: None,
                 }));
             }
@@ -98,7 +101,7 @@ impl Database {
         {
             let conn = self.songs_cr_conn.lock().unwrap_or_else(|e| e.into_inner());
             let mut stmt = conn.prepare_cached(
-                "SELECT id, title, author, copyright, ccli_number, slides_json, theme_name FROM songs WHERE id = ?1",
+                "SELECT id, title, author, copyright, ccli_number, slides_json, theme_name, public_domain_override FROM songs WHERE id = ?1",
             )?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
@@ -112,6 +115,7 @@ impl Database {
                     ccli_number: row.get(4)?,
                     slides,
                     theme_name: row.get(6)?,
+                    public_domain_override: row.get::<_, Option<i64>>(7)?.map(|v| v != 0),
                     alternate_title: None,
                 }));
             }
@@ -132,8 +136,8 @@ impl Database {
         {
             let conn = target_arc.lock().unwrap_or_else(|e| e.into_inner());
             conn.execute(
-                "INSERT OR REPLACE INTO songs (id, title, author, copyright, ccli_number, slides_json, theme_name)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT OR REPLACE INTO songs (id, title, author, copyright, ccli_number, slides_json, theme_name, public_domain_override)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     song.id,
                     song.title,
@@ -141,7 +145,8 @@ impl Database {
                     song.copyright,
                     song.ccli_number,
                     slides_json,
-                    song.theme_name
+                    song.theme_name,
+                    song.public_domain_override.map(i64::from)
                 ],
             )?;
         }
@@ -174,7 +179,7 @@ impl Database {
         let search_conn = |conn_arc: &Arc<Mutex<Connection>>| -> Result<Vec<Song>> {
             let conn = conn_arc.lock().unwrap_or_else(|e| e.into_inner());
             let mut stmt = conn.prepare_cached(
-                "SELECT id, title, author, copyright, ccli_number, slides_json, theme_name
+                "SELECT id, title, author, copyright, ccli_number, slides_json, theme_name, public_domain_override
                  FROM songs
                  WHERE title LIKE ?1 OR author LIKE ?1 OR slides_json LIKE ?1
                  ORDER BY title ASC LIMIT 50",
@@ -190,6 +195,7 @@ impl Database {
                     ccli_number: row.get(4)?,
                     slides,
                     theme_name: row.get(6)?,
+                    public_domain_override: row.get::<_, Option<i64>>(7)?.map(|v| v != 0),
                     alternate_title: None,
                 })
             })?;

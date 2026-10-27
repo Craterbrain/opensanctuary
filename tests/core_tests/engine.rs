@@ -42,7 +42,7 @@ fn test_show_engine_schedule_and_live_navigation() {
     let song = Song {
         id: "song_123".to_string(),
         title: "Amazing Grace".to_string(),
-        author: "John Newton".to_string(), alternate_title: None,
+        author: "John Newton".to_string(), alternate_title: None, public_domain_override: None,
         copyright: None,
         ccli_number: None,
         slides: vec![
@@ -146,7 +146,7 @@ fn test_stage_item_preview_click_preserves_item() {
         id: "song_preview_test".to_string(),
         title: "Blessed Assurance".to_string(),
         author: "Fanny Crosby".to_string(),
-        alternate_title: None,
+        alternate_title: None, public_domain_override: None,
         copyright: None,
         ccli_number: None,
         slides: vec![
@@ -271,7 +271,7 @@ fn test_engine_undo_and_redo_macro_compensation() {
         id: "song_1".to_string(),
         title: "Song One".to_string(),
         author: "Author".to_string(),
-        alternate_title: None, copyright: None, ccli_number: None, slides: vec![], theme_name: None,
+        alternate_title: None, public_domain_override: None, copyright: None, ccli_number: None, slides: vec![], theme_name: None,
     };
     engine.execute_command(ShowCommand::AddToSchedule(song1.to_schedule_item()));
     assert_eq!(engine.snapshot().schedule.items.len(), 1);
@@ -281,7 +281,7 @@ fn test_engine_undo_and_redo_macro_compensation() {
         id: "song_2".to_string(),
         title: "Song Two".to_string(),
         author: "Author".to_string(),
-        alternate_title: None, copyright: None, ccli_number: None, slides: vec![], theme_name: None,
+        alternate_title: None, public_domain_override: None, copyright: None, ccli_number: None, slides: vec![], theme_name: None,
     };
     engine.execute_command(ShowCommand::AddToSchedule(song2.to_schedule_item()));
     assert_eq!(engine.snapshot().schedule.items.len(), 2);

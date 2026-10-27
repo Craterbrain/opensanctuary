@@ -62,7 +62,7 @@ fn parse_ews_v5_songs(bytes: &[u8]) -> Option<Vec<ScheduleItem>> {
             continue;
         }
         let ccli = (!copyright.is_empty()).then(|| crate::core::models::CcliMetadata {
-            song_title: Some(title.clone()), author: (!author.is_empty()).then(|| author.clone()), copyright: Some(copyright.clone()), ccli_number: None,
+            song_title: Some(title.clone()), author: (!author.is_empty()).then(|| author.clone()), copyright: Some(copyright.clone()), ccli_number: None, public_domain: None,
         });
         let slides: Vec<Slide> = slides.into_iter().map(|s| Slide { ccli_metadata: ccli.clone(), ..s }).collect();
         items.push(ScheduleItem {

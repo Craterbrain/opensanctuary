@@ -78,6 +78,7 @@ import {
   createItemAuthor,
   createItemContent,
   createItemCopyright,
+  createItemPublicDomain,
   createItemTitle,
   createModal,
   currentContextMenuTarget,
@@ -240,6 +241,7 @@ function openSlideEditor(type = 'song') {
     else createItemAuthor.placeholder = 'Speaker / Ministry';
   }
   if (createItemCopyright) createItemCopyright.value = '';
+  if (createItemPublicDomain) createItemPublicDomain.checked = false;
   if (createItemContent) createItemContent.value = '';
 
   editingScheduleContext = null;
@@ -264,6 +266,7 @@ function editExistingItem(item: any, scheduleContext: { itemIndex: number; slide
   if (createItemTitle) createItemTitle.value = item.title || item.name || item.reference || '';
   if (createItemAuthor) createItemAuthor.value = item.author || item.version || '';
   if (createItemCopyright) createItemCopyright.value = item.copyright || item.ccli_number || '';
+  if (createItemPublicDomain) createItemPublicDomain.checked = item.public_domain_override === true;
   if (createItemContent) createItemContent.value = '';
 
   let editorSlides: EditorSlide[] = [];
@@ -590,6 +593,7 @@ async function saveEditorItem(addToSchedule = false) {
     alternate_title: null,
     copyright: copyright || 'Public Domain',
     ccli_number: null,
+    public_domain_override: createItemPublicDomain?.checked ? true : null,
     key: null,
     tempo: null,
     verse_order: null,

@@ -211,6 +211,19 @@ export function renderSettingRow(def: SettingDef, highlight: boolean): HTMLEleme
           setTimeout(() => { btn.disabled = false; btn.textContent = def.actionLabel || 'Run'; }, 2500);
         }
       });
+    } else if (def.key === 'clearLicensedScripture') {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const res = await fetch('/api/licensed-scripture', { method: 'DELETE', headers: hostTokenHeader() });
+          const j = res.ok ? await res.json() : null;
+          btn.textContent = j ? `Deleted ${j.removed} passage${j.removed === 1 ? '' : 's'}` : 'Could not delete';
+        } catch {
+          btn.textContent = 'Could not delete';
+        } finally {
+          setTimeout(() => { btn.disabled = false; btn.textContent = def.actionLabel || 'Run'; }, 2500);
+        }
+      });
     } else if (def.key === 'ccliReport') {
       btn.addEventListener('click', () => openCcliReportModal());
     }

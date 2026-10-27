@@ -124,7 +124,8 @@
           <span class="icon"><img data-icon="import" src="icons/orange/import.svg" alt="" draggable="false"></span>
           <span class="label">Import</span>
         </button>
-        <button class="ribbon-btn" id="btn-store" title="Media & Scripture Store">
+        <!-- Hidden for now (docs/TODO.md "Decide the Store dialog"); the dialog and its code are intact, remove `hidden` to bring the button back. -->
+        <button class="ribbon-btn" id="btn-store" title="Media & Scripture Store" hidden>
           <span class="icon"><img data-icon="store" src="icons/orange/store.svg" alt="" draggable="false"></span>
           <span class="label">Store</span>
         </button>
@@ -677,6 +678,7 @@
             <div class="form-group">
               <span class="studio-meta-label">CCLI / Copyright:</span>
               <input type="text" class="search-input" id="create-item-copyright" placeholder="Public Domain / CCLI #">
+              <label class="form-help" for="create-item-public-domain" title="Use when the copyright text above makes OpenSanctuary think a public-domain song is protected (or the other way round for the report)."><input type="checkbox" id="create-item-public-domain"> This song is public domain (ignore the copyright text)</label>
             </div>
           </div>
 

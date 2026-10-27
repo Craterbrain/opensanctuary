@@ -238,4 +238,12 @@ if [ -n "$optional_missing" ]; then
   echo "  yt-dlp install options: https://github.com/yt-dlp/yt-dlp#installation"
 fi
 
+# A copy that was running when the files were replaced keeps running the old version until it is restarted (the program file was swapped
+# underneath it). Builds with "restart to finish updating" offer that themselves; older ones don't, so say so here.
+if pgrep -x opensanctuary >/dev/null 2>&1; then
+  echo
+  echo "OpenSanctuary is running the previous version. Restart it to use $VERSION (pick a moment between services; the console and the"
+  echo "output windows close for a few seconds). Newer versions offer this themselves under Settings > About."
+fi
+
 echo "Run: opensanctuary"

@@ -10,7 +10,7 @@ fn test_database_crud_and_search() {
     let song = Song {
         id: "song_test_1".to_string(),
         title: "10,000 Reasons".to_string(),
-        author: "Matt Redman".to_string(), alternate_title: None,
+        author: "Matt Redman".to_string(), alternate_title: None, public_domain_override: None,
         copyright: Some("2011".to_string()),
         ccli_number: Some("6016351".to_string()),
         slides: vec![Slide { text: "Bless the Lord O my soul".to_string(), ..Default::default() }],
@@ -221,7 +221,7 @@ fn test_get_by_id_methods() {
         id: "song_by_id_1".to_string(),
         title: "Blessed Be Your Name".to_string(),
         author: "Matt Redman".to_string(),
-        alternate_title: None,
+        alternate_title: None, public_domain_override: None,
         copyright: None,
         ccli_number: None,
         slides: vec![Slide { text: "Every blessing".to_string(), ..Default::default() }],
@@ -359,7 +359,7 @@ fn test_split_database_architecture_and_folder_autocreation() {
         id: "song_pd_01".to_string(),
         title: "Amazing Grace".to_string(),
         author: "John Newton (1779)".to_string(),
-        alternate_title: None,
+        alternate_title: None, public_domain_override: None,
         copyright: Some("Public Domain".to_string()),
         ccli_number: None,
         slides: vec![Slide { text: "Amazing grace how sweet the sound".to_string(), ..Default::default() }],
@@ -372,7 +372,7 @@ fn test_split_database_architecture_and_folder_autocreation() {
         id: "song_cr_01".to_string(),
         title: "10,000 Reasons".to_string(),
         author: "Matt Redman".to_string(),
-        alternate_title: None,
+        alternate_title: None, public_domain_override: None,
         copyright: Some("2011 Thankyou Music / Said And Done Music".to_string()),
         ccli_number: Some("6016351".to_string()),
         slides: vec![Slide { text: "Bless the Lord O my soul".to_string(), ..Default::default() }],
@@ -821,4 +821,50 @@ fn test_a_legacy_song_that_cant_be_migrated_keeps_the_legacy_table() {
     let c = rusqlite::Connection::open(&path).unwrap();
     let kept: i64 = c.query_row("SELECT COUNT(*) FROM songs", [], |r| r.get(0)).unwrap();
     assert_eq!(kept, 2, "the legacy table (and the row that couldn't move) must still be there");
+}
+
+#[test]
+fn a_public_domain_line_with_a_rights_holder_in_it_is_not_public_domain() {
+    let pd = |c: &str| Database::is_public_domain_metadata(c, "");
+    assert!(pd("Public Domain"));
+    assert!(pd("  public domain "));
+    assert!(pd("PD"));
+    assert!(pd("Words: Public Domain; Tune: Public Domain"));
+    assert!(pd("Text 1779, public domain"));
+    assert!(pd(""), "a blank line is still treated as traditional (unchanged)");
+    // Songs built on public-domain works but with their own rights holder.
+    assert!(!pd("Arr. © 2001 Example Music, based on a public domain hymn"));
+    assert!(!pd("Public Domain text; music (c) Someone"));
+    assert!(!pd("Public domain lyrics. Arrangement 1998 Smith. All rights reserved"));
+    assert!(!pd("Public Domain; used by permission"));
+    assert!(!pd("© 2010 Worship Co"));
+}
+
+#[test]
+fn a_song_marked_public_domain_by_the_operator_is_filed_and_scheduled_as_public_domain() {
+    let db = Database::in_memory().unwrap();
+    let mut song = Song::new("O Come to the Altar (our arrangement)", "Church choir");
+    song.copyright = Some("Arr. © 2001 Example Music, based on a public domain hymn".into());
+    song.slides = vec![Slide { text: "Come to the altar of grace and mercy".into(), ..Default::default() }];
+    assert!(!Database::is_public_domain_song(&song));
+
+    // The schedule item carries the song's copyright on its slides (the CCLI report and the copyright pop-up read it there).
+    let item = song.to_schedule_item();
+    let meta = item.slides[0].ccli_metadata.as_ref().expect("copyright travels with the song");
+    assert_eq!(meta.copyright.as_deref(), song.copyright.as_deref());
+    assert_eq!(meta.public_domain, None);
+
+    song.public_domain_override = Some(true);
+    assert!(Database::is_public_domain_song(&song));
+    db.insert_song(&song).unwrap();
+    let back = db.get_song_by_id(&song.id).unwrap().unwrap();
+    assert_eq!(back.public_domain_override, Some(true), "the override is stored");
+    assert_eq!(back.to_schedule_item().slides[0].ccli_metadata.as_ref().unwrap().public_domain, Some(true));
+
+    // Clearing it sends the song back to the copyrighted side and the choice is gone.
+    song.public_domain_override = None;
+    db.insert_song(&song).unwrap();
+    let back = db.get_song_by_id(&song.id).unwrap().unwrap();
+    assert_eq!(back.public_domain_override, None);
+    assert_eq!(db.get_songs().unwrap().iter().filter(|s| s.id == song.id).count(), 1, "never in both song files");
 }
