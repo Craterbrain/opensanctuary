@@ -73,6 +73,10 @@ cp web/dist/*.js "$STAGE/web/dist/"
 cp -r web/icons "$STAGE/web/icons"
 cp -r web/pattern-thumbs "$STAGE/web/pattern-thumbs"  # pre-rendered pattern previews (web/scripts/render_pattern_thumbs.ts)
 cp -r target/bundled-plugins/. "$STAGE/web/plugins/"  # packaging/fetch-plugins.sh, run by build-deb.sh
+# install.sh rides along (verified by the same signed checksums as the tarball), so an installed copy can be re-run or repaired offline from
+# its own folder, and a fix to the script reaches installs with every release.
+cp packaging/install.sh "$STAGE/install.sh"
+chmod +x "$STAGE/install.sh"
 [ "${SKIP_TV_APK:-0}" = "1" ] || cp "$TV_APK" "$STAGE/tv-client/opensanctuary-tv.apk"
 
 mkdir -p target/release-artifacts
