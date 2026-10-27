@@ -1,0 +1,5 @@
+4500f19133558f1338ba8d2d543ce0671b336807c22db0a5e468145261698e8b  opensanctuary-0.3.9-x86_64.flatpak
+c8000dec351ffddfa10a80469a21174084f4dea0ca36ab9109a743fce80eb4ed  opensanctuary-linux-x64-0.3.9.tar.gz
+9e132ab282c5adb10d173a4e6e2e06a3a86f86716e77e998777f7ddad592df2d  opensanctuary-setup-x64.exe
+befc80b511a5d5a33eaec7bca963aad2c55eaa0f1fdd00d800f1a728b11a5bec  opensanctuary-windows-x64-0.3.9.zip
+be5446da34f29a1c9533d323b16f5f48f093675d4f85c6039df2951840cce8a5  opensanctuary_0.3.9-1_amd64.deb
