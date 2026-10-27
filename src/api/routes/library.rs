@@ -33,15 +33,10 @@ pub(super) async fn create_song(
     Ok(Json(song))
 }
 
-/// GET /api/songs/public-domain -- how many of the bundled public-domain hymns the library has, and how many it lacks.
-pub(super) async fn get_public_domain_hymns(State(app): State<AppState>) -> Result<impl IntoResponse, StatusCode> {
-    let r = crate::storage::pd_songs::missing(&app.db).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(serde_json::json!({ "total": r.total, "present": r.already_present, "missing": r.total - r.already_present })))
-}
-
-/// POST /api/songs/public-domain -- adds the bundled public-domain hymns the library doesn't have (never overwriting or duplicating a song).
+/// POST /api/songs/public-domain -- downloads the public-domain hymn library and adds the hymns the library doesn't have (never overwriting or duplicating a song).
 pub(super) async fn post_public_domain_hymns(State(app): State<AppState>) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let r = crate::storage::pd_songs::seed(&app.db).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let hymns = crate::storage::pd_songs::download().await.map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
+    let r = crate::storage::pd_songs::seed(&app.db, &hymns).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(serde_json::json!({ "success": true, "total": r.total, "added": r.added, "already_present": r.already_present })))
 }
 
@@ -247,7 +242,7 @@ pub(super) fn router() -> Router<AppState> {
     use axum::routing::get;
     Router::new()
         .route("/api/songs", get(get_songs).post(create_song))
-        .route("/api/songs/public-domain", get(get_public_domain_hymns).post(post_public_domain_hymns))
+        .route("/api/songs/public-domain", axum::routing::post(post_public_domain_hymns))
         .route("/api/songs/{id}", delete(delete_song))
         .route("/api/scriptures", get(get_scriptures).post(create_scripture))
         .route("/api/scriptures/{id}", delete(delete_scripture))

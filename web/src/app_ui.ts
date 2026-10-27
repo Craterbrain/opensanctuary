@@ -2056,7 +2056,6 @@ function openImportModal(initialMode = 'local') {
   if (importModal) showModal(importModal);
   resetImportModal();
   void refreshExportBibleChoices();
-  refreshPublicDomainCard();
   if (initialMode) setImportMode(initialMode);
 }
 
@@ -2303,7 +2302,7 @@ on('file-bundle-import', 'change', async (e: Event) => {
 });
 
 initBibleImportCard(() => { void refreshInstalledBibles(); });
-const refreshPublicDomainCard = initPublicDomainCard(() => { void loadLibraryTab('songs'); });
+initPublicDomainCard('btn-add-public-domain', 'public-domain-status', () => { void loadLibraryTab('songs'); });
 
 on('btn-export-all-songs', 'click', () => { void exportBundle({ kind: 'song' }, 'Songs'); });
 on('btn-export-all-presentations', 'click', () => { void exportBundle({ kind: 'presentation' }, 'Presentations'); });

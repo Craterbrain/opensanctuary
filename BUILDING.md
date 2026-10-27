@@ -66,8 +66,8 @@ and we don't have redistribution rights. Two options:
 2. Use in-app search (Settings → Bibles/Songs) to pull free/public-domain
    content from the configured providers at runtime.
 
-`songs/public_domain.db` (public-domain hymns) *is* included and loads by
-default.
+`songs/public_domain.db` (public-domain hymns) is in the repo but is not packaged; the same hymns are
+downloaded on request from the first-run wizard or Import (`docs/public-domain-songs.md`).
 
 ## Video tools (ffmpeg + yt-dlp)
 
