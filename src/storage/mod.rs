@@ -8,6 +8,7 @@ pub mod media_sniff;
 pub mod openlp_import;
 pub mod paths;
 pub mod pattern_cache;
+pub mod pd_songs;
 pub mod pptx_import;
 pub mod xml_scan;
 pub mod odp_import;

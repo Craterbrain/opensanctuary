@@ -331,10 +331,11 @@ metadata — no separate packaging script/DSL to maintain in parallel with
   `/usr/share/icons/hicolor/scalable/apps/opensanctuary.svg`. Same
   runtime-only file subset the Windows section defines (no `web/src`,
   `web/tests`, etc.) — and deliberately *not*
-  `songs/public_domain.db`: it would sit under this read-only path, but
+  `songs/public_domain.db` as a file: it would sit under this read-only path, but
   `songs_dir` resolves to the per-user data directory (`paths.md`), so
   SQLite would just create an empty db there instead of ever reading it.
-  Bundling it here would silently do nothing; see `Cargo.toml`'s comment.
+  The public-domain hymns are compiled into the program instead and added on
+  first run (`public-domain-songs.md`); see `Cargo.toml`'s comment.
 - `packaging/opensanctuary.desktop` (icon field points at the installed
   hicolor icon above).
 - `packaging/build-deb.sh` runs the whole pipeline: `bun run build`

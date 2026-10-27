@@ -24,6 +24,7 @@ mod importers;
 mod licensed;
 mod network;
 mod packaging;
+mod pd_songs;
 mod plugins;
 mod storage;
 
