@@ -14,6 +14,7 @@ pub mod linux;
 #[cfg(target_os = "windows")]
 pub mod windows;
 pub mod tls;
+pub mod open_files;
 pub mod relaunch;
 pub mod updater;
 

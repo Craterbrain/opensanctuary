@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- OpenSanctuary's own file types (docs/file-formats.md), so a double-click opens them in OpenSanctuary.
+     Installed to .../share/mime/packages/ by the .deb, the Flatpak (renamed to the app id) and install.sh. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-opensanctuary-song">
+    <comment>OpenSanctuary song</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.ossong"/>
+    <icon name="opensanctuary"/>
+  </mime-type>
+  <mime-type type="application/x-opensanctuary-presentation">
+    <comment>OpenSanctuary presentation</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.ospres"/>
+    <icon name="opensanctuary"/>
+  </mime-type>
+  <mime-type type="application/x-opensanctuary-service">
+    <comment>OpenSanctuary service</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.osservice"/>
+    <icon name="opensanctuary"/>
+  </mime-type>
+  <mime-type type="application/x-opensanctuary-bible">
+    <comment>OpenSanctuary Bible</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.osbible"/>
+    <icon name="opensanctuary"/>
+  </mime-type>
+</mime-info>
