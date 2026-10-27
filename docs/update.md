@@ -295,6 +295,30 @@ Dockerfile's own comment for why its base image (Ubuntu 22.04) is the real
 floor once both glibc *and* `libwebkit2gtk-4.1-dev` availability are
 accounted for, not just glibc alone.
 
+### Restart to finish updating (Linux)
+
+Installing the `.deb` replaces `/usr/bin/opensanctuary` on disk, but the copy already running keeps the old program in memory. (The Windows
+installer closes and reopens the app by itself; the Linux package manager does not.) So after an update the operator is still on the old version
+until a restart, and nothing used to say so.
+
+* **Detection** (`src/network/relaunch.rs`): the kernel marks a running program's own path with ` (deleted)` once the file under it has been replaced,
+  so `readlink /proc/self/exe` ending in that marker, with the file present again, means "an update was installed". Not used inside a Flatpak (its
+  updates replace the whole sandbox, not this path) or off Linux.
+* **A pop-up** (updates are always started by the operator, so asking is not a surprise): a background check every 30 s posts one sticky warning to the
+  Notices bell ("Restart to finish updating"), and the console turns that notice into a dialog, "The update is installed. Restart OpenSanctuary now?"
+  (*Restart now* / *Cancel*). Choose Cancel if a service is running: the same question is under Settings > About. A console opened after the update
+  finished asks once when it loads. Asked once per page load.
+* **Settings > About > Restart to finish updating** appears only while a restart is needed (`restart_needed` in `GET /api/updates/status`), and the
+  version row says so. *Restart now…* asks first (the console and the output windows go away for a few seconds), then calls
+  `POST /api/system/restart`.
+* **The restart** (`post_restart`): refused with 409 unless the program really was replaced, so it can't bounce a healthy app. It starts the installed program
+  again, detached, with the same arguments (`sh -c 'sleep 2; exec "$0" "$@"'`, nothing spliced into shell text), answers, then ends the native window loop
+  (`DisplayEvent::Quit`) or exits when there is none. The two-second wait lets this copy release its ports first. A browser console polls until the new copy
+  answers and reloads itself.
+
+Tested: unit tests for the detection (`network::relaunch`), HTTP tests for the status flag and the refusal (`tests/core_tests/restart.rs`), the Settings
+row and the pop-up trigger (`web/tests/restart_after_update.test.ts`), and by hand on the Mint VM (install over a running copy, notice, Restart now).
+
 No installer exists yet for macOS. Update-*checking* still works the same
 way there (it's just an HTTP call, and `check_latest_release` already
 resolves a `.dmg`-suffixed asset name for display purposes), but *apply* is

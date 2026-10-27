@@ -298,7 +298,7 @@ export const api = {
     // ReleaseInfo/UpdateCheckResult shape src/network/updater.rs serializes.
     status: async () => {
       await resolveHostSessionToken();
-      return api.get<{ status: UpdateCheckResult | null }>('/api/updates/status', { headers: hostTokenHeader() });
+      return api.get<{ status: UpdateCheckResult | null; restart_needed?: boolean }>('/api/updates/status', { headers: hostTokenHeader() });
     },
     // `throttled: true` means the server skipped a real GitHub call and
     // returned the still-fresh cached result -- see MIN_SECONDS_BETWEEN_REAL_CHECKS
@@ -306,6 +306,11 @@ export const api = {
     check: async () => {
       await resolveHostSessionToken();
       return api.post<{ status: UpdateCheckResult; throttled?: boolean }>('/api/updates/check', undefined, { headers: hostTokenHeader() });
+    },
+    // Linux: starts the installed new version and ends this one (409 when nothing was replaced). See src/network/relaunch.rs.
+    restart: async () => {
+      await resolveHostSessionToken();
+      return api.post<{ ok: boolean; error?: string }>('/api/system/restart', undefined, { headers: hostTokenHeader() });
     },
     downloadAndInstall: async () => {
       await resolveHostSessionToken();

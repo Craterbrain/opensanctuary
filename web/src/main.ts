@@ -56,7 +56,22 @@ clock.synchronize(5).then(async () => {
             await resolveHostSessionToken();
             // Notifications from the app and plugins (console pages only; others get a 403 and stop)
             const bell = document.getElementById("btn-notifications");
-            if (bell) { initNotificationBell(bell); void startNotificationFeed(); }
+            if (bell) {
+                initNotificationBell(bell);
+                void startNotificationFeed();
+                // Linux: an installed update waiting for a restart pops up the question (the host's notice triggers it live; this
+                // covers the case where the update finished before this page opened).
+                void (async () => {
+                    try {
+                        const { promptRestartToFinishUpdate } = await import("./ui/settings_dialog.ts");
+                        const { setRestartPrompt } = await import("./ui/notification_center.ts");
+                        const { api } = await import("./core/api_client.ts");
+                        setRestartPrompt(promptRestartToFinishUpdate);
+                        const status = await api.updates.status();
+                        if (status.restart_needed) promptRestartToFinishUpdate();
+                    } catch { /* not a console page, or offline: the notice and Settings > About still work */ }
+                })();
+            }
             const res = await fetch("/api/plugins?kind=web&active=1");
             if (!res.ok) return; // no console credential on this page (live/stage/remote)
             // Installed plugins not turned on yet: hints in the places they'd appear (core/plugin_hints.ts).

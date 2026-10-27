@@ -18,11 +18,17 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 ## Unverified (built, never tested for real)
 
 - [ ] **CCLI.com upload autofill.** The selectors were written without ever seeing the live site (it returns 403 to automated fetches). Try it with a real CCLI account. See `CCLI_REPORTING.md`.
-- [ ] **System-wide Linux install (`--system`).** Needs real root; only the per-user path has been tested end to end. See `installer.md`.
 - [ ] **OBS on another machine with a self-signed certificate.** The two workarounds (Caddy in front, or `--ignore-certificate-errors` for OBS's browser) are not verified against a current OBS. See `BROADCASTING.md`.
 - [ ] **Android TV ADB setup on more TV models.** Only tried on the models available so far; the "home app" switch and its Restore button may behave differently elsewhere. Release 0.3.4 notes ask people to try it on one TV first.
 - [ ] **In-app update between two Flatpak releases.** The Flatpak bundle builds and installs, but updating from one `.flatpak` to the next hasn't been exercised. See `installer.md`.
 - [ ] **Bundle files on real installers.** `.ossong`/`.ospres`/`.osbible`/`.osservice` are covered by unit, HTTP, e2e and fuzz tests, but haven't been opened on a Windows install or the Flatpak. See `file-formats.md`.
+
+## Updating
+
+- [ ] **The in-app updater offers the `.deb` to a tarball install.** On Linux `platform_asset_suffix()` always picks `.deb` (except in a Flatpak), so a copy installed with
+  `install.sh` (`~/.local/share/opensanctuary-install`, or `/opt/opensanctuary`) is told "Download & Install" the `.deb`, which would add a second copy under `/usr`. Found
+  2026-10-27 on the Mint VM. Options: detect a tarball install (a `VERSION` file beside the executable) and say "run install.sh", or apply the tarball update in the app.
+- [ ] **`install.sh` doesn't say to restart a running app.** Builds with "restart to finish updating" ask by themselves; 0.3.10 and older don't. A line in the script's output would cover them.
 
 ## Bible import
 

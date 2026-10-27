@@ -68,6 +68,8 @@ pub enum DisplayEvent {
     Open(DisplayOpenRequest),
     Close { id: String },
     RefreshMonitors,
+    /// Ends the event loop, and with it the app (the restart after an update: see `network::relaunch`).
+    Quit,
     /// `reply` carries back the chosen absolute path, or `None` if the user
     /// canceled the dialog. See `docs/paths.md` (Settings > Storage directory
     /// overrides) and `DisplayManagerHandle::pick_folder`.
@@ -129,6 +131,11 @@ impl DisplayManagerHandle {
 
     pub fn refresh_monitors(&self) -> Result<(), String> {
         self.send(DisplayEvent::RefreshMonitors)
+    }
+
+    /// Closes every window and ends the app. `Err` means there is no native window loop to end.
+    pub fn quit(&self) -> Result<(), String> {
+        self.send(DisplayEvent::Quit)
     }
 
     /// Shows a native "choose a folder" dialog on the same thread as the
@@ -578,6 +585,9 @@ pub fn launch_desktop_webview_sync(port: u16, display_manager: Arc<DisplayManage
                 display_windows.remove(&id);
                 pending_opens.retain(|r| r.id != id);
                 display_manager.statuses.lock().unwrap_or_else(|e| e.into_inner()).insert(id, DisplayStatus::default());
+            }
+            tao::event::Event::UserEvent(DisplayEvent::Quit) => {
+                *control_flow = tao::event_loop::ControlFlow::Exit;
             }
             tao::event::Event::UserEvent(DisplayEvent::RefreshMonitors) => {
                 *display_manager.monitors.lock().unwrap_or_else(|e| e.into_inner()) = enumerate_monitors(target.available_monitors(), target.primary_monitor());
