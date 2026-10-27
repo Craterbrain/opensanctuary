@@ -21,12 +21,6 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 - [ ] **Android TV ADB setup on more TV models.** Only tried on the models available so far; the "home app" switch and its Restore button may behave differently elsewhere. Release 0.3.4 notes ask people to try it on one TV first.
 - [ ] **In-app update between two Flatpak releases.** The Flatpak bundle builds and installs, but updating from one `.flatpak` to the next hasn't been exercised. See `installer.md`.
 
-## Updating
-
-- [ ] **The in-app updater offers the `.deb` to a tarball install.** On Linux `platform_asset_suffix()` always picks `.deb` (except in a Flatpak), so a copy installed with
-  `install.sh` (`~/.local/share/opensanctuary-install`, or `/opt/opensanctuary`) is told "Download & Install" the `.deb`, which would add a second copy under `/usr`. Found
-  2026-10-27 on the Mint VM. Options: detect a tarball install (a `VERSION` file beside the executable) and say "run install.sh", or apply the tarball update in the app.
-
 ## Bible import
 
 - [ ] **More formats** for *Bible from a Link or File*: SWORD modules (`docs/bible-import.md`).

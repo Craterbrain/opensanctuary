@@ -227,9 +227,87 @@ fn platform_asset_suffix() -> &'static str {
         // installer, which replaces the installed Flatpak); a .deb would install a second,
         // native copy instead.
         ".flatpak"
+    } else if tarball_install_dir().is_some() {
+        // A copy installed with install.sh is updated by the same tarball; a .deb would add a second copy under /usr.
+        ".tar.gz"
     } else {
         ".deb"
     }
+}
+
+/// The folder `install.sh` put this program in (`~/.local/share/opensanctuary-install`, `/opt/opensanctuary`), or `None` for any other kind of
+/// install (a .deb, a Flatpak, a build run from a source tree). install.sh leaves a `VERSION` file and the `web/` folder beside the program.
+pub fn tarball_install_dir() -> Option<PathBuf> {
+    if !cfg!(target_os = "linux") || crate::storage::paths::running_in_flatpak() {
+        return None;
+    }
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    (exe.file_name()? == "opensanctuary" && dir.join("VERSION").is_file() && dir.join("web").is_dir()).then(|| dir.to_path_buf())
+}
+
+/// Puts a verified release tarball over the tarball install in `install_dir`, the way install.sh does but without root: it is unpacked next to
+/// the install first, then each top-level entry replaces its namesake (so the running program is unlinked, not overwritten, and keeps running
+/// until it is restarted). Anything in the folder that the tarball doesn't carry is left alone. A folder the user can't write to is an error
+/// that says how to update it instead.
+pub fn apply_tarball(tarball: &Path, install_dir: &Path, version: &str) -> Result<(), String> {
+    let not_writable = || {
+        format!(
+            "OpenSanctuary can't write to {}. Update it from a terminal instead: curl -fsSL https://raw.githubusercontent.com/{}/main/packaging/install.sh | sh{}",
+            install_dir.display(),
+            RELEASES_REPO,
+            if install_dir.starts_with("/opt") || install_dir.starts_with("/usr") { " -s -- --system" } else { "" }
+        )
+    };
+    let parent = install_dir.parent().ok_or("the install folder has no parent folder")?;
+    let staging = parent.join(format!(".opensanctuary-update-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&staging).map_err(|_| not_writable())?;
+    let result = (|| {
+        // The install folder itself must be writable too (the parent can be while the folder is not).
+        let probe = install_dir.join(format!(".write-test-{}", uuid::Uuid::new_v4()));
+        fs::write(&probe, b"").map_err(|_| not_writable())?;
+        let _ = fs::remove_file(&probe);
+
+        let status = std::process::Command::new("tar")
+            .arg("-xzf")
+            .arg(tarball)
+            .arg("-C")
+            .arg(&staging)
+            .arg("--no-same-owner")
+            .status()
+            .map_err(|e| format!("couldn't run tar to unpack the update: {e}"))?;
+        if !status.success() {
+            return Err("the update could not be unpacked".to_string());
+        }
+        let new_exe = staging.join("opensanctuary");
+        if !new_exe.is_file() || !staging.join("web").is_dir() {
+            return Err("the update doesn't look like an OpenSanctuary release; nothing was changed".to_string());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&new_exe, fs::Permissions::from_mode(0o755)).map_err(|e| format!("couldn't make the update runnable: {e}"))?;
+        }
+        fs::write(staging.join("VERSION"), version.trim_start_matches('v')).map_err(|e| format!("couldn't write VERSION: {e}"))?;
+
+        let entries: Vec<_> = fs::read_dir(&staging).map_err(|e| e.to_string())?.collect::<Result<_, _>>().map_err(|e: std::io::Error| e.to_string())?;
+        // The web folder goes first and the program last, so a failure part-way leaves the old program with at worst a newer web folder.
+        let mut names: Vec<_> = entries.iter().map(|e| e.file_name()).collect();
+        names.sort_by_key(|n| n == "opensanctuary");
+        for name in names {
+            let target = install_dir.join(&name);
+            match fs::symlink_metadata(&target) {
+                Ok(m) if m.is_dir() => fs::remove_dir_all(&target),
+                Ok(_) => fs::remove_file(&target),
+                Err(_) => Ok(()),
+            }
+            .map_err(|e| format!("couldn't replace {}: {e}", target.display()))?;
+            fs::rename(staging.join(&name), &target).map_err(|e| format!("couldn't put {} in place: {e}", target.display()))?;
+        }
+        Ok(())
+    })();
+    let _ = fs::remove_dir_all(&staging);
+    result
 }
 
 /// Polls `RELEASES_REPO`'s latest GitHub release and compares its `tag_name`
@@ -328,7 +406,7 @@ fn is_release_download_url(url: &str) -> bool {
 fn asset_name_matches_version(asset_name: &str, version: &str, suffix: &str) -> Result<bool, String> {
     let v = semver::Version::parse(version.trim_start_matches('v'))
         .map_err(|e| format!("Could not parse release version '{}': {}", version, e))?;
-    if suffix != ".deb" && suffix != ".flatpak" {
+    if suffix != ".deb" && suffix != ".flatpak" && suffix != ".tar.gz" {
         return Ok(false);
     }
     let core = format!("{}.{}.{}", v.major, v.minor, v.patch);
@@ -361,7 +439,7 @@ fn manifest_binds_version(checksums: &str, version: &str, asset_name: &str) -> b
 /// signature failure, or hash mismatch returns `Err` and leaves nothing
 /// for a caller to install.
 ///
-/// Invoked for a Linux `.deb` (or `.flatpak` bundle) and the Windows installer -- `routes.rs`'s
+/// Invoked for a Linux `.deb` (or `.flatpak` bundle, or the `.tar.gz` of a tarball install) and the Windows installer -- `routes.rs`'s
 /// `/api/updates/download-and-install` handler hands the result straight to
 /// `open_with_system_handler` (`apt`/the desktop's `.deb` installer, or Windows running the
 /// downloaded installer). macOS isn't built: there is no installer for it.
@@ -471,6 +549,51 @@ mod tests {
         let kp = minisign::KeyPair::generate_unencrypted_keypair().expect("generate keypair");
         let sig_box = minisign::sign(None, &kp.sk, data, None, None).expect("sign");
         (kp.pk.to_base64(), sig_box.into_string())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_tarball_update_replaces_the_program_and_web_and_leaves_other_files_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("os-tarball-{}", uuid::Uuid::new_v4()));
+        let (install, release) = (root.join("install"), root.join("release"));
+        fs::create_dir_all(install.join("web")).unwrap();
+        fs::create_dir_all(release.join("web")).unwrap();
+        fs::write(install.join("opensanctuary"), "old program").unwrap();
+        fs::write(install.join("VERSION"), "0.3.10").unwrap();
+        fs::write(install.join("web/old-only.js"), "x").unwrap();
+        fs::write(install.join("library.db"), "my data").unwrap();
+        fs::write(release.join("opensanctuary"), "new program").unwrap();
+        fs::write(release.join("web/index.html"), "new web").unwrap();
+        let tarball = root.join("release.tar.gz");
+        assert!(std::process::Command::new("tar").arg("-czf").arg(&tarball).arg("-C").arg(&release).arg(".").status().unwrap().success());
+
+        apply_tarball(&tarball, &install, "v0.3.11").unwrap();
+        assert_eq!(fs::read_to_string(install.join("opensanctuary")).unwrap(), "new program");
+        assert_eq!(fs::read_to_string(install.join("VERSION")).unwrap(), "0.3.11");
+        assert!(install.join("web/index.html").is_file() && !install.join("web/old-only.js").exists(), "web/ is replaced as a whole");
+        assert_eq!(fs::read_to_string(install.join("library.db")).unwrap(), "my data", "files the tarball doesn't carry are untouched");
+        assert!(fs::metadata(install.join("opensanctuary")).unwrap().permissions().mode() & 0o111 != 0);
+        assert_eq!(fs::read_dir(&root).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with(".opensanctuary-update")).count(), 0, "no staging left");
+
+        // Something that isn't a release changes nothing.
+        fs::write(release.join("junk.txt"), "x").unwrap();
+        let junk = root.join("junk.tar.gz");
+        fs::remove_file(release.join("opensanctuary")).unwrap();
+        assert!(std::process::Command::new("tar").arg("-czf").arg(&junk).arg("-C").arg(&release).arg(".").status().unwrap().success());
+        assert!(apply_tarball(&junk, &install, "0.3.12").is_err());
+        assert_eq!(fs::read_to_string(install.join("opensanctuary")).unwrap(), "new program");
+
+        // A folder that can't be written says how to update instead.
+        let err = apply_tarball(&tarball, Path::new("/proc/opensanctuary-install"), "0.3.12").unwrap_err();
+        assert!(err.contains("install.sh"), "{err}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_tarball_name_carries_the_version_like_the_other_packages() {
+        assert!(asset_name_matches_version("opensanctuary-linux-x64-0.3.11.tar.gz", "0.3.11", ".tar.gz").unwrap());
+        assert!(!asset_name_matches_version("opensanctuary-linux-x64-0.3.10.tar.gz", "0.3.11", ".tar.gz").unwrap());
     }
 
     #[test]
