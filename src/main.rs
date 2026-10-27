@@ -142,10 +142,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         db_settings = db.get_settings().unwrap_or_default();
     }
     // A brand-new library gets the bundled public-domain hymns once (docs/public-domain-songs.md); an existing one is left alone.
-    match os_next::storage::pd_songs::seed_if_fresh(&db) {
-        Ok(Some(r)) => tracing::info!("Added the bundled public-domain hymn library: {} hymns", r.added),
-        Ok(None) => {}
-        Err(e) => tracing::warn!("Couldn't add the bundled public-domain hymns: {e}"),
+    // (Skipped with --skip-first-time-setup, which automated tests pass: they boot fresh databases and expect them empty.)
+    if !args.skip_first_time_setup {
+        match os_next::storage::pd_songs::seed_if_fresh(&db) {
+            Ok(Some(r)) => tracing::info!("Added the bundled public-domain hymn library: {} hymns", r.added),
+            Ok(None) => {}
+            Err(e) => tracing::warn!("Couldn't add the bundled public-domain hymns: {e}"),
+        }
     }
     let media_dir = args.media_dir.clone()
         .or_else(|| db_settings.get("mediaCacheDirectory").filter(|s| !s.trim().is_empty()).cloned())

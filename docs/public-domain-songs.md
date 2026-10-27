@@ -10,15 +10,34 @@ overwritten or duplicated.
 
 A hymn is included only on **evidence**, never because its copyright field is blank:
 
-* it has a **named historical author** (a text from before about 1930), or
-* it is one of the few **anonymous but clearly ancient** carols and hymns, listed by name in the tests (`The First Nowell`, `Away in a Manger`,
-  `Jesus Christ is Risen Today`).
+* it has a **named historical author**, with the words first published **before 1931** and the author **dead by 1955** (so the text is public domain in the
+  United States and in the countries that protect for life plus 70 years). Anything printed before 1881 qualifies on its date alone. Translators count: a
+  translation is credited and held to the same test; or
+* it is **anonymous or traditional but clearly ancient**, and says how we know in its `basis` field (the tests refuse an anonymous or traditional entry without one).
+
+Every song also carries its **source** where it came from a reference page.
 
 A blank copyright is not evidence. The app files a song with no copyright and no CCLI number under "public domain" by default
 (`Database::is_public_domain_metadata`), which is how modern choruses ended up in the old `songs/public_domain.db`. Hymnary.org does the same: it shows
 "Public Domain" for any text with no rights holder recorded, so its label is not proof either.
 
-## What was left out (31 entries of the 178 in the old file)
+## Where the hymns came from
+
+* 147 of the 178 songs in the original `songs/public_domain.db` passed the rule above (typos in titles and authors fixed).
+* **74 more** were added from **The Cyber Hymnal** (hymntime.com), the one reliable public source found. Its own terms say material without a copyright notice is
+  believed to be public domain and anything copyrighted or used by permission is clearly marked; every page was checked for such a notice, and for the author's
+  dates, before the hymn was taken. Its hymn pages are fetched one at a time; it offers no bulk lyrics download. Each added song's `source` names the page.
+  The Open Hymnal Project, the other obvious candidate, is gone: its domain now serves an unrelated site and its GitHub mirror is empty.
+  Hymnary.org was used to check rights holders but not as a source of "public domain" status: it tags anything with no recorded owner that way.
+* Hymns the Cyber Hymnal lists under "Frequently Requested" are ones it cannot carry because they are copyrighted, so that page is a handy list of what **not** to add.
+* *Let Us Break Bread Together* is the traditional spiritual's text (first published 1925), replacing the modern adaptation that was left out.
+* Texts are as the Cyber Hymnal prints them; refrains are repeated after each verse as in the printed hymn, and long stanzas are split over two slides.
+
+Left out of the added set on purpose: *Jesus Paid It All*, *Showers of Blessing* and *Come, Thou Almighty King* (the page's attribution disagreed with the hymn
+meant, or was disputed), *Lo, How a Rose E'er Blooming* (a verse by a translator whose dates could not be confirmed), *I Would Be True* (a co-author who died 1972),
+*Day by Day* (a 1930s translation) and *My Hope Is Built on Nothing Less* (the page prints Mote's original six verses starting with one nobody sings first).
+
+## What was left out of the original file (31 entries of the 178 in the old file)
 
 Researched 2026-10-27 against hymnary.org and publisher/chart pages. **Not one of the 28 real songs could be shown to be public domain as the old file had it.**
 Two are test data (`Test Song Save`, `ufu`).
@@ -53,10 +72,10 @@ God Is So Good, Great Is the Lord (the Psalm 48 chorus; a different song of that
 (Zephaniah 3:17), For Unto Us a Child Is Born (several modern settings exist), A New Commandment (John 13:34 set many ways; the second copy is one church's own
 slides), Mukti Dilaye (could not be matched to a source).
 
-### Truly traditional, but the file had the wrong words
+### Truly traditional, but the file had the wrong words (now fixed)
 
-Let Us Break Bread Together is an old spiritual (text first published 1925), so the real text is public domain. The old file held a modern adaptation ("we are
-one ... with our face to the risen Son"), so the song was left out. It can be added back from the 1925 text.
+*Let Us Break Bread Together* is an old spiritual (text first published 1925), so the real text is public domain. The old file held a modern adaptation ("we are
+one ... with our face to the risen Son"), so that version was left out and the traditional text was added in its place.
 
 ## Typos fixed on the way
 

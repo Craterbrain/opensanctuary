@@ -8,6 +8,7 @@ import { initFirstTimeSetup, maybeShowFirstTimeSetup, showFirstTimeSetup } from 
 import { rememberDeckMode } from './ui/deck_view_mode.ts';
 import { bundleKindForFile, exportBundle, importBundleFile, type BundleKind } from './ui/bundle_ui.ts';
 import { initBibleImportCard } from './ui/bible_import_ui.ts';
+import { initPublicDomainCard } from './ui/public_domain_ui.ts';
 import QRCode from 'qrcode';
 import {
   addDualScriptureToSchedule,
@@ -2055,6 +2056,7 @@ function openImportModal(initialMode = 'local') {
   if (importModal) showModal(importModal);
   resetImportModal();
   void refreshExportBibleChoices();
+  refreshPublicDomainCard();
   if (initialMode) setImportMode(initialMode);
 }
 
@@ -2301,6 +2303,7 @@ on('file-bundle-import', 'change', async (e: Event) => {
 });
 
 initBibleImportCard(() => { void refreshInstalledBibles(); });
+const refreshPublicDomainCard = initPublicDomainCard(() => { void loadLibraryTab('songs'); });
 
 on('btn-export-all-songs', 'click', () => { void exportBundle({ kind: 'song' }, 'Songs'); });
 on('btn-export-all-presentations', 'click', () => { void exportBundle({ kind: 'presentation' }, 'Presentations'); });

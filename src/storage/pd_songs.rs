@@ -40,7 +40,10 @@ fn key(title: &str, author: &str) -> (String, String) {
     (title.trim().to_lowercase(), author.trim().to_lowercase())
 }
 
-fn existing(db: &Database) -> Result<(HashSet<String>, HashSet<(String, String)>), String> {
+/// The ids and the (title, author) pairs of the songs the library already has.
+type Held = (HashSet<String>, HashSet<(String, String)>);
+
+fn existing(db: &Database) -> Result<Held, String> {
     let songs = db.get_songs().map_err(|e| e.to_string())?;
     Ok((songs.iter().map(|s| s.id.clone()).collect(), songs.iter().map(|s| key(&s.title, &s.author)).collect()))
 }
@@ -106,22 +109,31 @@ mod tests {
     }
 
     #[test]
-    fn nothing_without_a_named_author_or_a_known_age_and_no_test_data_is_in_it() {
-        // The rule (docs/public-domain-songs.md): a named historical author, or one of the few anonymous old carols/hymns listed here.
-        const OLD_ANONYMOUS: [&str; 3] = ["The First Nowell", "Away in a Manger", "Jesus Christ is Risen Today"];
-        for h in library().unwrap() {
-            let anonymous = matches!(h.author.trim().to_lowercase().as_str(), "" | "author unknown" | "unknown" | "custom" | "media ministry");
-            assert!(!anonymous || OLD_ANONYMOUS.contains(&h.title.as_str()), "{} has no named author and isn't a listed old carol", h.title);
-            let t = h.title.to_lowercase();
-            assert!(!t.contains("test") && t != "ufu", "test data: {}", h.title);
+    fn nothing_without_a_named_author_or_a_stated_basis_and_no_test_data_is_in_it() {
+        // The rule (docs/public-domain-songs.md): a named historical author, or an anonymous/traditional text whose age is stated in `basis`.
+        let raw: Vec<serde_json::Value> = serde_json::from_str(LIBRARY_JSON).unwrap();
+        for h in &raw {
+            let title = h["title"].as_str().unwrap_or_default();
+            let author = h["author"].as_str().unwrap_or_default().to_lowercase();
+            let basis = h["basis"].as_str().unwrap_or_default();
+            let unnamed = ["", "author unknown", "unknown", "custom", "media ministry"].contains(&author.trim());
+            let vague = author.split(|c: char| !c.is_alphabetic()).any(|w| ["anonymous", "traditional", "spiritual", "carol"].contains(&w));
+            assert!(!unnamed || basis.len() > 10, "{title} has no named author and no stated basis");
+            assert!(!vague || basis.len() > 10, "{title}: an anonymous or traditional text must say how we know it is old (the `basis` field)");
+            let t = title.to_lowercase();
+            assert!(!t.contains("test") && t != "ufu", "test data: {title}");
             // Known not-public-domain titles that must never come back (see the doc's "left out" list).
-            for banned in ["here i am to worship", "god of grace and god of glory"] {
+            for banned in ["here i am to worship", "god of grace and god of glory", "he is lord", "bless the lord, o my soul", "the virgin mary had a baby boy"] {
                 assert_ne!(t, banned);
             }
-            let lyrics = h.slides.iter().map(|s| s.text.to_lowercase()).collect::<Vec<_>>().join(" ");
+            let lyrics = h["slides"].as_array().unwrap().iter().filter_map(|s| s["text"].as_str()).collect::<Vec<_>>().join(" ").to_lowercase();
             for marker in ["©", "ccli", "all rights reserved", "used by permission"] {
-                assert!(!lyrics.contains(marker), "{} carries a rights notice in its lyrics", h.title);
+                assert!(!lyrics.contains(marker), "{title} carries a rights notice in its lyrics");
             }
+        }
+        // Every song added from the Cyber Hymnal names where it came from.
+        for h in raw.iter().filter(|h| h.get("source").is_some()) {
+            assert!(h["basis"].as_str().is_some_and(|b| !b.is_empty()), "{} has a source but no basis", h["title"]);
         }
     }
 

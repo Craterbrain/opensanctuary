@@ -134,9 +134,8 @@ cp -r web/icons "$STAGE/web/icons"
 cp -r web/pattern-thumbs "$STAGE/web/pattern-thumbs"  # pre-rendered pattern previews (web/scripts/render_pattern_thumbs.ts)
 cp -r target/bundled-plugins/. "$STAGE/web/plugins/"
 [ "${SKIP_TV_APK:-0}" = "1" ] || cp "$TV_APK" "$STAGE/tv-client/opensanctuary-tv.apk"
-# NOT songs/public_domain.db: same reasoning as the .deb (Cargo.toml comment) --
-# songs_dir resolves to the per-user data dir, not this install-relative path,
-# so bundling it here would silently never be read.
+# NOT songs/public_domain.db as a file: same reasoning as the .deb (Cargo.toml comment). The public-domain hymns are compiled into
+# the program instead (assets/public_domain_songs.json) and added on first run.
 
 echo "==> Compiling installer..."
 mkdir -p target/installer
