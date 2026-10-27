@@ -283,11 +283,12 @@ section). `POST /api/updates/download-and-install` implements the
 automated apply step for the `.deb` specifically: downloads it, verifies it
 the same way the manual path does, and hands it to the desktop's own
 `.deb`-install handler (`xdg-open`/`apt`) — never runs anything with
-elevated privileges itself. It doesn't know how to auto-apply the generic
-tarball (no universal "install" action for a bare tarball the way `apt`/
-Explorer provide for a `.deb`/`.exe`) — that one's for `install.sh` (a
-manual re-run, not wired into the app's own update check) or manual
-extraction. **Both Linux release binaries are built inside
+elevated privileges itself. A copy installed with `install.sh` (recognised by the `VERSION` file and `web/` folder beside the
+program) is updated from the same signed release instead: the check picks the `.tar.gz`, and the download is verified the
+same way, unpacked next to the install, and each top-level entry (the program, `web/`, ...) replaces its namesake in place (`apply_tarball`). Files
+the tarball doesn't carry are left alone, and the running program is unlinked rather than overwritten, so it keeps running until the
+"restart to finish updating" prompt. A per-user install needs no root; an install the user can't write to (`/opt/opensanctuary`) gets a message with the
+`install.sh --system` command instead. Verified on the Mint VM 2026-10-27 (0.3.9 build -> signed 0.3.11 tarball -> restart). **Both Linux release binaries are built inside
 a pinned Podman container** (`packaging/Dockerfile.linux-build`, run via
 `packaging/build-deb.sh`, which now produces both artifacts from one build),
 not directly on whatever machine happens to run the build — see that

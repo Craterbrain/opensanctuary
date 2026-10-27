@@ -25,9 +25,6 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 
 ## Updating
 
-- [ ] **The in-app updater offers the `.deb` to a tarball install.** On Linux `platform_asset_suffix()` always picks `.deb` (except in a Flatpak), so a copy installed with
-  `install.sh` (`~/.local/share/opensanctuary-install`, or `/opt/opensanctuary`) is told "Download & Install" the `.deb`, which would add a second copy under `/usr`. Found
-  2026-10-27 on the Mint VM. Options: detect a tarball install (a `VERSION` file beside the executable) and say "run install.sh", or apply the tarball update in the app.
 - [ ] **`install.sh` doesn't say to restart a running app.** Builds with "restart to finish updating" ask by themselves; 0.3.10 and older don't. A line in the script's output would cover them.
 
 ## Bible import

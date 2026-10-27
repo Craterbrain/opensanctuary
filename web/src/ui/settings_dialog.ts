@@ -379,6 +379,10 @@ export async function downloadAndInstallUpdate(): Promise<void> {
       showToast(`Could not install update: ${result.error || 'unknown error'}`, 'error');
       return;
     }
+    if (result.installed) {
+      showToast(`Updated to v${result.version}. Restart OpenSanctuary to finish.`, 'success');
+      return;
+    }
     showToast(`Opened your system's installer for v${result.version}. When it finishes, come back to Settings > About and choose Restart now.`, 'success');
   } catch (_) {
     showToast('Could not download the update.', 'error');
