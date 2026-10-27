@@ -44,6 +44,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; will warn; acceptable for now, revisit before a real public release.
 SetupIconFile=app.ico
 UninstallDisplayIcon={app}\web\favicon.ico
+; Tells Explorer the file associations below changed, so double-clicking an OpenSanctuary file works without a sign-out.
+ChangesAssociations=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -65,6 +67,26 @@ Source: "{#SourceDir}\tv-client\*"; DestDir: "{app}\tv-client"; Flags: ignorever
 ; requires) -- resolved at runtime by
 ; src/storage/paths.rs::resolve_ffmpeg_command()/resolve_ffprobe_command().
 Source: "{#SourceDir}\ffmpeg\*"; DestDir: "{app}\ffmpeg"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Registry]
+; OpenSanctuary's own files (docs/file-formats.md): .ossong .ospres .osservice .osbible open in OpenSanctuary. Written under HKA, so a per-user
+; install registers for that user only and a per-machine one for everyone. Uninstall removes every key and value created here.
+Root: HKA; Subkey: "Software\Classes\.ossong"; ValueType: string; ValueName: ""; ValueData: "OpenSanctuary.Song"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\.ospres"; ValueType: string; ValueName: ""; ValueData: "OpenSanctuary.Presentation"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\.osservice"; ValueType: string; ValueName: ""; ValueData: "OpenSanctuary.Service"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\.osbible"; ValueType: string; ValueName: ""; ValueData: "OpenSanctuary.Bible"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\OpenSanctuary.Song"; ValueType: string; ValueName: ""; ValueData: "OpenSanctuary song"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\OpenSanctuary.Song\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
+Root: HKA; Subkey: "Software\Classes\OpenSanctuary.Song\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
+Root: HKA; Subkey: "Software\Classes\OpenSanctuary.Presentation"; ValueType: string; ValueName: ""; ValueData: "OpenSanctuary presentation"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\OpenSanctuary.Presentation\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
+Root: HKA; Subkey: "Software\Classes\OpenSanctuary.Presentation\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
+Root: HKA; Subkey: "Software\Classes\OpenSanctuary.Service"; ValueType: string; ValueName: ""; ValueData: "OpenSanctuary service"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\OpenSanctuary.Service\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
+Root: HKA; Subkey: "Software\Classes\OpenSanctuary.Service\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
+Root: HKA; Subkey: "Software\Classes\OpenSanctuary.Bible"; ValueType: string; ValueName: ""; ValueData: "OpenSanctuary Bible"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\OpenSanctuary.Bible\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
+Root: HKA; Subkey: "Software\Classes\OpenSanctuary.Bible\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\web\favicon.ico"

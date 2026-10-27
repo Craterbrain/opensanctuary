@@ -76,7 +76,7 @@ cp -r target/bundled-plugins/. "$STAGE/web/plugins/"  # packaging/fetch-plugins.
 # install.sh rides along (verified by the same signed checksums as the tarball), so an installed copy can be re-run or repaired offline from
 # its own folder, and a fix to the script reaches installs with every release.
 # uninstall.sh does the reverse (keeps the library unless asked).
-cp packaging/install.sh packaging/uninstall.sh "$STAGE/"
+cp packaging/install.sh packaging/uninstall.sh packaging/opensanctuary-mime.xml "$STAGE/"
 chmod +x "$STAGE/install.sh" "$STAGE/uninstall.sh"
 [ "${SKIP_TV_APK:-0}" = "1" ] || cp "$TV_APK" "$STAGE/tv-client/opensanctuary-tv.apk"
 

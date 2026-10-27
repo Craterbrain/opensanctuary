@@ -46,6 +46,24 @@ media/<sha256>.<ext>   pictures, videos and music, each stored once however ofte
   deuterocanon included), with the translation's abbreviation, name, language, license and attribution.
   The chapter text is the same shape the Bibles repository publishes.
 
+## Double-clicking a file
+
+The installers register the four extensions, so a double-click (or "Open with") starts OpenSanctuary with the file, and the file goes through the same
+steps as **Import** (inspect, copyright pop-up, import):
+
+| Where | How it is registered |
+|---|---|
+| Windows installer | `[Registry]` in `packaging/opensanctuary.iss`: `.ossong` etc. -> `OpenSanctuary.Song` ... with the program's icon and `"OpenSanctuary.exe" "%1"`. Per-user installs register for that user, per-machine installs for everyone; uninstall removes them. |
+| `.deb` and Flatpak | `packaging/opensanctuary-mime.xml` (shared-mime-info: `application/x-opensanctuary-song`, `-presentation`, `-service`, `-bible`) and `MimeType=` / `Exec=opensanctuary %F` in the desktop file. The package manager refreshes the databases. |
+| `install.sh` tarball install | the same mime file and desktop entry, into `~/.local/share/mime` and `~/.local/share/applications` (or `/usr/share/...` with `--system`), then `update-mime-database` and `update-desktop-database` when present. `uninstall.sh` removes them. |
+
+**One copy only.** If OpenSanctuary is already running, the second start writes a request into `open-requests/` in the data folder and quits; the running copy
+opens the file in its console within a second (`src/network/open_files.rs`). Without a running copy the file opens as soon as the console is up. A file that is not
+one of the four kinds, or does not exist, is ignored. Opening a service while the current schedule has items asks before replacing it. Several files open one after
+another, each with its own pop-ups.
+
+Only an OpenSanctuary file is ever taken: the console reads it through the host token (`GET /api/open-file/pending`, `POST /api/open-file/{id}/take`).
+
 ## Opening a file
 
 Opening is two steps. The file is first **inspected** (the server describes it and changes nothing), then
@@ -101,8 +119,12 @@ ends; leftovers from a crash are swept up after a day.
 
 On 2026-10-27 all four kinds were opened on the Windows test VM with the installed 0.3.10 app (files made on Linux): a two-song `.ossong`
 (the pop-up list named the copyrighted one; the picture was written once to `%APPDATA%\OpenSanctuary\media\images\` and served back), a `.ospres`
-(reused that picture), a `.osbible` (2 chapters installed) and an `.osservice` (4 items and the live show replaced). Not exercised there: double-clicking a file in
-Explorer (the extensions aren't registered with the installer) and the Flatpak.
+(reused that picture), a `.osbible` (2 chapters installed) and an `.osservice` (4 items and the live show replaced). Not exercised there: the Flatpak.
+
+Double-clicking was verified on 2026-10-27: on the Windows VM with the freshly built installer (the keys are written, a `.ospres` opened by
+Explorer's own open command started OpenSanctuary and imported the file; opened again while it ran, the second start handed the file over and quit, leaving one
+process; uninstall removed every key), and on the Linux Mint desktop (`xdg-open` on an `.ossong` found the type, started the app, and the copyright pop-up appeared
+in the native console; a second `xdg-open` while it ran was queued behind the open pop-up and opened after it).
 
 ## Where it lives
 

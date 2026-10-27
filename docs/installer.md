@@ -256,6 +256,13 @@ vetting. Worth investigating free code-signing for open-source projects
 (e.g. SignPath.io) before any wider release, but explicitly out of scope
 here.
 
+### File associations — **implemented**
+
+The installer registers OpenSanctuary's own file types (`.ossong`, `.ospres`, `.osservice`, `.osbible`; see `file-formats.md`) under `HKA\Software\Classes`, with the
+program's icon and an open command of `"{app}\OpenSanctuary.exe" "%1"`, and sets `ChangesAssociations=yes` so Explorer picks them up at once. They are created
+with `uninsdeletekey`/`uninsdeletevalue`, so uninstall removes them. The Linux packages register the same types through
+`packaging/opensanctuary-mime.xml` (see `file-formats.md`).
+
 ### Uninstall — **implemented**
 
 - Must stop a running `os-next.exe` before removing install-dir files (Inno's

@@ -38,6 +38,7 @@ if [ "$SYSTEM" = 1 ]; then
   INSTALL_DIR="/opt/opensanctuary"
   BIN_DIR="/usr/local/bin"
   DESKTOP_DIR="/usr/share/applications"
+  MIME_DIR="/usr/share/mime"
   SUDO=""
   if [ "$(id -u)" != "0" ]; then
     if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else
@@ -49,6 +50,7 @@ else
   INSTALL_DIR="$HOME/.local/share/opensanctuary-install"
   BIN_DIR="$HOME/.local/bin"
   DESKTOP_DIR="$HOME/.local/share/applications"
+  MIME_DIR="$HOME/.local/share/mime"
   SUDO=""
 fi
 
@@ -78,10 +80,16 @@ if [ -L "$BIN_DIR/opensanctuary" ] && [ "$(readlink "$BIN_DIR/opensanctuary")" =
   $SUDO rm -f "$BIN_DIR/opensanctuary"
 fi
 # The desktop entry, only if it launches this install.
-if [ -f "$DESKTOP_DIR/opensanctuary.desktop" ] && grep -q "^Exec=$INSTALL_DIR/opensanctuary\$" "$DESKTOP_DIR/opensanctuary.desktop"; then
+if [ -f "$DESKTOP_DIR/opensanctuary.desktop" ] && grep -q "^Exec=$INSTALL_DIR/opensanctuary\( \|\$\)" "$DESKTOP_DIR/opensanctuary.desktop"; then
   $SUDO rm -f "$DESKTOP_DIR/opensanctuary.desktop"
 fi
 $SUDO rm -rf "$INSTALL_DIR"
+# The file types this install registered.
+if [ -f "$MIME_DIR/packages/opensanctuary.xml" ]; then
+  $SUDO rm -f "$MIME_DIR/packages/opensanctuary.xml"
+  if command -v update-mime-database >/dev/null 2>&1; then $SUDO update-mime-database "$MIME_DIR" >/dev/null 2>&1 || true; fi
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then $SUDO update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true; fi
 
 if [ "$DELETE_DATA" = 1 ]; then
   DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/OpenSanctuary"
