@@ -1,10 +1,11 @@
-# The bundled public-domain hymn library
+# The public-domain hymn library
 
 _Last edited: 2026-10-27_
 
-`assets/public_domain_songs.json` holds the hymns that ship inside the program (`src/storage/pd_songs.rs`). A brand-new library gets them once, and
-**Import > Public-domain hymns** adds any that are missing on request. They are added by id and by title+author, so a song you already have, or edited, is never
-overwritten or duplicated.
+The hymns live in the Bibles repository (`songs/public-domain-hymns.json` in Craterbrain/opensanctuary-bibles, with this document as its `SONGS.md`).
+They are not bundled with the program: the first-run wizard's Songs step and **Import > Public-domain hymns** download them (`src/storage/pd_songs.rs`)
+and add them by id and by title+author, so a song you already have, or edited, is never overwritten or duplicated. The program re-checks the download and
+refuses it if any hymn isn't marked "Public Domain" or carries a CCLI number.
 
 ## The rule
 
@@ -83,5 +84,6 @@ Wonderul, Unkown, Roberty Lowry, Chrisitan F. Gellert, Rosetti, Philips Brooks, 
 
 ## Changing the library
 
-Edit `assets/public_domain_songs.json`. The tests in `src/storage/pd_songs.rs` refuse test data, duplicates, a missing "Public Domain" line, a rights notice inside the
-lyrics, and any song with no named author that isn't on the short ancient list. Add a song only with a source for who wrote it and when.
+Edit `songs/public-domain-hymns.json` in the Bibles repository and run `python3 scripts/validate_songs.py --update`; its CI check (`validate_songs.py`)
+refuses test data, duplicates, a missing "Public Domain" line, a rights notice inside the lyrics, and any song with no named author and no stated `basis`.
+Add a song only with a source for who wrote it and when. A change goes live as soon as it is on the repository's `main` branch.

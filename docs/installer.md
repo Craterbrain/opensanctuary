@@ -334,8 +334,8 @@ metadata — no separate packaging script/DSL to maintain in parallel with
   `songs/public_domain.db` as a file: it would sit under this read-only path, but
   `songs_dir` resolves to the per-user data directory (`paths.md`), so
   SQLite would just create an empty db there instead of ever reading it.
-  The public-domain hymns are compiled into the program instead and added on
-  first run (`public-domain-songs.md`); see `Cargo.toml`'s comment.
+  The public-domain hymns are not packaged: they are downloaded on request
+  (`public-domain-songs.md`); see `Cargo.toml`'s comment.
 - `packaging/opensanctuary.desktop` (icon field points at the installed
   hicolor icon above).
 - `packaging/build-deb.sh` runs the whole pipeline: `bun run build`

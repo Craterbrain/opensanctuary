@@ -174,7 +174,7 @@ MIT — see [LICENSE](LICENSE). This covers OpenSanctuary's own code only.
   [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 - Bundled Bible translations (`bibles/`, not included in this repo — see
   `BUILDING.md`) are public-domain texts (KJV, ASV, World English Bible);
-  bundled songs (`songs/public_domain.db`) are public-domain hymns.
+  the public-domain hymns (`songs/public_domain.db`, or the download in the first-run wizard / Import) are public-domain.
   Copyrighted content (modern Bible translations, CCLI-licensed songs,
   stock media) is intentionally not included.
 

@@ -10,8 +10,8 @@ step list; each step notes where the shipped version matched or diverged from it
 
 Per the public-repo decision (`bibles/` and copyrighted `songs/` excluded,
 see the repo's `.gitignore`), a fresh install today has **zero Bible
-content** — songs are covered: the public-domain hymn library is compiled into
-the program and a brand-new library gets it on first run (`docs/public-domain-songs.md`). Without a first-run flow that actively helps the
+content** — songs start empty too, but the first-run wizard can download the public-domain hymn library
+(`docs/public-domain-songs.md`). Without a first-run flow that actively helps the
 user get *some* content in, "add a scripture item" is a dead end the
 first time anyone opens the app. This is the most important gap this plan
 needed to close, not just an onboarding nicety.
@@ -71,8 +71,8 @@ First-Time Setup" lives under Settings → About, per the original plan.
      buried settings toggle, since skipping it is easy to forget about.
 
 5. **Song content.** Lower-stakes than Bible content since
-   the public-domain hymn library is built in and added on first run — offer pointing at an existing songs
-   directory, or skip.
+   the wizard offers to download the public-domain hymn library (about 220 hymns, from the Bibles repository) —
+   and, below that, pointing at an existing songs directory; or skip.
 
 6. **Network quick-check.** Shows the detected hostname/LAN IP(s) the
    console is reachable at.

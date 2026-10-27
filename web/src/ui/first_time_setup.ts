@@ -15,6 +15,7 @@ import { showModal, closeModal, registerModalReset } from "./dialog_manager.ts";
 import { loadSettingsServerInfo } from "./settings_dialog.ts";
 import { escapeHtml } from "../core/presentation_helpers.ts";
 import { appOptions, saveAppOptions } from "../app_core.ts";
+import { initPublicDomainCard } from "./public_domain_ui.ts";
 
 const MODAL_ID = "first-time-setup-modal";
 
@@ -149,9 +150,16 @@ function stepHtml(step: Step): string {
       return `
         <h3 class="fts-step-title">Song Content</h3>
         <p class="fts-text">
-          A handful of public-domain hymns are already included. If you have a larger song
-          library (e.g. from another install), point at it here -- otherwise, skip.
+          No songs are included, to keep the download small. You can fetch a library of about
+          two hundred public-domain hymns (old hymns whose words are free to use) now, or later
+          from Import &gt; Public-domain hymns. It needs an internet connection.
         </p>
+        <div class="form-row">
+          <button class="btn btn-primary" id="fts-songs-download" type="button">Download the public-domain hymns</button>
+        </div>
+        <div id="fts-songs-download-status" class="form-help" style="display: none;"></div>
+        <div class="os-divider"></div>
+        <p class="form-help">Have a larger song library (e.g. from another install)? Point at it here.</p>
         <div class="form-row">
           <input type="text" id="fts-songs-dir" class="search-input" placeholder="Path to a folder of song databases">
           <button class="btn" id="fts-songs-browse" type="button">Browse…</button>
@@ -197,6 +205,7 @@ function wireStep(step: Step, body: HTMLElement): void {
   } else if (step === "songs") {
     void renderPluginOffers(body);
     wireDirectoryBrowse(body, "fts-songs-dir", "fts-songs-browse");
+    initPublicDomainCard("fts-songs-download", "fts-songs-download-status", () => {}, body);
   }
 }
 
