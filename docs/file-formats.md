@@ -97,6 +97,13 @@ Uploads are streamed to a temporary file in the data directory (`tmp/bundle-*.tm
 back from one, so a bundle with video never sits in memory. The temporary file is removed when the request
 ends; leftovers from a crash are swept up after a day.
 
+## Verified on a Windows install
+
+On 2026-10-27 all four kinds were opened on the Windows test VM with the installed 0.3.10 app (files made on Linux): a two-song `.ossong`
+(the pop-up list named the copyrighted one; the picture was written once to `%APPDATA%\OpenSanctuary\media\images\` and served back), a `.ospres`
+(reused that picture), a `.osbible` (2 chapters installed) and an `.osservice` (4 items and the live show replaced). Not exercised there: double-clicking a file in
+Explorer (the extensions aren't registered with the installer) and the Flatpak.
+
 ## Where it lives
 
 * `src/storage/bundle.rs` — the format, reader and writer; tests in `src/storage/bundle/tests.rs`.

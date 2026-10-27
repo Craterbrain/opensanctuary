@@ -20,7 +20,6 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 - [ ] **OBS on another machine with a self-signed certificate.** The two workarounds (Caddy in front, or `--ignore-certificate-errors` for OBS's browser) are not verified against a current OBS. See `BROADCASTING.md`.
 - [ ] **Android TV ADB setup on more TV models.** Only tried on the models available so far; the "home app" switch and its Restore button may behave differently elsewhere. Release 0.3.4 notes ask people to try it on one TV first.
 - [ ] **In-app update between two Flatpak releases.** The Flatpak bundle builds and installs, but updating from one `.flatpak` to the next hasn't been exercised. See `installer.md`.
-- [ ] **Bundle files on real installers.** `.ossong`/`.ospres`/`.osbible`/`.osservice` are covered by unit, HTTP, e2e and fuzz tests, but haven't been opened on a Windows install or the Flatpak. See `file-formats.md`.
 
 ## Updating
 
