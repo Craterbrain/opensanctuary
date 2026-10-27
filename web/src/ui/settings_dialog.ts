@@ -322,18 +322,18 @@ export async function checkForUpdates(btn: HTMLButtonElement): Promise<void> {
 
 /** Settings > About > "Restart now" (Linux): after the package manager replaced the program, start the new version and end this
  * one. Always asks first: the console and every output window go away for a few seconds, and this app runs live during services. */
-export function restartToFinishUpdate(btn: HTMLButtonElement): void {
+export function restartToFinishUpdate(btn?: HTMLButtonElement): void {
   showConfirmDialog(
-    'Restart OpenSanctuary?',
-    'A newer version is installed. Restarting closes the console and any output windows for a few seconds, then opens the new version.',
-    'Do not do this during a service. Your schedule and library are saved and come back as they were.',
+    'Restart to finish updating',
+    'The update is installed. Restart OpenSanctuary now to start using it?',
+    'The console and any output windows close for a few seconds, then the new version opens. Your schedule and library come back as they were. If a service is running, choose Cancel and restart later: Settings > About has a Restart now button.',
     async () => {
-      btn.disabled = true;
+      if (btn) btn.disabled = true;
       try {
         const res = await api.updates.restart();
         if (!res.ok) {
           showToast(res.error || 'Could not restart.', 'error');
-          btn.disabled = false;
+          if (btn) btn.disabled = false;
           return;
         }
         showToast('Restarting… this window reconnects by itself.', 'success');
@@ -345,6 +345,14 @@ export function restartToFinishUpdate(btn: HTMLButtonElement): void {
     },
     'Restart now'
   );
+}
+
+/** The pop-up form of the same question: shown when an installed update is waiting (see notification_center.ts / main.ts). */
+let restartPrompted = false;
+export function promptRestartToFinishUpdate(): void {
+  if (restartPrompted) return; // the live notice and the check at startup can both fire: ask once per page load
+  restartPrompted = true;
+  restartToFinishUpdate();
 }
 
 /** After asking for a restart: poll until the new copy answers, then reload this page onto it (a browser console; the native

@@ -125,12 +125,21 @@ function fromServer(raw: any): Notice | null {
   };
 }
 
+/** Linux: when the host says an installed update is waiting for a restart, the console pops up the question (updates here are
+ * always started by the operator, so asking is not a surprise). Set by main.ts; without it the notice is an ordinary toast. */
+let restartPrompt: (() => void) | null = null;
+export function setRestartPrompt(fn: () => void): void { restartPrompt = fn; }
+
 function ingest(list: unknown[]): void {
   for (const raw of list) {
     const n = fromServer(raw);
     if (!n || (n.serverId !== undefined && n.serverId <= lastServerId)) continue;
     lastServerId = n.serverId ?? lastServerId;
     push(n);
+    if (n.source === 'host' && n.key === 'restart-needed' && restartPrompt) {
+      restartPrompt(); // the dialog is the notice; the bell keeps the entry
+      continue;
+    }
     if (muted.has(n.source)) continue;
     // Toast text: title bold, body under it; the host names the source.
     showToast(n.body || n.title, n.level, n.sticky ? 0 : n.level === 'error' ? 8000 : 5000, {
