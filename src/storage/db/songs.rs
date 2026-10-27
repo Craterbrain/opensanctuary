@@ -5,6 +5,13 @@ use crate::core::models::Song;
 
 use super::{load_and_synthesize_slides, serialize_slides_for_storage, Database};
 
+/// The column that holds a song's "this is public domain" choice, or `NULL` for a song file that can't have it (a read-only file, or one
+/// from another program, where adding the column failed): such a file must keep working for reading.
+fn override_column(conn: &Connection) -> &'static str {
+    let has = conn.prepare("SELECT 1 FROM pragma_table_info('songs') WHERE name = 'public_domain_override'").and_then(|mut s| s.exists([])).unwrap_or(false);
+    if has { "public_domain_override" } else { "NULL AS public_domain_override" }
+}
+
 impl Database {
     // --- Song CRUD & Copyright Segmentation ---
 
@@ -36,7 +43,7 @@ impl Database {
         let read_songs = |conn_arc: &Arc<Mutex<Connection>>| -> Result<Vec<Song>> {
             let conn = conn_arc.lock().unwrap_or_else(|e| e.into_inner());
             let mut stmt = conn.prepare_cached(
-                "SELECT id, title, author, copyright, ccli_number, slides_json, theme_name, public_domain_override FROM songs ORDER BY title ASC",
+                &format!("SELECT id, title, author, copyright, ccli_number, slides_json, theme_name, {} FROM songs ORDER BY title ASC", override_column(&conn)),
             )?;
             let song_iter = stmt.query_map([], |row| {
                 let slides_json: String = row.get(5)?;
@@ -77,7 +84,7 @@ impl Database {
         {
             let conn = self.songs_pd_conn.lock().unwrap_or_else(|e| e.into_inner());
             let mut stmt = conn.prepare_cached(
-                "SELECT id, title, author, copyright, ccli_number, slides_json, theme_name, public_domain_override FROM songs WHERE id = ?1",
+                &format!("SELECT id, title, author, copyright, ccli_number, slides_json, theme_name, {} FROM songs WHERE id = ?1", override_column(&conn)),
             )?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
@@ -101,7 +108,7 @@ impl Database {
         {
             let conn = self.songs_cr_conn.lock().unwrap_or_else(|e| e.into_inner());
             let mut stmt = conn.prepare_cached(
-                "SELECT id, title, author, copyright, ccli_number, slides_json, theme_name, public_domain_override FROM songs WHERE id = ?1",
+                &format!("SELECT id, title, author, copyright, ccli_number, slides_json, theme_name, {} FROM songs WHERE id = ?1", override_column(&conn)),
             )?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
@@ -179,10 +186,13 @@ impl Database {
         let search_conn = |conn_arc: &Arc<Mutex<Connection>>| -> Result<Vec<Song>> {
             let conn = conn_arc.lock().unwrap_or_else(|e| e.into_inner());
             let mut stmt = conn.prepare_cached(
-                "SELECT id, title, author, copyright, ccli_number, slides_json, theme_name, public_domain_override
-                 FROM songs
-                 WHERE title LIKE ?1 OR author LIKE ?1 OR slides_json LIKE ?1
-                 ORDER BY title ASC LIMIT 50",
+                &format!(
+                    "SELECT id, title, author, copyright, ccli_number, slides_json, theme_name, {}
+                     FROM songs
+                     WHERE title LIKE ?1 OR author LIKE ?1 OR slides_json LIKE ?1
+                     ORDER BY title ASC LIMIT 50",
+                    override_column(&conn)
+                ),
             )?;
             let song_iter = stmt.query_map(params![q], |row| {
                 let slides_json: String = row.get(5)?;
@@ -217,5 +227,23 @@ impl Database {
         results.dedup_by(|a, b| a.id == b.id);
         results.truncate(50);
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod override_column_tests {
+    use super::*;
+
+    #[test]
+    fn a_song_file_without_the_override_column_still_reads() {
+        // A songs file from before the column existed (or from another program) that can't be altered: reading must not break.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE songs (id TEXT PRIMARY KEY, title TEXT NOT NULL, author TEXT NOT NULL, copyright TEXT, ccli_number TEXT, slides_json TEXT NOT NULL, theme_name TEXT);
+                            INSERT INTO songs VALUES ('a', 'Old', 'Anon', 'Public Domain', NULL, '[]', NULL);").unwrap();
+        assert_eq!(override_column(&conn), "NULL AS public_domain_override");
+        let v: Option<i64> = conn.query_row(&format!("SELECT {} FROM songs", override_column(&conn)), [], |r| r.get(0)).unwrap();
+        assert_eq!(v, None);
+        conn.execute("ALTER TABLE songs ADD COLUMN public_domain_override INTEGER", []).unwrap();
+        assert_eq!(override_column(&conn), "public_domain_override");
     }
 }

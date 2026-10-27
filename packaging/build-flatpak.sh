@@ -25,7 +25,8 @@ STAGE=target/flatpak-stage
 rm -rf "$STAGE"
 mkdir -p "$STAGE/icons"
 tar -xzf "$TARBALL" -C "$STAGE"
-sed -e "s/^Icon=.*/Icon=$APP_ID/" packaging/opensanctuary.desktop > "$STAGE/$APP_ID.desktop"
+# Files double-clicked outside the sandbox reach the app through the documents portal only when the launcher says so (@@ %F @@).
+sed -e "s/^Icon=.*/Icon=$APP_ID/" -e "s/^Exec=.*/Exec=opensanctuary @@ %F @@/" packaging/opensanctuary.desktop > "$STAGE/$APP_ID.desktop"
 # The file types, under the app id (Flatpak only exports mime files named for the app); the icon name follows the app id too.
 sed -e "s/<icon name=\"opensanctuary\"\/>/<icon name=\"$APP_ID\"\/>/" packaging/opensanctuary-mime.xml > "$STAGE/$APP_ID.mime.xml"
 sed -e "s/@VERSION@/$VERSION/" -e "s/@DATE@/$(date -u +%F)/" "packaging/flatpak/$APP_ID.metainfo.xml" > "$STAGE/$APP_ID.metainfo.xml"
