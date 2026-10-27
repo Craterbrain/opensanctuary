@@ -344,6 +344,14 @@ pub(super) async fn post_update_download_and_install(
         Err(e) => return Ok(Json(serde_json::json!({ "ok": false, "error": e }))),
     };
 
+    // A copy installed from the tarball is updated in place from the same (verified) tarball.
+    if let Some(dir) = crate::network::updater::tarball_install_dir() {
+        return Ok(match crate::network::updater::apply_tarball(&path, &dir, &release.version) {
+            Ok(()) => Json(serde_json::json!({ "ok": true, "version": release.version, "installed": true })),
+            Err(e) => Json(serde_json::json!({ "ok": false, "error": e })),
+        });
+    }
+
     #[cfg(feature = "open")]
     let open_result = crate::network::updater::open_with_system_handler(&path);
     #[cfg(not(feature = "open"))]

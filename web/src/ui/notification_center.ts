@@ -130,6 +130,10 @@ function fromServer(raw: any): Notice | null {
 let restartPrompt: (() => void) | null = null;
 export function setRestartPrompt(fn: () => void): void { restartPrompt = fn; }
 
+/** A file was opened from the desktop (double-click, "Open with"): the console takes it from the host's waiting list. Set by app_ui.ts. */
+let openFilePrompt: (() => void) | null = null;
+export function setOpenFilePrompt(fn: () => void): void { openFilePrompt = fn; }
+
 function ingest(list: unknown[]): void {
   for (const raw of list) {
     const n = fromServer(raw);
@@ -138,6 +142,10 @@ function ingest(list: unknown[]): void {
     push(n);
     if (n.source === 'host' && n.key === 'restart-needed' && restartPrompt) {
       restartPrompt(); // the dialog is the notice; the bell keeps the entry
+      continue;
+    }
+    if (n.source === 'host' && n.key === 'open-file' && openFilePrompt) {
+      openFilePrompt(); // the file's own messages (imported, refused, advisory) say the rest
       continue;
     }
     if (muted.has(n.source)) continue;

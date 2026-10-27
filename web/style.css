@@ -6066,7 +6066,7 @@ video {
 /* A plugin that would add this entry once turned on (core/plugin_hints.ts): muted, opens its review card */
 .plugin-source-node--off { color: var(--os-text-tertiary); }
 .plugin-source-node--off::after { content: "plugin · off"; }
-.plugin-picker-hint[hidden], .import-tab-btn[hidden] { display: none; }
+.plugin-picker-hint[hidden], .import-tab-btn[hidden], .ribbon-btn[hidden] { display: none; }
 .plugin-offer + .plugin-offer { margin-top: var(--os-space-5); }
 .store-plugin-cards { display: contents; }
 .fts-plugin-offer { margin: var(--os-space-4) 0; }

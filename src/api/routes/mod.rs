@@ -5,6 +5,7 @@ mod import;
 mod keyring;
 mod library;
 mod network;
+mod open_file;
 mod notifications;
 mod pairing;
 pub(crate) mod plugins;
@@ -127,6 +128,7 @@ pub(crate) fn needs_host_token(method: &axum::http::Method, path: &str) -> bool 
             | "/api/network/check-port"
             | "/api/network/check-hostname"
             | "/api/schedule/export"
+            | "/api/open-file/pending"
     )
 }
 
@@ -317,6 +319,7 @@ pub fn create_router(app_state: AppState) -> Router {
         .merge(schedule::router())
         .merge(import::router())
         .merge(bundle::router())
+        .merge(open_file::router())
         .merge(reports::router())
         .merge(pattern_cache::router())
 
@@ -385,7 +388,7 @@ mod gate_tests {
     #[test]
     fn state_changing_api_routes_are_gated_by_default() {
         for p in [
-            "/api/songs", "/api/songs/public-domain", "/api/scriptures", "/api/media", "/api/themes", "/api/themes/default",
+            "/api/songs", "/api/songs/public-domain", "/api/licensed-scripture", "/api/open-file/x/take", "/api/scriptures", "/api/media", "/api/themes", "/api/themes/default",
             "/api/presentations", "/api/slide-templates", "/api/import/openlp", "/api/import/pptx",
             "/api/import/freeshow-show", "/api/import/ewpx",
             "/api/displays/open", "/api/displays/close",

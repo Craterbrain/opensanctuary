@@ -66,6 +66,7 @@ if [ "$SYSTEM_INSTALL" = 1 ]; then
   INSTALL_DIR="/opt/opensanctuary"
   BIN_DIR="/usr/local/bin"
   DESKTOP_DIR="/usr/share/applications"
+  MIME_DIR="/usr/share/mime"
   SUDO=""
   if [ "$(id -u)" != "0" ]; then
     if command -v sudo >/dev/null 2>&1; then
@@ -85,6 +86,7 @@ else
   INSTALL_DIR="$HOME/.local/share/opensanctuary-install"
   BIN_DIR="$HOME/.local/bin"
   DESKTOP_DIR="$HOME/.local/share/applications"
+  MIME_DIR="$HOME/.local/share/mime"
   SUDO=""
 fi
 
@@ -199,12 +201,22 @@ cat > "$DESKTOP_FILE" <<EOF
 Type=Application
 Name=OpenSanctuary
 Comment=Next-generation church presentation engine
-Exec=$INSTALL_DIR/opensanctuary
+Exec=$INSTALL_DIR/opensanctuary %F
 Icon=$INSTALL_DIR/web/favicon.svg
 Terminal=false
 Categories=AudioVideo;Presentation;
+MimeType=application/x-opensanctuary-song;application/x-opensanctuary-presentation;application/x-opensanctuary-service;application/x-opensanctuary-bible;
 EOF
 $SUDO cp "$DESKTOP_FILE" "$DESKTOP_DIR/opensanctuary.desktop"
+
+# OpenSanctuary's own file types (.ossong .ospres .osservice .osbible), so a double-click opens them here. The definition ships in the
+# tarball; the update tools are optional (a desktop without them just picks the types up at its next login).
+if [ -f "$INSTALL_DIR/opensanctuary-mime.xml" ]; then
+  $SUDO mkdir -p "$MIME_DIR/packages"
+  $SUDO cp "$INSTALL_DIR/opensanctuary-mime.xml" "$MIME_DIR/packages/opensanctuary.xml"
+  if command -v update-mime-database >/dev/null 2>&1; then $SUDO update-mime-database "$MIME_DIR" >/dev/null 2>&1 || true; fi
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then $SUDO update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true; fi
 
 echo
 echo "Installed opensanctuary $VERSION to $INSTALL_DIR"
@@ -236,6 +248,14 @@ if [ -n "$optional_missing" ]; then
   echo "  Fedora:        sudo dnf install ffmpeg yt-dlp"
   echo "  Arch:          sudo pacman -S ffmpeg yt-dlp"
   echo "  yt-dlp install options: https://github.com/yt-dlp/yt-dlp#installation"
+fi
+
+# A copy that was running when the files were replaced keeps running the old version until it is restarted (the program file was swapped
+# underneath it). Builds with "restart to finish updating" offer that themselves; older ones don't, so say so here.
+if pgrep -x opensanctuary >/dev/null 2>&1; then
+  echo
+  echo "OpenSanctuary is running the previous version. Restart it to use $VERSION (pick a moment between services; the console and the"
+  echo "output windows close for a few seconds). Newer versions offer this themselves under Settings > About."
 fi
 
 echo "Run: opensanctuary"

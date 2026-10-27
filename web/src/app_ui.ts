@@ -9,6 +9,8 @@ import { rememberDeckMode } from './ui/deck_view_mode.ts';
 import { bundleKindForFile, exportBundle, importBundleFile, type BundleKind } from './ui/bundle_ui.ts';
 import { initBibleImportCard } from './ui/bible_import_ui.ts';
 import { initPublicDomainCard } from './ui/public_domain_ui.ts';
+import { openPendingFiles } from './ui/open_files_ui.ts';
+import { setOpenFilePrompt } from './ui/notification_center.ts';
 import QRCode from 'qrcode';
 import {
   addDualScriptureToSchedule,
@@ -78,6 +80,7 @@ import {
   createItemAuthor,
   createItemContent,
   createItemCopyright,
+  createItemPublicDomain,
   createItemTitle,
   createModal,
   currentContextMenuTarget,
@@ -240,6 +243,7 @@ function openSlideEditor(type = 'song') {
     else createItemAuthor.placeholder = 'Speaker / Ministry';
   }
   if (createItemCopyright) createItemCopyright.value = '';
+  if (createItemPublicDomain) createItemPublicDomain.checked = false;
   if (createItemContent) createItemContent.value = '';
 
   editingScheduleContext = null;
@@ -264,6 +268,7 @@ function editExistingItem(item: any, scheduleContext: { itemIndex: number; slide
   if (createItemTitle) createItemTitle.value = item.title || item.name || item.reference || '';
   if (createItemAuthor) createItemAuthor.value = item.author || item.version || '';
   if (createItemCopyright) createItemCopyright.value = item.copyright || item.ccli_number || '';
+  if (createItemPublicDomain) createItemPublicDomain.checked = item.public_domain_override === true;
   if (createItemContent) createItemContent.value = '';
 
   let editorSlides: EditorSlide[] = [];
@@ -590,6 +595,7 @@ async function saveEditorItem(addToSchedule = false) {
     alternate_title: null,
     copyright: copyright || 'Public Domain',
     ccli_number: null,
+    public_domain_override: createItemPublicDomain?.checked ? true : null,
     key: null,
     tempo: null,
     verse_order: null,
@@ -1234,6 +1240,13 @@ async function openBundle(file: File, mode: 'replace' | 'append'): Promise<boole
   }
   return true;
 }
+
+/** Opens the files the desktop handed to the program (a double-click on an .ossong etc.). Runs at start and when the host announces one. */
+function openFilesFromDesktop(): void {
+  void openPendingFiles({ open: openBundle, scheduleItemCount: () => currentSnapshot?.schedule?.items?.length ?? 0 });
+}
+setOpenFilePrompt(openFilesFromDesktop);
+setTimeout(openFilesFromDesktop, 1500); // a file given on the command line at start-up is already waiting
 
 async function loadScheduleFile(file: File, mode: 'replace' | 'append') {
   if (bundleKindForFile(file.name)) {

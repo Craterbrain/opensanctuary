@@ -256,6 +256,13 @@ vetting. Worth investigating free code-signing for open-source projects
 (e.g. SignPath.io) before any wider release, but explicitly out of scope
 here.
 
+### File associations — **implemented**
+
+The installer registers OpenSanctuary's own file types (`.ossong`, `.ospres`, `.osservice`, `.osbible`; see `file-formats.md`) under `HKA\Software\Classes`, with the
+program's icon and an open command of `"{app}\OpenSanctuary.exe" "%1"`, and sets `ChangesAssociations=yes` so Explorer picks them up at once. They are created
+with `uninsdeletekey`/`uninsdeletevalue`, so uninstall removes them. The Linux packages register the same types through
+`packaging/opensanctuary-mime.xml` (see `file-formats.md`).
+
 ### Uninstall — **implemented**
 
 - Must stop a running `os-next.exe` before removing install-dir files (Inno's
@@ -376,7 +383,9 @@ The tarball itself is built now (`opensanctuary-linux-x64-<version>.tar.gz`,
 produced by `packaging/build-deb.sh` alongside the `.deb`, from the same
 Podman container build -- see `update.md`'s "Linux — built" section).
 `packaging/install.sh` is the friendly `curl | sh` wrapper around fetching
-and placing it.
+and placing it. The tarball also carries `install.sh` and `uninstall.sh` (removes the install, the launcher link and the desktop entry; keeps the library unless `--delete-data`) at its top level, so an installed
+copy has `install.sh` in its own folder (`~/.local/share/opensanctuary-install/install.sh`) to re-run or repair from, and a fix to the script reaches
+installs with the next release (the in-app tarball update replaces it along with the program).
 
 A single downloadable POSIX `sh` script (the same shape as rustup's or
 Homebrew's installers) for distros without a native package built for them:

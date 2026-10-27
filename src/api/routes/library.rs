@@ -40,6 +40,13 @@ pub(super) async fn post_public_domain_hymns(State(app): State<AppState>) -> Res
     Ok(Json(serde_json::json!({ "success": true, "total": r.total, "added": r.added, "already_present": r.already_present })))
 }
 
+/// DELETE /api/licensed-scripture -- Settings > Storage > "Delete kept Bible passages": removes every licensed passage (the NIV and others
+/// kept only for the publisher's time limit) now instead of waiting for them to expire. A schedule that names one just asks the plugin again.
+pub(super) async fn delete_licensed_scripture(State(app): State<AppState>) -> Result<impl IntoResponse, StatusCode> {
+    let removed = app.db.purge_all_licensed().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({ "success": true, "removed": removed })))
+}
+
 pub(super) async fn delete_song(
     State(app): State<AppState>,
     headers: HeaderMap,
@@ -243,6 +250,7 @@ pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/songs", get(get_songs).post(create_song))
         .route("/api/songs/public-domain", axum::routing::post(post_public_domain_hymns))
+        .route("/api/licensed-scripture", delete(delete_licensed_scripture))
         .route("/api/songs/{id}", delete(delete_song))
         .route("/api/scriptures", get(get_scriptures).post(create_scripture))
         .route("/api/scriptures/{id}", delete(delete_scripture))

@@ -314,7 +314,7 @@ export const api = {
     },
     downloadAndInstall: async () => {
       await resolveHostSessionToken();
-      return api.post<{ ok: boolean; version?: string; error?: string }>(
+      return api.post<{ ok: boolean; version?: string; installed?: boolean; error?: string }>(
         '/api/updates/download-and-install', undefined, { headers: hostTokenHeader() },
       );
     },

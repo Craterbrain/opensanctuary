@@ -211,6 +211,19 @@ export function renderSettingRow(def: SettingDef, highlight: boolean): HTMLEleme
           setTimeout(() => { btn.disabled = false; btn.textContent = def.actionLabel || 'Run'; }, 2500);
         }
       });
+    } else if (def.key === 'clearLicensedScripture') {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const res = await fetch('/api/licensed-scripture', { method: 'DELETE', headers: hostTokenHeader() });
+          const j = res.ok ? await res.json() : null;
+          btn.textContent = j ? `Deleted ${j.removed} passage${j.removed === 1 ? '' : 's'}` : 'Could not delete';
+        } catch {
+          btn.textContent = 'Could not delete';
+        } finally {
+          setTimeout(() => { btn.disabled = false; btn.textContent = def.actionLabel || 'Run'; }, 2500);
+        }
+      });
     } else if (def.key === 'ccliReport') {
       btn.addEventListener('click', () => openCcliReportModal());
     }
@@ -377,6 +390,10 @@ export async function downloadAndInstallUpdate(): Promise<void> {
     const result = await api.updates.downloadAndInstall();
     if (!result.ok) {
       showToast(`Could not install update: ${result.error || 'unknown error'}`, 'error');
+      return;
+    }
+    if (result.installed) {
+      showToast(`Updated to v${result.version}. Restart OpenSanctuary to finish.`, 'success');
       return;
     }
     showToast(`Opened your system's installer for v${result.version}. When it finishes, come back to Settings > About and choose Restart now.`, 'success');
