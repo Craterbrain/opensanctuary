@@ -376,7 +376,7 @@ The tarball itself is built now (`opensanctuary-linux-x64-<version>.tar.gz`,
 produced by `packaging/build-deb.sh` alongside the `.deb`, from the same
 Podman container build -- see `update.md`'s "Linux — built" section).
 `packaging/install.sh` is the friendly `curl | sh` wrapper around fetching
-and placing it. The tarball also carries a copy of `install.sh` at its top level, so an installed
+and placing it. The tarball also carries `install.sh` and `uninstall.sh` (removes the install, the launcher link and the desktop entry; keeps the library unless `--delete-data`) at its top level, so an installed
 copy has `install.sh` in its own folder (`~/.local/share/opensanctuary-install/install.sh`) to re-run or repair from, and a fix to the script reaches
 installs with the next release (the in-app tarball update replaces it along with the program).
 
