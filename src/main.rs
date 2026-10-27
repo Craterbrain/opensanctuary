@@ -540,6 +540,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
 
+            // Linux: after a package update replaces this program on disk, say so once (the console turns this notice into a pop-up);
+            // Settings > About then offers "Restart now". See network/relaunch.rs.
+            if cfg!(target_os = "linux") {
+                let bus = app_state.notifications.clone();
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                    loop {
+                        interval.tick().await;
+                        if os_next::network::relaunch::running_binary_replaced() {
+                            let _ = bus.post("host", "OpenSanctuary", os_next::api::notifications::NewNotification {
+                                level: Some(os_next::api::notifications::Level::Warning),
+                                title: "Restart to finish updating".into(),
+                                body: "A new version of OpenSanctuary was installed, but this window is still running the old one. Choose Restart now when you are ready (Settings > About has the button).".into(),
+                                key: Some("restart-needed".into()),
+                                sticky: true,
+                            });
+                            return;
+                        }
+                    }
+                });
+            }
+
             // Initial media-folder sync (moved here from the pre-runtime
             // main thread -- see the comment where `images_dir`/
             // `videos_dir` used to be computed, above `AssetGraph::new`).

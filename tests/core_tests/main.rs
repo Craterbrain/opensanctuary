@@ -26,6 +26,7 @@ mod network;
 mod packaging;
 mod pd_songs;
 mod plugins;
+mod restart;
 mod storage;
 
 /// An `AppState` with the defaults nearly every test wants (an empty engine, a throwaway
