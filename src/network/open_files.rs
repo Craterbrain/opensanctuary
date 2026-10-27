@@ -166,7 +166,16 @@ mod tests {
         assert!(take(&id).is_none());
 
         drop(first);
-        assert!(acquire_instance_lock(&data).is_some(), "the lock is free again when the instance quits");
+        // Free again once the instance quits. (A child process forked by another test in the same instant briefly holds a copy of the
+        // descriptor, and with it the lock, until it execs; so allow a moment.)
+        let freed = (0..50).any(|_| {
+            let got = acquire_instance_lock(&data).is_some();
+            if !got {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            got
+        });
+        assert!(freed, "the lock is free again when the instance quits");
     }
 
     #[test]
