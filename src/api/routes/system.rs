@@ -217,7 +217,44 @@ pub(super) async fn get_update_status(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     require_host_token(&headers, &app)?;
     let status = app.update_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    Ok(Json(serde_json::json!({ "status": status })))
+    // Linux: an update was installed while this copy kept running (docs/update.md "Restart to finish updating").
+    Ok(Json(serde_json::json!({ "status": status, "restart_needed": crate::network::relaunch::running_binary_replaced() })))
+}
+
+/// POST /api/system/restart
+///
+/// Starts the freshly installed version and ends this one, for "Restart now" in Settings > About after an update was installed
+/// (Linux: the package manager replaces the program on disk but leaves the old copy running). Only allowed while the running
+/// program really has been replaced, so it can't be used to bounce a healthy app. The caller (the console) confirms with the
+/// operator first, because the console and the output windows go away for a few seconds.
+pub(super) async fn post_restart(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    require_host_token(&headers, &app)?;
+    if !crate::network::relaunch::running_binary_replaced() {
+        return Ok((StatusCode::CONFLICT, Json(serde_json::json!({
+            "ok": false,
+            "error": "Nothing to restart for: this is already the installed version.",
+        }))));
+    }
+    if let Err(e) = crate::network::relaunch::spawn_replacement() {
+        return Ok((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "ok": false, "error": e }))));
+    }
+    // Answer first, then go: the console needs this reply, and the new copy waits two seconds before it starts.
+    let display = app.display_manager.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        // With a native window loop, end it (closes the windows tidily); with none (headless) or if it can't be told, just exit.
+        let ended = match display.as_ref() {
+            Some(m) => m.quit(),
+            None => Err("no native window loop".to_string()),
+        };
+        if ended.is_err() {
+            std::process::exit(0);
+        }
+    });
+    Ok((StatusCode::OK, Json(serde_json::json!({ "ok": true }))))
 }
 
 /// POST /api/updates/check
@@ -328,4 +365,5 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/updates/status", get(get_update_status))
         .route("/api/updates/check", post(post_update_check))
         .route("/api/updates/download-and-install", post(post_update_download_and_install))
+        .route("/api/system/restart", post(post_restart))
 }

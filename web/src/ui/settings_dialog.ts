@@ -72,6 +72,13 @@ let settingsServerInfo: {
  * automated check flow's cached result (docs/update.md), shown inline next to
  * the `appVersion` row. `undefined` until the first load attempt completes. */
 let settingsUpdateStatus: UpdateCheckResult | null | undefined = undefined;
+/** Linux: an update was installed while this copy kept running (`restart_needed` from /api/updates/status). */
+let settingsRestartNeeded = false;
+
+/** The "Restart to finish updating" row only exists while there is something to restart for. */
+export function settingRowVisible(d: SettingDef): boolean {
+  return d.key !== 'restartToFinishUpdate' || settingsRestartNeeded;
+}
 let currentContext: SettingsContext | null = null;
 
 let displaysAvailable = false;
@@ -88,6 +95,7 @@ function getSettingValue(key: string): string {
   if (key === 'appVersion') {
     const version = (settingsServerInfo && settingsServerInfo.version) || '';
     const latest = settingsUpdateStatus?.latest;
+    if (settingsRestartNeeded) return `${version}  —  restart to finish updating`;
     return latest ? `${version}  —  Update available: v${latest.version}` : version;
   }
   if (key === 'dataDirectory') return (settingsServerInfo && settingsServerInfo.data_dir) || '(unavailable)';
@@ -114,7 +122,7 @@ export function renderSettingsSidebar() {
   const q = settingsSearchQuery.trim().toLowerCase();
   list.innerHTML = '';
   SETTINGS_CATEGORIES.forEach(cat => {
-    const defs = SETTINGS_SCHEMA.filter(d => d.category === cat.id);
+    const defs = SETTINGS_SCHEMA.filter(d => d.category === cat.id && settingRowVisible(d));
     const hasMatch = !q || defs.some(d => settingMatchesSearch(d, q));
     const btn = document.createElement('button');
     btn.className = 'settings-category-btn'
@@ -180,6 +188,8 @@ export function renderSettingRow(def: SettingDef, highlight: boolean): HTMLEleme
         if (optionsModalEl) closeModal(optionsModalEl);
         currentContext?.showFirstTimeSetup?.();
       });
+    } else if (def.key === 'restartToFinishUpdate') {
+      btn.addEventListener('click', () => restartToFinishUpdate(btn));
     } else if (def.key === 'checkForUpdates') {
       btn.addEventListener('click', () => checkForUpdates(btn));
     } else if (def.key === 'installUpdateFromFile') {
@@ -310,6 +320,50 @@ export async function checkForUpdates(btn: HTMLButtonElement): Promise<void> {
   }
 }
 
+/** Settings > About > "Restart now" (Linux): after the package manager replaced the program, start the new version and end this
+ * one. Always asks first: the console and every output window go away for a few seconds, and this app runs live during services. */
+export function restartToFinishUpdate(btn: HTMLButtonElement): void {
+  showConfirmDialog(
+    'Restart OpenSanctuary?',
+    'A newer version is installed. Restarting closes the console and any output windows for a few seconds, then opens the new version.',
+    'Do not do this during a service. Your schedule and library are saved and come back as they were.',
+    async () => {
+      btn.disabled = true;
+      try {
+        const res = await api.updates.restart();
+        if (!res.ok) {
+          showToast(res.error || 'Could not restart.', 'error');
+          btn.disabled = false;
+          return;
+        }
+        showToast('Restarting… this window reconnects by itself.', 'success');
+        await waitForRestart();
+      } catch (e: any) {
+        // The server may drop the connection the moment it quits; that is the restart, not a failure.
+        await waitForRestart();
+      }
+    },
+    'Restart now'
+  );
+}
+
+/** After asking for a restart: poll until the new copy answers, then reload this page onto it (a browser console; the native
+ * window is replaced by the new copy's own). Gives up quietly after a minute. */
+async function waitForRestart(): Promise<void> {
+  const started = Date.now();
+  await new Promise(r => setTimeout(r, 3000));
+  while (Date.now() - started < 60000) {
+    try {
+      const res = await fetch('/api/updates/status', { headers: hostTokenHeader(), cache: 'no-store' });
+      if (res.ok && !(await res.json()).restart_needed) {
+        window.location.reload();
+        return;
+      }
+    } catch (_) { /* still restarting */ }
+    await new Promise(r => setTimeout(r, 1500));
+  }
+}
+
 export async function downloadAndInstallUpdate(): Promise<void> {
   try {
     const result = await api.updates.downloadAndInstall();
@@ -317,7 +371,7 @@ export async function downloadAndInstallUpdate(): Promise<void> {
       showToast(`Could not install update: ${result.error || 'unknown error'}`, 'error');
       return;
     }
-    showToast(`Opened your system's installer for v${result.version}. Restart OpenSanctuary once it finishes.`, 'success');
+    showToast(`Opened your system's installer for v${result.version}. When it finishes, come back to Settings > About and choose Restart now.`, 'success');
   } catch (_) {
     showToast('Could not download the update.', 'error');
   }
@@ -492,8 +546,8 @@ export function renderSettingsContent() {
   content.innerHTML = '';
 
   const defsToShow = q
-    ? SETTINGS_SCHEMA.filter(d => settingMatchesSearch(d, q))
-    : SETTINGS_SCHEMA.filter(d => d.category === activeSettingsCategory);
+    ? SETTINGS_SCHEMA.filter(d => settingMatchesSearch(d, q) && settingRowVisible(d))
+    : SETTINGS_SCHEMA.filter(d => d.category === activeSettingsCategory && settingRowVisible(d));
 
   if (defsToShow.length === 0) {
     const empty = document.createElement('div');
@@ -530,6 +584,7 @@ export async function loadSettingsServerInfo() {
   try {
     const result = await api.updates.status();
     settingsUpdateStatus = result.status;
+    settingsRestartNeeded = !!result.restart_needed;
   } catch (_) {
     // Not fatal -- the appVersion row just omits the "Update available"
     // suffix (e.g. not console-authenticated yet, or offline).

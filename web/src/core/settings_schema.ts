@@ -365,6 +365,14 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
     actionLabel: 'Re-run First-Time Setup',
   },
   {
+    key: 'restartToFinishUpdate',
+    label: 'Restart to finish updating',
+    description: 'A new version was installed while this one kept running. Restarting opens the new version. The console and the output windows close for a few seconds, so choose a moment between services.',
+    category: 'about',
+    control: 'action',
+    actionLabel: 'Restart now…',
+  },
+  {
     key: 'checkForUpdates',
     label: 'Check for Updates',
     description: 'OpenSanctuary checks for a new release periodically in the background. Click to check right now -- if one\'s available, you\'ll be offered to download and install it immediately.',
