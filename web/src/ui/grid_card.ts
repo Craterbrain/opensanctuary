@@ -7,7 +7,7 @@
  */
 
 import { formatMediaTime } from '../core/ui_utils.ts';
-import { escapeHtml, escapeUserHtml } from '../core/presentation_helpers.ts';
+import { escapeUserHtml } from '../core/presentation_helpers.ts';
 
 export type ThumbnailType = 'image' | 'video' | 'css' | 'icon';
 

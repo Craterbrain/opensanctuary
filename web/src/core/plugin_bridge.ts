@@ -107,7 +107,7 @@ function startWatchdog() {
     const now = Date.now();
     const lagged = now - expected > 3000; // the console itself was stalled: nobody is judged this round
     expected = now + PING_EVERY_MS;
-    for (const [win, w] of watched) {
+    for (const [win] of watched) {
       try { win.postMessage({ type: 'os.ping', n: now }, '*'); } catch { /* frame gone */ }
       if (!running.has(win)) watched.delete(win);
     }
