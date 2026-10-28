@@ -2109,7 +2109,7 @@ export function renderSchedule(schedule: Schedule) {
                     }
                   });
                   const mediaKind = isAud ? 'audio track' : (isVid ? 'video background' : 'image background');
-                  showToast(`✓ Assigned ${mediaKind} to slide ${sIdx + 1} (${slide.tag || 'Slide ' + (sIdx + 1)}): ${d.name}`, 'success');
+                  showToast(`✓ Assigned ${mediaKind} to slide ${sIdx + 1} (${slide?.tag || 'Slide ' + (sIdx + 1)}): ${d.name}`, 'success');
                 }
               } else if (d.type === 'theme-item') {
                 sendCommand({
@@ -3267,7 +3267,7 @@ function renderLiveOutput(state: ShowState) {
     }
     if (canvasFooterRightEl) {
       canvasFooterRightEl.style.opacity = '1';
-      canvasFooterRightEl.textContent = currentSlide.footer || liveItem.subtitle || '';
+      canvasFooterRightEl.textContent = currentSlide?.footer || liveItem.subtitle || '';
     }
 
     if (liveCanvasEl) {

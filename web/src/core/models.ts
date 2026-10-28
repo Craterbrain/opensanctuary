@@ -27,6 +27,8 @@ export interface Slide {
   slide_document_version?: number;
   duration_seconds?: number | null;
   reference_label?: string | null;
+  /** A footer line some sources attach to a slide (shown bottom right on the output); not part of the stored slide. */
+  footer?: string | null;
 }
 
 export interface ArrangementEntry {

@@ -3,6 +3,7 @@
  * Pure business logic and resolution algorithms for worship slides, media, and scripture.
  */
 
+import type { Slide } from './models.ts';
 import { getReorderDestinationIndex } from "@atlaskit/pragmatic-drag-and-drop-hitbox/util/get-reorder-destination-index";
 import { getPatternMeta, getPatternSpec, ensurePatternKeyframes, patternAnimationName, patternScaleFor, scalePx } from "./background_patterns.ts";
 import { GRADIENT_PRESETS, PATTERN_PRESETS, type SlideBackground, type BackgroundPreset } from "../editor/types.ts";
@@ -59,7 +60,7 @@ export interface ArrangementEntry {
  * If `item.arrangement` exists and is non-empty, returns it.
  * Otherwise returns an identity mapping over `item.slides`.
  */
-export function effectiveArrangement(item: { slides?: any[]; arrangement?: ArrangementEntry[] | null } | null | undefined): ArrangementEntry[] {
+export function effectiveArrangement(item: { slides?: Slide[]; arrangement?: ArrangementEntry[] | null } | null | undefined): ArrangementEntry[] {
     if (!item) return [];
     if (item.arrangement && Array.isArray(item.arrangement) && item.arrangement.length > 0) {
         return item.arrangement;
@@ -76,7 +77,7 @@ export function effectiveArrangement(item: { slides?: any[]; arrangement?: Arran
  * Resolves the master slide referenced at a given arrangement play position,
  * applying any per-play background override.
  */
-export function resolveSlideAt(item: { slides?: any[]; arrangement?: ArrangementEntry[] | null } | null | undefined, playPos: number): any | null {
+export function resolveSlideAt(item: { slides?: Slide[]; arrangement?: ArrangementEntry[] | null } | null | undefined, playPos: number): Slide | null {
     if (!item) return null;
     const arr = effectiveArrangement(item);
     const entry = arr[playPos];
@@ -147,7 +148,7 @@ export function resolveSlideBackground(
  * Resolves the background for an item at a specific arrangement play position through the 7-tier cascade.
  */
 export function resolveBackgroundAt(
-    item: { slides?: any[]; arrangement?: ArrangementEntry[] | null; background?: string | null; theme_name?: string | null } | null | undefined,
+    item: { slides?: Slide[]; arrangement?: ArrangementEntry[] | null; background?: string | null; theme_name?: string | null } | null | undefined,
     playPos: number,
     availableThemes: ThemeDefinition[] = [],
     activeTheme: { background_value?: string | null } | null | undefined = null,
@@ -850,7 +851,7 @@ export class UndoPlaceholderManager {
  * Handles scriptures (Genesis 1:1 -> V1), songs (Verse 2 -> V2, Chorus 1 -> C1, Bridge -> B),
  * and assigns permanent badges to slides without badges so reordering never changes verse numbers.
  */
-export function getSlideBadge(slide: any, sIdx?: number): string {
+export function getSlideBadge(slide: Slide | null | undefined, sIdx?: number): string {
     if (!slide) return sIdx !== undefined ? `V${sIdx + 1}` : 'Slide';
 
     // 1. If explicit cached tag or tag already assigned, preserve it!

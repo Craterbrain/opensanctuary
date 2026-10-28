@@ -373,7 +373,7 @@ export function renderSnapshot(snapshot: StateSnapshot) {
           sc.classList.add('is-active');
         }
 
-        const tagClass = getTagClass(slide.label || slide.tag);
+        const tagClass = getTagClass(slide.label || slide.tag || '');
 
         sc.innerHTML = `
           <div class="slide-card-top">
