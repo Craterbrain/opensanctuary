@@ -5,12 +5,13 @@
  * per-slide timer (falling back to a default duration when a slide has none of
  * its own).
  */
+import type { ShowCommand } from '../core/models.ts';
 import type { ScheduleItem } from '../core/models.ts';
 import { effectiveArrangement } from '../core/presentation_helpers';
 
 export interface PresentationPlaybackContext {
   getCurrentSnapshot(): any;
-  sendCommand(cmd: any): void;
+  sendCommand(cmd: ShowCommand): void;
 }
 
 let ctx: PresentationPlaybackContext | null = null;

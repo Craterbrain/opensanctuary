@@ -8,12 +8,14 @@
  * - Bottom half: "Drop to Append to Schedule"
  */
 
+import type { StateSnapshot } from './models.ts';
+import { errorMessage } from './ui_utils.ts';
 import { appStore } from './state';
 import { resolveHostSessionToken, hostTokenHeader } from './host_session.ts';
 
 export interface ScheduleDropOptions {
   panelSelector?: string;
-  onLoaded?: (snapshot: any, mode: 'replace' | 'append') => void;
+  onLoaded?: (snapshot: StateSnapshot, mode: 'replace' | 'append') => void;
   showToast?: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
   /** Opens an OpenSanctuary file (`.osservice` etc.) -- injected so this module doesn't depend on the dialogs it needs. */
   openBundle?: (file: File, mode: 'replace' | 'append') => Promise<void>;
@@ -206,8 +208,8 @@ export function setupScheduleDesktopDrop(options?: ScheduleDropOptions): () => v
       } else {
         toast(`✓ Successfully loaded schedule '${snapshot?.schedule?.title || file.name}'`, 'success');
       }
-    } catch (err: any) {
-      toast(`Error loading schedule: ${err.message || err}`, 'error');
+    } catch (err) {
+      toast(`Error loading schedule: ${errorMessage(err)}`, 'error');
     }
   };
 

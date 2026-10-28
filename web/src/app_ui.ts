@@ -1,3 +1,4 @@
+import { errorMessage } from './core/ui_utils.ts';
 import type { LibrarySlide, ScriptureVerse, Schedule, ScheduleItem } from './core/models.ts';
 import { SlideEditor, EditorSlide, projectTextFromElements, applyArchetypeToSlide, splitTextToSlides, stripChordsAndAnnotations, BulkSplitRule } from './editor/index';
 import { resolveKeyboardShortcut, buildPairingUrl, buildRemoteUrl, escapeHtml } from './core/presentation_helpers.ts';
@@ -1261,8 +1262,8 @@ async function loadScheduleFile(file: File, mode: 'replace' | 'append') {
       showToast(`✓ Successfully loaded schedule '${data.schedule?.title || file.name}'`, 'success');
     }
     closeModal(openModal);
-  } catch (err: any) {
-    showToast(`Error loading schedule: ${err.message || err}`, 'error');
+  } catch (err) {
+    showToast(`Error loading schedule: ${errorMessage(err)}`, 'error');
   }
 }
 
@@ -1412,8 +1413,8 @@ async function performSave(title: string, format: string): Promise<void> {
       downloadAnchor.remove();
       URL.revokeObjectURL(url);
     }
-  } catch (e: any) {
-    showToast(`Save failed: ${e.message || e}`, 'error');
+  } catch (e) {
+    showToast(`Save failed: ${errorMessage(e)}`, 'error');
     return;
   }
   lastSavedTitle = title;
@@ -1767,10 +1768,10 @@ async function startAdbProvisioning() {
     }
     // The TV is now showing its pairing code: take the operator to the tab where it gets scanned.
     followAdbTask(startResult.task_id, [startBtn, restoreBtn], statusEl, () => switchToPairingTab());
-  } catch (err: any) {
+  } catch (err) {
     if (startBtn) startBtn.disabled = false;
     if (restoreBtn) restoreBtn.disabled = false;
-    const message = (err && err.message) || 'Could not start provisioning.';
+    const message = errorMessage(err) || 'Could not start provisioning.';
     if (statusEl) statusEl.innerHTML = `<span style="color: var(--os-danger-text);">❌ ${escapeHtml(message)}</span>`;
   }
 }
@@ -1792,10 +1793,10 @@ async function restoreAdbHome() {
     const r = await api.tvProvision.restoreHome({ ip });
     if (!r || !r.task_id) throw new Error('Server did not return a task id.');
     followAdbTask(r.task_id, [startBtn, restoreBtn], statusEl);
-  } catch (err: any) {
+  } catch (err) {
     if (startBtn) startBtn.disabled = false;
     if (restoreBtn) restoreBtn.disabled = false;
-    if (statusEl) statusEl.innerHTML = `<span style="color: var(--os-danger-text);">❌ ${escapeHtml((err && err.message) || 'Could not start.')}</span>`;
+    if (statusEl) statusEl.innerHTML = `<span style="color: var(--os-danger-text);">❌ ${escapeHtml(errorMessage(err) || 'Could not start.')}</span>`;
   }
 }
 
@@ -2167,13 +2168,13 @@ on('file-openlp-import', 'change', async (e: Event) => {
       }
       showToast(`OpenLP import error: ${err}`, 'error');
     }
-  } catch (err: any) {
+  } catch (err) {
     if (statusEl) {
       statusEl.style.display = 'block';
       statusEl.style.color = 'var(--os-danger-text)';
-      statusEl.textContent = `Error: ${err.message}`;
+      statusEl.textContent = `Error: ${errorMessage(err)}`;
     }
-    showToast(`OpenLP import failed: ${err.message}`, 'error');
+    showToast(`OpenLP import failed: ${errorMessage(err)}`, 'error');
   } finally {
     (e.target as HTMLInputElement).value = '';
   }
@@ -2223,13 +2224,13 @@ on('file-freeshow-show-import', 'change', async (e: Event) => {
       }
       showToast(`FreeShow import error: ${err}`, 'error');
     }
-  } catch (err: any) {
+  } catch (err) {
     if (statusEl) {
       statusEl.style.display = 'block';
       statusEl.style.color = 'var(--os-danger-text)';
-      statusEl.textContent = `Error: ${err.message}`;
+      statusEl.textContent = `Error: ${errorMessage(err)}`;
     }
-    showToast(`FreeShow import failed: ${err.message}`, 'error');
+    showToast(`FreeShow import failed: ${errorMessage(err)}`, 'error');
   } finally {
     (e.target as HTMLInputElement).value = '';
   }
@@ -2275,13 +2276,13 @@ on('file-pptx-import', 'change', async (e: Event) => {
       }
       showToast(`PowerPoint import error: ${err}`, 'error');
     }
-  } catch (err: any) {
+  } catch (err) {
     if (statusEl) {
       statusEl.style.display = 'block';
       statusEl.style.color = 'var(--os-danger-text)';
-      statusEl.textContent = `Error: ${err.message}`;
+      statusEl.textContent = `Error: ${errorMessage(err)}`;
     }
-    showToast(`PowerPoint import failed: ${err.message}`, 'error');
+    showToast(`PowerPoint import failed: ${errorMessage(err)}`, 'error');
   } finally {
     (e.target as HTMLInputElement).value = '';
   }
@@ -2395,13 +2396,13 @@ on('file-odp-import', 'change', async (e: Event) => {
       }
       showToast(`OpenDocument Presentation import error: ${err}`, 'error');
     }
-  } catch (err: any) {
+  } catch (err) {
     if (statusEl) {
       statusEl.style.display = 'block';
       statusEl.style.color = 'var(--os-danger-text)';
-      statusEl.textContent = `Error: ${err.message}`;
+      statusEl.textContent = `Error: ${errorMessage(err)}`;
     }
-    showToast(`OpenDocument Presentation import failed: ${err.message}`, 'error');
+    showToast(`OpenDocument Presentation import failed: ${errorMessage(err)}`, 'error');
   } finally {
     (e.target as HTMLInputElement).value = '';
   }
@@ -2453,9 +2454,9 @@ on('file-ewpx-import', 'change', async (e: Event) => {
       show(`Import error: ${msg}`, 'var(--os-danger-text)');
       showToast(`EasyWorship presentation import error: ${msg}`, 'error');
     }
-  } catch (err: any) {
-    show(`Error: ${err.message}`, 'var(--os-danger-text)');
-    showToast(`EasyWorship presentation import failed: ${err.message}`, 'error');
+  } catch (err) {
+    show(`Error: ${errorMessage(err)}`, 'var(--os-danger-text)');
+    showToast(`EasyWorship presentation import failed: ${errorMessage(err)}`, 'error');
   } finally {
     (e.target as HTMLInputElement).value = '';
   }
@@ -2499,13 +2500,13 @@ on('btn-openlp-autodetect', 'click', async () => {
       }
       showToast(`OpenLP auto-detect error: ${err}`, 'error');
     }
-  } catch (err: any) {
+  } catch (err) {
     if (statusEl) {
       statusEl.style.display = 'block';
       statusEl.style.color = 'var(--os-danger-text)';
-      statusEl.textContent = `Error: ${err.message}`;
+      statusEl.textContent = `Error: ${errorMessage(err)}`;
     }
-    showToast(`OpenLP auto-detect failed: ${err.message}`, 'error');
+    showToast(`OpenLP auto-detect failed: ${errorMessage(err)}`, 'error');
   }
 });
 

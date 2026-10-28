@@ -3,6 +3,7 @@
  * Bundled entrypoint for stage.html.
  */
 
+import type { StateSnapshot } from './core/models.ts';
 import { resolveSlideAt, escapeHtml } from './core/presentation_helpers.ts';
 import { autoFitLyrics } from './core/autofit.ts';
 import { clock } from './core/timesync.ts';
@@ -41,7 +42,7 @@ const badgeClear = document.getElementById('badge-foh-clear');
 const badgeLogo = document.getElementById('badge-foh-logo');
 const badgeMedia = document.getElementById('badge-foh-media');
 
-export function renderStageSnapshot(snapshot: any) {
+export function renderStageSnapshot(snapshot: StateSnapshot) {
   if (!snapshot) return;
   const state = snapshot.state || {};
   const schedule = snapshot.schedule || { items: [] };

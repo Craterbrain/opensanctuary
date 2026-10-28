@@ -8,6 +8,8 @@
  * says so and asks to continue. It never blocks: Continue always imports. Only then is the file sent
  * again to be imported.
  */
+import type { StateSnapshot } from '../core/models.ts';
+import { errorMessage } from '../core/ui_utils.ts';
 import { closeModal, dialogManager, registerModalReset, showConfirmDialog } from './dialog_manager.ts';
 import { hostTokenHeader, resolveHostSessionToken } from '../core/host_session.ts';
 import { escapeHtml } from '../core/presentation_helpers.ts';
@@ -190,7 +192,7 @@ export interface ImportOutcome {
   /** What was said to the user. */
   message: string;
   /** For a service: the new state of the show. */
-  snapshot: any | null;
+  snapshot: StateSnapshot | null;
 }
 
 /**
@@ -206,8 +208,8 @@ export async function importBundleFile(file: File, opts: ImportOptions = {}): Pr
   let summary: BundleSummary;
   try {
     summary = await inspectBundle(file);
-  } catch (e: any) {
-    showToast(`Couldn't open ${file.name}: ${e?.message ?? e}`, 'error', 7000);
+  } catch (e) {
+    showToast(`Couldn't open ${file.name}: ${errorMessage(e)}`, 'error', 7000);
     return null;
   }
 
@@ -259,8 +261,8 @@ export async function importBundleFile(file: File, opts: ImportOptions = {}): Pr
     showToast(message, 'success', 6000);
     if (summary.kind === 'song' || summary.kind === 'presentation' || summary.kind === 'bible') opts.onLibraryChanged?.(summary.kind);
     return { kind: summary.kind, title, result, message, snapshot: body.snapshot ?? null };
-  } catch (e: any) {
-    showToast(`Couldn't import ${file.name}: ${e?.message ?? e}`, 'error', 7000);
+  } catch (e) {
+    showToast(`Couldn't import ${file.name}: ${errorMessage(e)}`, 'error', 7000);
     return null;
   }
 }
@@ -327,8 +329,8 @@ export async function exportBundle(req: ExportRequest, fallbackName: string): Pr
       showToast(`${missing} media file${missing === 1 ? ' was' : 's were'} missing from your library and left out.`, 'warning', 8000);
     }
     return true;
-  } catch (e: any) {
-    showToast(`Export failed: ${e?.message ?? e}`, 'error', 7000);
+  } catch (e) {
+    showToast(`Export failed: ${errorMessage(e)}`, 'error', 7000);
     return false;
   }
 }

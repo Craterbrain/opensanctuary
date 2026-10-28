@@ -5,6 +5,7 @@
  * authored slides) and a play-order queue (the arrangement actually performed),
  * built with drag-and-drop between and within both lists.
  */
+import type { ShowCommand, Schedule, ShowState } from '../core/models.ts';
 import type { Slide } from '../core/models.ts';
 import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { type ArrangementEntry, escapeUserHtml, isPrimaryDropTarget } from '../core/presentation_helpers';
@@ -14,15 +15,15 @@ export interface ArrangementModalContext {
   showToast: (message: string, type?: ToastType) => void;
   showModal: (el: HTMLElement) => void;
   closeModal: (el: HTMLElement) => void;
-  sendCommand: (cmd: any) => void;
+  sendCommand: (cmd: ShowCommand) => void;
   getSlideBadge: (slide: any, idx?: number) => string;
   getSlideBadgeColor: (badge: string) => string;
   escapeHtml: (str: string) => string;
   formatCssBackground: (bg: string | null | undefined) => string;
   getCurrentSnapshot: () => any;
-  renderSchedule: (schedule: any) => void;
-  renderPreviewDeck: (state: any) => void;
-  renderLiveDeck: (state: any) => void;
+  renderSchedule: (schedule: Schedule) => void;
+  renderPreviewDeck: (state: ShowState) => void;
+  renderLiveDeck: (state: ShowState) => void;
 }
 
 let ctx: ArrangementModalContext | null = null;

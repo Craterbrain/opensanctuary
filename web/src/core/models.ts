@@ -189,3 +189,6 @@ export interface LibraryItem {
   theme_name?: string | null;
   item_type?: string;
 }
+
+/** A command sent to the show engine: `{ Name: payload }` (or just `"Name"` for one without a payload); see `ShowCommand` in src/core/commands.rs. */
+export type ShowCommand = string | { [name: string]: unknown };

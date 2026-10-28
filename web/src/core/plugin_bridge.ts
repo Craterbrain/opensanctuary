@@ -35,6 +35,7 @@
  *   and, with ui.toolbar, `{ type: 'os.event', event: 'toolbar', data: { id } }` when one of its ribbon buttons is clicked.
  *   and, with show.observe, `{ type: 'os.event', event: 'state', data }` for each state update.
  */
+import { errorMessage } from './ui_utils.ts';
 import { api, type PluginInfo } from "./api_client.ts";
 import { getCurrentIconSet } from "./icon_sets.ts";
 import { registerLibrarySource, unregisterLibrarySource } from "../ui/library_panel.ts";
@@ -438,8 +439,8 @@ function installListener() {
     r.inFlight++;
     try {
       reply({ ok: true, result: await handle(r, msg.method, msg.params) });
-    } catch (e: any) {
-      reply({ ok: false, error: String(e?.message ?? e) });
+    } catch (e) {
+      reply({ ok: false, error: String(errorMessage(e)) });
     } finally {
       r.inFlight--;
     }

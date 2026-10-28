@@ -1,3 +1,4 @@
+import { errorMessage } from './core/ui_utils.ts';
 import jsQR from 'jsqr';
 import { escapeHtml } from './core/presentation_helpers';
 
@@ -161,9 +162,9 @@ import { escapeHtml } from './core/presentation_helpers';
 
       isScanning = true;
       requestAnimationFrame(scanFrameLoop);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Camera access error:', err);
-      showAlert('Camera permission denied or camera unavailable: ' + (err.message || err));
+      showAlert('Camera permission denied or camera unavailable: ' + (errorMessage(err)));
       if (manualCard) manualCard.style.display = 'block';
     }
   }
@@ -298,8 +299,8 @@ import { escapeHtml } from './core/presentation_helpers';
           } else {
             showAlert('No QR code detected in the selected image. Please try again or enter code manually.');
           }
-        } catch (err: any) {
-          showAlert('Failed to process image: ' + err.message);
+        } catch (err) {
+          showAlert('Failed to process image: ' + errorMessage(err));
         }
       };
 
@@ -400,8 +401,8 @@ import { escapeHtml } from './core/presentation_helpers';
 
       const data = await res.json();
       showSuccessScreen(data);
-    } catch (err: any) {
-      showAlert('Pairing Authorization Failed: ' + err.message);
+    } catch (err) {
+      showAlert('Pairing Authorization Failed: ' + errorMessage(err));
       if (submitBtn) {
         submitBtn.disabled = false;
         submitBtn.textContent = 'Authorize Display';

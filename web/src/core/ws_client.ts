@@ -10,6 +10,7 @@
  * - WebSocket send with automatic HTTP /api/command fallback
  */
 
+import type { StateSnapshot, ShowCommand } from './models.ts';
 import { validateSnapshotProtocol } from './protocol.ts';
 import { resolveHostSessionToken, getHostSessionToken, getConsoleSessionId } from './host_session.ts';
 
@@ -32,7 +33,7 @@ export interface WsClientOptions {
   onClose?: (event?: any) => void;
   onError?: (err?: any) => void;
   onStatusChange?: (status: WsConnectionStatus) => void;
-  onSnapshot?: (snapshot: any) => void;
+  onSnapshot?: (snapshot: StateSnapshot) => void;
   onProtocolMismatch?: (errorMessage: string) => void;
   /**
    * Fired when the server rejects a command with a distinct reason rather
@@ -209,7 +210,7 @@ export class EngineWebSocketClient {
   /**
    * Sends an engine command over WebSocket if open; falls back to HTTP POST /api/command.
    */
-  public async sendCommand(cmd: any): Promise<any> {
+  public async sendCommand(cmd: ShowCommand): Promise<any> {
     const deviceToken = this.options.deviceToken;
     const text = typeof cmd === 'string' && (cmd.startsWith('{') || cmd.startsWith('"') || cmd.startsWith('['))
       ? cmd

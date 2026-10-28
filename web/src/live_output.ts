@@ -4,6 +4,7 @@
 // the canvas editor's element renderer with the in-app Live preview, making
 // what an operator designs (positioned text/images/shapes/tables) actually
 // appear on the real output instead of only a flattened text string.
+import type { StateSnapshot } from './core/models.ts';
 import { computeCanvasProjection } from './core/canvas_projection';
 import { renderSlideElements } from './core/slide_render';
 import { autoFitLyrics as autoFitLyricsCore } from './core/autofit';
@@ -606,7 +607,7 @@ function fadeInFromBlack(durationSec = 0.4) {
 
 let lastSnapshot: any = null;
 
-function renderSnapshot(snapshot: any) {
+function renderSnapshot(snapshot: StateSnapshot) {
   try {
     lastSnapshot = snapshot;
     const state = snapshot.state;
@@ -743,7 +744,7 @@ function renderSnapshot(snapshot: any) {
       lyricsContainerEl.style.marginTop = '';
     }
 
-    const isDedicatedMedia = state.live_item && state.live_item.item_type === 'media';
+    const isDedicatedMedia = !!state.live_item && state.live_item.item_type === 'media';
 
     // A pre-rendered clip of an animated pattern plays as a looping video, which is
     // far cheaper for a TV browser than redrawing the pattern every frame. Until the

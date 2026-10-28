@@ -1,4 +1,6 @@
 // OpenSanctuary Rust Client Show Controller & Bible Manager (app.js)
+import type { ShowCommand } from './core/models.ts';
+import { errorMessage } from './core/ui_utils.ts';
 import type { StateSnapshot, Schedule, ShowState, LibrarySlide, ScriptureVerse } from './core/models.ts';
 import { showLicensedLink } from './ui/licensed_link.ts';
 import { stripLicensedText } from './core/licensed';
@@ -766,7 +768,7 @@ function showHostAuthBanner() {
   document.getElementById('os-host-auth-dismiss')?.addEventListener('click', () => banner.remove());
 }
 
-export function sendCommand(cmd: any) {
+export function sendCommand(cmd: ShowCommand) {
   if (engineWsClient) {
     engineWsClient.sendCommand(cmd);
   } else {
@@ -3735,8 +3737,8 @@ on('ctx-lib-export-odp', 'click', async () => {
     a.remove();
     URL.revokeObjectURL(url);
     showToast(`✓ Exported "${title}" (.odp)`, 'success');
-  } catch (e: any) {
-    showToast(`Export failed: ${e?.message ?? e}`, 'error');
+  } catch (e) {
+    showToast(`Export failed: ${errorMessage(e)}`, 'error');
   }
 });
 // Songs and presentations save one file each; a Bible saves the whole translation the chapter belongs to.

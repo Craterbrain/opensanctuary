@@ -12,6 +12,8 @@
  * already use, so this stays a one-way dependency (app_core.ts imports from here,
  * never the reverse).
  */
+import type { ShowCommand } from '../core/models.ts';
+import { errorMessage } from '../core/ui_utils.ts';
 import type { LibrarySlide, ScriptureVerse } from '../core/models.ts';
 import { draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { parseScriptureReference } from '../core/bible_parser';
@@ -35,7 +37,7 @@ export interface LibraryPanelContext {
   getAvailableThemes(): any[];
   getCurrentSnapshot(): any;
   showToast(message: string, type?: string): void;
-  sendCommand(cmd: any): void;
+  sendCommand(cmd: ShowCommand): void;
   escapeHtml(str: any): string;
   formatCssBackground(bg: string | null | undefined, defaultGradient?: string): string;
   showContextMenu(el: HTMLElement | null, x: number, y: number): void;
@@ -99,8 +101,8 @@ export function initLibraryPanel(context: LibraryPanelContext) {
       if (!res.ok || body.success === false) throw new Error(body.error || `status ${res.status}`);
       ctx.showToast(`Removed ${b.abbreviation} from the list.`, 'success');
       window.dispatchEvent(new CustomEvent('os-library-changed', { detail: { category: 'scriptures', bibles: true } }));
-    } catch (e: any) {
-      ctx.showToast(`Could not remove ${b.abbreviation}: ${e?.message ?? e}`, 'error');
+    } catch (e) {
+      ctx.showToast(`Could not remove ${b.abbreviation}: ${errorMessage(e)}`, 'error');
     }
   });
 

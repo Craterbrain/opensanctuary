@@ -4,6 +4,7 @@
  * Handles real-time WebSocket communication, touch navigation, and mode toggles.
  */
 
+import type { StateSnapshot, ShowCommand } from './core/models.ts';
 import type { ScheduleItem } from './core/models.ts';
 import { resolveSlideAt, escapeHtml } from './core/presentation_helpers.ts';
 import { createEngineWebSocket, type EngineWebSocketClient } from './core/ws_client.ts';
@@ -194,7 +195,7 @@ export function applyPreviewBackground(card: HTMLElement | null, slide: any) {
 }
 
 // --- Command Dispatch ---
-export async function sendCommand(cmd: any): Promise<boolean | void> {
+export async function sendCommand(cmd: ShowCommand): Promise<boolean | void> {
   if (!isFullControl) {
     // In view-only prompter mode, lock out ALL mutating commands
     return;
@@ -205,7 +206,7 @@ export async function sendCommand(cmd: any): Promise<boolean | void> {
 }
 
 // --- UI Render from StateSnapshot ---
-export function renderSnapshot(snapshot: any) {
+export function renderSnapshot(snapshot: StateSnapshot) {
   if (!snapshot) return;
   latestSnapshot = snapshot;
   const state = snapshot.state || {};
@@ -292,7 +293,7 @@ export function renderSnapshot(snapshot: any) {
   // Determine which item to show in Slides view
   let currentItem: ScheduleItem | null = null;
   if (viewedItemId && schedule.items) {
-    currentItem = schedule.items.find((it: ScheduleItem) => it.id === viewedItemId);
+    currentItem = schedule.items.find((it: ScheduleItem) => it.id === viewedItemId) ?? null;
   }
   if (!currentItem) {
     currentItem = stagedItem || liveItem;
