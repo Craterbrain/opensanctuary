@@ -5,6 +5,7 @@
  * per-slide timer (falling back to a default duration when a slide has none of
  * its own).
  */
+import type { ScheduleItem } from '../core/models.ts';
 import { effectiveArrangement } from '../core/presentation_helpers';
 
 export interface PresentationPlaybackContext {
@@ -109,7 +110,7 @@ export function findLiveItemIndex(): number {
   const sched = snapshot && snapshot.schedule;
   const liveItem = snapshot && snapshot.state && snapshot.state.live_item;
   if (!sched || !sched.items || !liveItem) return -1;
-  return sched.items.findIndex((it: any) => it.id === liveItem.id);
+  return sched.items.findIndex((it: ScheduleItem) => it.id === liveItem.id);
 }
 
 export function initPresentationPlayback(context: PresentationPlaybackContext) {

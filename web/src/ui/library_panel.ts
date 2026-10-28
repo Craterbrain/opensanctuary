@@ -12,6 +12,7 @@
  * already use, so this stays a one-way dependency (app_core.ts imports from here,
  * never the reverse).
  */
+import type { LibrarySlide, ScriptureVerse } from '../core/models.ts';
 import { draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { parseScriptureReference } from '../core/bible_parser';
 import { escapeHtml, escapeUserHtml, formatParallelSlide, resolveSlideBackgroundElement } from '../core/presentation_helpers.ts';
@@ -67,12 +68,12 @@ let remoteMenuTarget: any = null;
  */
 export function remoteReferenceItems(parsedRef: any, activeVersion: unknown): any[] {
   if (!ctx || !parsedRef?.isReference || !parsedRef.book || !parsedRef.chapter) return [];
-  const all = ctx.getInstalledBibles().filter((b: any) => b.remote);
-  const scope = (!activeVersion || activeVersion === 'all') ? all : all.filter((b: any) => b.id === activeVersion);
+  const all = ctx.getInstalledBibles().filter((b) => b.remote);
+  const scope = (!activeVersion || activeVersion === 'all') ? all : all.filter((b) => b.id === activeVersion);
   const from = parsedRef.hasSpecificVerse ? (parsedRef.verseStart || 0) : 0;
   const to = parsedRef.hasSpecificVerse ? (parsedRef.verseEnd || from) : 0;
   const verses = from ? (to > from ? `:${from}-${to}` : `:${from}`) : '';
-  return scope.map((b: any) => ({
+  return scope.map((b) => ({
     id: `yvref:${b.remote.source}:${b.remote.bible_id}:${parsedRef.book}:${parsedRef.chapter}:${from}:${to}`,
     book: parsedRef.book,
     chapter: parsedRef.chapter,
@@ -770,7 +771,7 @@ export function filterAndRenderCatalog() {
       const matchTitle = (s.title || '').toLowerCase().includes(query) || (s.alternate_title || '').toLowerCase().includes(query);
       const matchAuthor = (s.author || '').toLowerCase().includes(query);
       const matchCcli = (s.ccli_number || '').toLowerCase().includes(query) || (s.id || '').toLowerCase().includes(query);
-      const matchLyrics = s.slides && s.slides.some((sl: any) => (sl.text || '').toLowerCase().includes(query));
+      const matchLyrics = s.slides && s.slides.some((sl: LibrarySlide) => (sl.text || '').toLowerCase().includes(query));
 
       if (mode === 'title') return matchTitle;
       if (mode === 'lyrics') return matchLyrics;
@@ -784,7 +785,7 @@ export function filterAndRenderCatalog() {
         matchedOnlineReference = parsedRef;
         const matchingItems: any[] = [];
         const refBook = parsedRef.book;
-        activeLibraryItems.forEach((sc: any) => {
+        activeLibraryItems.forEach((sc) => {
           if (!refBook) return;
           if (!scriptureMatchesVersion(sc, lp.getActiveBibleVersion())) return;
           const matchBook = (sc.book || '').toLowerCase() === refBook.toLowerCase();
@@ -796,7 +797,7 @@ export function filterAndRenderCatalog() {
             if (startV === undefined || startV === null) return;
             const endV = parsedRef.verseEnd || startV;
             if (sc.verse_start <= startV && sc.verse_end >= startV) {
-              const specificVerses = (sc.verses || []).filter((v: any) => v.verse_number >= startV && v.verse_number <= endV);
+              const specificVerses = (sc.verses || []).filter((v: ScriptureVerse) => v.verse_number >= startV && v.verse_number <= endV);
               if (specificVerses.length > 0) {
                 const cleanBook = sc.book;
                 const refStr = (startV === endV)
@@ -833,11 +834,11 @@ export function filterAndRenderCatalog() {
       const scored: any[] = [];
       const seenIds = new Set();
 
-      activeLibraryItems.forEach((sc: any) => {
+      activeLibraryItems.forEach((sc) => {
         if (!scriptureMatchesVersion(sc, lp.getActiveBibleVersion())) return;
         if (!sc.verses || sc.verses.length === 0) return;
 
-        sc.verses.forEach((v: any) => {
+        sc.verses.forEach((v: ScriptureVerse) => {
           const textLower = (v.text || '').toLowerCase();
           let score = 0;
           if (textLower.includes(query)) {
@@ -874,7 +875,7 @@ export function filterAndRenderCatalog() {
       filteredLibraryItems = scored.map(s => s.item);
     }
   } else if (lp.getCurrentTab() === 'media') {
-    filteredLibraryItems = activeLibraryItems.filter((m: any) => {
+    filteredLibraryItems = activeLibraryItems.filter((m) => {
       const matchName = (m.name || '').toLowerCase().includes(query);
       const matchPath = (m.file_path || '').toLowerCase().includes(query);
       const matchType = (m.media_type || '').toLowerCase().includes(query);
@@ -895,14 +896,14 @@ export function filterAndRenderCatalog() {
     filteredLibraryItems = activeLibraryItems.filter(p => {
       const matchTitle = (p.title || '').toLowerCase().includes(query);
       const matchAuthor = (p.author || '').toLowerCase().includes(query);
-      const matchSlides = p.slides && p.slides.some((s: any) => (s.content || s.title || '').toLowerCase().includes(query));
+      const matchSlides = p.slides && p.slides.some((s: LibrarySlide) => (s.content || s.title || '').toLowerCase().includes(query));
       if (mode === 'title') return matchTitle;
       return matchTitle || matchAuthor || matchSlides;
     });
   } else if (lp.getCurrentTab() === 'themes') {
     const categoryMap: Record<string, string> = { 'song-themes': 'song', 'scripture-themes': 'scripture', 'presentation-themes': 'presentation' };
     const wantedCategory = categoryMap[activeCategory];
-    filteredLibraryItems = activeLibraryItems.filter((t: any) => {
+    filteredLibraryItems = activeLibraryItems.filter((t) => {
       if (wantedCategory && (t.category || 'song') !== wantedCategory) return false;
       const matchName = (t.name || '').toLowerCase().includes(query);
       const matchFont = (t.font_family || '').toLowerCase().includes(query);
@@ -1391,7 +1392,7 @@ export function renderAssetPreview(item: any, tabName: string) {
     const qLower = (resourceSearchInput ? resourceSearchInput.value : '').trim().toLowerCase();
     let targetVerseIdx = 0;
     if (qLower && item.verses.length > 1) {
-      const matchIdx = item.verses.findIndex((v: any) => (v.text || '').toLowerCase().includes(qLower));
+      const matchIdx = item.verses.findIndex((v: ScriptureVerse) => (v.text || '').toLowerCase().includes(qLower));
       if (matchIdx !== -1) targetVerseIdx = matchIdx;
     }
     const v1 = item.verses[targetVerseIdx] || item.verses[0];
@@ -1527,7 +1528,7 @@ export function renderAssetPreview(item: any, tabName: string) {
         const el = document.getElementById('dual-secondary-text');
         if (localData && localData.verses && localData.verses.length > 0) {
           currentDualSecondaryVerses = localData.verses;
-          const matchingVerses = localData.verses.filter((v: any) =>
+          const matchingVerses = localData.verses.filter((v: ScriptureVerse) =>
             v.verse_number >= item.verse_start && v.verse_number <= item.verse_end
           );
           const vList = matchingVerses.length > 0 ? matchingVerses : localData.verses;
@@ -1535,7 +1536,7 @@ export function renderAssetPreview(item: any, tabName: string) {
           const qLower = (resourceSearchInput ? resourceSearchInput.value : '').trim().toLowerCase();
           let targetIdx = 0;
           if (qLower && vList.length > 1) {
-            const foundIdx = vList.findIndex((v: any) => (v.text || '').toLowerCase().includes(qLower));
+            const foundIdx = vList.findIndex((v: ScriptureVerse) => (v.text || '').toLowerCase().includes(qLower));
             if (foundIdx !== -1) targetIdx = foundIdx;
           }
           

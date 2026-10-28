@@ -242,8 +242,8 @@ export function initMediaImagePicker(context: MediaImagePickerContext) {
   document.addEventListener('DOMContentLoaded', () => {
     const catWrap = document.getElementById('image-picker-categories');
     if (catWrap) {
-      catWrap.addEventListener('click', (e: any) => {
-        const btn = e.target.closest('.import-tab-btn');
+      catWrap.addEventListener('click', (e) => {
+        const btn = (e.target as Element | null)?.closest('.import-tab-btn');
         if (btn) {
           catWrap.querySelectorAll('.import-tab-btn').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');

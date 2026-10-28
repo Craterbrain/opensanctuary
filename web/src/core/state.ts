@@ -3,10 +3,12 @@
  * Provides typed, decoupled state management across ES modules without globalThis pollutions.
  */
 
+import type { StateSnapshot } from './models.ts';
+
 export type TabType = 'songs' | 'scriptures' | 'media' | 'presentations' | 'themes';
 
 export interface AppState {
-  snapshot: any | null;
+  snapshot: StateSnapshot | null;
   activeTab: TabType;
   activeCategory: string;
   activeLibraryItems: any[];

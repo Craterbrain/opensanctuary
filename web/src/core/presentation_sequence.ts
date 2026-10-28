@@ -103,7 +103,7 @@ export function resolveNextPresentationPreview(
   const items = schedule?.items || [];
   let nextScheduleItem: any = null;
   if (items.length > 0) {
-    const curIdx = items.findIndex((it: any) => it.id === liveItem.id);
+    const curIdx = items.findIndex((it) => it.id === liveItem.id);
     if (curIdx >= 0 && curIdx + 1 < items.length) {
       nextScheduleItem = items[curIdx + 1];
     }

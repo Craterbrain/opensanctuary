@@ -4,6 +4,7 @@
  * Handles real-time WebSocket communication, touch navigation, and mode toggles.
  */
 
+import type { ScheduleItem } from './core/models.ts';
 import { resolveSlideAt, escapeHtml } from './core/presentation_helpers.ts';
 import { createEngineWebSocket, type EngineWebSocketClient } from './core/ws_client.ts';
 import { resolveNextPresentationPreview } from './core/presentation_sequence.ts';
@@ -241,7 +242,7 @@ export function renderSnapshot(snapshot: any) {
     if (schedule.items && schedule.items.length > 0) {
       scheduleEmptyEl.style.display = 'none';
       scheduleListEl.innerHTML = '';
-      schedule.items.forEach((item: any, idx: number) => {
+      schedule.items.forEach((item: ScheduleItem, idx: number) => {
         const card = doc!.createElement('div');
         card.className = 'schedule-card';
 
@@ -289,9 +290,9 @@ export function renderSnapshot(snapshot: any) {
   }
 
   // Determine which item to show in Slides view
-  let currentItem: any = null;
+  let currentItem: ScheduleItem | null = null;
   if (viewedItemId && schedule.items) {
-    currentItem = schedule.items.find((it: any) => it.id === viewedItemId);
+    currentItem = schedule.items.find((it: ScheduleItem) => it.id === viewedItemId);
   }
   if (!currentItem) {
     currentItem = stagedItem || liveItem;
@@ -359,10 +360,10 @@ export function renderSnapshot(snapshot: any) {
 
       slideCardsGrid.innerHTML = '';
       const effectiveSlides = (currentItem.arrangement && currentItem.arrangement.length > 0)
-        ? currentItem.arrangement.map((_: any, playPos: number) => resolveSlideAt(currentItem, playPos))
-        : (currentItem.slides || []).map((_: any, i: number) => resolveSlideAt(currentItem, i));
+        ? currentItem.arrangement.map((_: unknown, playPos: number) => resolveSlideAt(currentItem, playPos))
+        : (currentItem.slides || []).map((_: unknown, i: number) => resolveSlideAt(currentItem, i));
 
-      effectiveSlides.forEach((slide: any, idx: number) => {
+      effectiveSlides.forEach((slide, idx: number) => {
         if (!slide) return;
         const sc = doc!.createElement('div');
         sc.className = 'slide-card';
@@ -382,7 +383,7 @@ export function renderSnapshot(snapshot: any) {
         `;
 
         sc.addEventListener('click', () => {
-          const itemIdx = schedule.items.findIndex((it: any) => it.id === currentItem.id);
+          const itemIdx = schedule.items.findIndex((it: ScheduleItem) => it.id === currentItem.id);
           const targetIdx = itemIdx !== -1 ? itemIdx : null;
           sendCommand({ GoLive: { item_index: targetIdx, slide_index: idx } });
         });
@@ -441,19 +442,21 @@ function setupGestures() {
   let touchStartY = 0;
   let touchStartTime = 0;
 
-  gestureZone.addEventListener('touchstart', (e: any) => {
-    if (e.touches && e.touches.length === 1) {
-      touchStartX = e.touches[0].clientX;
-      touchStartY = e.touches[0].clientY;
+  gestureZone.addEventListener('touchstart', (e) => {
+    const touch = e.touches?.[0];
+    if (touch && e.touches.length === 1) {
+      touchStartX = touch.clientX;
+      touchStartY = touch.clientY;
       touchStartTime = Date.now();
     }
   }, { passive: true });
 
-  gestureZone.addEventListener('touchend', (e: any) => {
+  gestureZone.addEventListener('touchend', (e) => {
     if (!isFullControl) return;
-    if (e.changedTouches && e.changedTouches.length === 1) {
-      const deltaX = e.changedTouches[0].clientX - touchStartX;
-      const deltaY = e.changedTouches[0].clientY - touchStartY;
+    const touch = e.changedTouches?.[0];
+    if (touch && e.changedTouches.length === 1) {
+      const deltaX = touch.clientX - touchStartX;
+      const deltaY = touch.clientY - touchStartY;
       const elapsed = Date.now() - touchStartTime;
 
       // Require swift swipe (< 450ms) and minimum distance (45px)
@@ -532,10 +535,10 @@ function setupButtons() {
       if (!latestSnapshot) return;
       const sched = latestSnapshot.schedule || { items: [] };
       const currentItem = (viewedItemId && sched.items)
-        ? sched.items.find((it: any) => it.id === viewedItemId)
+        ? sched.items.find((it: ScheduleItem) => it.id === viewedItemId)
         : (latestSnapshot.state?.staged_item || latestSnapshot.state?.live_item);
       if (!currentItem) return;
-      const idx = sched.items.findIndex((it: any) => it.id === currentItem.id);
+      const idx = sched.items.findIndex((it: ScheduleItem) => it.id === currentItem.id);
       const targetIdx = idx !== -1 ? idx : null;
       sendCommand({ GoLive: { item_index: targetIdx, slide_index: 0 } });
     });

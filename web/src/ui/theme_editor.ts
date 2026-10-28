@@ -200,7 +200,7 @@ export async function duplicateTheme(theme: any) {
     try {
       const res = await fetch('/api/themes');
       const list = res.ok ? await res.json() : [];
-      return list.map((t: any) => t.name.toLowerCase());
+      return list.map((t: { name: string }) => t.name.toLowerCase());
     } catch (_) { return []; }
   })()));
   while (existingNames.has(newName.toLowerCase())) {

@@ -5,6 +5,7 @@
  * authored slides) and a play-order queue (the arrangement actually performed),
  * built with drag-and-drop between and within both lists.
  */
+import type { Slide } from '../core/models.ts';
 import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { type ArrangementEntry, escapeUserHtml, isPrimaryDropTarget } from '../core/presentation_helpers';
 import type { ToastType } from '../core/ui_utils';
@@ -212,7 +213,7 @@ export function openArrangementModal(itemIndex: number, item: any) {
   activeArrangementTargetItem = item;
 
   // Extract master slides with badges
-  localMasterSlides = item.slides.map((s: any, idx: number) => ({
+  localMasterSlides = item.slides.map((s: Slide, idx: number) => ({
     ...s,
     masterIndex: idx,
     badge: ctx!.getSlideBadge(s, idx),

@@ -67,7 +67,7 @@ async function refreshLiveThemes() {
     if (res.ok) {
       const dbThemes = await res.json();
       if (Array.isArray(dbThemes) && dbThemes.length > 0) {
-        availableThemes = dbThemes.map((t: any) => ({
+        availableThemes = dbThemes.map((t) => ({
           name: t.name,
           bg: t.background || 'linear-gradient(135deg, #0f2027, #203a43, #2c5364)',
           font: t.font_family,

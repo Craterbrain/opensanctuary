@@ -1,3 +1,4 @@
+import type { LibrarySlide, ScriptureVerse, Schedule, ScheduleItem } from './core/models.ts';
 import { SlideEditor, EditorSlide, projectTextFromElements, applyArchetypeToSlide, splitTextToSlides, stripChordsAndAnnotations, BulkSplitRule } from './editor/index';
 import { resolveKeyboardShortcut, buildPairingUrl, buildRemoteUrl, escapeHtml } from './core/presentation_helpers.ts';
 import { api } from './core/api_client.ts';
@@ -267,27 +268,27 @@ function editExistingItem(item: any, scheduleContext: { itemIndex: number; slide
 
   let editorSlides: EditorSlide[] = [];
   if (item.slides && item.slides.length > 0) {
-    editorSlides = item.slides.map((s: any, idx: number) => {
+    editorSlides = item.slides.map((s: LibrarySlide & { layout?: string; id?: string }, idx: number) => {
       const bodyText = s.text || s.content || '';
       const layout = s.layout || (currentEditorType === 'presentation' ? (idx === 0 ? 'title' : 'title_body') : 'lyric');
       const base: EditorSlide = {
         id: s.id || `slide-${idx}`,
         text: bodyText,
-        header: s.header,
+        header: s.header ?? undefined,
         label: s.label || s.title || `Slide ${idx + 1}`,
-        tag: s.tag,
-        notes: s.notes,
-        background: s.background,
+        tag: s.tag ?? undefined,
+        notes: s.notes ?? undefined,
+        background: s.background ?? undefined,
         elements: [],
         speaker_notes: s.speaker_notes || s.notes || '',
-        ccli_metadata: s.ccli_metadata || {
+        ccli_metadata: (s.ccli_metadata as EditorSlide['ccli_metadata']) || {
           title: item.title,
           author: item.author,
           copyright: item.copyright,
           ccli_number: item.ccli_number
         },
-        background_v2: s.background_v2,
-        transition: s.transition,
+        background_v2: s.background_v2 ?? undefined,
+        transition: s.transition ?? undefined,
         slide_document_version: s.slide_document_version || 2,
         duration_seconds: s.duration_seconds
       };
@@ -295,7 +296,7 @@ function editExistingItem(item: any, scheduleContext: { itemIndex: number; slide
       return base;
     });
   } else if (item.verses && item.verses.length > 0) {
-    editorSlides = item.verses.map((v: any, idx: number) => {
+    editorSlides = item.verses.map((v: ScriptureVerse, idx: number) => {
       const base: EditorSlide = {
         id: `verse-${idx}`,
         text: v.text,
@@ -803,8 +804,8 @@ export function initRibbonControls() {
 
   // Right-click on empty area of schedule list
   if (scheduleListEl) {
-    scheduleListEl.addEventListener('contextmenu', (e: any) => {
-      if (e.target === scheduleListEl || (e.target.id === 'schedule-items-list' || (!e.target.closest('.schedule-item') && !e.target.closest('.schedule-child-item')))) {
+    scheduleListEl.addEventListener('contextmenu', (e) => {
+      if (e.target === scheduleListEl || ((e.target as Element | null)?.id === 'schedule-items-list' || (!(e.target as Element | null)?.closest('.schedule-item') && !(e.target as Element | null)?.closest('.schedule-child-item')))) {
         e.preventDefault();
         setCurrentContextMenuTargetState({ type: 'schedule-panel' });
         showContextMenu(document.getElementById('schedule-empty-context-menu'), e.clientX, e.clientY);
@@ -1079,8 +1080,8 @@ document.querySelectorAll<HTMLElement>('.sched-tick-label, .sched-view-btn').for
 
 // Schedule Panel Action Buttons
 on('btn-sched-collapse-all', 'click', () => {
-  const sched: any = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
-  const hasHeaders = sched && sched.items && sched.items.some((it: any) => {
+  const sched: Schedule | null = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
+  const hasHeaders = sched && sched.items && sched.items.some((it: ScheduleItem) => {
     const t = (it.item_type || '').toLowerCase();
     return t === 'header' || t === 'group';
   });
@@ -1091,7 +1092,7 @@ on('btn-sched-collapse-all', 'click', () => {
       showToast('✓ Expanded all groups', 'info');
     } else {
       // Collapse all groups
-      sched.items.forEach((it: any) => {
+      sched.items.forEach((it: ScheduleItem) => {
         const t = (it.item_type || '').toLowerCase();
         if (t === 'header' || t === 'group') collapsedGroupIds.add(it.id);
       });
@@ -2333,7 +2334,7 @@ async function refreshExportBibleChoices(): Promise<void> {
   let bibles: Array<{ id: string; name?: string }> = [];
   try {
     const res = await fetch('/api/bibles');
-    if (res.ok) bibles = (await res.json()).filter((b: any) => !b.remote); // only Bibles stored here can be exported
+    if (res.ok) bibles = (await res.json()).filter((b: { remote?: boolean }) => !b.remote); // only Bibles stored here can be exported
   } catch {
     /* an empty list below says it */
   }
@@ -2411,7 +2412,7 @@ const fillEwpxThemes = async () => {
   const select = document.getElementById('ewpx-theme') as HTMLSelectElement | null;
   if (!select || select.dataset.loaded === '1') return;
   try {
-    const themes = (await api.themes.list()).filter((t: any) => t.category === 'presentation');
+    const themes = (await api.themes.list()).filter((t) => t.category === 'presentation');
     for (const t of themes) {
       const o = document.createElement('option');
       o.value = t.name;
@@ -2918,7 +2919,7 @@ registerUiCallbacks({
 // module graph entirely -- not needed by any in-repo module.
 try { (globalThis as any).openImportModal = openImportModal; } catch (_) {}
 try { (globalThis as any).openSlideEditor = openSlideEditor; } catch (_) {}
-try { (globalThis as any).getCanvasSlideEditorDebugState = () => ({ hasEditor: !!canvasSlideEditor, editingScheduleContext, activeSlideElements: canvasSlideEditor ? canvasSlideEditor.getActiveSlide().elements.map((e: any) => ({ id: e.id, transform: e.transform, block: e.type === 'TextBlock' ? e.block : undefined })) : null }); } catch (_) {}
+try { (globalThis as any).getCanvasSlideEditorDebugState = () => ({ hasEditor: !!canvasSlideEditor, editingScheduleContext, activeSlideElements: canvasSlideEditor ? canvasSlideEditor.getActiveSlide().elements.map((e) => ({ id: e.id, transform: e.transform, block: e.type === 'TextBlock' ? e.block : undefined })) : null }); } catch (_) {}
 try { (globalThis as any).__debugApplyTextStyle = (update: any) => canvasSlideEditor?.applyTextStyle(update); } catch (_) {}
 try {
   (globalThis as any).__debugInsertElement = (el: any) => {

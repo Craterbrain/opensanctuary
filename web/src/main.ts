@@ -78,7 +78,7 @@ clock.synchronize(5).then(async () => {
             // Installed plugins not turned on yet: hints in the places they'd appear (core/plugin_hints.ts).
             void refreshPluginHints();
             const list = await res.json();
-            const approved = (Array.isArray(list) ? list : []).filter((p: any) => p && typeof p.id === "string");
+            const approved = (Array.isArray(list) ? list : []).filter((p) => p && typeof p.id === "string");
             const startAll = async () => {
                 if (approved.length) { markPluginsStarting(); watchConsoleHealth(); }
                 for (const p of approved) {

@@ -1,4 +1,5 @@
 // OpenSanctuary Rust Client Show Controller & Bible Manager (app.js)
+import type { StateSnapshot, Schedule, ShowState, LibrarySlide, ScriptureVerse } from './core/models.ts';
 import { showLicensedLink } from './ui/licensed_link.ts';
 import { stripLicensedText } from './core/licensed';
 import { exportBundle } from './ui/bundle_ui.ts';
@@ -97,7 +98,7 @@ try { (globalThis as any).openThemePicker = openThemePicker; } catch (_) {}
 
 let ws: any = null;
 let engineWsClient: EngineWebSocketClient | null = null;
-export let currentSnapshot: any = null;
+export let currentSnapshot: StateSnapshot | null = null;
 let protocolMismatchWarned = false;
 let consoleLockedWarned = false;
 export let currentTab = 'songs';
@@ -804,7 +805,7 @@ export function renderAll(snapshot = currentSnapshot) {
   }
 }
 
-function renderRibbon(state: any) {
+function renderRibbon(state: ShowState) {
   if (btnBlack) btnBlack.classList.toggle('active', !!state.is_blackout);
   if (btnClear) btnClear.classList.toggle('active', !!state.is_clear_text);
   if (btnLogo) btnLogo.classList.toggle('active', !!state.is_logo_override);
@@ -858,7 +859,7 @@ function computeSafeDestinationIndex(startIndex: number, indexOfTarget: number, 
 function recordSchedulePositions(): Map<string, DOMRect> {
   const positions = new Map<string, DOMRect>();
   if (!scheduleListEl) return positions;
-  const els = scheduleListEl.querySelectorAll('[data-schedule-key]');
+  const els = scheduleListEl.querySelectorAll<HTMLElement>('[data-schedule-key]');
   els.forEach(el => {
     const key = el.getAttribute('data-schedule-key');
     if (key) {
@@ -874,8 +875,8 @@ function recordSchedulePositions(): Map<string, DOMRect> {
 function applyScheduleFLIP(prevPositions: Map<string, DOMRect>) {
   if (!scheduleListEl || !prevPositions || prevPositions.size === 0) return;
   requestAnimationFrame(() => {
-    const els = scheduleListEl.querySelectorAll('[data-schedule-key]');
-    els.forEach((el: any) => {
+    const els = scheduleListEl.querySelectorAll<HTMLElement>('[data-schedule-key]');
+    els.forEach((el) => {
       const key = el.getAttribute('data-schedule-key');
       if (key && prevPositions.has(key)) {
         const oldRect = prevPositions.get(key)!;
@@ -913,7 +914,7 @@ function clearAllScheduleDropIndicators() {
  * Reorders schedule items: optimistic array mutation immediately, backend command sent,
  * but full renderSchedule() deferred to next frame/microtask so nodes are not destroyed mid-gesture.
  */
-function reorderScheduleItemsAnimated(schedule: any, fromIdx: number, toIdx: number, focusTargetSelector?: string) {
+function reorderScheduleItemsAnimated(schedule: Schedule, fromIdx: number, toIdx: number, focusTargetSelector?: string) {
   const sched = (currentSnapshot && currentSnapshot.schedule) ? currentSnapshot.schedule : schedule;
   if (!sched || !sched.items || fromIdx === toIdx || fromIdx < 0 || toIdx < 0
       || fromIdx >= sched.items.length || toIdx >= sched.items.length) {
@@ -923,10 +924,10 @@ function reorderScheduleItemsAnimated(schedule: any, fromIdx: number, toIdx: num
   // 1. Optimistic in-memory mutation
   const prevPositions = recordSchedulePositions();
   const [moved] = sched.items.splice(fromIdx, 1);
-  sched.items.splice(toIdx, 0, moved);
+  if (moved) sched.items.splice(toIdx, 0, moved);
   if (schedule && schedule !== sched && schedule.items) {
     const [m2] = schedule.items.splice(fromIdx, 1);
-    schedule.items.splice(toIdx, 0, m2);
+    if (m2) schedule.items.splice(toIdx, 0, m2);
   }
   adjustExpandedIndexOnReorder(fromIdx, toIdx);
 
@@ -967,7 +968,7 @@ function reorderScheduleItemsAnimated(schedule: any, fromIdx: number, toIdx: num
  * Reorders child slides inside a schedule item: optimistic mutation immediately,
  * renderSchedule deferred to next frame so nodes are not destroyed mid-gesture.
  */
-function reorderChildSlidesAnimated(schedule: any, itemIdx: number, fromIdx: number, toIdx: number, focusTargetSelector?: string) {
+function reorderChildSlidesAnimated(schedule: Schedule, itemIdx: number, fromIdx: number, toIdx: number, focusTargetSelector?: string) {
   const sched = (currentSnapshot && currentSnapshot.schedule) ? currentSnapshot.schedule : schedule;
   const it = sched && sched.items ? sched.items[itemIdx] : null;
   const arr = effectiveArrangement(it);
@@ -981,7 +982,7 @@ function reorderChildSlidesAnimated(schedule: any, itemIdx: number, fromIdx: num
     it.arrangement = effectiveArrangement(it);
   }
   const [movedEntry] = it.arrangement.splice(fromIdx, 1);
-  it.arrangement.splice(toIdx, 0, movedEntry);
+  if (movedEntry) it.arrangement.splice(toIdx, 0, movedEntry);
 
   if (schedule && schedule !== sched && schedule.items && schedule.items[itemIdx]) {
     const sItem = schedule.items[itemIdx];
@@ -989,7 +990,7 @@ function reorderChildSlidesAnimated(schedule: any, itemIdx: number, fromIdx: num
       sItem.arrangement = effectiveArrangement(sItem);
     }
     const [m2] = sItem.arrangement.splice(fromIdx, 1);
-    sItem.arrangement.splice(toIdx, 0, m2);
+    if (m2) sItem.arrangement.splice(toIdx, 0, m2);
   }
 
   // Keep live item in sync if this is the currently live item
@@ -1000,7 +1001,7 @@ function reorderChildSlidesAnimated(schedule: any, itemIdx: number, fromIdx: num
       lItem.arrangement = effectiveArrangement(lItem);
     }
     const [mLive] = lItem.arrangement.splice(fromIdx, 1);
-    lItem.arrangement.splice(toIdx, 0, mLive);
+    if (mLive) lItem.arrangement.splice(toIdx, 0, mLive);
     if (currentSnapshot.state.live_slide_index === fromIdx) {
       currentSnapshot.state.live_slide_index = toIdx;
     } else if (fromIdx < toIdx && currentSnapshot.state.live_slide_index > fromIdx && currentSnapshot.state.live_slide_index <= toIdx) {
@@ -1018,7 +1019,7 @@ function reorderChildSlidesAnimated(schedule: any, itemIdx: number, fromIdx: num
       sItem.arrangement = effectiveArrangement(sItem);
     }
     const [mStaged] = sItem.arrangement.splice(fromIdx, 1);
-    sItem.arrangement.splice(toIdx, 0, mStaged);
+    if (mStaged) sItem.arrangement.splice(toIdx, 0, mStaged);
     if (currentSnapshot.state.staged_slide_index === fromIdx) {
       currentSnapshot.state.staged_slide_index = toIdx;
     } else if (fromIdx < toIdx && currentSnapshot.state.staged_slide_index > fromIdx && currentSnapshot.state.staged_slide_index <= toIdx) {
@@ -1048,12 +1049,12 @@ function reorderChildSlidesAnimated(schedule: any, itemIdx: number, fromIdx: num
 }
 
 // Active Panel / Deck Interaction Tracker
-document.addEventListener('click', (e: any) => {
-  if (e.target.closest('#preview-panel') || e.target.closest('#preview-slide-matrix')) {
+document.addEventListener('click', (e) => {
+  if ((e.target as Element | null)?.closest('#preview-panel') || (e.target as Element | null)?.closest('#preview-slide-matrix')) {
     lastActiveDeckContext = 'preview';
-  } else if (e.target.closest('#live-output-panel') || e.target.closest('#live-slide-matrix') || e.target.closest('#live-panel')) {
+  } else if ((e.target as Element | null)?.closest('#live-output-panel') || (e.target as Element | null)?.closest('#live-slide-matrix') || (e.target as Element | null)?.closest('#live-panel')) {
     lastActiveDeckContext = 'live';
-  } else if (e.target.closest('#schedule-panel') || e.target.closest('#schedule-items-list')) {
+  } else if ((e.target as Element | null)?.closest('#schedule-panel') || (e.target as Element | null)?.closest('#schedule-items-list')) {
     lastActiveDeckContext = 'schedule';
   }
 }, true);
@@ -1312,7 +1313,7 @@ export function updateSlideSelectionVisuals() {
       const isSelected = activeSelectedSlide &&
         activeSelectedSlide.context === 'preview' &&
         activeSelectedSlide.slideIndex === idx;
-      el.classList.toggle('active-staged', !!isSelected || (currentSnapshot && currentSnapshot.state.staged_slide_index === idx));
+      el.classList.toggle('active-staged', !!isSelected || currentSnapshot?.state.staged_slide_index === idx);
     });
   }
 }
@@ -1326,7 +1327,7 @@ export function deleteSelectedSlideOrItem(): boolean {
   if (!activeSelectedSlide && lastActiveDeckContext === 'preview' && currentSnapshot && currentSnapshot.state.staged_item) {
     const stagedItem = currentSnapshot.state.staged_item;
     const sched = currentSnapshot.schedule;
-    const itemIdx = (sched && sched.items) ? sched.items.findIndex((it: any) => it.id === stagedItem.id) : -1;
+    const itemIdx = (sched && sched.items) ? sched.items.findIndex((it) => it.id === stagedItem.id) : -1;
     if (itemIdx >= 0) {
       activeSelectedSlide = {
         itemIndex: itemIdx,
@@ -1337,16 +1338,20 @@ export function deleteSelectedSlideOrItem(): boolean {
   }
 
   if (!activeSelectedSlide) return false;
+  const snap = currentSnapshot;
+  if (!snap) return false;
 
-  const sched = (currentSnapshot && currentSnapshot.schedule) ? currentSnapshot.schedule : null;
+  const sched = (snap && snap.schedule) ? snap.schedule : null;
   if (!sched || !sched.items || sched.items.length === 0) return false;
 
   let itemIdx = activeSelectedSlide.itemIndex;
   if (itemIdx < 0 || itemIdx >= sched.items.length) {
-    if (activeSelectedSlide.context === 'preview' && currentSnapshot.state.staged_item) {
-      itemIdx = sched.items.findIndex((it: any) => it.id === currentSnapshot.state.staged_item.id);
-    } else if (activeSelectedSlide.context === 'live' && currentSnapshot.state.live_item) {
-      itemIdx = sched.items.findIndex((it: any) => it.id === currentSnapshot.state.live_item.id);
+    const stagedNow = snap.state.staged_item;
+    const liveNow = snap.state.live_item;
+    if (activeSelectedSlide.context === 'preview' && stagedNow) {
+      itemIdx = sched.items.findIndex((it) => it.id === stagedNow.id);
+    } else if (activeSelectedSlide.context === 'live' && liveNow) {
+      itemIdx = sched.items.findIndex((it) => it.id === liveNow.id);
     }
   }
 
@@ -1366,16 +1371,16 @@ export function deleteSelectedSlideOrItem(): boolean {
 
     // Optimistically update local schedule and state
     item.slides.splice(slideIdx, 1);
-    if (currentSnapshot.state.staged_item && currentSnapshot.state.staged_item.id === item.id) {
-      currentSnapshot.state.staged_item.slides = item.slides.slice();
-      if (currentSnapshot.state.staged_slide_index >= item.slides.length) {
-        currentSnapshot.state.staged_slide_index = Math.max(0, item.slides.length - 1);
+    if (snap.state.staged_item && snap.state.staged_item.id === item.id) {
+      snap.state.staged_item.slides = item.slides.slice();
+      if (snap.state.staged_slide_index >= item.slides.length) {
+        snap.state.staged_slide_index = Math.max(0, item.slides.length - 1);
       }
     }
-    if (currentSnapshot.state.live_item && currentSnapshot.state.live_item.id === item.id) {
-      currentSnapshot.state.live_item.slides = item.slides.slice();
-      if (currentSnapshot.state.live_slide_index >= item.slides.length) {
-        currentSnapshot.state.live_slide_index = Math.max(0, item.slides.length - 1);
+    if (snap.state.live_item && snap.state.live_item.id === item.id) {
+      snap.state.live_item.slides = item.slides.slice();
+      if (snap.state.live_slide_index >= item.slides.length) {
+        snap.state.live_slide_index = Math.max(0, item.slides.length - 1);
       }
     }
 
@@ -1390,9 +1395,9 @@ export function deleteSelectedSlideOrItem(): boolean {
     lastRenderedPreviewKey = '';
     lastRenderedLiveKey = '';
     renderSchedule(sched);
-    renderPreviewDeck(currentSnapshot.state);
-    renderLiveDeck(currentSnapshot.state);
-    renderPreviewOutput(currentSnapshot.state);
+    renderPreviewDeck(snap.state);
+    renderLiveDeck(snap.state);
+    renderPreviewOutput(snap.state);
 
     showToast(`✓ Removed slide (${slideTag})`, 'info');
     return true;
@@ -1438,7 +1443,7 @@ try {
   globalThis.clearActiveUndoPlaceholder = clearActiveUndoPlaceholder;
 } catch (_) {}
 
-export function renderSchedule(schedule: any) {
+export function renderSchedule(schedule: Schedule) {
   if (!scheduleListEl) return;
   if (scheduleTitleEl) scheduleTitleEl.textContent = schedule.title || 'UNTITLED';
 
@@ -1519,7 +1524,7 @@ export function renderSchedule(schedule: any) {
 
   let currentGroupIsCollapsed = false;
 
-  schedule.items.forEach((item: any, idx: number) => {
+  schedule.items.forEach((item, idx: number) => {
     if (activeUndoPlaceholder && activeUndoPlaceholder.index === idx) {
       scheduleListEl.appendChild(createUndoPlaceholderElement(activeUndoPlaceholder));
     }
@@ -1532,7 +1537,7 @@ export function renderSchedule(schedule: any) {
     if (typeLower === 'header' || typeLower === 'group') {
       let groupItemCount = 0;
       for (let j = idx + 1; j < schedule.items.length; j++) {
-        const nextType = (schedule.items[j].item_type || '').toLowerCase();
+        const nextType = (schedule.items[j]?.item_type || '').toLowerCase();
         if (nextType === 'header' || nextType === 'group') break;
         groupItemCount++;
       }
@@ -1562,8 +1567,8 @@ export function renderSchedule(schedule: any) {
       `;
 
       // Toggle group collapse on click (excluding the drag handle)
-      headerEl.addEventListener('click', (e: any) => {
-        if (e.target.closest('.schedule-drag-handle')) return;
+      headerEl.addEventListener('click', (e) => {
+        if ((e.target as Element | null)?.closest('.schedule-drag-handle')) return;
         if (collapsedGroupIds.has(item.id)) {
           collapsedGroupIds.delete(item.id);
         } else {
@@ -1585,7 +1590,7 @@ export function renderSchedule(schedule: any) {
       const headerHandle = headerEl.querySelector<HTMLElement>('.schedule-drag-handle');
       if (headerHandle) {
         headerHandle.addEventListener('click', (e) => e.stopPropagation());
-        headerHandle.addEventListener('keydown', (e: any) => {
+        headerHandle.addEventListener('keydown', (e) => {
           if ((e.altKey || e.ctrlKey) && e.key === 'ArrowUp') {
             e.preventDefault();
             e.stopPropagation();
@@ -1760,8 +1765,8 @@ export function renderSchedule(schedule: any) {
     }
 
     // Row Click: Stage item and auto-expand clicked item
-    itemEl.addEventListener('click', (e: any) => {
-      if (e.target.closest('.schedule-caret') || e.target.closest('.schedule-drag-handle')) return;
+    itemEl.addEventListener('click', (e) => {
+      if ((e.target as Element | null)?.closest('.schedule-caret') || (e.target as Element | null)?.closest('.schedule-drag-handle')) return;
       if (expandedScheduleIndex !== idx && item.slides && item.slides.length > 1) {
         expandedScheduleIndex = idx;
         const activeSched = (currentSnapshot && currentSnapshot.schedule) ? currentSnapshot.schedule : schedule;
@@ -1772,8 +1777,8 @@ export function renderSchedule(schedule: any) {
       sendCommand({ StageItem: { item_index: idx, slide_index: 0 } });
     });
 
-    itemEl.addEventListener('dblclick', (e: any) => {
-      if (e.target.closest('.schedule-drag-handle')) return;
+    itemEl.addEventListener('dblclick', (e) => {
+      if ((e.target as Element | null)?.closest('.schedule-drag-handle')) return;
       sendCommand({ GoLive: { item_index: idx, slide_index: 0 } });
     });
 
@@ -1790,7 +1795,7 @@ export function renderSchedule(schedule: any) {
     const itemHandle = itemEl.querySelector<HTMLElement>('.schedule-drag-handle');
     if (itemHandle) {
       itemHandle.addEventListener('click', (e) => e.stopPropagation());
-      itemHandle.addEventListener('keydown', (e: any) => {
+      itemHandle.addEventListener('keydown', (e) => {
         if ((e.altKey || e.ctrlKey) && e.key === 'ArrowUp') {
           e.preventDefault();
           e.stopPropagation();
@@ -1921,9 +1926,9 @@ export function renderSchedule(schedule: any) {
       const childContainer = document.createElement('div');
       childContainer.className = 'schedule-child-slides';
 
-      effectiveArr.forEach((entry: any, sIdx: number) => {
+      effectiveArr.forEach((entry, sIdx: number) => {
         const slide = resolveSlideAt(item, sIdx);
-        const isCurrentLiveSlide = isLive && currentSnapshot.state.live_slide_index === sIdx;
+        const isCurrentLiveSlide = isLive && currentSnapshot?.state.live_slide_index === sIdx;
         const isSelectedSlide = (activeSelectedSlide &&
           activeSelectedSlide.itemIndex === idx &&
           activeSelectedSlide.slideIndex === sIdx);
@@ -1958,8 +1963,8 @@ export function renderSchedule(schedule: any) {
           ${slideMediaBadge}
         `;
 
-        childEl.addEventListener('click', (e: any) => {
-          if (e.target.closest('.child-slide-drag-handle')) return;
+        childEl.addEventListener('click', (e) => {
+          if ((e.target as Element | null)?.closest('.child-slide-drag-handle')) return;
           if (childEl.classList.contains('dragging')) return;
           e.stopPropagation();
           lastActiveDeckContext = 'schedule';
@@ -1967,8 +1972,8 @@ export function renderSchedule(schedule: any) {
           clearAdhocPreview();
           sendCommand({ StageItem: { item_index: idx, slide_index: sIdx } });
         });
-        childEl.addEventListener('dblclick', (e: any) => {
-          if (e.target.closest('.child-slide-drag-handle')) return;
+        childEl.addEventListener('dblclick', (e) => {
+          if ((e.target as Element | null)?.closest('.child-slide-drag-handle')) return;
           if (childEl.classList.contains('dragging')) return;
           e.stopPropagation();
           lastActiveDeckContext = 'schedule';
@@ -1980,7 +1985,7 @@ export function renderSchedule(schedule: any) {
         const childHandle = childEl.querySelector<HTMLElement>('.child-slide-drag-handle');
         if (childHandle) {
           childHandle.addEventListener('click', (e) => e.stopPropagation());
-          childHandle.addEventListener('keydown', (e: any) => {
+          childHandle.addEventListener('keydown', (e) => {
             if ((e.altKey || e.ctrlKey) && e.key === 'ArrowUp') {
               e.preventDefault();
               e.stopPropagation();
@@ -2435,6 +2440,12 @@ let lastRenderedPreviewOutputKey = '';
 // Ad-hoc library preview: viewing a resource that isn't (yet) on the Schedule.
 // Purely a local rendering concern — never touches engine staged_item state,
 // so it can't accidentally be sent Live via a stale item_index.
+/** A state with nothing live or staged, for drawing the library preview before the first snapshot has arrived. */
+const EMPTY_SHOW_STATE: ShowState = {
+  live_item: null, live_slide_index: 0, staged_item: null, staged_slide_index: 0, is_blackout: false, is_clear_text: false,
+  is_logo_override: false, alert_message: null, global_theme: null, global_background: null, sequence_number: 0, last_event_id: '', server_time_ms: 0,
+};
+
 let adhocPreviewItem: any = null;
 let adhocPreviewTabName = '';
 let adhocPreviewSlideIndex = 0;
@@ -2449,7 +2460,7 @@ function setAdhocPreview(item: any, tabName: string) {
   adhocPreviewItem = item;
   adhocPreviewTabName = tabName;
   adhocPreviewSlideIndex = 0;
-  const state = currentSnapshot || {};
+  const state = currentSnapshot?.state ?? EMPTY_SHOW_STATE;
   renderPreviewDeck(state);
   renderPreviewOutput(state);
 }
@@ -2463,12 +2474,12 @@ function buildAdhocPreviewSlides(item: any, tabName: string): Array<{ text: stri
   if (!item) return [];
 
   if ((tabName === 'songs' || tabName === 'presentations') && Array.isArray(item.slides) && item.slides.length > 0) {
-    return item.slides.map((s: any) => ({ text: s.text || s.content || s.title || '', background: s.background }));
+    return item.slides.map((s: LibrarySlide) => ({ text: s.text || s.content || s.title || '', background: s.background ?? undefined }));
   }
 
   if (tabName === 'scriptures') {
     if (Array.isArray(item.verses) && item.verses.length > 0) {
-      return item.verses.map((v: any) => ({ text: `${v.verse_number}. ${v.text}` }));
+      return item.verses.map((v: ScriptureVerse) => ({ text: `${v.verse_number}. ${v.text}` }));
     }
     return [{ text: item.reference || item.text || '' }];
   }
@@ -2488,7 +2499,8 @@ function reorderPreviewSlides(fromIdx: number, toIdx: number) {
   if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0) return;
   const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
   const state = currentSnapshot && currentSnapshot.state ? currentSnapshot.state : null;
-  const stagedItem = state ? state.staged_item : null;
+  if (!state) return;
+  const stagedItem = state.staged_item;
   if (!stagedItem || !stagedItem.slides || fromIdx >= stagedItem.slides.length || toIdx >= stagedItem.slides.length) return;
 
   // Reordering addresses its target by schedule index, unlike staging/going
@@ -2498,12 +2510,13 @@ function reorderPreviewSlides(fromIdx: number, toIdx: number) {
 
   // Optimistically swap slides in local memory
   const [moved] = stagedItem.slides.splice(fromIdx, 1);
+  if (!moved) return;
   stagedItem.slides.splice(toIdx, 0, moved);
 
   // Sync with schedule item slides if present
   if (sched && itemIdx >= 0 && sched.items[itemIdx] && sched.items[itemIdx].slides) {
     const [m2] = sched.items[itemIdx].slides.splice(fromIdx, 1);
-    sched.items[itemIdx].slides.splice(toIdx, 0, m2);
+    if (m2) sched.items[itemIdx].slides.splice(toIdx, 0, m2);
     lastRenderedScheduleKey = '';
     renderSchedule(sched);
   }
@@ -2511,7 +2524,7 @@ function reorderPreviewSlides(fromIdx: number, toIdx: number) {
   // Sync live item if it matches
   if (state && state.live_item && state.live_item.id === stagedItem.id && state.live_item.slides) {
     const [mLive] = state.live_item.slides.splice(fromIdx, 1);
-    state.live_item.slides.splice(toIdx, 0, mLive);
+    if (mLive) state.live_item.slides.splice(toIdx, 0, mLive);
     if (state.live_slide_index === fromIdx) {
       state.live_slide_index = toIdx;
     } else if (fromIdx < toIdx && state.live_slide_index > fromIdx && state.live_slide_index <= toIdx) {
@@ -2581,7 +2594,7 @@ export function refreshSlideDecks() {
   renderLiveDeck(state);
 }
 
-function renderPreviewDeck(state: any) {
+function renderPreviewDeck(state: ShowState) {
   if (!previewSlideMatrixEl) return;
 
   if (adhocPreviewItem) {
@@ -2705,7 +2718,7 @@ function renderPreviewDeck(state: any) {
     const cardHandle = cardEl.querySelector<HTMLElement>('.preview-card-drag-handle');
     if (cardHandle) {
       cardHandle.addEventListener('click', (e) => e.stopPropagation());
-      cardHandle.addEventListener('keydown', (e: any) => {
+      cardHandle.addEventListener('keydown', (e) => {
         if ((e.altKey || e.ctrlKey) && (e.key === 'ArrowLeft' || e.key === 'ArrowUp')) {
           e.preventDefault();
           e.stopPropagation();
@@ -2784,8 +2797,8 @@ function renderPreviewDeck(state: any) {
     );
 
     // Single click stages slide
-    cardEl.addEventListener('click', (e: any) => {
-      if (e.target.closest('.preview-card-drag-handle')) return;
+    cardEl.addEventListener('click', (e) => {
+      if ((e.target as Element | null)?.closest('.preview-card-drag-handle')) return;
       if (cardEl.classList.contains('dragging')) return;
       lastActiveDeckContext = 'preview';
       state.staged_slide_index = sIdx;
@@ -2795,7 +2808,7 @@ function renderPreviewDeck(state: any) {
       renderPreviewOutput(state);
 
       const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
-      const itemIdx = (sched && sched.items && stagedItem) ? sched.items.findIndex((it: any) => it.id === stagedItem.id) : -1;
+      const itemIdx = (sched && sched.items && stagedItem) ? sched.items.findIndex((it) => it.id === stagedItem.id) : -1;
       setActiveSelectedSlide({
         itemIndex: itemIdx >= 0 ? itemIdx : 0,
         slideIndex: sIdx,
@@ -2806,11 +2819,11 @@ function renderPreviewDeck(state: any) {
     });
 
     // Double click sends slide directly to Live
-    cardEl.addEventListener('dblclick', (e: any) => {
-      if (e.target.closest('.preview-card-drag-handle')) return;
+    cardEl.addEventListener('dblclick', (e) => {
+      if ((e.target as Element | null)?.closest('.preview-card-drag-handle')) return;
       if (cardEl.classList.contains('dragging')) return;
       const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
-      const itemIdx = (sched && sched.items && stagedItem) ? sched.items.findIndex((it: any) => it.id === stagedItem.id) : -1;
+      const itemIdx = (sched && sched.items && stagedItem) ? sched.items.findIndex((it) => it.id === stagedItem.id) : -1;
       sendCommand({ GoLive: { item_index: itemIdx >= 0 ? itemIdx : null, slide_index: sIdx } });
     });
 
@@ -2820,7 +2833,7 @@ function renderPreviewDeck(state: any) {
       e.stopPropagation();
       lastActiveDeckContext = 'preview';
       const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
-      const itemIdx = (sched && sched.items && stagedItem) ? sched.items.findIndex((it: any) => it.id === stagedItem.id) : -1;
+      const itemIdx = (sched && sched.items && stagedItem) ? sched.items.findIndex((it) => it.id === stagedItem.id) : -1;
       setActiveSelectedSlide({
         itemIndex: itemIdx >= 0 ? itemIdx : 0,
         slideIndex: sIdx,
@@ -2835,7 +2848,7 @@ function renderPreviewDeck(state: any) {
   });
 }
 
-function renderPreviewOutput(state: any) {
+function renderPreviewOutput(state: ShowState) {
   if (!previewCanvasLyricsEl) return;
 
   if (adhocPreviewItem) {
@@ -2951,7 +2964,7 @@ function renderPreviewOutput(state: any) {
 
 let lastRenderedLiveKey = '';
 
-function renderLiveDeck(state: any) {
+function renderLiveDeck(state: ShowState) {
   if (!liveSlideMatrixEl) return;
   if (liveTitleEl) liveTitleEl.textContent = state.live_item ? state.live_item.title : 'No Active Item';
   showLicensedLink(liveTitleEl, state.live_item);
@@ -3019,7 +3032,7 @@ function renderLiveDeck(state: any) {
     cardEl.addEventListener('click', () => {
       lastActiveDeckContext = 'live';
       const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
-      const itemIdx = (sched && sched.items && liveItem) ? sched.items.findIndex((it: any) => it.id === liveItem.id) : -1;
+      const itemIdx = (sched && sched.items && liveItem) ? sched.items.findIndex((it) => it.id === liveItem.id) : -1;
       setActiveSelectedSlide({ itemIndex: itemIdx >= 0 ? itemIdx : 0, slideIndex: sIdx, context: 'live' });
       sendCommand({ JumpSlide: sIdx });
     });
@@ -3030,7 +3043,7 @@ function renderLiveDeck(state: any) {
       e.stopPropagation();
       lastActiveDeckContext = 'live';
       const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
-      const itemIdx = (sched && sched.items && liveItem) ? sched.items.findIndex((it: any) => it.id === liveItem.id) : -1;
+      const itemIdx = (sched && sched.items && liveItem) ? sched.items.findIndex((it) => it.id === liveItem.id) : -1;
       setActiveSelectedSlide({ itemIndex: itemIdx >= 0 ? itemIdx : 0, slideIndex: sIdx, context: 'live' });
       currentContextMenuTarget = { type: 'slide', itemIndex: itemIdx >= 0 ? itemIdx : null, slideIndex: sIdx, item: liveItem, slide: slide };
       updateSlideDurationMenuVisibility(liveItem);
@@ -3041,7 +3054,7 @@ function renderLiveDeck(state: any) {
   });
 }
 
-function renderLiveOutput(state: any) {
+function renderLiveOutput(state: ShowState) {
   if (!canvasLyricsEl) return;
   const liveItem = state.live_item;
   const slideIdx = state.live_slide_index || 0;
@@ -3304,7 +3317,7 @@ on('ctx-sched-theme', 'click', () => {
     openThemePicker(item, (theme) => {
       item.theme_name = theme.name;
       if (item.slides) {
-        item.slides.forEach((s: any) => s.background = theme.bg);
+        item.slides.forEach((s: LibrarySlide) => s.background = theme.bg);
       }
       sendCommand({
         SetItemTheme: {
@@ -3331,7 +3344,7 @@ on('ctx-sched-image', 'click', () => {
       currentImage: item.slides && item.slides[0] ? item.slides[0].background : null,
       onSelectSlide: (_filePath, cssBg) => {
         item.theme_name = name;
-        if (item.slides) item.slides.forEach((s: any) => s.background = cssBg);
+        if (item.slides) item.slides.forEach((s: LibrarySlide) => s.background = cssBg);
         sendCommand({
           SetItemTheme: {
             item_index: itemIdx,
@@ -3418,7 +3431,7 @@ on('ctx-sched-merge-next', 'click', () => {
  */
 function ensureItemInSchedule(item: any): number {
   if (!currentSnapshot || !currentSnapshot.schedule || !item) return -1;
-  const existingIdx = currentSnapshot.schedule.items.findIndex((it: any) => it.id === item.id);
+  const existingIdx = currentSnapshot.schedule.items.findIndex((it) => it.id === item.id);
   if (existingIdx >= 0) return existingIdx;
   const newIdx = currentSnapshot.schedule.items.length;
   // A deep clone, not the same reference as `item` (state.staged_item/
@@ -3627,7 +3640,7 @@ on('ctx-lib-theme', 'click', () => {
     openThemePicker(item, async (theme) => {
       item.theme_name = theme.name;
       if (item.slides) {
-        item.slides.forEach((s: any) => s.background = theme.bg);
+        item.slides.forEach((s: LibrarySlide) => s.background = theme.bg);
       }
       try {
         if (tab === 'songs') {
@@ -3662,7 +3675,7 @@ on('ctx-lib-image', 'click', () => {
       onSelectSlide: async (_filePath, cssBg) => {
         item.theme_name = name;
         if (item.slides) {
-          item.slides.forEach((s: any) => s.background = cssBg);
+          item.slides.forEach((s: LibrarySlide) => s.background = cssBg);
         }
         try {
           if (tab === 'songs') {
@@ -3693,7 +3706,7 @@ on('ctx-lib-image', 'click', () => {
 on('ctx-lib-copy', 'click', () => {
   if (currentContextMenuTarget && currentContextMenuTarget.item) {
     const it = currentContextMenuTarget.item;
-    const text = it.slides ? it.slides.map((s: any) => s.text).join('\n\n') : (it.name || it.title || it.reference || '');
+    const text = it.slides ? it.slides.map((s: LibrarySlide) => s.text).join('\n\n') : (it.name || it.title || it.reference || '');
     copyToClipboard(text, '✓ Copied library item content to clipboard!');
   }
   hideAllContextMenus();
