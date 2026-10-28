@@ -156,7 +156,7 @@ if (resourceSearchInput) {
       } else {
         const filtered = getFilteredLibraryItems();
         if (filtered.length > 0) {
-          addItemToSchedule(currentTab, filtered[0].id);
+          if (filtered[0]) addItemToSchedule(currentTab, filtered[0].id);
         }
       }
     }
