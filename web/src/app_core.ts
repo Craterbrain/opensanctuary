@@ -1,4 +1,5 @@
 // OpenSanctuary Rust Client Show Controller & Bible Manager (app.js)
+import { showLicensedLink } from './ui/licensed_link.ts';
 import { stripLicensedText } from './core/licensed';
 import { exportBundle } from './ui/bundle_ui.ts';
 import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
@@ -2662,6 +2663,7 @@ function renderPreviewDeck(state: any) {
 
   const stagedItem = state.staged_item;
   if (previewTitleEl) previewTitleEl.textContent = stagedItem ? stagedItem.title : 'No Staged Item';
+  showLicensedLink(previewTitleEl, stagedItem);
   applyDeckMode(previewSlideMatrixEl, 'preview', stagedItem ? stagedItem.item_type : '');
 
   const itemId = stagedItem ? stagedItem.id : '';
@@ -2983,6 +2985,7 @@ let lastRenderedLiveKey = '';
 function renderLiveDeck(state: any) {
   if (!liveSlideMatrixEl) return;
   if (liveTitleEl) liveTitleEl.textContent = state.live_item ? state.live_item.title : 'No Active Item';
+  showLicensedLink(liveTitleEl, state.live_item);
 
   const liveItem = state.live_item;
   applyDeckMode(liveSlideMatrixEl, 'live', liveItem ? liveItem.item_type : '');

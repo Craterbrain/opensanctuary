@@ -156,7 +156,19 @@ async function openUploadAssist(): Promise<void> {
       ctx!.showToast(result.error || 'Could not open the CCLI Upload Assistant.', 'error');
       return;
     }
-    ctx!.showToast('Opening the CCLI Upload Assistant -- you still need to click Log In and Upload yourself.', 'info');
+    // The autofill is best effort; the same CSV is saved as a file, so when the upload box isn't filled in the operator can choose it.
+    const box = document.getElementById('ccli-report-assist-file-box');
+    const pathEl = document.getElementById('ccli-report-assist-file');
+    if (box && pathEl && result.csv_path) {
+      pathEl.textContent = result.csv_path;
+      box.hidden = false;
+    }
+    ctx!.showToast(
+      result.csv_path
+        ? `Opening the CCLI Upload Assistant -- you still need to click Log In and Upload yourself. If the upload box isn't filled in, choose ${result.csv_path}.`
+        : 'Opening the CCLI Upload Assistant -- you still need to click Log In and Upload yourself.',
+      'info',
+    );
   } catch (e: any) {
     ctx!.showToast(`Could not open the CCLI Upload Assistant: ${e?.message || e}`, 'error');
   }

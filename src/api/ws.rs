@@ -301,6 +301,19 @@ impl AppState {
         }
     }
 
+    /// A console that only ever used HTTP says it is going away (its page closed). Frees the lock at once instead of after
+    /// `CONSOLE_HTTP_IDLE`. Never frees a lock that live WebSockets back (their own disconnect does that), nor another session's.
+    pub fn release_http_console(&self, session_id: &str) -> bool {
+        let mut guard = self.active_console.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Some(cur) if cur.session_id == session_id && cur.ws_conns == 0 => {
+                *guard = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Called when one of `session_id`'s sockets disconnects. Frees the lock
     /// once it has no live sockets left; a no-op if another session holds it.
     pub fn release_console_if_held(&self, session_id: &str) {

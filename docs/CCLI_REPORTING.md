@@ -193,6 +193,12 @@ won't trigger (degrades to "nothing happens," not "something breaks"), and
 the selectors in `CCLI_ASSIST_SCRIPT_TEMPLATE` would need adjusting by
 whoever first tries this against a real account.
 
+## When the autofill does nothing
+
+The upload autofill is best effort (it was written without ever seeing the live site). The same CSV is therefore also saved as a plain file,
+`ccli-reports/ccli-usage-<start>_to_<end>.csv` in the data folder, and its path is shown in the report window's sidebar and in the message when the
+Upload Assistant opens: if the upload box isn't filled in, choose that file in the page's own Browse dialog.
+
 ## Open questions
 
 - **Whether CCLI's login/upload page DOM is stable enough to target
