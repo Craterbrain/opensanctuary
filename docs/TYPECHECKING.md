@@ -35,16 +35,42 @@ was silently unchecked. This adds a real `tsc --noEmit` gate.
 ## Flags (updated 2026-10-28)
 
 On, all checked by `bun run typecheck` and CI: `strict` (it includes `noImplicitAny`), `noImplicitReturns`, `noFallthroughCasesInSwitch`, `noImplicitOverride`,
-`noUnusedLocals` and `noUnusedParameters`. The last two were switched on after removing 43 dead imports, unused constants and a dead function
-(`app_core.ts`, `app_ui.ts`, `library_panel.ts` and others) and two unused private fields in the WebCodecs player. A parameter that a signature has to keep but a
-function doesn't use is named with a leading underscore (`_filePath`).
+`noUnusedLocals`, `noUnusedParameters` and `noUncheckedIndexedAccess`.
 
-Measured and **left off on purpose**:
+* `noUnusedLocals` / `noUnusedParameters` came on after removing 43 dead imports, constants and a dead function. A parameter a signature has to keep but a function
+  doesn't use is named with a leading underscore (`_filePath`).
+* `noUncheckedIndexedAccess` came on after guarding all 225 index sites (`array[i]`, regex groups, `split()` destructuring). No `!` was added: each site got a guard or a
+  sensible fallback. `editor/slide_editor.ts` (56 sites) now keeps one invariant in one place (`getActiveSlide()` always returns a slide) and guards the swaps, reorders and
+  empty selections.
+
+Left off on purpose:
 
 | Flag | Errors | Why not |
 |---|---|---|
-| `noUncheckedIndexedAccess` | 225 | Almost all are regex capture groups (`m[1]`) and pixel/animation math (`gradient_canvas.ts` 43, `background_patterns.ts` 35) where the index is valid by construction; the only fix is a `!` on each, which adds noise and finds nothing. The one file with real findings is `editor/slide_editor.ts` (56: slides that may not exist at an index); fix those by hand if that file is reworked. |
 | `exactOptionalPropertyTypes` | 39 | Almost all are `{ x: maybeUndefined }` passed where `x?:` is declared, i.e. style, not bugs. |
 | `noPropertyAccessFromIndexSignature` | 225 | Style only. |
 
-There are 364 explicit `any` (`as any` / `: any`) in 86 files: those are the real holes, and no flag closes them. The way to shrink them is to type the objects that cross the API boundary (`Song`, `ScheduleItem`, `StateSnapshot`, ...) once and replace the casts where they are used.
+## The shapes that cross the API boundary
+
+`web/src/core/models.ts` mirrors the serde structs in `src/core/models.rs` (`StateSnapshot`, `ShowState`, `Schedule`, `ScheduleItem`, `Slide`, `Song`, `ScriptureItem`,
+`MediaItem`, `Presentation`, `MediaPlayback`) plus the console's own row types (`LibraryItem`, `ThemeRow`, `InstalledBible`, `ShowCommand`). JSON has no `undefined`, so these use
+`| null`; the slide *editor* keeps its own `EditorSlide` (with `undefined`) in `editor/types.ts`, and the conversion between the two is explicit. When the server adds a
+field the console reads, add it here first; the compiler then shows every place that has to handle it.
+
+Typing these found things the `any` had hidden: places that assumed a snapshot or a live item was there, a `Slide.footer` and a `MediaPlayback.preroll_target_pts` the
+server never sends, a `.target.closest(...)` on a possibly-null event target, and a live-output call that passed `isLooping` where the engine reads `is_looping` (fixed:
+a looping background video now loops).
+
+## Explicit `any`
+
+368 on 2026-10-27, 95 now. What is left, and why:
+
+| Where | Count | Why |
+|---|---|---|
+| `global_debug_surface.d.ts` | 22 | The ambient debug names mirrored onto `globalThis` for devtools and the browser tests (see that file's header). |
+| `core/plugins.ts`, `core/plugin_bridge.ts` | ~8 | Third-party plugin objects and messages: the host cannot know their shape. These should become `unknown` + checks. |
+| `core/api_client.ts` | ~10 | Request/response bodies are whatever the endpoint sends; each call site should pass its own `<T>`. |
+| `live_output.ts` `TimecodeSyncEngine` | 4 | Reshapes the server's media state into its own camelCase form; needs its own interface. |
+| `app_ui.ts`, `app_core.ts` debug mirrors, `ui/filter_bar.ts`, small JSON bodies | the rest | Mostly one-offs; replace as the code around them is touched. |
+
+Do not add new ones without a reason in a comment; use `unknown` and narrow, or add the type to `core/models.ts`.

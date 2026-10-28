@@ -27,7 +27,7 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 
 ## Small improvements
 
-- [ ] **Explicit `any` in the web UI.** 364 `as any` / `: any` in 86 files are the remaining type holes (the strict flags that are worth having are on; see `TYPECHECKING.md`). Type the objects that cross the API boundary (`Song`, `ScheduleItem`, `StateSnapshot`) once and replace the casts where they are used.
+- [ ] **The last 95 explicit `any` in the web UI.** The API-boundary types are in `core/models.ts` and most of the 368 are gone; what is left (plugin boundary, request bodies, the live-output sync engine, debug mirrors) is listed in `TYPECHECKING.md`.
 - [ ] **Run a short fuzz pass in CI** as a regression gate (e.g. 60 seconds per target), or leave it manual. Undecided. See `FUZZING.md`.
 - [ ] **Importer fuzz targets share one media folder,** so long runs grow the disk. Revisit if it bites. See `FUZZING.md`.
 - [ ] **Live and staged items are copied whole on every small edit.** An `Arc` around them would avoid it. Noted, not implemented.
