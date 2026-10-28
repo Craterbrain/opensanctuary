@@ -32,19 +32,19 @@ was silently unchecked. This adds a real `tsc --noEmit` gate.
   them (a Rust-only contributor building locally still gets the same gate
   through `build.rs`).
 
-## Flags (updated 2026-10-27)
+## Flags (updated 2026-10-28)
 
-`strict` is **on** (it was turned on after the first pass; `noImplicitAny` is part of it), and so are three more that cost nothing today:
-`noImplicitReturns`, `noFallthroughCasesInSwitch` and `noImplicitOverride` (zero errors when they were switched on).
+On, all checked by `bun run typecheck` and CI: `strict` (it includes `noImplicitAny`), `noImplicitReturns`, `noFallthroughCasesInSwitch`, `noImplicitOverride`,
+`noUnusedLocals` and `noUnusedParameters`. The last two were switched on after removing 43 dead imports, unused constants and a dead function
+(`app_core.ts`, `app_ui.ts`, `library_panel.ts` and others) and two unused private fields in the WebCodecs player. A parameter that a signature has to keep but a
+function doesn't use is named with a leading underscore (`_filePath`).
 
-Measured on 2026-10-27, not turned on:
+Measured and **left off on purpose**:
 
-| Flag | Errors now | Verdict |
+| Flag | Errors | Why not |
 |---|---|---|
-| `noUnusedLocals` | 37 | Mostly dead imports and bindings in `app_core.ts` / `app_ui.ts`. Worth a cleanup pass, then switch it on. Some of those imports may exist for their side effects, so each needs a look rather than a blanket delete. |
-| `noUnusedParameters` | 6 | Same cleanup. |
-| `exactOptionalPropertyTypes` | 39 | Catches `undefined` assigned to an optional field; real findings but fiddly. Later. |
-| `noUncheckedIndexedAccess` | 225 | Every `array[i]` becomes possibly undefined. The noisiest and the one that finds the most real bugs; do it per file, not all at once. |
-| `noPropertyAccessFromIndexSignature` | 225 | Style only. Skip. |
+| `noUncheckedIndexedAccess` | 225 | Almost all are regex capture groups (`m[1]`) and pixel/animation math (`gradient_canvas.ts` 43, `background_patterns.ts` 35) where the index is valid by construction; the only fix is a `!` on each, which adds noise and finds nothing. The one file with real findings is `editor/slide_editor.ts` (56: slides that may not exist at an index); fix those by hand if that file is reworked. |
+| `exactOptionalPropertyTypes` | 39 | Almost all are `{ x: maybeUndefined }` passed where `x?:` is declared, i.e. style, not bugs. |
+| `noPropertyAccessFromIndexSignature` | 225 | Style only. |
 
 There are 364 explicit `any` (`as any` / `: any`) in 86 files: those are the real holes, and no flag closes them. The way to shrink them is to type the objects that cross the API boundary (`Song`, `ScheduleItem`, `StateSnapshot`, ...) once and replace the casts where they are used.

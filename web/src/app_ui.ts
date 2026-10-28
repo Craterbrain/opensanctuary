@@ -3,7 +3,6 @@ import { resolveKeyboardShortcut, buildPairingUrl, buildRemoteUrl, escapeHtml } 
 import { api } from './core/api_client.ts';
 import { SETTINGS_SCHEMA } from './core/settings_schema';
 import { setupScheduleDesktopDrop, uploadScheduleFile, fileToBase64 } from './core/schedule_drop';
-import { resolveHostSessionToken, hostTokenHeader } from './core/host_session.ts';
 import { initFirstTimeSetup, maybeShowFirstTimeSetup, showFirstTimeSetup } from './ui/first_time_setup.ts';
 import { rememberDeckMode } from './ui/deck_view_mode.ts';
 import { bundleKindForFile, exportBundle, importBundleFile, type BundleKind } from './ui/bundle_ui.ts';
@@ -17,7 +16,6 @@ import {
   addItemToSchedule,
   filterAndRenderCatalog,
   loadLibraryTab,
-  renderCategoryTree,
   selectAndPreviewItem,
   updateSearchModeUI,
   getActiveLibraryItems,
@@ -55,8 +53,6 @@ import {
   registerUiCallbacks,
   aboutModal,
   activeBibleVersion,
-  activeImportMode,
-  activeLiveViewMode,
   activeUndoPlaceholder,
   alertModal,
   alertTextInput,
@@ -83,7 +79,6 @@ import {
   createItemPublicDomain,
   createItemTitle,
   createModal,
-  currentContextMenuTarget,
   currentDualSecondaryVerses,
   currentEditorType,
   currentSnapshot,
@@ -106,7 +101,6 @@ import {
   scheduleListEl,
   secondaryBibleVersion,
   selectedLibraryItem,
-  setActiveBibleVersion,
   setActiveImportMode,
   setCurrentContextMenuTargetState,
   setCurrentEditorType,

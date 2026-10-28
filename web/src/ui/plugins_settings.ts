@@ -430,13 +430,11 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void, policy: string): 
     ].filter(Boolean);
     card.appendChild(el('div', 'plugin-warning', `You overrode what this plugin asked for (${parts.join('; ')}). If it misbehaves, revoke it and approve again without the override.`));
   }
-  let advancedOn = false;
   let advancedApply: HTMLButtonElement | null = null;
   let normalApprove: HTMLButtonElement | null = null;
   let advanced: ReturnType<typeof buildAdvanced> | null = null;
   if (!plugin.error && plugin.state !== 'incompatible') {
     advanced = buildAdvanced(plugin, (on) => {
-      advancedOn = on;
       if (advancedApply) advancedApply.hidden = !on;
       if (normalApprove) normalApprove.hidden = on;
     });

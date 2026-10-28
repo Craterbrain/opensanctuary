@@ -14,7 +14,7 @@
  */
 import { draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { parseScriptureReference } from '../core/bible_parser';
-import { escapeCssUrl, escapeHtml, escapeUserHtml, formatParallelSlide, resolveSlideBackgroundElement } from '../core/presentation_helpers.ts';
+import { escapeHtml, escapeUserHtml, formatParallelSlide, resolveSlideBackgroundElement } from '../core/presentation_helpers.ts';
 import { renderSlideVisual } from '../core/slide_render.ts';
 import { openThemeEditor, setThemeAsDefault, duplicateTheme, deleteThemeItem } from './theme_editor.ts';
 
@@ -1145,7 +1145,7 @@ export function appendCatalogTableRows(items: any[], tabName: string, startIndex
   });
 }
 
-export function renderCatalogTable(items: any[], tabName: string, matchedOnlineRef: any = null) {
+export function renderCatalogTable(items: any[], tabName: string, _matchedOnlineRef: any = null) {
   if (!ctx) return;
   const headers = document.getElementById('catalog-headers');
   if (!catalogTableBody) return;

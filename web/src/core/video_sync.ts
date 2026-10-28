@@ -91,7 +91,7 @@ export interface VideoSyncDecision {
 export function computeVideoSyncDecision(
     expectedTime: number,
     currentTime: number,
-    currentRate: number = 1.0
+    _currentRate: number = 1.0
 ): VideoSyncDecision {
     const driftSeconds = expectedTime - currentTime;
     const driftMs = driftSeconds * 1000.0;

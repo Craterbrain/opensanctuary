@@ -27,7 +27,7 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 
 ## Small improvements
 
-- [ ] **More TypeScript strictness.** `strict` and three more flags are on; `noUnusedLocals` (37 errors) and `noUnusedParameters` (6) are a cleanup away, `noUncheckedIndexedAccess` (225) is a per-file job, and 364 explicit `any` are the real holes. Numbers in `TYPECHECKING.md`.
+- [ ] **Explicit `any` in the web UI.** 364 `as any` / `: any` in 86 files are the remaining type holes (the strict flags that are worth having are on; see `TYPECHECKING.md`). Type the objects that cross the API boundary (`Song`, `ScheduleItem`, `StateSnapshot`) once and replace the casts where they are used.
 - [ ] **Run a short fuzz pass in CI** as a regression gate (e.g. 60 seconds per target), or leave it manual. Undecided. See `FUZZING.md`.
 - [ ] **Importer fuzz targets share one media folder,** so long runs grow the disk. Revisit if it bites. See `FUZZING.md`.
 - [ ] **Live and staged items are copied whole on every small edit.** An `Arc` around them would avoid it. Noted, not implemented.

@@ -35,22 +35,14 @@ import { formatSlideLyricsHtml, applyAutoFitLyrics, renderSlideVisual } from './
 import { parseDisplayOutputs, serializeDisplayOutputs } from './core/display_config.ts';
 import { MediaSyncManager, type MediaSyncPayload } from './core/media_sync.ts';
 import {
-  parseScriptureReference,
-  parseScriptureReferenceAsync,
-  setParsedRefCache,
-  parsedRefCache
-} from './core/bible_parser.ts';
-import {
   initSettingsDialog,
-  onSettingsSearchInput,
-  resetOptionsModal,
-  saveNetworkSettings
+  resetOptionsModal
 } from './ui/settings_dialog.ts';
 import { initThemePicker, openThemePicker } from './ui/theme_picker.ts';
-import { initThemeEditor, openThemeEditor } from './ui/theme_editor.ts';
+import { initThemeEditor } from './ui/theme_editor.ts';
 import { buildSlideCardElement, buildSlideThumbElement, renderDeckEmptyState, slideDeckStyle } from './ui/slide_deck_view.ts';
 import { initArrangementModal, openArrangementModal } from './ui/arrangement_modal.ts';
-import { initCcliReportModal, openCcliReportModal } from './ui/ccli_report_modal.ts';
+import { initCcliReportModal } from './ui/ccli_report_modal.ts';
 import {
   initLibraryPanel,
   loadLibraryTab,
@@ -59,15 +51,8 @@ import {
   areTranslationsEquivalent,
   addItemToSchedule,
   renderAssetPreview,
-  selectAndPreviewItem,
   addDualScriptureToSchedule,
   updateSearchModeUI,
-  getActiveResourceViewMode,
-  setActiveResourceViewMode,
-  getActiveCategory,
-  setActiveCategory,
-  getActiveLibraryItems,
-  getFilteredLibraryItems,
 } from './ui/library_panel.ts';
 import {
   initPresentationPlayback,
@@ -358,7 +343,6 @@ const previewCanvasFooterRightEl = document.getElementById('preview-canvas-foote
 const previewCanvasImageEl = document.getElementById('preview-canvas-image');
 const previewCanvasElementsEl = document.getElementById('preview-canvas-elements');
 const previewSlideCounterTextEl = document.getElementById('preview-slide-counter-text');
-const btnPreviewGoLive = document.getElementById('btn-preview-golive');
 const liveTitleEl = document.getElementById('live-title-display');
 export const liveSlideMatrixEl = document.getElementById('live-slide-matrix');
 const canvasLyricsEl = document.getElementById('canvas-lyrics-text');
@@ -373,7 +357,6 @@ const slideCounterTextEl = document.getElementById('slide-counter-text');
 const liveCanvasEl = document.getElementById('live-canvas');
 
 // Search & Preview Actions
-const btnPreviewToSchedule = document.getElementById('btn-preview-to-schedule');
 export const btnToggleDualBible = document.getElementById('btn-toggle-dual-bible');
 
 // Ribbon Buttons
@@ -405,21 +388,13 @@ export const optionsModal = document.getElementById('options-modal');
 export const shortcutsModal = document.getElementById('shortcuts-modal');
 export const aboutModal = document.getElementById('about-modal');
 export const scheduleArticlesModal = document.getElementById('schedule-articles-modal');
-const confirmModal = document.getElementById('confirm-modal');
-let onConfirmDialogAccept = null;
 
 // Editor Elements
-const createModalTitle = document.getElementById('create-modal-title');
 export const createItemTitle = document.getElementById('create-item-title') as HTMLInputElement | null;
 export const createItemAuthor = document.getElementById('create-item-author') as HTMLInputElement | null;
-const createItemTheme = document.getElementById('create-item-theme');
 export const createItemCopyright = document.getElementById('create-item-copyright') as HTMLInputElement | null;
 export const createItemPublicDomain = document.getElementById('create-item-public-domain') as HTMLInputElement | null;
 export const createItemContent = document.getElementById('create-item-content') as HTMLInputElement | null;
-const editorPreviewCanvas = document.getElementById('editor-preview-canvas');
-const editorPreviewText = document.getElementById('editor-preview-text');
-const editorPreviewTitle = document.getElementById('editor-preview-title');
-const editorPreviewAuthor = document.getElementById('editor-preview-author');
 
 // ============================================================================
 // GLOBAL RIGHT-CLICK SUPPRESSION & CONTEXT MENU MANAGEMENT
@@ -840,7 +815,6 @@ function renderRibbon(state: any) {
 // SCHEDULE PANEL: SINGLE ITEM EXPANSION & GROUP COLLAPSING (PRAGMATIC DND)
 // ============================================================================
 export let lastRenderedScheduleKey = '';
-let draggedPreviewSlideIndex: number | null = null;
 export const collapsedGroupIds = new Set<string>();
 
 // Cleanup subscriptions for dynamic DOM elements
@@ -2225,11 +2199,6 @@ function broadcastLocalMediaSync(action: MediaSyncPayload['action'], currentTime
   mediaSyncManager.broadcastSync(action, currentTime, isPlaying, isLooping, executeAtEpoch);
 }
 
-function startMediaSyncHeartbeat() {
-  mediaSyncManager.setLooping(isLiveVideoLooping);
-  mediaSyncManager.startHeartbeat();
-}
-
 function stopMediaSyncHeartbeat() {
   mediaSyncManager.stopHeartbeat();
 }
@@ -3360,7 +3329,7 @@ on('ctx-sched-image', 'click', () => {
     const itemIdx = currentContextMenuTarget.index;
     openMediaImagePicker({
       currentImage: item.slides && item.slides[0] ? item.slides[0].background : null,
-      onSelectSlide: (filePath, cssBg, name) => {
+      onSelectSlide: (_filePath, cssBg) => {
         item.theme_name = name;
         if (item.slides) item.slides.forEach((s: any) => s.background = cssBg);
         sendCommand({
@@ -3523,7 +3492,7 @@ on('ctx-slide-image', 'click', () => {
     const slideIdx = target.slideIndex;
     openMediaImagePicker({
       currentImage: target.slide ? target.slide.background : null,
-      onSelectSlide: (filePath, cssBg, name) => {
+      onSelectSlide: (_filePath, cssBg) => {
         if (target.slide) target.slide.background = cssBg;
         sendCommand({
           SetSlideBackground: {
@@ -3690,7 +3659,7 @@ on('ctx-lib-image', 'click', () => {
     const item = currentContextMenuTarget.item;
     const tab = currentContextMenuTarget.tab || currentTab;
     openMediaImagePicker({
-      onSelectSlide: async (filePath, cssBg, name) => {
+      onSelectSlide: async (_filePath, cssBg) => {
         item.theme_name = name;
         if (item.slides) {
           item.slides.forEach((s: any) => s.background = cssBg);
