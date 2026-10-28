@@ -35,6 +35,8 @@
  *   and, with ui.toolbar, `{ type: 'os.event', event: 'toolbar', data: { id } }` when one of its ribbon buttons is clicked.
  *   and, with show.observe, `{ type: 'os.event', event: 'state', data }` for each state update.
  */
+import type { StateSnapshot } from './models.ts';
+import { errorMessage } from './ui_utils.ts';
 import { api, type PluginInfo } from "./api_client.ts";
 import { getCurrentIconSet } from "./icon_sets.ts";
 import { registerLibrarySource, unregisterLibrarySource } from "../ui/library_panel.ts";
@@ -131,7 +133,10 @@ function collectThemeVars(): Record<string, string> {
       const style = (rule as CSSStyleRule).style;
       const sel = (rule as CSSStyleRule).selectorText || '';
       if (!style || !/(^|[\s,]):root|html|body|\[data-/.test(sel)) continue;
-      for (let i = 0; i < style.length; i++) if (style[i].startsWith('--os-')) names.add(style[i]);
+      for (let i = 0; i < style.length; i++) {
+        const prop = style[i];
+        if (prop && prop.startsWith('--os-')) names.add(prop);
+      }
     }
   }
   const computed = getComputedStyle(document.documentElement);
@@ -173,7 +178,7 @@ function commandName(cmd: unknown): string | null {
   if (typeof cmd === 'string') return cmd;
   if (cmd && typeof cmd === 'object') {
     const keys = Object.keys(cmd as object);
-    if (keys.length === 1) return keys[0];
+    if (keys.length === 1) return keys[0] ?? null;
   }
   return null;
 }
@@ -435,8 +440,8 @@ function installListener() {
     r.inFlight++;
     try {
       reply({ ok: true, result: await handle(r, msg.method, msg.params) });
-    } catch (e: any) {
-      reply({ ok: false, error: String(e?.message ?? e) });
+    } catch (e) {
+      reply({ ok: false, error: String(errorMessage(e)) });
     } finally {
       r.inFlight--;
     }
@@ -451,16 +456,17 @@ function installListener() {
 const LICENSED_RETRY_MS = 20_000;
 const licensedAsked = new Map<string, number>();
 const licensedWarned = new Set<string>();
-let lastSnapshot: any = null;
+let lastSnapshot: StateSnapshot | null = null;
 
 /** Does this plugin hold the grant that lets it fill licensed text in? */
 function resolvesLicensed(p: PluginInfo): boolean {
   return grantedCommands(p).includes('ResolveLicensed');
 }
 
-function watchLicensed(data: any) {
-  if (data) lastSnapshot = data;
-  const items = lastSnapshot?.schedule?.items ?? lastSnapshot?.snapshot?.schedule?.items;
+/** `data` is a snapshot, or a WebSocket message that wraps one as `{ snapshot }`. */
+function watchLicensed(data: StateSnapshot | { snapshot?: StateSnapshot } | null | undefined) {
+  if (data) lastSnapshot = ('snapshot' in data && data.snapshot ? data.snapshot : data) as StateSnapshot;
+  const items = lastSnapshot?.schedule?.items;
   if (!Array.isArray(items)) return;
   const now = Date.now();
   const bySource = new Map<string, any[]>();
@@ -511,7 +517,7 @@ function ensureStateSocket() {
         r.frame.contentWindow?.postMessage({ type: 'os.event', event: 'state', data }, '*');
       }
     }
-    watchLicensed(data);
+    watchLicensed(data as StateSnapshot | { snapshot?: StateSnapshot });
   };
   stateSocket.onclose = () => {
     stateSocket = null;

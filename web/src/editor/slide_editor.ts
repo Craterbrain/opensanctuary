@@ -114,7 +114,7 @@ function applyPickerBackgroundToSlide(
   }
   if (cleanBg.startsWith('url(')) {
     const match = cleanBg.match(/url\(['"]?([^'"]+)['"]?\)/);
-    const p = match ? match[1] : cleanBg;
+    const p = (match ? match[1] : undefined) ?? cleanBg;
     if (isVideoBackground(p)) {
       cur.background_v2 = {
         kind: 'Video',
@@ -223,7 +223,7 @@ export class SlideEditor {
     }
     this.activeIndex = Math.max(0, Math.min(activeIndex, this.slides.length - 1));
 
-    const cur = this.slides[this.activeIndex];
+    const cur = this.getActiveSlide();
     this.history.init(cur);
     this.canvas.setSlide(cur);
     this.propertiesPanel.bind(cur, []);
@@ -237,7 +237,13 @@ export class SlideEditor {
   }
 
   public getActiveSlide(): EditorSlide {
-    return this.slides[this.activeIndex];
+    const cur = this.slides[this.activeIndex] ?? this.slides[0];
+    if (cur) return cur;
+    // The editor always holds at least one slide, so this is unreachable; recover with a blank one instead of returning undefined.
+    const blank = this.createBlankSlide(0);
+    this.slides = [blank];
+    this.activeIndex = 0;
+    return blank;
   }
 
   public getAllSlides(): EditorSlide[] {
@@ -474,7 +480,7 @@ export class SlideEditor {
         selectedCount: sel.length,
         hasClipboard: this.clipboard.length > 0,
         isGroup: sel.some(el => el.type === 'Group'),
-        isSingleImage: sel.length === 1 && sel[0].type === 'Image'
+        isSingleImage: sel.length === 1 && sel[0]?.type === 'Image'
       });
     });
 
@@ -489,7 +495,7 @@ export class SlideEditor {
     this.activeCropOverlay?.destroy();
     this.activeCropOverlay = null;
     this.activeIndex = newIndex;
-    const cur = this.slides[this.activeIndex];
+    const cur = this.getActiveSlide();
     this.history.init(cur);
     this.canvas.selection.deselectAll();
     this.canvas.setSlide(cur);
@@ -534,6 +540,7 @@ export class SlideEditor {
   private reorderSlides(from: number, to: number): void {
     if (from === to) return;
     const [moved] = this.slides.splice(from, 1);
+    if (!moved) return;
     this.slides.splice(to, 0, moved);
     this.activeIndex = to;
     this.filmstrip.setSlides(this.slides, this.activeIndex);
@@ -543,6 +550,7 @@ export class SlideEditor {
   public setSlideTag(index: number, tag: string | null): void {
     if (index < 0 || index >= this.slides.length) return;
     const slide = this.slides[index];
+    if (!slide) return;
     this.history.pushState(this.getActiveSlide());
     slide.tag = tag ? tag.trim() : undefined;
     if (slide.tag) {
@@ -563,6 +571,7 @@ export class SlideEditor {
   public setSlideDuration(index: number, durationSeconds: number | null): void {
     if (index < 0 || index >= this.slides.length) return;
     const slide = this.slides[index];
+    if (!slide) return;
     this.history.pushState(this.getActiveSlide());
     slide.duration_seconds = durationSeconds && durationSeconds > 0 ? durationSeconds : undefined;
     this.filmstrip.setSlides(this.slides, this.activeIndex);
@@ -634,18 +643,20 @@ export class SlideEditor {
       cur.elements = [...selectedEls, ...unselectedEls];
     } else if (action === 'bringForward') {
       for (let i = cur.elements.length - 2; i >= 0; i--) {
-        if (selectedIds.includes(cur.elements[i].id) && !selectedIds.includes(cur.elements[i + 1].id)) {
-          const tmp = cur.elements[i];
-          cur.elements[i] = cur.elements[i + 1];
-          cur.elements[i + 1] = tmp;
+        const here = cur.elements[i];
+        const above = cur.elements[i + 1];
+        if (here && above && selectedIds.includes(here.id) && !selectedIds.includes(above.id)) {
+          cur.elements[i] = above;
+          cur.elements[i + 1] = here;
         }
       }
     } else if (action === 'sendBackward') {
       for (let i = 1; i < cur.elements.length; i++) {
-        if (selectedIds.includes(cur.elements[i].id) && !selectedIds.includes(cur.elements[i - 1].id)) {
-          const tmp = cur.elements[i];
-          cur.elements[i] = cur.elements[i - 1];
-          cur.elements[i - 1] = tmp;
+        const here = cur.elements[i];
+        const below = cur.elements[i - 1];
+        if (here && below && selectedIds.includes(here.id) && !selectedIds.includes(below.id)) {
+          cur.elements[i] = below;
+          cur.elements[i - 1] = here;
         }
       }
     }
@@ -669,6 +680,7 @@ export class SlideEditor {
     if (selected.length === 1) {
       // Align single element relative to canvas (0..1)
       const el = selected[0];
+      if (!el) return;
       switch (action) {
         case 'left': el.transform.x = 0.05; break;
         case 'center': el.transform.x = (1.0 - el.transform.w) / 2; break;
@@ -867,8 +879,8 @@ export class SlideEditor {
     this.toolbar.updateBackgroundState(cur?.background_v2, cur?.background);
 
     const textElements = sel.filter(e => e.type === 'TextBlock') as (SlideElement & { type: 'TextBlock' })[];
-    if (textElements.length > 0) {
-      const primary = textElements[0];
+    const primary = textElements[0];
+    if (primary) {
       const run0 = primary.block.runs[0] || { text: '' };
       this.toolbar.updateTextFormattingState({
         fontFamily: run0.font_family,
@@ -987,7 +999,8 @@ export class SlideEditor {
             }
           }
           if (tb.runs.length > 0) {
-            tb.runs[0].text = formatBulletLines(tb.runs[0].text, update.bullet_kind);
+            const first = tb.runs[0];
+            if (first) first.text = formatBulletLines(first.text, update.bullet_kind);
           }
         }
         if (update.indent_level !== undefined) {
@@ -1029,7 +1042,7 @@ export class SlideEditor {
       currentVid = cur.background;
     } else if (cur.background && (cur.background.startsWith('url(') || cur.background.includes('/media/images/'))) {
       const match = cur.background.match(/url\(['"]?([^'"]+)['"]?\)/);
-      currentImg = match ? match[1] : null;
+      currentImg = (match ? match[1] : undefined) ?? null;
     }
 
     const defaultTab = initialTab || (currentVid ? 'videos' : 'images');
@@ -1106,7 +1119,7 @@ export class SlideEditor {
 
   private startImageCrop(): void {
     const sel = this.getSelectedElements();
-    if (sel.length !== 1 || sel[0].type !== 'Image') return;
+    if (sel.length !== 1 || sel[0]?.type !== 'Image') return;
     const el = sel[0] as SlideElement & { type: 'Image' };
 
     this.endImageCrop();

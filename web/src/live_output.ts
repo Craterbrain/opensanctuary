@@ -4,6 +4,8 @@
 // the canvas editor's element renderer with the in-app Live preview, making
 // what an operator designs (positioned text/images/shapes/tables) actually
 // appear on the real output instead of only a flattened text string.
+import type { MediaPlayback, Slide } from './core/models.ts';
+import type { StateSnapshot } from './core/models.ts';
 import { computeCanvasProjection } from './core/canvas_projection';
 import { renderSlideElements } from './core/slide_render';
 import { autoFitLyrics as autoFitLyricsCore } from './core/autofit';
@@ -67,7 +69,7 @@ async function refreshLiveThemes() {
     if (res.ok) {
       const dbThemes = await res.json();
       if (Array.isArray(dbThemes) && dbThemes.length > 0) {
-        availableThemes = dbThemes.map((t: any) => ({
+        availableThemes = dbThemes.map((t) => ({
           name: t.name,
           bg: t.background || 'linear-gradient(135deg, #0f2027, #203a43, #2c5364)',
           font: t.font_family,
@@ -105,10 +107,11 @@ let liveWsClient: EngineWebSocketClient | null = null;
 class TimecodeSyncEngine {
   videoEl: HTMLVideoElement;
   audioEl: HTMLAudioElement;
+  // The server's media state reshaped for this engine (camelCase, with a few derived fields): kept loose on purpose.
   masterState: any = null;
-  syncTimer: any = null;
+  syncTimer: ReturnType<typeof setTimeout> | null = null;
   scheduledStartRaf: number | null = null;
-  _scheduledTimeout: any = null;
+  _scheduledTimeout: ReturnType<typeof setTimeout> | null = null;
   _scheduledTargetMs: number | undefined;
   _playStartedAt: number | undefined;
   _lastReportedReadyVersion: number | undefined;
@@ -119,7 +122,7 @@ class TimecodeSyncEngine {
     this.startSyncClock();
   }
 
-  setMasterState(mediaPlayback: any, isDedicatedMedia: boolean) {
+  setMasterState(mediaPlayback: Partial<MediaPlayback> | null | undefined, isDedicatedMedia: boolean) {
     if (!mediaPlayback) {
       this.masterState = null;
       if (this.scheduledStartRaf) cancelAnimationFrame(this.scheduledStartRaf);
@@ -486,7 +489,7 @@ async function switchVideoRenderer(url: string, fit: 'contain' | 'cover', onRead
  * (above), translated into the pre-resolved form WebCodecsPlayer.applySyncState
  * expects, since that class does its own continuous clock-driven frame
  * selection instead of being polled/nudged the way the <video> element is. */
-function toWebCodecsSyncState(mediaPlayback: any, isDedicatedMedia: boolean): WebCodecsSyncState {
+function toWebCodecsSyncState(mediaPlayback: MediaPlayback, isDedicatedMedia: boolean): WebCodecsSyncState {
   const loop = !isDedicatedMedia || !!mediaPlayback.is_looping;
   const muted = !isDedicatedMedia || (mediaPlayback.is_muted !== undefined ? !!mediaPlayback.is_muted : false);
   const volume = mediaPlayback.volume !== undefined ? Number(mediaPlayback.volume) : 1.0;
@@ -542,7 +545,7 @@ try {
         current_time: d.currentTime,
         timestamp_ms: d.timestamp || Date.now(),
         start_at_epoch_ms: d.start_at_epoch_ms || null,
-        isLooping: d.isLooping,
+        is_looping: !!d.isLooping,
         is_muted: videoBgEl ? videoBgEl.muted : false,
         volume: 1.0
       }, !videoBgEl.loop);
@@ -604,9 +607,9 @@ function fadeInFromBlack(durationSec = 0.4) {
   }, durationSec * 1000 + 40);
 }
 
-let lastSnapshot: any = null;
+let lastSnapshot: StateSnapshot | null = null;
 
-function renderSnapshot(snapshot: any) {
+function renderSnapshot(snapshot: StateSnapshot) {
   try {
     lastSnapshot = snapshot;
     const state = snapshot.state;
@@ -651,16 +654,17 @@ function renderSnapshot(snapshot: any) {
     const referencePosition = (resolvedTheme && resolvedTheme.referencePosition) || 'inline';
 
     let currentBg = 'linear-gradient(135deg, #0f2027, #203a43, #2c5364)';
-    let slide: any = null;
+    let slide: Slide | null | undefined = null;
     if (referenceLabelEl) referenceLabelEl.style.display = 'none';
     if (state.live_item && state.live_item.slides && state.live_item.slides.length > 0) {
-      slide = resolveSlideAt(state.live_item, state.live_slide_index) || state.live_item.slides[0];
+      slide = resolveSlideAt(state.live_item, state.live_slide_index) || state.live_item.slides[0] || null;
+      if (!slide) return;
       const hasPositionedElements = !!(slide.elements && slide.elements.length > 0);
       const showPinnedReference = isScriptureTheme && !!slide.reference_label && (referencePosition === 'top' || referencePosition === 'bottom');
       const inlinePrefix = (isScriptureTheme && slide.reference_label && referencePosition === 'inline') ? `${slide.reference_label}  ` : '';
 
       if (referenceLabelEl && showPinnedReference) {
-        referenceLabelEl.textContent = slide.reference_label;
+        referenceLabelEl.textContent = slide.reference_label ?? null;
         referenceLabelEl.style.display = 'block';
         if (referencePosition === 'top') {
           referenceLabelEl.style.top = '3vh';
@@ -743,7 +747,7 @@ function renderSnapshot(snapshot: any) {
       lyricsContainerEl.style.marginTop = '';
     }
 
-    const isDedicatedMedia = state.live_item && state.live_item.item_type === 'media';
+    const isDedicatedMedia = !!state.live_item && state.live_item.item_type === 'media';
 
     // A pre-rendered clip of an animated pattern plays as a looping video, which is
     // far cheaper for a TV browser than redrawing the pattern every frame. Until the

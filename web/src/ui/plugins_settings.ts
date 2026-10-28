@@ -5,6 +5,7 @@
  * Everything below comes from a plugin's own manifest, which is untrusted input: it is
  * only ever inserted with textContent, never innerHTML.
  */
+import { errorMessage } from '../core/ui_utils.ts';
 import { api, type PluginAuditEntry, type PluginPublisher, type PluginTrustLevel, type PluginCatalogEntry, type PluginGrantInput, type PluginInfo, type PluginPermissionInfo } from "../core/api_client.ts";
 import { showToast } from "../core/ui_utils.ts";
 import { getCurrentIconSet, iconUrl } from "../core/icon_sets.ts";
@@ -124,8 +125,8 @@ function buildAdvanced(plugin: PluginInfo, onChange: (on: boolean) => void): { r
       'Turning off something it needs, narrowing it, or adding permissions it never asked for can make it misbehave or stop working, ' +
       'and extra permissions give it more access than its author intended. Only do this if you know what you are doing.'));
     let catalog: PluginCatalogEntry[] = [];
-    try { catalog = await api.plugins.permissionCatalog(); } catch (e: any) {
-      panel.appendChild(el('div', 'plugin-error', `Couldn't load the list of permissions: ${e?.message ?? e}`));
+    try { catalog = await api.plugins.permissionCatalog(); } catch (e) {
+      panel.appendChild(el('div', 'plugin-error', `Couldn't load the list of permissions: ${errorMessage(e)}`));
       return;
     }
     const byId = new Map(catalog.map((c) => [c.id, c]));
@@ -449,8 +450,8 @@ function renderPlugin(plugin: PluginInfo, refresh: () => void, policy: string): 
       window.dispatchEvent(new CustomEvent('os-plugin-changed', { detail: { plugin: updated } }));
       showToast(done);
       refresh();
-    } catch (e: any) {
-      showToast(`Plugin action failed: ${e?.message ?? e}`);
+    } catch (e) {
+      showToast(`Plugin action failed: ${errorMessage(e)}`);
     }
   };
   let trustBox: HTMLInputElement | null = null;
@@ -578,8 +579,8 @@ async function renderSharedSecrets(content: HTMLElement, refresh: () => void): P
           await api.plugins.deleteSharedSecret(e.service, e.account);
           showToast('Deleted the shared secret');
           refresh();
-        } catch (err: any) {
-          showToast(`Couldn't delete it: ${err?.message ?? err}`);
+        } catch (err) {
+          showToast(`Couldn't delete it: ${errorMessage(err)}`);
         }
       });
       row.appendChild(del);
@@ -615,7 +616,7 @@ async function renderPublishers(content: HTMLElement, refresh: () => void): Prom
       row.appendChild(el('span', `os-badge plugin-trust plugin-trust--${p.revoked ? 'revoked' : 'trusted'}`, p.revoked ? 'Revoked' : 'Trusted'));
       row.appendChild(el('span', 'settings-hint', ` key ${p.key_id} · ${p.plugins.length ? p.plugins.join(', ') : 'no plugins'}${p.revoked && p.note ? ` · ${p.note}` : ''}`));
       const doIt = async (fn: () => Promise<unknown>, done: string) => {
-        try { await fn(); showToast(done); refresh(); } catch (e: any) { showToast(`Couldn't do that: ${e?.message ?? e}`); }
+        try { await fn(); showToast(done); refresh(); } catch (e) { showToast(`Couldn't do that: ${errorMessage(e)}`); }
       };
       if (p.trusted) {
         const stop = el('button', 'btn btn-secondary btn-sm plugin-publisher-untrust', 'Stop trusting');
@@ -652,7 +653,7 @@ function renderPolicyControl(content: HTMLElement, policy: string, refresh: () =
   for (const value of ['allow', 'warn', 'require']) {
     const opt = document.createElement('option');
     opt.value = value;
-    opt.textContent = POLICY_LABEL[value];
+    opt.textContent = POLICY_LABEL[value] ?? value;
     opt.selected = value === policy;
     select.appendChild(opt);
   }
@@ -662,8 +663,8 @@ function renderPolicyControl(content: HTMLElement, policy: string, refresh: () =
         await api.settings.save({ pluginSignaturePolicy: select.value });
         showToast(`Plugin signature policy set to ${POLICY_LABEL[select.value]}`);
         refresh();
-      } catch (e: any) {
-        showToast(`Couldn't save: ${e?.message ?? e}`);
+      } catch (e) {
+        showToast(`Couldn't save: ${errorMessage(e)}`);
       }
     })();
   });
@@ -700,8 +701,8 @@ export function renderPluginsSettings(content: HTMLElement) {
           const p = await api.plugins.install(file);
           showToast(`${p.name} installed. Review its permissions below before it can run.`);
           refresh();
-        } catch (e: any) {
-          showToast(`Couldn't install: ${e?.message ?? e}`);
+        } catch (e) {
+          showToast(`Couldn't install: ${errorMessage(e)}`);
         }
       }));
       install.append(installBtn, el('span', 'settings-hint', 'A plugin package is a .zip with a plugin.json. Only install plugins from people you trust: it stays switched off until you approve it.'));

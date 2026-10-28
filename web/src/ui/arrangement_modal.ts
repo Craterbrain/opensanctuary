@@ -5,6 +5,7 @@
  * authored slides) and a play-order queue (the arrangement actually performed),
  * built with drag-and-drop between and within both lists.
  */
+import type { ShowCommand, Schedule, ScheduleItem, ShowState, Slide } from '../core/models.ts';
 import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { type ArrangementEntry, escapeUserHtml, isPrimaryDropTarget } from '../core/presentation_helpers';
 import type { ToastType } from '../core/ui_utils';
@@ -13,15 +14,15 @@ export interface ArrangementModalContext {
   showToast: (message: string, type?: ToastType) => void;
   showModal: (el: HTMLElement) => void;
   closeModal: (el: HTMLElement) => void;
-  sendCommand: (cmd: any) => void;
-  getSlideBadge: (slide: any, idx?: number) => string;
+  sendCommand: (cmd: ShowCommand) => void;
+  getSlideBadge: (slide: Slide, idx?: number) => string;
   getSlideBadgeColor: (badge: string) => string;
   escapeHtml: (str: string) => string;
   formatCssBackground: (bg: string | null | undefined) => string;
   getCurrentSnapshot: () => any;
-  renderSchedule: (schedule: any) => void;
-  renderPreviewDeck: (state: any) => void;
-  renderLiveDeck: (state: any) => void;
+  renderSchedule: (schedule: Schedule) => void;
+  renderPreviewDeck: (state: ShowState) => void;
+  renderLiveDeck: (state: ShowState) => void;
 }
 
 let ctx: ArrangementModalContext | null = null;
@@ -101,6 +102,7 @@ export function initArrangementModal(context: ArrangementModalContext) {
       e.stopPropagation();
       if (selectedPlayIndex !== null && selectedPlayIndex > 0) {
         const [moved] = localArrangement.splice(selectedPlayIndex, 1);
+        if (!moved) return;
         localArrangement.splice(selectedPlayIndex - 1, 0, moved);
         selectedPlayIndex--;
         renderArrangementModalPanes();
@@ -114,6 +116,7 @@ export function initArrangementModal(context: ArrangementModalContext) {
       e.stopPropagation();
       if (selectedPlayIndex !== null && selectedPlayIndex < localArrangement.length - 1) {
         const [moved] = localArrangement.splice(selectedPlayIndex, 1);
+        if (!moved) return;
         localArrangement.splice(selectedPlayIndex + 1, 0, moved);
         selectedPlayIndex++;
         renderArrangementModalPanes();
@@ -180,6 +183,7 @@ export function initArrangementModal(context: ArrangementModalContext) {
       e.stopPropagation();
       if (selectedMasterIndex !== null && localMasterSlides[selectedMasterIndex]) {
         const m = localMasterSlides[selectedMasterIndex];
+        if (!m) return;
         localArrangement.push({
           section_id: m.badge,
           source_slide_index: selectedMasterIndex,
@@ -194,14 +198,14 @@ export function initArrangementModal(context: ArrangementModalContext) {
 }
 
 let activeArrangementItemIndex: number | null = null;
-let activeArrangementTargetItem: any = null;
-let localMasterSlides: any[] = [];
+let activeArrangementTargetItem: ScheduleItem | null = null;
+let localMasterSlides: Array<Slide & { masterIndex: number; badge: string }> = [];
 let localArrangement: ArrangementEntry[] = [];
 let arrangementDndCleanups: Array<() => void> = [];
 let selectedPlayIndex: number | null = null;
 let selectedMasterIndex: number | null = null;
 
-export function openArrangementModal(itemIndex: number, item: any) {
+export function openArrangementModal(itemIndex: number, item: ScheduleItem) {
   if (!item || !item.slides || item.slides.length === 0) {
     ctx!.showToast('Item has no slides to arrange', 'info');
     return;
@@ -210,7 +214,7 @@ export function openArrangementModal(itemIndex: number, item: any) {
   activeArrangementTargetItem = item;
 
   // Extract master slides with badges
-  localMasterSlides = item.slides.map((s: any, idx: number) => ({
+  localMasterSlides = item.slides.map((s: Slide, idx: number) => ({
     ...s,
     masterIndex: idx,
     badge: ctx!.getSlideBadge(s, idx),
@@ -279,9 +283,9 @@ function renderArrangementModalPanes() {
   // Preview first item if available
   if (localArrangement.length > 0) {
     const firstEntry = localArrangement[0];
-    const m = localMasterSlides[firstEntry.source_slide_index] || localMasterSlides[0];
-    updateArrangementPreview(m, firstEntry.background_override);
-  } else if (localMasterSlides.length > 0) {
+    const m = firstEntry ? (localMasterSlides[firstEntry.source_slide_index] || localMasterSlides[0]) : localMasterSlides[0];
+    if (m) updateArrangementPreview(m, firstEntry?.background_override ?? null);
+  } else if (localMasterSlides.length > 0 && localMasterSlides[0]) {
     updateArrangementPreview(localMasterSlides[0], null);
   }
 
@@ -423,8 +427,10 @@ function renderArrangementModalPanes() {
                 const fromIdx = data.playIndex as number;
                 if (fromIdx !== pIdx && fromIdx >= 0 && fromIdx < localArrangement.length) {
                   const entry = localArrangement.splice(fromIdx, 1)[0];
-                  localArrangement.splice(pIdx, 0, entry);
-                  renderArrangementModalPanes();
+                  if (entry) {
+                    localArrangement.splice(pIdx, 0, entry);
+                    renderArrangementModalPanes();
+                  }
                 }
               }
             }

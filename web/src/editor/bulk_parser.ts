@@ -120,23 +120,24 @@ export function extractSongMetadata(text: string): { cleanedText: string; metada
   const metadata: ExtractedMetadata = {};
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
+    const rawLine = lines[i] ?? '';
+    const line = rawLine.trim();
     if (!line) {
-      cleanedLines.push(lines[i]);
+      cleanedLines.push(rawLine);
       continue;
     }
 
     // CCLI Number detection
     const ccliMatch = line.match(/^(?:CCLI\s*(?:Song\s*)?(?:#|No\.?|Number)?\s*:?\s*)(\d+)/i);
     if (ccliMatch) {
-      metadata.ccli_number = ccliMatch[1].trim();
+      metadata.ccli_number = (ccliMatch[1] ?? '').trim();
       continue;
     }
 
     // Author / Writer / Music / Lyrics detection
     const authorMatch = line.match(/^(?:Words\s+(?:&|and)\s+Music\s+by|Music\s+(?:&|and)\s+Words\s+by|Words\s+by|Music\s+by|Written\s+by|Author\s*:?|Words\s*:|Music\s*:|Lyrics\s*(?:by)?\s*:?)\s+(.+)/i);
     if (authorMatch) {
-      const authorVal = authorMatch[1].trim();
+      const authorVal = (authorMatch[1] ?? '').trim();
       metadata.author = metadata.author ? `${metadata.author}, ${authorVal}` : authorVal;
       continue;
     }
@@ -148,7 +149,7 @@ export function extractSongMetadata(text: string): { cleanedText: string; metada
       continue;
     }
 
-    cleanedLines.push(lines[i]);
+    cleanedLines.push(rawLine);
   }
 
   const cleanedText = cleanedLines.join('\n').trim();
@@ -258,7 +259,7 @@ function splitScriptureByVerses(text: string): BulkParsedSlide[] {
   let m: RegExpExecArray | null;
 
   while ((m = verseRegex.exec(text)) !== null) {
-    matches.push({ index: m.index, verseNum: m[1], length: m[0].length });
+    matches.push({ index: m.index, verseNum: m[1] ?? '', length: m[0].length });
   }
 
   if (matches.length <= 1) {
@@ -268,11 +269,13 @@ function splitScriptureByVerses(text: string): BulkParsedSlide[] {
 
   const slides: BulkParsedSlide[] = [];
   for (let i = 0; i < matches.length; i++) {
-    const start = matches[i].index + matches[i].length;
-    const end = i < matches.length - 1 ? matches[i + 1].index : text.length;
+    const cur = matches[i];
+    if (!cur) continue;
+    const start = cur.index + cur.length;
+    const end = matches[i + 1]?.index ?? text.length;
     const body = text.substring(start, end).trim();
     if (body) {
-      const vNum = matches[i].verseNum;
+      const vNum = cur.verseNum;
       slides.push({
         text: `${vNum} ${body}`,
         tag: `V${vNum}`,
@@ -293,7 +296,7 @@ function splitByParagraphs(text: string): BulkParsedSlide[] {
 
   for (const blk of blocks) {
     const lines = blk.split(/\r?\n/);
-    const firstLine = lines[0].trim();
+    const firstLine = (lines[0] ?? '').trim();
     const section = detectSectionHeader(firstLine);
 
     if (section) {
@@ -329,7 +332,8 @@ function splitByLineCount(text: string, linesPerSlide: number): BulkParsedSlide[
     let currentLabel: string | undefined;
     let startIdx = 0;
 
-    const section = detectSectionHeader(allLines[0]);
+    const head = allLines[0] ?? '';
+    const section = detectSectionHeader(head);
     if (section) {
       currentTag = section.tag;
       currentLabel = section.label;
@@ -339,7 +343,7 @@ function splitByLineCount(text: string, linesPerSlide: number): BulkParsedSlide[
     const contentLines = allLines.slice(startIdx);
     if (contentLines.length === 0) {
       slides.push({
-        text: allLines[0],
+        text: head,
         tag: currentTag,
         label: currentLabel,
       });
@@ -413,11 +417,12 @@ function splitByCustomDelimiter(text: string, delimiter: string = '---'): BulkPa
 
   for (const blk of blocks) {
     const lines = blk.split(/\r?\n/);
-    const section = detectSectionHeader(lines[0].trim());
+    const first = lines[0] ?? '';
+    const section = detectSectionHeader(first.trim());
     if (section) {
       const body = lines.slice(1).join('\n').trim();
       slides.push({
-        text: body || lines[0],
+        text: body || first,
         tag: section.tag,
         label: section.label,
         header: section.label,

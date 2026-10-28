@@ -448,12 +448,12 @@ export const keyring = new KeyringClient();
 
 // Auto-register on global OS runtime context for host use
 if (typeof window !== 'undefined') {
-  (window as any).OS = (window as any).OS || {};
-  (window as any).OS.keyring = keyring;
+  window.OS = window.OS || {};
+  window.OS.keyring = keyring;
 }
 if (typeof globalThis !== 'undefined') {
-  (globalThis as any).OS = (globalThis as any).OS || {};
-  (globalThis as any).OS.keyring = keyring;
+  globalThis.OS = globalThis.OS || {};
+  globalThis.OS.keyring = keyring;
 }
 
 // Give the singleton its host token as soon as it's resolvable — see

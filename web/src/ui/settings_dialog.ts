@@ -3,6 +3,9 @@
  * Searchable, categorized settings rendering driven by settings_schema.ts.
  */
 
+import type { InstalledBible } from '../core/models.ts';
+import type { ThemeDefinition } from '../core/presentation_helpers.ts';
+import { errorMessage } from '../core/ui_utils.ts';
 import {
   SETTINGS_SCHEMA,
   SETTINGS_CATEGORIES,
@@ -26,8 +29,8 @@ import { ICON_SETS, ICON_SET_PREVIEW_ICONS, IconSetDef, iconUrl, resolveTheme } 
 
 export interface SettingsContext {
   getAppOptions: () => Record<string, any>;
-  getInstalledBibles: () => any[];
-  getAvailableThemes: () => any[];
+  getInstalledBibles: () => InstalledBible[];
+  getAvailableThemes: () => ThemeDefinition[];
   areTranslationsEquivalent: (a: string, b: string) => boolean;
   getDisplayOutputs: () => DisplayOutputConfig[];
   saveDisplayOutputs: (outputs: DisplayOutputConfig[]) => Promise<void> | void;
@@ -351,7 +354,7 @@ export function restartToFinishUpdate(btn?: HTMLButtonElement): void {
         }
         showToast('Restarting… this window reconnects by itself.', 'success');
         await waitForRestart();
-      } catch (e: any) {
+      } catch (e) {
         // The server may drop the connection the moment it quits; that is the restart, not a failure.
         await waitForRestart();
       }
@@ -522,8 +525,8 @@ async function handleMoveDataDirectory(btn: HTMLButtonElement): Promise<void> {
           } else {
             showToast('Failed to move data directory.', 'error');
           }
-        } catch (err: any) {
-          showToast(`Failed to move data directory: ${err?.message || err}`, 'error');
+        } catch (err) {
+          showToast(`Failed to move data directory: ${errorMessage(err)}`, 'error');
         } finally {
           btn.disabled = false;
           btn.textContent = originalText;
@@ -531,8 +534,8 @@ async function handleMoveDataDirectory(btn: HTMLButtonElement): Promise<void> {
       },
       acceptText
     );
-  } catch (err: any) {
-    showToast(`Could not initiate folder selection: ${err?.message || err}`, 'error');
+  } catch (err) {
+    showToast(`Could not initiate folder selection: ${errorMessage(err)}`, 'error');
   } finally {
     btn.disabled = false;
   }
@@ -1041,8 +1044,8 @@ function renderDisplayOutputRow(out: DisplayOutputConfig, allOutputs: DisplayOut
   resolutionSelect.className = 'search-input';
   [['native', 'Fill Monitor (Native)'], ['fixed', 'Fixed Resolution']].forEach(([value, label]) => {
     const opt = document.createElement('option');
-    opt.value = value;
-    opt.textContent = label;
+    opt.value = value ?? '';
+    opt.textContent = label ?? '';
     if (value === out.resolutionMode) opt.selected = true;
     resolutionSelect.appendChild(opt);
   });
@@ -1755,9 +1758,9 @@ function renderNetworkSettings(content: HTMLElement) {
         tlsStatus.className = 'network-badge network-badge--error';
         tlsStatus.textContent = '❌ Failed to regenerate certificate';
       }
-    } catch (err: any) {
+    } catch (err) {
       tlsStatus.className = 'network-badge network-badge--error';
-      tlsStatus.textContent = `❌ ${err.message || 'Error regenerating certificate'}`;
+      tlsStatus.textContent = `❌ ${errorMessage(err) || 'Error regenerating certificate'}`;
     } finally {
       regenBtn.disabled = false;
     }
@@ -1811,8 +1814,8 @@ function renderNetworkSettings(content: HTMLElement) {
       if (!data.success) {
         networkElevationError = data.message || 'Failed to toggle dedicated adapter.';
       }
-    } catch (e: any) {
-      networkElevationError = e?.message || 'Network error communicating with server.';
+    } catch (e) {
+      networkElevationError = errorMessage(e) || 'Network error communicating with server.';
     } finally {
       networkElevationInProgress = false;
       await fetchNetworkState();

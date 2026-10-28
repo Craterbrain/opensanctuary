@@ -6,6 +6,7 @@
  * (image/CSS/video) reused here for choosing a theme's `background` value.
  */
 
+import type { ThemeRow } from '../core/models.ts';
 import { FONT_FAMILY_GROUPS } from "../editor/types.ts";
 import { openThemePicker } from "./theme_picker.ts";
 import { applyResolvedBackground } from "../core/presentation_helpers.ts";
@@ -15,7 +16,7 @@ import type { ToastType } from "../core/ui_utils.ts";
 export interface ThemeEditorContext {
   refreshThemes: () => Promise<void>;
   showToast: (message: string, type?: ToastType) => void;
-  escapeHtml: (str: any) => string;
+  escapeHtml: (str: unknown) => string;
 }
 
 let ctx: ThemeEditorContext | null = null;
@@ -74,9 +75,9 @@ function populateFontSelect() {
   });
 }
 
-function setVal(id: string, value: any) {
+function setVal(id: string, value: string | number | null | undefined) {
   const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
-  if (el) el.value = value ?? '';
+  if (el) el.value = String(value ?? '');
 }
 function getVal(id: string): string {
   const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
@@ -91,7 +92,7 @@ function getChecked(id: string): boolean {
   return el ? el.checked : false;
 }
 
-export function openThemeEditor(theme: any | null) {
+export function openThemeEditor(theme: ThemeRow | null) {
   if (!ctx) return;
   populateFontSelect();
   editingBackground = theme ? (theme.background || '#102027') : '#102027';
@@ -177,7 +178,7 @@ async function saveThemeEditor() {
   }
 }
 
-export async function setThemeAsDefault(theme: any) {
+export async function setThemeAsDefault(theme: ThemeRow) {
   if (!ctx || !theme) return;
   try {
     await fetch('/api/themes/default', {
@@ -192,7 +193,7 @@ export async function setThemeAsDefault(theme: any) {
   }
 }
 
-export async function duplicateTheme(theme: any) {
+export async function duplicateTheme(theme: ThemeRow) {
   if (!ctx || !theme) return;
   let newName = `${theme.name} Copy`;
   let n = 2;
@@ -200,7 +201,7 @@ export async function duplicateTheme(theme: any) {
     try {
       const res = await fetch('/api/themes');
       const list = res.ok ? await res.json() : [];
-      return list.map((t: any) => t.name.toLowerCase());
+      return list.map((t: { name: string }) => t.name.toLowerCase());
     } catch (_) { return []; }
   })()));
   while (existingNames.has(newName.toLowerCase())) {
@@ -221,7 +222,7 @@ export async function duplicateTheme(theme: any) {
   }
 }
 
-export async function deleteThemeItem(theme: any) {
+export async function deleteThemeItem(theme: ThemeRow) {
   if (!ctx || !theme) return;
   if (!confirm(`Delete theme "${theme.name}"? This cannot be undone.`)) return;
   try {

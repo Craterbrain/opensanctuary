@@ -90,17 +90,17 @@ export function applyMaskShape(el: HTMLElement, maskShape: string): void {
       el.style.borderRadius = '16px';
       break;
     case 'star':
-      (el.style as any).clipPath = 'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)';
+      el.style.clipPath = 'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)';
       break;
     case 'triangle':
-      (el.style as any).clipPath = 'polygon(50% 0%, 0% 100%, 100% 100%)';
+      el.style.clipPath = 'polygon(50% 0%, 0% 100%, 100% 100%)';
       break;
     case 'diamond':
-      (el.style as any).clipPath = 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)';
+      el.style.clipPath = 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)';
       break;
     default:
       el.style.borderRadius = '0px';
-      (el.style as any).clipPath = '';
+      el.style.clipPath = '';
       break;
   }
 }

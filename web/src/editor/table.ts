@@ -62,15 +62,15 @@ export function renderTableDOM(
       td.style.textAlign = 'center';
       td.style.verticalAlign = 'middle';
 
-      const cellText = (currentCells[r] && currentCells[r][c]) ? currentCells[r][c] : '';
+      const cellText = currentCells[r]?.[c] || '';
       td.textContent = cellText;
 
       if (isEditing) {
         td.contentEditable = 'true';
         td.style.outline = 'none';
         td.oninput = () => {
-          if (!currentCells[r]) currentCells[r] = [];
-          currentCells[r][c] = td.textContent || '';
+          const row = currentCells[r] ?? (currentCells[r] = []);
+          row[c] = td.textContent || '';
           if (onCellsChange) onCellsChange(currentCells);
         };
       }

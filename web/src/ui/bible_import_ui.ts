@@ -1,6 +1,7 @@
 // Importing a Bible from a link or a file (Import dialog > "Bible from a Link or File"). The server does the
 // download and the reading (src/storage/bible_import.rs); this only asks, and asks again before replacing.
 
+import { errorMessage } from '../core/ui_utils.ts';
 import { showToast } from '../core/ui_utils';
 import { dialogManager, registerModalReset, showConfirmDialog } from './dialog_manager.ts';
 import { hostTokenHeader } from '../core/host_session.ts';
@@ -112,8 +113,8 @@ export function initBibleImportCard(onInstalled: () => void): void {
     say('Downloading and reading it… (a whole Bible can take a minute)', 'info');
     try {
       finish(await importBibleFromLink(url.value, abbr?.value ?? ''));
-    } catch (e: any) {
-      finish({ ok: false, message: `The import failed: ${e?.message ?? e}` });
+    } catch (e) {
+      finish({ ok: false, message: `The import failed: ${errorMessage(e)}` });
     } finally {
       go.disabled = false;
     }
@@ -124,8 +125,8 @@ export function initBibleImportCard(onInstalled: () => void): void {
     say(`Reading ${f.name}…`, 'info');
     try {
       finish(await importBibleFile(f, abbr?.value ?? ''));
-    } catch (e: any) {
-      finish({ ok: false, message: `The import failed: ${e?.message ?? e}` });
+    } catch (e) {
+      finish({ ok: false, message: `The import failed: ${errorMessage(e)}` });
     } finally {
       file.value = '';
     }

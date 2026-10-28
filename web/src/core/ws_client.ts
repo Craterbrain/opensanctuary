@@ -10,6 +10,7 @@
  * - WebSocket send with automatic HTTP /api/command fallback
  */
 
+import type { StateSnapshot, ShowCommand } from './models.ts';
 import { validateSnapshotProtocol } from './protocol.ts';
 import { resolveHostSessionToken, getHostSessionToken, getConsoleSessionId } from './host_session.ts';
 
@@ -29,10 +30,10 @@ export interface WsClientOptions {
    */
   deviceToken?: string;
   onOpen?: () => void;
-  onClose?: (event?: any) => void;
-  onError?: (err?: any) => void;
+  onClose?: (event?: CloseEvent) => void;
+  onError?: (err?: Event) => void;
   onStatusChange?: (status: WsConnectionStatus) => void;
-  onSnapshot?: (snapshot: any) => void;
+  onSnapshot?: (snapshot: StateSnapshot) => void;
   onProtocolMismatch?: (errorMessage: string) => void;
   /**
    * Fired when the server rejects a command with a distinct reason rather
@@ -46,9 +47,9 @@ export interface WsClientOptions {
 
 export class EngineWebSocketClient {
   private ws: WebSocket | null = null;
-  private currentSnapshot: any = null;
+  private currentSnapshot: StateSnapshot | null = null;
   private status: WsConnectionStatus = 'disconnected';
-  private reconnectTimer: any = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay: number;
   private isExplicitlyClosed: boolean = false;
   private boundOnlineListener: (() => void) | null = null;
@@ -113,7 +114,7 @@ export class EngineWebSocketClient {
 
       this.ws.onerror = (err: Event) => {
         if (this.options.onError) {
-          this.options.onError(err);
+          this.options.onError(err instanceof Event ? err : undefined);
         }
         try {
           if (this.ws) this.ws.close();
@@ -134,7 +135,7 @@ export class EngineWebSocketClient {
     } catch (err) {
       this.setStatus('disconnected');
       if (this.options.onError) {
-        this.options.onError(err);
+        this.options.onError(err instanceof Event ? err : undefined);
       }
       if (!this.isExplicitlyClosed && this.options.autoReconnect) {
         this.scheduleReconnect();
@@ -209,7 +210,7 @@ export class EngineWebSocketClient {
   /**
    * Sends an engine command over WebSocket if open; falls back to HTTP POST /api/command.
    */
-  public async sendCommand(cmd: any): Promise<any> {
+  public async sendCommand(cmd: ShowCommand): Promise<any> {
     const deviceToken = this.options.deviceToken;
     const text = typeof cmd === 'string' && (cmd.startsWith('{') || cmd.startsWith('"') || cmd.startsWith('['))
       ? cmd
@@ -273,7 +274,7 @@ export class EngineWebSocketClient {
   /**
    * Sends raw string or object directly without fallback.
    */
-  public sendRaw(data: any): boolean {
+  public sendRaw(data: unknown): boolean {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         const text = typeof data === 'string' ? data : JSON.stringify(data);
@@ -321,7 +322,7 @@ export class EngineWebSocketClient {
     return this.status === 'connected' && !!this.ws && this.ws.readyState === WebSocket.OPEN;
   }
 
-  public getSnapshot(): any {
+  public getSnapshot(): StateSnapshot | null {
     return this.currentSnapshot;
   }
 

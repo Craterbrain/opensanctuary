@@ -31,7 +31,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 export function isWebCodecsSupported(): boolean {
-  return typeof (window as any).VideoDecoder !== 'undefined' && typeof (window as any).AudioDecoder !== 'undefined';
+  return typeof window.VideoDecoder !== 'undefined' && typeof window.AudioDecoder !== 'undefined';
 }
 
 /** Mirrors TimecodeSyncEngine's masterState shape, pre-resolved into the

@@ -99,7 +99,7 @@ export function debounce<T extends (...args: any[]) => any>(
   fn: T,
   delayMs: number
 ): ((...args: Parameters<T>) => void) & { cancel: () => void } {
-  let timer: any = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
 
   const debounced = (...args: Parameters<T>) => {
     if (timer) clearTimeout(timer);
@@ -192,4 +192,11 @@ export async function readClipboard(): Promise<string> {
   }
 
   return '';
+}
+
+/** The message of anything that was thrown: an `Error`, an object with a `message`, or a plain value. */
+export function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string') return (e as { message: string }).message;
+  return String(e);
 }

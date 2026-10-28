@@ -6,6 +6,7 @@
  * "Export CSV" action, plus a persistent sidebar explaining what counts as
  * "used," the PD exclusion rule, and the current reporting period.
  */
+import { errorMessage } from '../core/ui_utils.ts';
 import { api } from '../core/api_client.ts';
 import { escapeHtml, escapeUserHtml } from '../core/presentation_helpers.ts';
 import type { ToastType } from '../core/ui_utils.ts';
@@ -125,8 +126,8 @@ async function saveCcliCredentials(): Promise<void> {
     if (passwordInput) passwordInput.value = '';
     ctx!.showToast('CCLI login saved.', 'success');
     await updateCredentialsStatus();
-  } catch (e: any) {
-    ctx!.showToast(`Could not save CCLI login: ${e?.message || e}`, 'error');
+  } catch (e) {
+    ctx!.showToast(`Could not save CCLI login: ${errorMessage(e)}`, 'error');
   }
 }
 
@@ -139,8 +140,8 @@ async function clearCcliCredentials(): Promise<void> {
     if (passwordInput) passwordInput.value = '';
     ctx!.showToast('CCLI login cleared.', 'info');
     await updateCredentialsStatus();
-  } catch (e: any) {
-    ctx!.showToast(`Could not clear CCLI login: ${e?.message || e}`, 'error');
+  } catch (e) {
+    ctx!.showToast(`Could not clear CCLI login: ${errorMessage(e)}`, 'error');
   }
 }
 
@@ -169,8 +170,8 @@ async function openUploadAssist(): Promise<void> {
         : 'Opening the CCLI Upload Assistant -- you still need to click Log In and Upload yourself.',
       'info',
     );
-  } catch (e: any) {
-    ctx!.showToast(`Could not open the CCLI Upload Assistant: ${e?.message || e}`, 'error');
+  } catch (e) {
+    ctx!.showToast(`Could not open the CCLI Upload Assistant: ${errorMessage(e)}`, 'error');
   }
 }
 

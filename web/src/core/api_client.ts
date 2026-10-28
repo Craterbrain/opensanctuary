@@ -4,6 +4,8 @@
  * and high-level endpoints for church presentation operations.
  */
 
+import type { LibraryItem } from './models.ts';
+import type { ShowCommand } from './models.ts';
 import { hostTokenHeader, resolveHostSessionToken } from './host_session.ts';
 
 /** Mirrors `ReleaseInfo` in `src/network/updater.rs`. */
@@ -135,15 +137,15 @@ export const api = {
    * same way `pairing.*` below does — /api/command requires it for any
    * caller not presenting a paired-device token (see
    * docs/CLIENT_PAIRING.md "Console (host) authentication"). */
-  sendCommand: async <T = any>(cmd: any): Promise<T> => {
+  sendCommand: async <T = any>(cmd: ShowCommand): Promise<T> => {
     await resolveHostSessionToken();
     return apiFetch<T>('/api/command', { method: 'POST', body: cmd, headers: hostTokenHeader() });
   },
 
   // High-level Domain Resources
   themes: {
-    list: () => api.get<any[]>('/api/themes'),
-    save: (theme: any) => api.post('/api/themes', theme),
+    list: () => api.get<LibraryItem[]>('/api/themes'),
+    save: (theme: LibraryItem) => api.post('/api/themes', theme),
     // Console-only now -- see src/api/routes.rs's `delete_theme`.
     delete: async (name: string) => {
       await resolveHostSessionToken();
@@ -152,8 +154,8 @@ export const api = {
   },
 
   media: {
-    list: () => api.get<any[]>('/api/media'),
-    save: (item: any) => api.post('/api/media', item),
+    list: () => api.get<LibraryItem[]>('/api/media'),
+    save: (item: LibraryItem) => api.post('/api/media', item),
   },
 
   settings: {

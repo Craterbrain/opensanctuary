@@ -3,18 +3,20 @@
  * Provides typed, decoupled state management across ES modules without globalThis pollutions.
  */
 
+import type { StateSnapshot, LibraryItem, InstalledBible } from './models.ts';
+
 export type TabType = 'songs' | 'scriptures' | 'media' | 'presentations' | 'themes';
 
 export interface AppState {
-  snapshot: any | null;
+  snapshot: StateSnapshot | null;
   activeTab: TabType;
   activeCategory: string;
-  activeLibraryItems: any[];
-  filteredLibraryItems: any[];
-  selectedLibraryItem: any | null;
+  activeLibraryItems: LibraryItem[];
+  filteredLibraryItems: LibraryItem[];
+  selectedLibraryItem: LibraryItem | null;
   selectedCatalogIndex: number;
   appOptions: Record<string, any>;
-  installedBibles: any[];
+  installedBibles: InstalledBible[];
   activeBibleVersion: string;
   secondaryBibleVersion: string;
   isDualBibleMode: boolean;
@@ -89,7 +91,7 @@ export class AppStore {
 
   // --- Convenience typed mutators ---
 
-  setSnapshot(snapshot: any) {
+  setSnapshot(snapshot: StateSnapshot | null) {
     this.setState({ snapshot });
   }
 
@@ -97,11 +99,11 @@ export class AppStore {
     this.setState({ activeTab, activeCategory });
   }
 
-  setLibraryItems(activeLibraryItems: any[], filteredLibraryItems: any[] = activeLibraryItems) {
+  setLibraryItems(activeLibraryItems: LibraryItem[], filteredLibraryItems: LibraryItem[] = activeLibraryItems) {
     this.setState({ activeLibraryItems, filteredLibraryItems });
   }
 
-  setSelectedItem(selectedLibraryItem: any, selectedCatalogIndex = 0) {
+  setSelectedItem(selectedLibraryItem: LibraryItem | null, selectedCatalogIndex = 0) {
     this.setState({ selectedLibraryItem, selectedCatalogIndex });
   }
 
@@ -109,7 +111,7 @@ export class AppStore {
     this.setState({ appOptions });
   }
 
-  setBibles(installedBibles: any[], activeBibleVersion?: string) {
+  setBibles(installedBibles: InstalledBible[], activeBibleVersion?: string) {
     const update: Partial<AppState> = { installedBibles };
     if (activeBibleVersion !== undefined) {
       update.activeBibleVersion = activeBibleVersion;

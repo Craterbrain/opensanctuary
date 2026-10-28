@@ -17,7 +17,7 @@ export interface ThemePickerContext {
   refreshThemes: () => Promise<void>;
   showModal: (el: HTMLElement | null) => void;
   closeModal: (el: HTMLElement | null) => void;
-  escapeHtml: (str: any) => string;
+  escapeHtml: (str: unknown) => string;
 }
 
 let selectedThemeForPicker = 'Midnight Ocean';

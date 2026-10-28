@@ -5,24 +5,27 @@
  * per-slide timer (falling back to a default duration when a slide has none of
  * its own).
  */
+import type { StateSnapshot } from '../core/models.ts';
+import type { ShowCommand } from '../core/models.ts';
+import type { ScheduleItem } from '../core/models.ts';
 import { effectiveArrangement } from '../core/presentation_helpers';
 
 export interface PresentationPlaybackContext {
-  getCurrentSnapshot(): any;
-  sendCommand(cmd: any): void;
+  getCurrentSnapshot(): StateSnapshot | null;
+  sendCommand(cmd: ShowCommand): void;
 }
 
 let ctx: PresentationPlaybackContext | null = null;
 
 const DEFAULT_SLIDESHOW_SECONDS_PER_SLIDE = 10;
-let presentationPlaybackTimer: any = null;
+let presentationPlaybackTimer: ReturnType<typeof setTimeout> | null = null;
 let presentationPlaybackItemId: string | null = null;
 
 export function getPresentationPlaybackItemId(): string | null {
   return presentationPlaybackItemId;
 }
 
-export function getEffectiveSlideDuration(item: any, slideIdx: number): number {
+export function getEffectiveSlideDuration(item: ScheduleItem, slideIdx: number): number {
   const slide = item && item.slides ? item.slides[slideIdx] : null;
   const perSlide = slide ? slide.duration_seconds : null;
   const perItem = item ? item.default_slide_duration_seconds : null;
@@ -43,7 +46,7 @@ export function stopPresentationPlayback() {
 }
 
 export function startPresentationPlayback() {
-  const state = ctx!.getCurrentSnapshot() && ctx!.getCurrentSnapshot().state;
+  const state = ctx!.getCurrentSnapshot()?.state;
   const liveItem = state && state.live_item;
   if (!liveItem || liveItem.item_type !== 'presentation' || !liveItem.slides || liveItem.slides.length === 0) return;
   presentationPlaybackItemId = liveItem.id;
@@ -57,7 +60,7 @@ export function startPresentationPlayback() {
 
 function schedulePresentationTick() {
   if (presentationPlaybackTimer) clearTimeout(presentationPlaybackTimer);
-  const state = ctx!.getCurrentSnapshot() && ctx!.getCurrentSnapshot().state;
+  const state = ctx!.getCurrentSnapshot()?.state;
   const liveItem = state && state.live_item;
   if (!liveItem || liveItem.id !== presentationPlaybackItemId) {
     // The live item changed out from under a running slideshow — stop rather
@@ -71,7 +74,7 @@ function schedulePresentationTick() {
 }
 
 function advancePresentationSlide() {
-  const state = ctx!.getCurrentSnapshot() && ctx!.getCurrentSnapshot().state;
+  const state = ctx!.getCurrentSnapshot()?.state;
   const liveItem = state && state.live_item;
   if (!liveItem || liveItem.id !== presentationPlaybackItemId) {
     stopPresentationPlayback();
@@ -109,7 +112,7 @@ export function findLiveItemIndex(): number {
   const sched = snapshot && snapshot.schedule;
   const liveItem = snapshot && snapshot.state && snapshot.state.live_item;
   if (!sched || !sched.items || !liveItem) return -1;
-  return sched.items.findIndex((it: any) => it.id === liveItem.id);
+  return sched.items.findIndex((it: ScheduleItem) => it.id === liveItem.id);
 }
 
 export function initPresentationPlayback(context: PresentationPlaybackContext) {

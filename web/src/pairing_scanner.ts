@@ -1,3 +1,4 @@
+import { errorMessage } from './core/ui_utils.ts';
 import jsQR from 'jsqr';
 import { escapeHtml } from './core/presentation_helpers';
 
@@ -39,18 +40,19 @@ import { escapeHtml } from './core/presentation_helpers';
   const procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
 
   // Optional native BarcodeDetector if supported by host browser
-  let nativeBarcodeDetector: any = null;
-  if (typeof (window as any).BarcodeDetector !== 'undefined') {
+  let nativeBarcodeDetector: BarcodeDetectorLike | null = null;
+  const BarcodeDetectorCtor = window.BarcodeDetector;
+  if (BarcodeDetectorCtor) {
     try {
-      const getFormats = (window as any).BarcodeDetector.getSupportedFormats;
+      const getFormats = BarcodeDetectorCtor.getSupportedFormats;
       if (typeof getFormats === 'function') {
-        getFormats.call((window as any).BarcodeDetector).then((formats: any) => {
+        getFormats.call(BarcodeDetectorCtor).then((formats: string[]) => {
           if (formats && Array.isArray(formats) && formats.includes('qr_code')) {
-            nativeBarcodeDetector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+            nativeBarcodeDetector = new BarcodeDetectorCtor({ formats: ['qr_code'] });
           }
         }).catch(() => {});
       } else {
-        nativeBarcodeDetector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+        nativeBarcodeDetector = new BarcodeDetectorCtor({ formats: ['qr_code'] });
       }
     } catch (_) {}
   }
@@ -161,9 +163,9 @@ import { escapeHtml } from './core/presentation_helpers';
 
       isScanning = true;
       requestAnimationFrame(scanFrameLoop);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Camera access error:', err);
-      showAlert('Camera permission denied or camera unavailable: ' + (err.message || err));
+      showAlert('Camera permission denied or camera unavailable: ' + (errorMessage(err)));
       if (manualCard) manualCard.style.display = 'block';
     }
   }
@@ -194,8 +196,9 @@ import { escapeHtml } from './core/presentation_helpers';
           try {
             const barcodes = await nativeBarcodeDetector.detect(videoEl);
             if (!isScanning) return;
-            if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
-              detectedValue = barcodes[0].rawValue;
+            const first = barcodes?.[0];
+            if (first && first.rawValue) {
+              detectedValue = first.rawValue;
             }
           } catch (_) {}
         }
@@ -298,8 +301,8 @@ import { escapeHtml } from './core/presentation_helpers';
           } else {
             showAlert('No QR code detected in the selected image. Please try again or enter code manually.');
           }
-        } catch (err: any) {
-          showAlert('Failed to process image: ' + err.message);
+        } catch (err) {
+          showAlert('Failed to process image: ' + errorMessage(err));
         }
       };
 
@@ -324,8 +327,8 @@ import { escapeHtml } from './core/presentation_helpers';
       const parts = dataStr.split(':');
       if (parts.length >= 2) {
         payload = {
-          device_id: parts[0].trim(),
-          name: parts[1].trim(),
+          device_id: (parts[0] ?? '').trim(),
+          name: (parts[1] ?? '').trim(),
           platform: (parts[2] || 'android-tv').trim(),
         };
       } else {
@@ -400,8 +403,8 @@ import { escapeHtml } from './core/presentation_helpers';
 
       const data = await res.json();
       showSuccessScreen(data);
-    } catch (err: any) {
-      showAlert('Pairing Authorization Failed: ' + err.message);
+    } catch (err) {
+      showAlert('Pairing Authorization Failed: ' + errorMessage(err));
       if (submitBtn) {
         submitBtn.disabled = false;
         submitBtn.textContent = 'Authorize Display';

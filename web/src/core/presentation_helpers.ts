@@ -3,6 +3,7 @@
  * Pure business logic and resolution algorithms for worship slides, media, and scripture.
  */
 
+import type { Slide } from './models.ts';
 import { getReorderDestinationIndex } from "@atlaskit/pragmatic-drag-and-drop-hitbox/util/get-reorder-destination-index";
 import { getPatternMeta, getPatternSpec, ensurePatternKeyframes, patternAnimationName, patternScaleFor, scalePx } from "./background_patterns.ts";
 import { GRADIENT_PRESETS, PATTERN_PRESETS, type SlideBackground, type BackgroundPreset } from "../editor/types.ts";
@@ -59,7 +60,7 @@ export interface ArrangementEntry {
  * If `item.arrangement` exists and is non-empty, returns it.
  * Otherwise returns an identity mapping over `item.slides`.
  */
-export function effectiveArrangement(item: { slides?: any[]; arrangement?: ArrangementEntry[] | null } | null | undefined): ArrangementEntry[] {
+export function effectiveArrangement(item: { slides?: Slide[]; arrangement?: ArrangementEntry[] | null } | null | undefined): ArrangementEntry[] {
     if (!item) return [];
     if (item.arrangement && Array.isArray(item.arrangement) && item.arrangement.length > 0) {
         return item.arrangement;
@@ -76,7 +77,7 @@ export function effectiveArrangement(item: { slides?: any[]; arrangement?: Arran
  * Resolves the master slide referenced at a given arrangement play position,
  * applying any per-play background override.
  */
-export function resolveSlideAt(item: { slides?: any[]; arrangement?: ArrangementEntry[] | null } | null | undefined, playPos: number): any | null {
+export function resolveSlideAt(item: { slides?: Slide[]; arrangement?: ArrangementEntry[] | null } | null | undefined, playPos: number): Slide | null {
     if (!item) return null;
     const arr = effectiveArrangement(item);
     const entry = arr[playPos];
@@ -147,7 +148,7 @@ export function resolveSlideBackground(
  * Resolves the background for an item at a specific arrangement play position through the 7-tier cascade.
  */
 export function resolveBackgroundAt(
-    item: { slides?: any[]; arrangement?: ArrangementEntry[] | null; background?: string | null; theme_name?: string | null } | null | undefined,
+    item: { slides?: Slide[]; arrangement?: ArrangementEntry[] | null; background?: string | null; theme_name?: string | null } | null | undefined,
     playPos: number,
     availableThemes: ThemeDefinition[] = [],
     activeTheme: { background_value?: string | null } | null | undefined = null,
@@ -506,16 +507,16 @@ const ESCAPE_HTML_RE = /[&<>"']/g;
 // over the string with a replacer function does the same job as five sequential
 // .replace() calls (each of which rescans the ENTIRE string, including characters the
 // previous pass already handled) in a single scan.
-export function escapeHtml(str: any): string {
+export function escapeHtml(str: unknown): string {
     if (str === null || str === undefined) return '';
-    return String(str).replace(ESCAPE_HTML_RE, (ch) => ESCAPE_HTML_MAP[ch]);
+    return String(str).replace(ESCAPE_HTML_RE, (ch) => ESCAPE_HTML_MAP[ch] ?? ch);
 }
 
 /**
  * escapeHtml for text the user typed (titles, authors, lyrics). Wrapped so the emoji-to-icon
  * converter (core/emoji_icons.ts) leaves it exactly as written: user content is never rewritten.
  */
-export function escapeUserHtml(str: any): string {
+export function escapeUserHtml(str: unknown): string {
     return `<span data-no-iconify>${escapeHtml(str)}</span>`;
 }
 
@@ -524,7 +525,7 @@ export function escapeUserHtml(str: any): string {
  * assigning data-derived values to navigable sinks (iframe.src, a.href) so that
  * `javascript:` / `data:` / `vbscript:` URLs are never loaded.
  */
-export function safeHttpUrl(url: any): string | null {
+export function safeHttpUrl(url: unknown): string | null {
     if (typeof url !== 'string') return null;
     try {
         const u = new URL(url.trim());
@@ -539,7 +540,7 @@ export function safeHttpUrl(url: any): string | null {
  * HTML `style="..."` attribute: percent-encodes quotes/parens/backslashes/whitespace/
  * control chars (so it cannot terminate the url() token) and HTML-escapes the result.
  */
-export function escapeCssUrl(url: any): string {
+export function escapeCssUrl(url: unknown): string {
     const encoded = String(url ?? '').replace(/['"()\\\s<>&\x00-\x1f]/g, (ch) => '%' + ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
     return escapeHtml(encoded);
 }
@@ -756,7 +757,7 @@ export class ScheduleAddGuard {
  */
 export function isPrimaryDropTarget(targetElement: any, dropTargets: Array<{ element: any }>): boolean {
     if (!dropTargets || dropTargets.length === 0) return true;
-    return dropTargets[0].element === targetElement;
+    return dropTargets[0]?.element === targetElement;
 }
 
 /**
@@ -797,7 +798,7 @@ export function resolveTargetItemToDelete(params: {
     }
 
     if (targetIdx >= 0 && targetIdx < scheduleItems.length) {
-        return { index: targetIdx, title: scheduleItems[targetIdx].title || 'Item' };
+        return { index: targetIdx, title: scheduleItems[targetIdx]?.title || 'Item' };
     }
 
     return null;
@@ -850,7 +851,7 @@ export class UndoPlaceholderManager {
  * Handles scriptures (Genesis 1:1 -> V1), songs (Verse 2 -> V2, Chorus 1 -> C1, Bridge -> B),
  * and assigns permanent badges to slides without badges so reordering never changes verse numbers.
  */
-export function getSlideBadge(slide: any, sIdx?: number): string {
+export function getSlideBadge(slide: Slide | null | undefined, sIdx?: number): string {
     if (!slide) return sIdx !== undefined ? `V${sIdx + 1}` : 'Slide';
 
     // 1. If explicit cached tag or tag already assigned, preserve it!
@@ -947,7 +948,7 @@ function extractHeaderAndBody(col: string): { header?: string; body: string } {
     const trimmed = col.trim();
     const match = trimmed.match(/^\[([^\]]+)\]\n?([\s\S]*)$/);
     if (match) {
-        return { header: match[1].trim(), body: match[2].trim() };
+        return { header: (match[1] ?? '').trim(), body: (match[2] ?? '').trim() };
     }
     return { header: undefined, body: trimmed };
 }

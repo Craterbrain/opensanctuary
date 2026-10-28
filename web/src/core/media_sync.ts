@@ -16,7 +16,7 @@ export interface MediaSyncPayload {
 
 export class MediaSyncManager {
   private channel: BroadcastChannel | null = null;
-  private heartbeatTimer: any = null;
+  private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private isConnectedToLiveOutput: boolean = false;
   private isLooping: boolean = false;
   private getVideoElCallback: () => HTMLVideoElement | null;

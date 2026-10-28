@@ -1,5 +1,6 @@
 // Downloading the public-domain hymn library (the Bibles repository's songs/public-domain-hymns.json) into the song library.
 // Used by the first-run wizard's Songs step and by Import > Public-domain hymns.
+import { errorMessage } from '../core/ui_utils.ts';
 import { showToast } from '../core/ui_utils';
 import { hostTokenHeader } from '../core/host_session.ts';
 
@@ -8,8 +9,8 @@ export async function addHymnLibrary(): Promise<{ ok: boolean; message: string; 
   let res: Response;
   try {
     res = await fetch('/api/songs/public-domain', { method: 'POST', headers: { ...hostTokenHeader() } });
-  } catch (e: any) {
-    return { ok: false, added: 0, message: `Could not download the hymns: ${e?.message ?? e}` };
+  } catch (e) {
+    return { ok: false, added: 0, message: `Could not download the hymns: ${errorMessage(e)}` };
   }
   if (!res.ok) {
     const detail = (await res.text().catch(() => '')).trim();
