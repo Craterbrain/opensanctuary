@@ -388,7 +388,7 @@ mod gate_tests {
     #[test]
     fn state_changing_api_routes_are_gated_by_default() {
         for p in [
-            "/api/songs", "/api/songs/public-domain", "/api/licensed-scripture", "/api/open-file/x/take", "/api/scriptures", "/api/media", "/api/themes", "/api/themes/default",
+            "/api/songs", "/api/songs/public-domain", "/api/licensed-scripture", "/api/open-file/x/take", "/api/system/open-url", "/api/console/release", "/api/scriptures", "/api/media", "/api/themes", "/api/themes/default",
             "/api/presentations", "/api/slide-templates", "/api/import/openlp", "/api/import/pptx",
             "/api/import/freeshow-show", "/api/import/ewpx",
             "/api/displays/open", "/api/displays/close",

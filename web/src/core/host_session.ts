@@ -281,6 +281,24 @@ export function installHostTokenFetch(): void {
 
 installHostTokenFetch();
 
+/** The request a closing console page sends so the "one console at a time" lock is handed back at once (needed when it only used the HTTP fallback). */
+export function consoleReleaseRequest(): { url: string; init: RequestInit } | null {
+  if (!cachedToken) return null;
+  return { url: '/api/console/release', init: { method: 'POST', keepalive: true, headers: hostTokenHeader() } };
+}
+
+let releaseOnCloseInstalled = false;
+
+/** Console pages only: tell the host when this page goes away. A reload comes straight back under the same session id and claims it again. */
+export function releaseConsoleLockOnClose(): void {
+  if (typeof window === 'undefined' || releaseOnCloseInstalled) return;
+  releaseOnCloseInstalled = true;
+  window.addEventListener('pagehide', () => {
+    const req = consoleReleaseRequest();
+    if (req) void fetch(req.url, req.init).catch(() => {});
+  });
+}
+
 let cachedConsoleSessionId: string | null = null;
 
 /**

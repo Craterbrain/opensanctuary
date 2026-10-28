@@ -100,6 +100,43 @@ pub(super) async fn post_reveal_data_dir(
     })
 }
 
+/// The sites a licensed Bible's copyright notice may link to (Biblica for the NIV, Lockman for the NASB and AMP, YouVersion itself).
+/// Anything else is refused: the link comes from a plugin, and this opens a browser on the machine the server runs on.
+pub(crate) fn publisher_url_allowed(url: &str) -> bool {
+    let Ok(u) = reqwest::Url::parse(url) else { return false };
+    if u.scheme() != "https" || u.username() != "" || u.password().is_some() {
+        return false;
+    }
+    let Some(host) = u.host_str().map(str::to_ascii_lowercase) else { return false };
+    ["biblica.com", "lockman.org", "bible.com", "youversion.com"].iter().any(|d| host == *d || host.ends_with(&format!(".{d}")))
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct OpenUrlReq {
+    url: String,
+}
+
+/// POST /api/system/open-url -- the one-step link a licensed Bible's notice requires (Biblica, Lockman...): opens the publisher's page in
+/// the machine's browser. Console-only, and only the publisher sites in `publisher_url_allowed`.
+pub(super) async fn post_open_url(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<OpenUrlReq>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    require_host_token(&headers, &app)?;
+    if !publisher_url_allowed(&req.url) {
+        return Ok(Json(serde_json::json!({ "ok": false, "error": "That address isn't one of the Bible publishers' sites." })));
+    }
+    #[cfg(feature = "open")]
+    let result = open::that(&req.url).map_err(|e| format!("Could not open the link: {e}"));
+    #[cfg(not(feature = "open"))]
+    let result: Result<(), String> = Err("Opening a link isn't supported in this build".to_string());
+    Ok(match result {
+        Ok(()) => Json(serde_json::json!({ "ok": true })),
+        Err(e) => Json(serde_json::json!({ "ok": false, "error": e })),
+    })
+}
+
 #[derive(serde::Deserialize)]
 pub(super) struct AdoptLegacyLibraryReq {
     legacy_dir: String,
@@ -374,4 +411,31 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/updates/check", post(post_update_check))
         .route("/api/updates/download-and-install", post(post_update_download_and_install))
         .route("/api/system/restart", post(post_restart))
+        .route("/api/system/open-url", post(post_open_url))
+}
+
+#[cfg(test)]
+mod publisher_link_tests {
+    use super::publisher_url_allowed;
+
+    #[test]
+    fn only_https_pages_on_the_bible_publishers_sites_open() {
+        for ok in ["https://www.biblica.com", "https://biblica.com/bible/", "https://www.lockman.org/", "https://www.bible.com/versions/111", "https://youversion.com"] {
+            assert!(publisher_url_allowed(ok), "{ok}");
+        }
+        for bad in [
+            "http://www.biblica.com",
+            "https://evilbiblica.com",
+            "https://biblica.com.evil.example/",
+            "https://www.biblica.com@evil.example/",
+            "https://user:pw@www.biblica.com/",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "https://example.com",
+            "not a url",
+            "",
+        ] {
+            assert!(!publisher_url_allowed(bad), "{bad}");
+        }
+    }
 }

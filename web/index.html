@@ -1305,9 +1305,10 @@
           <!-- Right: persistent explainer sidebar -->
           <div class="os-column ccli-explainer">
             <div><b>What counts as "used"?</b><br>Only songs that actually went live during a service — adding a song to a schedule and never presenting it doesn't count.</div>
-            <div><b>Public Domain exclusion</b><br>A song is flagged PD when it has no CCLI number and its copyright field is empty or contains "public domain." This is a heuristic — double-check before relying on it.</div>
+            <div><b>Public Domain exclusion</b><br>A song is flagged PD when it has no CCLI number and its copyright line is empty or says "public domain" with no rights holder named (a ©, a publisher, a year after 1930), or when you ticked "This song is public domain" on the song. This is a heuristic — double-check before relying on it.</div>
             <div><b>Due date</b><br><span id="ccli-report-due-date-info">Set in Settings → Integrations → CCLI Reporting Due Date.</span></div>
             <div><b>Current period</b><br><span id="ccli-report-period-info"></span></div>
+            <div id="ccli-report-assist-file-box" hidden><b>Upload file</b><br>If the upload box on CCLI's page isn't filled in for you, choose this file in its Browse dialog:<br><code id="ccli-report-assist-file" data-no-iconify></code></div>
           </div>
         </div>
         <div class="modal-footer">

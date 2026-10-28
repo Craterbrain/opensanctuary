@@ -271,7 +271,7 @@ export const api = {
     // stored credential and opens a window on the server's own machine.
     openCcliAssist: async (startMs: number, endMs: number) => {
       await resolveHostSessionToken();
-      return api.post<{ ok: boolean; error?: string }>(
+      return api.post<{ ok: boolean; csv_path?: string | null; error?: string }>(
         `/api/reports/ccli-open-assist?start=${startMs}&end=${endMs}`,
         {},
         { headers: hostTokenHeader() }

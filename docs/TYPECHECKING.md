@@ -11,7 +11,7 @@ was silently unchecked. This adds a real `tsc --noEmit` gate.
 
 - `web/tsconfig.json` — `moduleResolution: "Bundler"`,
   `allowImportingTsExtensions: true` (this codebase imports with explicit
-  `.ts` extensions), `strict: false` (see below), `noEmit: true`.
+  `.ts` extensions), `strict: true` (see "Flags" below), `noEmit: true`.
 - `web/package.json`: new `"typecheck": "tsc --noEmit"` script, and `"build"`
   now runs it first (`bun run typecheck && bun build ...`) — a type error
   fails the whole `build` script before any bundler even runs.
@@ -32,14 +32,19 @@ was silently unchecked. This adds a real `tsc --noEmit` gate.
   them (a Rust-only contributor building locally still gets the same gate
   through `build.rs`).
 
-## Why `strict: false`
+## Flags (updated 2026-10-27)
 
-Turning on `strict` cold, with zero prior type-checking history, would
-likely produce a very large `noImplicitAny`-driven error count unrelated to
-any real bug (this codebase's whole style is untyped `function foo(a, b) {}`
-declarations). `strict: false` gets meaningful checking (wrong property
-access, wrong argument count, wrong assignment type, unresolved names)
-without demanding a full-codebase retype as a prerequisite. Turning on
-individual strict flags later (`noImplicitAny` first, most likely) is a
-reasonable follow-up once the codebase's typing habits catch up — not done
-here.
+`strict` is **on** (it was turned on after the first pass; `noImplicitAny` is part of it), and so are three more that cost nothing today:
+`noImplicitReturns`, `noFallthroughCasesInSwitch` and `noImplicitOverride` (zero errors when they were switched on).
+
+Measured on 2026-10-27, not turned on:
+
+| Flag | Errors now | Verdict |
+|---|---|---|
+| `noUnusedLocals` | 37 | Mostly dead imports and bindings in `app_core.ts` / `app_ui.ts`. Worth a cleanup pass, then switch it on. Some of those imports may exist for their side effects, so each needs a look rather than a blanket delete. |
+| `noUnusedParameters` | 6 | Same cleanup. |
+| `exactOptionalPropertyTypes` | 39 | Catches `undefined` assigned to an optional field; real findings but fiddly. Later. |
+| `noUncheckedIndexedAccess` | 225 | Every `array[i]` becomes possibly undefined. The noisiest and the one that finds the most real bugs; do it per file, not all at once. |
+| `noPropertyAccessFromIndexSignature` | 225 | Style only. Skip. |
+
+There are 364 explicit `any` (`as any` / `: any`) in 86 files: those are the real holes, and no flag closes them. The way to shrink them is to type the objects that cross the API boundary (`Song`, `ScheduleItem`, `StateSnapshot`, ...) once and replace the casts where they are used.

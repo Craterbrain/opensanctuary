@@ -1169,7 +1169,12 @@ pub(super) async fn plugin_add_media_url(State(app): State<AppState>, headers: H
     let (sub, media_type) = if is_video { ("videos", crate::core::models::MediaType::Video) } else { ("images", crate::core::models::MediaType::Image) };
     let dir = app.media_dir.join(sub);
     let prefix: String = caller.plugin_id.chars().filter(|c| c.is_ascii_alphanumeric()).take(24).collect();
-    let file_name = crate::storage::media_sniff::write_sniffed_media(&dir, &prefix, &f.body)
+    // Writing a download (up to MAX_MEDIA_URL_BYTES) is blocking file I/O: off the async worker, with a time limit.
+    let (dir2, body) = (dir.clone(), f.body);
+    let file_name = blocking_with_timeout(PLUGIN_IO_TIMEOUT, move || crate::storage::media_sniff::write_sniffed_media(&dir2, &prefix, &body))
+        .await
+        .ok()
+        .flatten()
         .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "couldn't save the file"))?;
     let clean_id: String = req.id.as_deref().unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).take(64).collect();
     let mut item = crate::core::models::MediaItem::new(&title, &format!("/media/{sub}/{file_name}"), media_type);
@@ -1201,6 +1206,28 @@ pub(super) struct AddMediaReq {
     duration: Option<f64>,
     #[serde(default)]
     thumbnail: Option<String>,
+}
+
+/// How long a plugin-triggered file operation may take before the request gives up (a large video copied across drives is the long case).
+const PLUGIN_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// Runs blocking work on the blocking pool so it never stalls an async worker (the server's request threads), giving up after `limit`.
+/// `Err` is "it timed out" or "it panicked"; the closure's own result is inside the `Ok`.
+async fn blocking_with_timeout<T: Send + 'static>(limit: std::time::Duration, f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    match tokio::time::timeout(limit, tokio::task::spawn_blocking(f)).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(_)) => Err("the operation failed unexpectedly".to_string()),
+        Err(_) => Err(format!("it took longer than {} minutes", limit.as_secs() / 60)),
+    }
+}
+
+/// Moves a file: a rename, or when that can't (another drive) a copy and then removing the original.
+fn move_file(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    if std::fs::rename(src, dest).is_err() {
+        std::fs::copy(src, dest)?;
+        let _ = std::fs::remove_file(src);
+    }
+    Ok(())
 }
 
 const VIDEO_EXTS: [&str; 6] = ["mp4", "webm", "mkv", "mov", "m4v", "avi"];
@@ -1268,11 +1295,12 @@ pub(super) async fn plugin_add_media(State(app): State<AppState>, headers: Heade
         dest = dest_dir.join(format!("{stem} ({n}).{ext}"));
         n += 1;
     }
-    if std::fs::rename(&src, &dest).is_err() {
-        // Different filesystems: copy, then remove the original.
-        std::fs::copy(&src, &dest).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("couldn't move the file: {e}")))?;
-        let _ = std::fs::remove_file(&src);
-    }
+    // A video can be gigabytes and, across filesystems, is copied: off the async worker, with a time limit.
+    let (src2, dest2) = (src.clone(), dest.clone());
+    blocking_with_timeout(PLUGIN_IO_TIMEOUT, move || move_file(&src2, &dest2))
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("couldn't move the file: {e}")))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("couldn't move the file: {e}")))?;
     let file_name = dest.file_name().and_then(|f| f.to_str()).unwrap_or(name).to_string();
 
     let clean_id: String = req.id.as_deref().unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).take(64).collect();
@@ -1847,4 +1875,33 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/plugin-host/process/release", post(process_release))
         .route("/api/plugin-host/tool/status", post(tool_status))
         .route("/api/plugin-host/tool/update", post(tool_update))
+}
+
+#[cfg(test)]
+mod blocking_io_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn slow_blocking_work_gives_up_and_does_not_stall_other_requests() {
+        // A one-worker runtime: if the blocking work ran on the worker, the timer below could never fire.
+        let t0 = std::time::Instant::now();
+        let slow = blocking_with_timeout(std::time::Duration::from_millis(100), || std::thread::sleep(std::time::Duration::from_millis(600)));
+        let ticker = async { tokio::time::sleep(std::time::Duration::from_millis(50)).await; t0.elapsed() };
+        let (r, tick) = tokio::join!(slow, ticker);
+        assert!(r.unwrap_err().contains("took longer"));
+        assert!(tick < std::time::Duration::from_millis(300), "the async side kept running: {tick:?}");
+        assert_eq!(blocking_with_timeout(std::time::Duration::from_secs(5), || 7).await.unwrap(), 7);
+    }
+
+    #[test]
+    fn a_file_is_moved_even_when_the_destination_exists_elsewhere() {
+        let d = std::env::temp_dir().join(format!("os-move-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        let (a, b) = (d.join("a.mp4"), d.join("b.mp4"));
+        std::fs::write(&a, b"video").unwrap();
+        move_file(&a, &b).unwrap();
+        assert!(!a.exists());
+        assert_eq!(std::fs::read(&b).unwrap(), b"video");
+        assert!(move_file(&a, &d.join("c.mp4")).is_err(), "a missing source is an error");
+    }
 }

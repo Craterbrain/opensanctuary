@@ -11,7 +11,6 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 
 ## Licensed scripture (see `LICENSED_SCRIPTURE.md`)
 
-- [ ] **Biblica's link:** the NIV license wants a one-step link to Biblica whenever the text is shown. The plugin panel shows the YouVersion link; the projected slide carries only the notice.
 - [ ] **Rotate the YouVersion key before 1.0.** The `YVP_APP_KEY` secret is currently the development key (it was pasted in a chat). Before 1.0: create a separate production app in the YouVersion Platform portal, accept the licenses on it, put its key in the secret (`gh secret set YVP_APP_KEY -R Craterbrain/opensanctuary`), and retire the development key. Also rotate it any time it is thought to have leaked.
 
 ## Unverified (built, never tested for real)
@@ -28,10 +27,7 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 
 ## Small improvements
 
-- [ ] **CCLI autofill fallback message.** When the autofill can't find a field it silently does nothing; show the file path instead. See `CCLI_REPORTING.md`.
-- [ ] **Blocking plugin hooks stall a server worker.** Run them with `spawn_blocking` and a timeout. See `PLUGIN_PERMISSIONS.md`.
-- [ ] **Console that only uses the HTTP fallback never releases the console lock** when it goes away (the WebSocket drop is what releases it). Accepted for now. See `CLIENT_PAIRING.md`.
-- [ ] **Turn on stricter TypeScript flags,** `noImplicitAny` first. See `TYPECHECKING.md`.
+- [ ] **More TypeScript strictness.** `strict` and three more flags are on; `noUnusedLocals` (37 errors) and `noUnusedParameters` (6) are a cleanup away, `noUncheckedIndexedAccess` (225) is a per-file job, and 364 explicit `any` are the real holes. Numbers in `TYPECHECKING.md`.
 - [ ] **Run a short fuzz pass in CI** as a regression gate (e.g. 60 seconds per target), or leave it manual. Undecided. See `FUZZING.md`.
 - [ ] **Importer fuzz targets share one media folder,** so long runs grow the disk. Revisit if it bites. See `FUZZING.md`.
 - [ ] **Live and staged items are copied whole on every small edit.** An `Arc` around them would avoid it. Noted, not implemented.
@@ -41,5 +37,5 @@ What hasn't been done yet. Each item says where it came from, so the detail live
 ## Decisions waiting on the owner
 
 - [ ] **Plugin signing:** how an author publishes a first key so people recognize it. See `PLUGIN_SIGNING.md` section 12.
-- [ ] **Sign commits and tags** with an SSH key so the history shows GitHub's "Verified" badge. Release files are already signed with minisign; this would cover the source history.
+- [ ] **Sign commits and tags** with an SSH key so the history shows GitHub's "Verified" badge. The how-to is written (`SIGNING.md`); it needs a key created and set up on the maintainer's machine and GitHub account (steps 1-3), then optionally the "require signed commits" rule.
 - [ ] **Glib dependency alert.** Dismissed as tolerable risk; revisit when `wry` / `tao` next bump.

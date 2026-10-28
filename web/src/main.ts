@@ -5,7 +5,7 @@ import { PluginManager } from "./core/plugins.ts";
 import { clock } from "./core/timesync.ts";
 import { VideoSyncController } from "./core/video_sync.ts";
 import { keyring } from "./core/keyring.ts";
-import { resolveHostSessionToken } from "./core/host_session.ts";
+import { resolveHostSessionToken, releaseConsoleLockOnClose } from "./core/host_session.ts";
 import { startSandboxedPlugin, stopSandboxedPlugin, isSandboxedPluginRunning } from "./core/plugin_bridge.ts";
 import { refreshPluginHints } from "./core/plugin_hints.ts";
 import { startEmojiIcons } from "./core/emoji_icons.ts";
@@ -58,6 +58,7 @@ clock.synchronize(5).then(async () => {
             const bell = document.getElementById("btn-notifications");
             if (bell) {
                 initNotificationBell(bell);
+                releaseConsoleLockOnClose();
                 void startNotificationFeed();
                 // Linux: an installed update waiting for a restart pops up the question (the host's notice triggers it live; this
                 // covers the case where the update finished before this page opened).
