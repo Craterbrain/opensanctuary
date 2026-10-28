@@ -142,7 +142,7 @@ export function resolveHostSessionToken(): Promise<string | null> {
   resolvePromise = (async () => {
     if (typeof window === 'undefined') return null;
 
-    const injected = (window as any).__OS_HOST_TOKEN__;
+    const injected = window.__OS_HOST_TOKEN__;
     if (typeof injected === 'string' && injected) {
       cachedToken = injected;
       return cachedToken;
@@ -255,9 +255,8 @@ export function hostTokenHeader(): Record<string, string> {
  */
 export function installHostTokenFetch(): void {
   if (typeof window === 'undefined' || typeof window.fetch !== 'function') return;
-  const w = window as any;
-  if (w.__osHostTokenFetchInstalled) return;
-  w.__osHostTokenFetchInstalled = true;
+  if (window.__osHostTokenFetchInstalled) return;
+  window.__osHostTokenFetchInstalled = true;
   const originalFetch = window.fetch.bind(window);
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     if (!cachedToken) return originalFetch(input, init);

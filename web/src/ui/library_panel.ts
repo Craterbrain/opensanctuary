@@ -13,6 +13,7 @@
  * never the reverse).
  */
 import { errorMessage } from '../core/ui_utils.ts';
+import type { ThemeRow } from '../core/models.ts';
 import type { ThemeDefinition } from '../core/presentation_helpers.ts';
 import type { LibrarySlide, ScriptureVerse, LibraryItem, ShowCommand, InstalledBible, StateSnapshot } from '../core/models.ts';
 import { draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
@@ -1239,7 +1240,7 @@ export function createCatalogGridCard(item: LibraryItem, idx: number, tabName: s
   });
 
   if (tabName === 'themes') {
-    card.addEventListener('dblclick', () => openThemeEditor(item));
+    card.addEventListener('dblclick', () => openThemeEditor(item as ThemeRow));
   }
 
   // Register Pragmatic DnD Draggable on Grid Card

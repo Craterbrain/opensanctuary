@@ -1,7 +1,7 @@
 // OpenSanctuary Rust Client Show Controller & Bible Manager (app.js)
 import type { ShowCommand } from './core/models.ts';
 import { errorMessage } from './core/ui_utils.ts';
-import type { StateSnapshot, Schedule, ShowState, LibrarySlide, ScriptureVerse, LibraryItem, InstalledBible } from './core/models.ts';
+import type { StateSnapshot, Schedule, ScheduleItem, Slide, ShowState, LibrarySlide, ScriptureVerse, LibraryItem, InstalledBible } from './core/models.ts';
 import { showLicensedLink } from './ui/licensed_link.ts';
 import { stripLicensedText } from './core/licensed';
 import { exportBundle } from './ui/bundle_ui.ts';
@@ -77,10 +77,10 @@ import { createEngineWebSocket, EngineWebSocketClient } from './core/ws_client.t
 // reversing that order). app_ui.ts calls registerUiCallbacks() once, near
 // the end of its own module body, after all of these are declared.
 interface UiCallbacks {
-  editExistingItem: (item: any, scheduleContext?: { itemIndex: number; slideIndex?: number } | null) => void;
+  editExistingItem: (item: LibraryItem | ScheduleItem, scheduleContext?: { itemIndex: number; slideIndex?: number } | null) => void;
   openImportModal: (initialMode?: string) => void;
   openSlideEditor: (type?: string) => void;
-  promptNewSectionHeader: (insertIndex: any) => void;
+  promptNewSectionHeader: (insertIndex: number | null) => void;
   setImportMode: (mode: string) => void;
   switchToPairingTab: () => void;
   switchToAdbProvisionTab: () => void;
@@ -98,7 +98,7 @@ try { (globalThis as any).sendCommand = sendCommand; } catch (_) {}
 try { (globalThis as any).openThemePicker = openThemePicker; } catch (_) {}
 
 
-let ws: any = null;
+let ws: WebSocket | null = null;
 let engineWsClient: EngineWebSocketClient | null = null;
 export let currentSnapshot: StateSnapshot | null = null;
 let protocolMismatchWarned = false;
@@ -121,6 +121,7 @@ export let activeUndoPlaceholder: {
 } | null = null;
 
 // Context Menu State
+/** What a right-click menu was opened on: a schedule item, a slide, a library row, a Bible... (the shape differs per menu; each handler reads what its menu stored). */
 export let currentContextMenuTarget: any = null;
 
 // Available Presentation Themes & Background Photos — canonical list lives in
@@ -222,8 +223,8 @@ function applyDefaultBibleVersionIfUnset() {
 
 export let secondaryBibleVersion = '';
 export let isDualBibleMode = false;
-export let currentDualSecondaryVerses: any[] = [];
-let contextMenuTargetBible: any = null;
+export let currentDualSecondaryVerses: ScriptureVerse[] = [];
+let contextMenuTargetBible: InstalledBible | null = null;
 
 
 // Global Application Options (16:9 Default Standard)
@@ -408,7 +409,7 @@ document.addEventListener('contextmenu', (e) => {
   e.preventDefault();
 });
 
-export function showContextMenu(menuEl: any, x: number, y: number) {
+export function showContextMenu(menuEl: HTMLElement | null, x: number, y: number) {
   return contextMenuManager.showElement(menuEl, x, y);
 }
 
@@ -421,7 +422,7 @@ export function hideAllContextMenus() {
  * schedule item context menu. Merging is only offered between two adjacent,
  * non-header items (section headers/groups have no slides to merge).
  */
-function updateScheduleMergeMenuVisibility(idx: number, item: any, schedule: any) {
+function updateScheduleMergeMenuVisibility(idx: number, item: ScheduleItem, schedule: Schedule) {
   const prevBtn = document.getElementById('ctx-sched-merge-prev');
   const nextBtn = document.getElementById('ctx-sched-merge-next');
   const items = (schedule && schedule.items) || [];
@@ -435,7 +436,7 @@ function updateScheduleMergeMenuVisibility(idx: number, item: any, schedule: any
 }
 
 /** Shows "Set Slide Duration..." on the slide context menu only for presentation items. */
-function updateSlideDurationMenuVisibility(item: any) {
+function updateSlideDurationMenuVisibility(item: ScheduleItem | LibraryItem) {
   const btn = document.getElementById('ctx-slide-duration');
   if (btn) btn.style.display = (item && item.item_type === 'presentation') ? '' : 'none';
 }
@@ -451,13 +452,13 @@ initPresentationPlayback({
   sendCommand: sendCommand,
 });
 
-export function showModal(modalEl: any, options?: any) {
+export function showModal(modalEl: HTMLElement | null, options?: Parameters<typeof dialogManager.openModal>[1]) {
   if (!modalEl) return null;
   hideAllContextMenus();
   return dialogManager.openModal(modalEl, options);
 }
 
-export function closeModal(modalEl: any) {
+export function closeModal(modalEl: HTMLElement | null) {
   if (!modalEl) return false;
   return dialogManager.closeModal(modalEl);
 }
@@ -573,7 +574,7 @@ dialogManager.registerResetHook('arrangement-modal', () => {
 dialogManager.setupConfirmModalBindings();
 
 // Backdrop click closes and resets modal
-document.querySelectorAll('.modal-backdrop').forEach(backdrop => {
+document.querySelectorAll<HTMLElement>('.modal-backdrop').forEach(backdrop => {
   backdrop.addEventListener('click', (e) => {
     if (e.target === backdrop) {
       closeModal(backdrop);
@@ -1193,7 +1194,7 @@ function deleteScheduleItemByIndex(index: number, title?: string) {
 // ============================================================================
 // SLIDE BADGE & VERSE NUMBER PRESERVATION HELPERS
 // ============================================================================
-export function getSlideBadge(slide: any, sIdx?: number): string {
+export function getSlideBadge(slide: Slide, sIdx?: number): string {
   if (!slide) return sIdx !== undefined ? `V${sIdx + 1}` : 'Slide';
 
   // 1. If explicit cached tag or tag already assigned, preserve it!
@@ -1367,6 +1368,7 @@ export function deleteSelectedSlideOrItem(): boolean {
   if (slideIdx < 0 || slideIdx >= item.slides.length) return false;
 
   const slideToDelete = item.slides[slideIdx];
+  if (!slideToDelete) return false;
   const slideTag = getSlideBadge(slideToDelete, slideIdx);
 
   if (item.slides.length > 1) {
@@ -2556,7 +2558,7 @@ function reorderPreviewSlides(fromIdx: number, toIdx: number) {
 }
 
 /** Paints a slide's resolved background onto a deck thumbnail, the way the main canvases do. */
-function slideBackgroundPainter(item: any, slideIdx: number, state: any): (el: HTMLElement) => void {
+function slideBackgroundPainter(item: ScheduleItem, slideIdx: number, state: ShowState): (el: HTMLElement) => void {
   const bg = resolveBackgroundAt(item, slideIdx, availableThemes, state.active_theme, state.global_theme);
   // An animated pattern on a slide in the decks: make sure its pre-rendered clip exists.
   const patternKey = parseAnimatedPatternMarker(bg);
@@ -3432,7 +3434,7 @@ on('ctx-sched-merge-next', 'click', () => {
  * currentSnapshot.schedule.items lets the caller's very next sendCommand
  * target that index immediately, without waiting on the round trip.
  */
-function ensureItemInSchedule(item: any): number {
+function ensureItemInSchedule(item: ScheduleItem): number {
   if (!currentSnapshot || !currentSnapshot.schedule || !item) return -1;
   const existingIdx = currentSnapshot.schedule.items.findIndex((it) => it.id === item.id);
   if (existingIdx >= 0) return existingIdx;
@@ -3806,14 +3808,15 @@ on('ctx-mon-foh', 'click', () => {
 
 // 5. Bible Versions Tree Context Menu Handlers
 on('ctx-set-default-bible', 'click', () => {
-  if (contextMenuTargetBible) {
-    appOptions.defaultBibleVersion = contextMenuTargetBible.id;
-    saveAppOptions({ defaultBibleVersion: contextMenuTargetBible.id });
-    installedBibles.forEach(b => b.isDefault = areTranslationsEquivalent(b.id, contextMenuTargetBible.id));
+  const targetBible = contextMenuTargetBible;
+  if (targetBible) {
+    appOptions.defaultBibleVersion = targetBible.id;
+    saveAppOptions({ defaultBibleVersion: targetBible.id });
+    installedBibles.forEach(b => b.isDefault = areTranslationsEquivalent(b.id, targetBible.id));
     renderCategoryTree('scriptures');
     updateSearchModeUI();
     filterAndRenderCatalog();
-    showToast(`✓ Set ${contextMenuTargetBible.abbreviation} (${contextMenuTargetBible.name}) as default translation`, 'success');
+    showToast(`✓ Set ${targetBible.abbreviation} (${targetBible.name}) as default translation`, 'success');
   }
   hideAllContextMenus();
 });

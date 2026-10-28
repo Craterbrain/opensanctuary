@@ -33,7 +33,7 @@ window.addEventListener("os-plugin-changed", (ev) => {
 export const pluginManager = new PluginManager();
 
 // Expose core modules globally for legacy app migration
-(window as any).OS = {
+window.OS = {
     plugins: pluginManager,
     clock: clock,
     VideoSyncController: VideoSyncController,
@@ -47,7 +47,7 @@ clock.synchronize(5).then(async () => {
     //    app_ui.ts    — search, keyboard, menus, editors, importers (~2775 lines)
     await import("./app_core.ts");
     await import("./app_ui.ts");
-    (window as any).__APP_READY__ = true;
+    window.__APP_READY__ = true;
 
     // 4. Load only the web plugins the operator has approved (Settings > Plugins). The
     //    server also refuses to serve any other file under /plugins/.

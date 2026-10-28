@@ -67,7 +67,7 @@ function hidePairingGate() {
 export let latestSnapshot: StateSnapshot | null = null;
 export let isFullControl: boolean = true; // Control vs Prompter mode
 export let activeTab: string = 'view-schedule';
-export let wakeLockSentinel: any = null;
+export let wakeLockSentinel: WakeLockSentinel | null = null;
 export let viewedItemId: string | null = null;
 export let prevLiveItemId: string | null = null;
 
@@ -489,7 +489,7 @@ function setupWakeLock() {
     if (typeof navigator !== 'undefined' && 'wakeLock' in navigator) {
       if (!wakeLockSentinel) {
         try {
-          wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
+          wakeLockSentinel = await navigator.wakeLock.request('screen');
           btnWakeLock.style.borderColor = '#00E676';
           btnWakeLock.style.color = '#00E676';
           wakeLockSentinel.addEventListener('release', () => {
@@ -602,7 +602,7 @@ function initRemoteApp(deviceToken: string) {
 
   // Export helpers on window for testing environments
   if (typeof window !== 'undefined') {
-    (window as any).OS_REMOTE = {
+    window.OS_REMOTE = {
       renderSnapshot,
       resolveSlideAt,
       getItemTypeIcon,

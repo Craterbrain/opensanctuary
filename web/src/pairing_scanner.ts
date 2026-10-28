@@ -40,18 +40,19 @@ import { escapeHtml } from './core/presentation_helpers';
   const procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
 
   // Optional native BarcodeDetector if supported by host browser
-  let nativeBarcodeDetector: any = null;
-  if (typeof (window as any).BarcodeDetector !== 'undefined') {
+  let nativeBarcodeDetector: BarcodeDetectorLike | null = null;
+  const BarcodeDetectorCtor = window.BarcodeDetector;
+  if (BarcodeDetectorCtor) {
     try {
-      const getFormats = (window as any).BarcodeDetector.getSupportedFormats;
+      const getFormats = BarcodeDetectorCtor.getSupportedFormats;
       if (typeof getFormats === 'function') {
-        getFormats.call((window as any).BarcodeDetector).then((formats: any) => {
+        getFormats.call(BarcodeDetectorCtor).then((formats: string[]) => {
           if (formats && Array.isArray(formats) && formats.includes('qr_code')) {
-            nativeBarcodeDetector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+            nativeBarcodeDetector = new BarcodeDetectorCtor({ formats: ['qr_code'] });
           }
         }).catch(() => {});
       } else {
-        nativeBarcodeDetector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+        nativeBarcodeDetector = new BarcodeDetectorCtor({ formats: ['qr_code'] });
       }
     } catch (_) {}
   }
@@ -195,8 +196,9 @@ import { escapeHtml } from './core/presentation_helpers';
           try {
             const barcodes = await nativeBarcodeDetector.detect(videoEl);
             if (!isScanning) return;
-            if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
-              detectedValue = barcodes[0].rawValue;
+            const first = barcodes?.[0];
+            if (first && first.rawValue) {
+              detectedValue = first.rawValue;
             }
           } catch (_) {}
         }

@@ -24,6 +24,29 @@
 export {};
 
 declare global {
+  /** The browser's QR/barcode detector (Chromium); not in TypeScript's DOM lib. */
+  interface BarcodeDetectorLike {
+    detect(source: CanvasImageSource): Promise<Array<{ rawValue: string }>>;
+  }
+  interface BarcodeDetectorConstructor {
+    new (options?: { formats?: string[] }): BarcodeDetectorLike;
+    getSupportedFormats?: () => Promise<string[]>;
+  }
+
+  interface Window {
+    /** The app's own namespace for plugins, clock, keyring (main.ts); plugins read it as their host context. */
+    OS?: Record<string, unknown>;
+    __APP_READY__?: boolean;
+    /** Browser-test helpers the remote page mirrors onto `window`. */
+    OS_REMOTE?: Record<string, unknown>;
+    /** Injected into the native webview at creation (src/webview/mod.rs). */
+    __OS_HOST_TOKEN__?: string;
+    __osHostTokenFetchInstalled?: boolean;
+    BarcodeDetector?: BarcodeDetectorConstructor;
+    VideoDecoder?: unknown;
+    AudioDecoder?: unknown;
+  }
+
   var activeSelectedSlide: any;
   var clearActiveSelectedSlide: any;
   var clearActiveUndoPlaceholder: any;

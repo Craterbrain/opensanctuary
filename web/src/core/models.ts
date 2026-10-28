@@ -216,12 +216,34 @@ export interface LibraryItem {
   duration_seconds?: number | null;
   thumbnail_path?: string | null;
   loop_playback?: boolean;
-  // themes
-  font_family?: string;
-  font_size?: number;
-  background_type?: string;
+  // themes (the stored `Theme`: see `ThemeRow`)
   is_default?: boolean;
   category?: string;
+  background_type?: string;
+  font_family?: string;
+  font_size?: string;
+}
+
+/** A theme as the server stores it (`Theme` in src/core/models.rs): every style value is text. */
+export interface ThemeRow extends LibraryItem {
+  name: string;
+  background?: string;
+  bg?: string;
+  font_color?: string;
+  alignment?: string;
+  text_shadow?: string;
+  line_height?: string;
+  letter_spacing?: string;
+  opacity?: string;
+  margin_top?: string;
+  margin_bottom?: string;
+  margin_left?: string;
+  margin_right?: string;
+  vertical_align?: string;
+  reference_position?: string;
+  chroma_key_enabled?: boolean;
+  chroma_key_color?: string;
+  safe_area_percent?: number;
 }
 
 /** A command sent to the show engine: `{ Name: payload }` (or just `"Name"` for one without a payload); see `ShowCommand` in src/core/commands.rs. */
