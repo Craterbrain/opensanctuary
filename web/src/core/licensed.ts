@@ -3,7 +3,7 @@ import type { ScheduleItem, Slide } from './models.ts';
 // kept. The server never stores or exports it; anything the console keeps for itself goes through here too.
 
 /** One-line stand-in for a licensed slide's text, the same wording the server uses. */
-function placeholder(item: any, slide: any): string {
+function placeholder(item: ScheduleItem, slide: Slide): string {
   const what = slide?.reference_label || slide?.header || item?.title || 'Passage';
   return `${what} — fetching the text…`;
 }

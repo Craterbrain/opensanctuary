@@ -3,6 +3,8 @@
  * Searchable, categorized settings rendering driven by settings_schema.ts.
  */
 
+import type { InstalledBible } from '../core/models.ts';
+import type { ThemeDefinition } from '../core/presentation_helpers.ts';
 import { errorMessage } from '../core/ui_utils.ts';
 import {
   SETTINGS_SCHEMA,
@@ -27,8 +29,8 @@ import { ICON_SETS, ICON_SET_PREVIEW_ICONS, IconSetDef, iconUrl, resolveTheme } 
 
 export interface SettingsContext {
   getAppOptions: () => Record<string, any>;
-  getInstalledBibles: () => any[];
-  getAvailableThemes: () => any[];
+  getInstalledBibles: () => InstalledBible[];
+  getAvailableThemes: () => ThemeDefinition[];
   areTranslationsEquivalent: (a: string, b: string) => boolean;
   getDisplayOutputs: () => DisplayOutputConfig[];
   saveDisplayOutputs: (outputs: DisplayOutputConfig[]) => Promise<void> | void;

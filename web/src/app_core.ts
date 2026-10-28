@@ -426,7 +426,7 @@ function updateScheduleMergeMenuVisibility(idx: number, item: ScheduleItem, sche
   const prevBtn = document.getElementById('ctx-sched-merge-prev');
   const nextBtn = document.getElementById('ctx-sched-merge-next');
   const items = (schedule && schedule.items) || [];
-  const isMergeable = (it: any) => it && !it.is_section_header && (it.item_type || '').toLowerCase() !== 'header' && (it.item_type || '').toLowerCase() !== 'group';
+  const isMergeable = (it: ScheduleItem | undefined) => it && !it.is_section_header && (it.item_type || '').toLowerCase() !== 'header' && (it.item_type || '').toLowerCase() !== 'group';
 
   const canMergePrev = isMergeable(item) && idx > 0 && isMergeable(items[idx - 1]);
   const canMergeNext = isMergeable(item) && idx < items.length - 1 && isMergeable(items[idx + 1]);
@@ -1067,7 +1067,7 @@ document.addEventListener('click', (e) => {
  * Creates an interactive DOM placeholder row in the schedule where an item was just deleted.
  * Hangs around for a second (1500ms), pauses on hover, and undos on click.
  */
-function createUndoPlaceholderElement(ph: { index: number; title: string; createdAt: number; timer: any }): HTMLElement {
+function createUndoPlaceholderElement(ph: { index: number; title: string; createdAt: number; timer: ReturnType<typeof setTimeout> | null }): HTMLElement {
   const el = document.createElement('div');
   el.className = 'schedule-undo-placeholder';
   el.setAttribute('role', 'alert');

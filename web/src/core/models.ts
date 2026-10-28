@@ -115,6 +115,8 @@ export interface MediaPlayback {
   is_muted: boolean;
   volume: number;
   sync_version: number;
+  /** Not sent by the server today; the player reads it when present. */
+  preroll_target_pts?: number | null;
 }
 
 export interface StateSnapshot {

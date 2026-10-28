@@ -73,7 +73,7 @@ async function verifyTokenState(token: string): Promise<'valid' | 'invalid' | 'e
 
 function describeThisBrowser(): string {
   try {
-    const nav: any = typeof navigator !== 'undefined' ? navigator : {};
+    const nav = (typeof navigator !== 'undefined' ? navigator : {}) as Partial<Navigator> & { userAgentData?: { platform?: string } };
     const platform = (nav.userAgentData && nav.userAgentData.platform) || nav.platform || 'browser';
     return `Console (${platform}, ${new Date().toISOString().slice(0, 10)})`;
   } catch {

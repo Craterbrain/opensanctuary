@@ -33,6 +33,9 @@ declare global {
     getSupportedFormats?: () => Promise<string[]>;
   }
 
+  /** The app's own namespace on `globalThis` (see `window.OS`). */
+  var OS: Record<string, unknown> | undefined;
+
   interface Window {
     /** The app's own namespace for plugins, clock, keyring (main.ts); plugins read it as their host context. */
     OS?: Record<string, unknown>;
