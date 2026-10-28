@@ -2416,8 +2416,8 @@ const fillEwpxThemes = async () => {
     const themes = (await api.themes.list()).filter((t) => t.category === 'presentation');
     for (const t of themes) {
       const o = document.createElement('option');
-      o.value = t.name;
-      o.textContent = t.name;
+      o.value = t.name ?? '';
+      o.textContent = t.name ?? '';
       select.appendChild(o);
     }
     select.dataset.loaded = '1';

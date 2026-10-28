@@ -506,7 +506,7 @@ const ESCAPE_HTML_RE = /[&<>"']/g;
 // over the string with a replacer function does the same job as five sequential
 // .replace() calls (each of which rescans the ENTIRE string, including characters the
 // previous pass already handled) in a single scan.
-export function escapeHtml(str: any): string {
+export function escapeHtml(str: unknown): string {
     if (str === null || str === undefined) return '';
     return String(str).replace(ESCAPE_HTML_RE, (ch) => ESCAPE_HTML_MAP[ch] ?? ch);
 }
@@ -515,7 +515,7 @@ export function escapeHtml(str: any): string {
  * escapeHtml for text the user typed (titles, authors, lyrics). Wrapped so the emoji-to-icon
  * converter (core/emoji_icons.ts) leaves it exactly as written: user content is never rewritten.
  */
-export function escapeUserHtml(str: any): string {
+export function escapeUserHtml(str: unknown): string {
     return `<span data-no-iconify>${escapeHtml(str)}</span>`;
 }
 
@@ -524,7 +524,7 @@ export function escapeUserHtml(str: any): string {
  * assigning data-derived values to navigable sinks (iframe.src, a.href) so that
  * `javascript:` / `data:` / `vbscript:` URLs are never loaded.
  */
-export function safeHttpUrl(url: any): string | null {
+export function safeHttpUrl(url: unknown): string | null {
     if (typeof url !== 'string') return null;
     try {
         const u = new URL(url.trim());
@@ -539,7 +539,7 @@ export function safeHttpUrl(url: any): string | null {
  * HTML `style="..."` attribute: percent-encodes quotes/parens/backslashes/whitespace/
  * control chars (so it cannot terminate the url() token) and HTML-escapes the result.
  */
-export function escapeCssUrl(url: any): string {
+export function escapeCssUrl(url: unknown): string {
     const encoded = String(url ?? '').replace(/['"()\\\s<>&\x00-\x1f]/g, (ch) => '%' + ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
     return escapeHtml(encoded);
 }

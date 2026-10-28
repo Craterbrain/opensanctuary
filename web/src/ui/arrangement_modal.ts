@@ -5,8 +5,7 @@
  * authored slides) and a play-order queue (the arrangement actually performed),
  * built with drag-and-drop between and within both lists.
  */
-import type { ShowCommand, Schedule, ShowState } from '../core/models.ts';
-import type { Slide } from '../core/models.ts';
+import type { ShowCommand, Schedule, ScheduleItem, ShowState, Slide } from '../core/models.ts';
 import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { type ArrangementEntry, escapeUserHtml, isPrimaryDropTarget } from '../core/presentation_helpers';
 import type { ToastType } from '../core/ui_utils';
@@ -16,7 +15,7 @@ export interface ArrangementModalContext {
   showModal: (el: HTMLElement) => void;
   closeModal: (el: HTMLElement) => void;
   sendCommand: (cmd: ShowCommand) => void;
-  getSlideBadge: (slide: any, idx?: number) => string;
+  getSlideBadge: (slide: Slide, idx?: number) => string;
   getSlideBadgeColor: (badge: string) => string;
   escapeHtml: (str: string) => string;
   formatCssBackground: (bg: string | null | undefined) => string;
@@ -184,6 +183,7 @@ export function initArrangementModal(context: ArrangementModalContext) {
       e.stopPropagation();
       if (selectedMasterIndex !== null && localMasterSlides[selectedMasterIndex]) {
         const m = localMasterSlides[selectedMasterIndex];
+        if (!m) return;
         localArrangement.push({
           section_id: m.badge,
           source_slide_index: selectedMasterIndex,
@@ -198,14 +198,14 @@ export function initArrangementModal(context: ArrangementModalContext) {
 }
 
 let activeArrangementItemIndex: number | null = null;
-let activeArrangementTargetItem: any = null;
-let localMasterSlides: any[] = [];
+let activeArrangementTargetItem: ScheduleItem | null = null;
+let localMasterSlides: Array<Slide & { masterIndex: number; badge: string }> = [];
 let localArrangement: ArrangementEntry[] = [];
 let arrangementDndCleanups: Array<() => void> = [];
 let selectedPlayIndex: number | null = null;
 let selectedMasterIndex: number | null = null;
 
-export function openArrangementModal(itemIndex: number, item: any) {
+export function openArrangementModal(itemIndex: number, item: ScheduleItem) {
   if (!item || !item.slides || item.slides.length === 0) {
     ctx!.showToast('Item has no slides to arrange', 'info');
     return;

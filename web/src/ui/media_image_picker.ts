@@ -17,7 +17,7 @@ import { renderEmptyState } from './filter_bar';
 export interface MediaImagePickerContext {
   showModal(el: HTMLElement | null): void;
   closeModal(el: HTMLElement | null): void;
-  escapeHtml(str: any): string;
+  escapeHtml(str: unknown): string;
 }
 
 let ctx: MediaImagePickerContext | null = null;

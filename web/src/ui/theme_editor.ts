@@ -15,7 +15,7 @@ import type { ToastType } from "../core/ui_utils.ts";
 export interface ThemeEditorContext {
   refreshThemes: () => Promise<void>;
   showToast: (message: string, type?: ToastType) => void;
-  escapeHtml: (str: any) => string;
+  escapeHtml: (str: unknown) => string;
 }
 
 let ctx: ThemeEditorContext | null = null;
