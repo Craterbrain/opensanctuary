@@ -191,9 +191,9 @@ export function applyEffectsToElement(el: HTMLElement, effects?: ElementEffects)
 
   // 1. Text Outline
   if (effects.outline && effects.outline.width > 0) {
-    (el.style as any).webkitTextStroke = `${effects.outline.width}px ${effects.outline.color}`;
+    el.style.setProperty('-webkit-text-stroke', `${effects.outline.width}px ${effects.outline.color}`);
   } else {
-    (el.style as any).webkitTextStroke = '';
+    el.style.removeProperty('-webkit-text-stroke');
   }
 
   // 2. Text Shadow
@@ -205,9 +205,9 @@ export function applyEffectsToElement(el: HTMLElement, effects?: ElementEffects)
 
   // 3. Reflection
   if (effects.reflection && effects.reflection.enabled) {
-    (el.style as any).webkitBoxReflect = `below 2px linear-gradient(transparent, rgba(0,0,0,${effects.reflection.opacity}))`;
+    el.style.setProperty('-webkit-box-reflect', `below 2px linear-gradient(transparent, rgba(0,0,0,${effects.reflection.opacity}))`);
   } else {
-    (el.style as any).webkitBoxReflect = '';
+    el.style.removeProperty('-webkit-box-reflect');
   }
 
   // 4. Glow

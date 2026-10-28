@@ -99,7 +99,7 @@ export function debounce<T extends (...args: any[]) => any>(
   fn: T,
   delayMs: number
 ): ((...args: Parameters<T>) => void) & { cancel: () => void } {
-  let timer: any = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
 
   const debounced = (...args: Parameters<T>) => {
     if (timer) clearTimeout(timer);

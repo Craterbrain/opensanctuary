@@ -107,9 +107,9 @@ class TimecodeSyncEngine {
   videoEl: HTMLVideoElement;
   audioEl: HTMLAudioElement;
   masterState: any = null;
-  syncTimer: any = null;
+  syncTimer: ReturnType<typeof setTimeout> | null = null;
   scheduledStartRaf: number | null = null;
-  _scheduledTimeout: any = null;
+  _scheduledTimeout: ReturnType<typeof setTimeout> | null = null;
   _scheduledTargetMs: number | undefined;
   _playStartedAt: number | undefined;
   _lastReportedReadyVersion: number | undefined;
@@ -605,7 +605,7 @@ function fadeInFromBlack(durationSec = 0.4) {
   }, durationSec * 1000 + 40);
 }
 
-let lastSnapshot: any = null;
+let lastSnapshot: StateSnapshot | null = null;
 
 function renderSnapshot(snapshot: StateSnapshot) {
   try {

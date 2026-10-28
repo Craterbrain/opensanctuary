@@ -1,7 +1,7 @@
 // OpenSanctuary Rust Client Show Controller & Bible Manager (app.js)
 import type { ShowCommand } from './core/models.ts';
 import { errorMessage } from './core/ui_utils.ts';
-import type { StateSnapshot, Schedule, ShowState, LibrarySlide, ScriptureVerse, LibraryItem } from './core/models.ts';
+import type { StateSnapshot, Schedule, ShowState, LibrarySlide, ScriptureVerse, LibraryItem, InstalledBible } from './core/models.ts';
 import { showLicensedLink } from './ui/licensed_link.ts';
 import { stripLicensedText } from './core/licensed';
 import { exportBundle } from './ui/bundle_ui.ts';
@@ -104,7 +104,7 @@ export let currentSnapshot: StateSnapshot | null = null;
 let protocolMismatchWarned = false;
 let consoleLockedWarned = false;
 export let currentTab = 'songs';
-export let selectedLibraryItem: any = null;
+export let selectedLibraryItem: LibraryItem | null = null;
 export let currentEditorType = 'song';
 export let editingItemId: string | null = null;
 export let activeImportMode = 'local';
@@ -117,7 +117,7 @@ export let activeUndoPlaceholder: {
   index: number;
   title: string;
   createdAt: number;
-  timer: any;
+  timer: ReturnType<typeof setTimeout> | null;
 } | null = null;
 
 // Context Menu State
@@ -178,7 +178,7 @@ export async function refreshAvailableThemes(force = false) {
 }
 
 // Bible Translations Management (Dynamic DB Lookups - Zero Hardcoded Defaults)
-export let installedBibles: any[] = [];
+export let installedBibles: InstalledBible[] = [];
 
 export async function refreshInstalledBibles() {
   try {
@@ -191,7 +191,8 @@ export async function refreshInstalledBibles() {
         const stored = installedBibles.filter(b => !b.remote);
         if (!appOptions.defaultBibleVersion && stored.length > 0) {
           const defaultObj = stored.find(b => b.is_default || b.isDefault);
-          appOptions.defaultBibleVersion = defaultObj ? defaultObj.id : stored[0].id;
+          const pick = defaultObj ? defaultObj.id : stored[0]?.id;
+          if (pick) appOptions.defaultBibleVersion = pick;
         }
         installedBibles.forEach(b => {
           b.isDefault = areTranslationsEquivalent(b.id, appOptions.defaultBibleVersion);

@@ -64,7 +64,7 @@ function hidePairingGate() {
 }
 
 // --- State Management ---
-export let latestSnapshot: any = null;
+export let latestSnapshot: StateSnapshot | null = null;
 export let isFullControl: boolean = true; // Control vs Prompter mode
 export let activeTab: string = 'view-schedule';
 export let wakeLockSentinel: any = null;

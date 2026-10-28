@@ -226,3 +226,17 @@ export interface LibraryItem {
 
 /** A command sent to the show engine: `{ Name: payload }` (or just `"Name"` for one without a payload); see `ShowCommand` in src/core/commands.rs. */
 export type ShowCommand = string | { [name: string]: unknown };
+
+/** One entry of `/api/bibles`: a Bible stored here, or a translation a plugin offers (it carries `remote`). */
+export interface InstalledBible {
+  id: string;
+  name?: string;
+  abbreviation?: string;
+  language?: string;
+  is_default?: boolean;
+  /** Set by the console on its own copy: whether this is the configured default translation. */
+  isDefault?: boolean;
+  verse_count?: number;
+  is_licensed?: boolean;
+  remote?: RemoteBibleRef;
+}

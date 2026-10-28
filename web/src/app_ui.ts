@@ -1121,7 +1121,7 @@ on('btn-preview-to-schedule', 'click', () => {
   if (selectedLibraryItem) {
     if (currentTab === 'scriptures' && isDualBibleMode) {
       const pVersion = selectedLibraryItem.version || (activeBibleVersion !== 'all' ? activeBibleVersion : (installedBibles[0] ? installedBibles[0].id : 'KJV'));
-      addDualScriptureToSchedule(selectedLibraryItem, pVersion, secondaryBibleVersion, selectedLibraryItem.verses, currentDualSecondaryVerses);
+      addDualScriptureToSchedule(selectedLibraryItem, pVersion, secondaryBibleVersion, selectedLibraryItem.verses ?? [], currentDualSecondaryVerses);
     } else {
       addItemToSchedule(currentTab, selectedLibraryItem.id);
     }

@@ -45,7 +45,7 @@ export class TimeSync {
         }
     }
 
-    private syncInterval: any = null;
+    private syncInterval: ReturnType<typeof setTimeout> | null = null;
 
     /**
      * Start periodic background clock synchronization (default every 15s).
