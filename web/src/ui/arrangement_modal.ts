@@ -101,6 +101,7 @@ export function initArrangementModal(context: ArrangementModalContext) {
       e.stopPropagation();
       if (selectedPlayIndex !== null && selectedPlayIndex > 0) {
         const [moved] = localArrangement.splice(selectedPlayIndex, 1);
+        if (!moved) return;
         localArrangement.splice(selectedPlayIndex - 1, 0, moved);
         selectedPlayIndex--;
         renderArrangementModalPanes();
@@ -114,6 +115,7 @@ export function initArrangementModal(context: ArrangementModalContext) {
       e.stopPropagation();
       if (selectedPlayIndex !== null && selectedPlayIndex < localArrangement.length - 1) {
         const [moved] = localArrangement.splice(selectedPlayIndex, 1);
+        if (!moved) return;
         localArrangement.splice(selectedPlayIndex + 1, 0, moved);
         selectedPlayIndex++;
         renderArrangementModalPanes();
@@ -279,9 +281,9 @@ function renderArrangementModalPanes() {
   // Preview first item if available
   if (localArrangement.length > 0) {
     const firstEntry = localArrangement[0];
-    const m = localMasterSlides[firstEntry.source_slide_index] || localMasterSlides[0];
-    updateArrangementPreview(m, firstEntry.background_override);
-  } else if (localMasterSlides.length > 0) {
+    const m = firstEntry ? (localMasterSlides[firstEntry.source_slide_index] || localMasterSlides[0]) : localMasterSlides[0];
+    if (m) updateArrangementPreview(m, firstEntry?.background_override ?? null);
+  } else if (localMasterSlides.length > 0 && localMasterSlides[0]) {
     updateArrangementPreview(localMasterSlides[0], null);
   }
 
@@ -423,8 +425,10 @@ function renderArrangementModalPanes() {
                 const fromIdx = data.playIndex as number;
                 if (fromIdx !== pIdx && fromIdx >= 0 && fromIdx < localArrangement.length) {
                   const entry = localArrangement.splice(fromIdx, 1)[0];
-                  localArrangement.splice(pIdx, 0, entry);
-                  renderArrangementModalPanes();
+                  if (entry) {
+                    localArrangement.splice(pIdx, 0, entry);
+                    renderArrangementModalPanes();
+                  }
                 }
               }
             }

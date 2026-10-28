@@ -508,7 +508,7 @@ const ESCAPE_HTML_RE = /[&<>"']/g;
 // previous pass already handled) in a single scan.
 export function escapeHtml(str: any): string {
     if (str === null || str === undefined) return '';
-    return String(str).replace(ESCAPE_HTML_RE, (ch) => ESCAPE_HTML_MAP[ch]);
+    return String(str).replace(ESCAPE_HTML_RE, (ch) => ESCAPE_HTML_MAP[ch] ?? ch);
 }
 
 /**
@@ -756,7 +756,7 @@ export class ScheduleAddGuard {
  */
 export function isPrimaryDropTarget(targetElement: any, dropTargets: Array<{ element: any }>): boolean {
     if (!dropTargets || dropTargets.length === 0) return true;
-    return dropTargets[0].element === targetElement;
+    return dropTargets[0]?.element === targetElement;
 }
 
 /**
@@ -797,7 +797,7 @@ export function resolveTargetItemToDelete(params: {
     }
 
     if (targetIdx >= 0 && targetIdx < scheduleItems.length) {
-        return { index: targetIdx, title: scheduleItems[targetIdx].title || 'Item' };
+        return { index: targetIdx, title: scheduleItems[targetIdx]?.title || 'Item' };
     }
 
     return null;
@@ -947,7 +947,7 @@ function extractHeaderAndBody(col: string): { header?: string; body: string } {
     const trimmed = col.trim();
     const match = trimmed.match(/^\[([^\]]+)\]\n?([\s\S]*)$/);
     if (match) {
-        return { header: match[1].trim(), body: match[2].trim() };
+        return { header: (match[1] ?? '').trim(), body: (match[2] ?? '').trim() };
     }
     return { header: undefined, body: trimmed };
 }

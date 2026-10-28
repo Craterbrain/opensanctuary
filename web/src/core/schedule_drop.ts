@@ -181,6 +181,7 @@ export function setupScheduleDesktopDrop(options?: ScheduleDropOptions): () => v
     const files = e.dataTransfer.files;
     if (!files || files.length === 0) return;
     const file = files[0];
+    if (!file) return;
 
     if (isBundleFile(file.name) && options?.openBundle) {
       await options.openBundle(file, mode);

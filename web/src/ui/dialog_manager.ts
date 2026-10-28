@@ -225,7 +225,7 @@ export class DialogManager {
    */
   public getTopmostModal(): HTMLElement | null {
     if (this.openStack.length > 0) {
-      return this.openStack[this.openStack.length - 1];
+      return this.openStack[this.openStack.length - 1] ?? null;
     }
     return null;
   }

@@ -168,6 +168,7 @@ export class LoadShedder {
       // Switching off the most recent one cleared it: that's the culprit.
       const culprit = this.suspended[this.suspended.length - 1];
       const innocents = this.suspended.slice(0, -1);
+      if (culprit === undefined) return [];
       this.blamed.add(culprit);
       this.reset();
       return [{ kind: 'blame', id: culprit }, ...(innocents.length ? [{ kind: 'restore', ids: innocents } as ShedAction] : [])];

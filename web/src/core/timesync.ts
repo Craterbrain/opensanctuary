@@ -100,5 +100,5 @@ export function computeMedianOffset(offsets: number[]): number {
     if (!offsets || offsets.length === 0) return 0;
     const sorted = [...offsets].sort((a, b) => a - b);
     const mid = Math.floor(sorted.length / 2);
-    return sorted[mid];
+    return sorted[mid] ?? 0;
 }

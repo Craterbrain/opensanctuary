@@ -76,7 +76,7 @@ export async function prepareMediaImagePickerGrid({ currentImage = null, onSelec
   } catch (err) {}
 
   const available = getAllAvailableImages();
-  selectedImageForPicker = currentImage || (available.length > 0 ? available[0].file_path : null);
+  selectedImageForPicker = currentImage || (available[0]?.file_path ?? null);
   onImagePickerSlideCallback = onSelectSlide;
   onImagePickerAllCallback = onSelectAll;
 

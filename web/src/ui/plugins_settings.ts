@@ -652,7 +652,7 @@ function renderPolicyControl(content: HTMLElement, policy: string, refresh: () =
   for (const value of ['allow', 'warn', 'require']) {
     const opt = document.createElement('option');
     opt.value = value;
-    opt.textContent = POLICY_LABEL[value];
+    opt.textContent = POLICY_LABEL[value] ?? value;
     opt.selected = value === policy;
     select.appendChild(opt);
   }

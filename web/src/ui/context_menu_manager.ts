@@ -82,7 +82,7 @@ export class ContextMenuManager {
       } else if (e.key === 'Enter') {
         const items = this.getInteractiveItems();
         if (this.selectedItemIndex >= 0 && this.selectedItemIndex < items.length) {
-          items[this.selectedItemIndex].click();
+          items[this.selectedItemIndex]?.click();
           e.preventDefault();
           e.stopPropagation();
         }

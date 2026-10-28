@@ -224,8 +224,11 @@ export async function prepareVideoPickerGrid(opts: {
     const found = currentVideos.find(v => v.file_path === opts.currentVideo);
     selectedVideoName = found ? found.name : opts.currentVideo.split('/').pop() || 'Video';
   } else if (currentVideos.length > 0 && !selectedVideoPath) {
-    selectedVideoPath = currentVideos[0].file_path;
-    selectedVideoName = currentVideos[0].name;
+    const firstVideo = currentVideos[0];
+    if (firstVideo) {
+      selectedVideoPath = firstVideo.file_path;
+      selectedVideoName = firstVideo.name;
+    }
   }
 
   setVideoSubtab('library');

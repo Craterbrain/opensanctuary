@@ -441,7 +441,8 @@ function convertBulkTextToSlides() {
   });
 
   const curSlides = canvasSlideEditor ? canvasSlideEditor.getAllSlides() : studioSlides;
-  const isOnlyBlankPlaceholder = curSlides.length === 1 && !curSlides[0].text?.trim() && (!curSlides[0].elements || curSlides[0].elements.length === 0);
+  const onlySlide = curSlides.length === 1 ? curSlides[0] : undefined;
+  const isOnlyBlankPlaceholder = !!onlySlide && !onlySlide.text?.trim() && (!onlySlide.elements || onlySlide.elements.length === 0);
 
   if (actionMode === 'append' && !isOnlyBlankPlaceholder) {
     const combined = [...curSlides, ...newSlides];
@@ -961,7 +962,8 @@ function setScheduleIconViewLevel(level: string | number, notify = false) {
   const listEl = scheduleListEl;
   if (listEl) {
     SCHED_VIEW_CLASSES.forEach(cls => listEl.classList.remove(cls));
-    listEl.classList.add(SCHED_VIEW_CLASSES[currentSchedIconLevel]);
+    const viewClass = SCHED_VIEW_CLASSES[currentSchedIconLevel];
+    if (viewClass) listEl.classList.add(viewClass);
   }
 
   const slider = document.getElementById('sched-view-slider') as HTMLInputElement | null;
@@ -1326,9 +1328,10 @@ if (scheduleDropzone) {
     e.preventDefault();
     scheduleDropzone.classList.remove('dragover-active');
     const files = e.dataTransfer?.files;
-    if (files && files.length > 0) {
+    const dropped = files?.[0];
+    if (dropped) {
       const mode = getSelectedScheduleMode();
-      await loadScheduleFile(files[0], mode);
+      await loadScheduleFile(dropped, mode);
     }
   });
 }
@@ -2028,7 +2031,7 @@ const ARTICLES_DATA: Record<string, string> = {
 };
 
 function renderArticle(articleId: string) {
-  const content = ARTICLES_DATA[articleId] || ARTICLES_DATA['article-overview'];
+  const content = ARTICLES_DATA[articleId] || ARTICLES_DATA['article-overview'] || '';
   const pane = document.getElementById('articles-content-pane');
   if (pane) {
     pane.innerHTML = content;

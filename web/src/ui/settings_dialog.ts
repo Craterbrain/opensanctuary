@@ -1041,8 +1041,8 @@ function renderDisplayOutputRow(out: DisplayOutputConfig, allOutputs: DisplayOut
   resolutionSelect.className = 'search-input';
   [['native', 'Fill Monitor (Native)'], ['fixed', 'Fixed Resolution']].forEach(([value, label]) => {
     const opt = document.createElement('option');
-    opt.value = value;
-    opt.textContent = label;
+    opt.value = value ?? '';
+    opt.textContent = label ?? '';
     if (value === out.resolutionMode) opt.selected = true;
     resolutionSelect.appendChild(opt);
   });

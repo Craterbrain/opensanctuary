@@ -68,7 +68,7 @@ function renderStep(): void {
   const skipBtn = document.getElementById("btn-first-time-skip") as HTMLButtonElement | null;
   if (!body) return;
 
-  const step = STEPS[stepIndex];
+  const step = STEPS[stepIndex] ?? "welcome";
   if (backBtn) backBtn.style.visibility = stepIndex === 0 ? "hidden" : "visible";
   if (skipBtn) skipBtn.style.display = step === "welcome" || step === "done" ? "none" : "";
   if (nextBtn) nextBtn.textContent = step === "done" ? "Done" : step === "welcome" ? "Let's Go ➜" : "Next ➜";
@@ -370,7 +370,7 @@ export function initFirstTimeSetup(): void {
   });
   nextBtn?.addEventListener("click", async () => {
     if (!body) return;
-    const step = STEPS[stepIndex];
+    const step = STEPS[stepIndex] ?? "welcome";
     await commitStep(step, body);
     if (step === "done") {
       closeWizard();

@@ -324,8 +324,8 @@ import { escapeHtml } from './core/presentation_helpers';
       const parts = dataStr.split(':');
       if (parts.length >= 2) {
         payload = {
-          device_id: parts[0].trim(),
-          name: parts[1].trim(),
+          device_id: (parts[0] ?? '').trim(),
+          name: (parts[1] ?? '').trim(),
           platform: (parts[2] || 'android-tv').trim(),
         };
       } else {

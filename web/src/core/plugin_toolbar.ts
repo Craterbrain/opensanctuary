@@ -148,9 +148,10 @@ export function addToolbarItems(
 /** Removes a plugin's buttons (revoke, deny, a failed token) and hides the group when it is empty. */
 export function removeToolbarItems(pluginId: string, redraw = true): void {
   for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i].pluginId === pluginId) {
-      state.delete(keyOf(pluginId, entries[i].id));
-      lastClick.delete(keyOf(pluginId, entries[i].id));
+    const entry = entries[i];
+    if (entry && entry.pluginId === pluginId) {
+      state.delete(keyOf(pluginId, entry.id));
+      lastClick.delete(keyOf(pluginId, entry.id));
       entries.splice(i, 1);
     }
   }

@@ -131,7 +131,10 @@ function collectThemeVars(): Record<string, string> {
       const style = (rule as CSSStyleRule).style;
       const sel = (rule as CSSStyleRule).selectorText || '';
       if (!style || !/(^|[\s,]):root|html|body|\[data-/.test(sel)) continue;
-      for (let i = 0; i < style.length; i++) if (style[i].startsWith('--os-')) names.add(style[i]);
+      for (let i = 0; i < style.length; i++) {
+        const prop = style[i];
+        if (prop && prop.startsWith('--os-')) names.add(prop);
+      }
     }
   }
   const computed = getComputedStyle(document.documentElement);
@@ -173,7 +176,7 @@ function commandName(cmd: unknown): string | null {
   if (typeof cmd === 'string') return cmd;
   if (cmd && typeof cmd === 'object') {
     const keys = Object.keys(cmd as object);
-    if (keys.length === 1) return keys[0];
+    if (keys.length === 1) return keys[0] ?? null;
   }
   return null;
 }
