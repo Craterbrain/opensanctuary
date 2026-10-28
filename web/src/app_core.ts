@@ -1,7 +1,7 @@
 // OpenSanctuary Rust Client Show Controller & Bible Manager (app.js)
 import type { ShowCommand } from './core/models.ts';
 import { errorMessage } from './core/ui_utils.ts';
-import type { StateSnapshot, Schedule, ShowState, LibrarySlide, ScriptureVerse } from './core/models.ts';
+import type { StateSnapshot, Schedule, ShowState, LibrarySlide, ScriptureVerse, LibraryItem } from './core/models.ts';
 import { showLicensedLink } from './ui/licensed_link.ts';
 import { stripLicensedText } from './core/licensed';
 import { exportBundle } from './ui/bundle_ui.ts';
@@ -2448,7 +2448,7 @@ const EMPTY_SHOW_STATE: ShowState = {
   is_logo_override: false, alert_message: null, global_theme: null, global_background: null, sequence_number: 0, last_event_id: '', server_time_ms: 0,
 };
 
-let adhocPreviewItem: any = null;
+let adhocPreviewItem: LibraryItem | null = null;
 let adhocPreviewTabName = '';
 let adhocPreviewSlideIndex = 0;
 
@@ -2458,7 +2458,7 @@ function clearAdhocPreview() {
   adhocPreviewSlideIndex = 0;
 }
 
-function setAdhocPreview(item: any, tabName: string) {
+function setAdhocPreview(item: LibraryItem | null, tabName: string) {
   adhocPreviewItem = item;
   adhocPreviewTabName = tabName;
   adhocPreviewSlideIndex = 0;
@@ -2472,7 +2472,7 @@ function setAdhocPreview(item: any, tabName: string) {
  * "slides" for the ad-hoc Preview panel. This is a display-only projection —
  * it does not attempt to replicate the server-side AddToSchedule conversion.
  */
-function buildAdhocPreviewSlides(item: any, tabName: string): Array<{ text: string; background?: string }> {
+function buildAdhocPreviewSlides(item: LibraryItem, tabName: string): Array<{ text: string; background?: string }> {
   if (!item) return [];
 
   if ((tabName === 'songs' || tabName === 'presentations') && Array.isArray(item.slides) && item.slides.length > 0) {

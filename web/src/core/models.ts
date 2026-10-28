@@ -175,12 +175,21 @@ export interface Presentation {
 export type LibrarySlide = Slide & { content?: string; title?: string };
 
 /** The entries of a library list (songs, scriptures, media, presentations, themes) share one row type: the fields each kind has, all optional. */
+/** Where a plugin's Bible (the NIV through YouVersion...) comes from; its text is looked up when the passage is added to a schedule. */
+export interface RemoteBibleRef {
+  source: string;
+  bible_id: number;
+  tag: string;
+  [more: string]: unknown;
+}
+
 export interface LibraryItem {
-  id?: string;
+  id: string;
   title?: string;
   name?: string;
   reference?: string;
   author?: string;
+  alternate_title?: string | null;
   slides?: LibrarySlide[];
   verses?: ScriptureVerse[];
   file_path?: string;
@@ -188,6 +197,31 @@ export interface LibraryItem {
   background?: string;
   theme_name?: string | null;
   item_type?: string;
+  /** Older shapes of a scripture row carry the passage as plain text. */
+  text?: string;
+  // songs
+  copyright?: string | null;
+  ccli_number?: string | null;
+  public_domain_override?: boolean | null;
+  // scriptures
+  version?: string;
+  book?: string;
+  chapter?: number;
+  verse_start?: number;
+  verse_end?: number;
+  /** A reference-only result from a plugin's Bible (not stored here). */
+  remote?: RemoteBibleRef;
+  // media
+  media_type?: string;
+  duration_seconds?: number | null;
+  thumbnail_path?: string | null;
+  loop_playback?: boolean;
+  // themes
+  font_family?: string;
+  font_size?: number;
+  background_type?: string;
+  is_default?: boolean;
+  category?: string;
 }
 
 /** A command sent to the show engine: `{ Name: payload }` (or just `"Name"` for one without a payload); see `ShowCommand` in src/core/commands.rs. */

@@ -12,9 +12,8 @@
  * already use, so this stays a one-way dependency (app_core.ts imports from here,
  * never the reverse).
  */
-import type { ShowCommand } from '../core/models.ts';
 import { errorMessage } from '../core/ui_utils.ts';
-import type { LibrarySlide, ScriptureVerse } from '../core/models.ts';
+import type { LibrarySlide, ScriptureVerse, LibraryItem, ShowCommand } from '../core/models.ts';
 import { draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { parseScriptureReference } from '../core/bible_parser';
 import { escapeHtml, escapeUserHtml, formatParallelSlide, resolveSlideBackgroundElement } from '../core/presentation_helpers.ts';
@@ -25,7 +24,7 @@ export interface LibraryPanelContext {
   getCurrentTab(): string;
   setCurrentTab(tab: string): void;
   getSelectedLibraryItem(): any;
-  setSelectedLibraryItem(item: any): void;
+  setSelectedLibraryItem(item: LibraryItem): void;
   getActiveBibleVersion(): string;
   setActiveBibleVersion(v: string): void;
   getSecondaryBibleVersion(): string;
@@ -46,7 +45,7 @@ export interface LibraryPanelContext {
   setBibleVersionUserSelected(v: boolean): void;
   applyDefaultBibleVersionIfUnset(): void;
   formatMediaTime(sec: number): string;
-  setAdhocPreview(item: any, tabName: string): void;
+  setAdhocPreview(item: LibraryItem | null, tabName: string): void;
 }
 
 let ctx: LibraryPanelContext | null = null;
@@ -310,7 +309,7 @@ let currentLibraryTabRequestId = 0;
  * "Save as OpenSanctuary File" applies to songs, presentations and Bibles only; on a Bible it says so, since
  * it saves the whole translation the clicked chapter belongs to.
  */
-function prepareBundleMenuItem(tabName: string, item: any): void {
+function prepareBundleMenuItem(tabName: string, item: LibraryItem): void {
   const el = document.getElementById('ctx-lib-export-bundle');
   if (!el) return;
   const bundleable = tabName === 'songs' || tabName === 'presentations' || tabName === 'scriptures';
@@ -965,7 +964,7 @@ if (catalogScrollBodyEl) {
   });
 }
 
-export function renderCatalog(items: any[], tabName: string, matchedOnlineRef: any = null) {
+export function renderCatalog(items: LibraryItem[], tabName: string, matchedOnlineRef: any = null) {
   if (!ctx) return;
   const lp = ctx;
   currentCatalogItems = items;
@@ -997,7 +996,8 @@ export function renderCatalog(items: any[], tabName: string, matchedOnlineRef: a
       }
     }
     selectedCatalogIndex = targetIdx;
-    selectAndPreviewItem(items[targetIdx], tabName);
+    const target = items[targetIdx];
+    if (target) selectAndPreviewItem(target, tabName);
   } else if (!matchedOnlineRef) {
     if (resourcePreviewMonitor) {
       resourcePreviewMonitor.innerHTML = '<div class="asset-preview-empty">No items match query</div>';
@@ -1005,7 +1005,7 @@ export function renderCatalog(items: any[], tabName: string, matchedOnlineRef: a
   }
 }
 
-export function createCatalogTableRow(item: any, idx: number, tabName: string) {
+export function createCatalogTableRow(item: LibraryItem, idx: number, tabName: string) {
   if (!ctx) return document.createElement('tr');
   const lp = ctx;
   const tr = document.createElement('tr');
@@ -1021,7 +1021,7 @@ export function createCatalogTableRow(item: any, idx: number, tabName: string) {
       <td class="cell-meta">${escapeUserHtml(item.ccli_number || item.copyright || '')}</td>
     `;
   } else if (tabName === 'scriptures') {
-    const snippet = item.remote ? 'Text loads when added to the schedule' : (item.verses && item.verses.length > 0 ? item.verses[0].text : '');
+    const snippet = item.remote ? 'Text loads when added to the schedule' : (item.verses && item.verses.length > 0 ? (item.verses[0]?.text ?? '') : '');
     tr.innerHTML = `
       <td class="cell-title">📖 ${escapeUserHtml(item.reference)}</td>
       <td><span class="bible-lang-badge">${lp.escapeHtml(item.version)}</span>${item.remote ? ` <span class="bible-source-tag">${lp.escapeHtml(item.remote.tag)}</span>` : ''}</td>
@@ -1140,7 +1140,7 @@ export function createCatalogTableRow(item: any, idx: number, tabName: string) {
   return tr;
 }
 
-export function appendCatalogTableRows(items: any[], tabName: string, startIndex: number) {
+export function appendCatalogTableRows(items: LibraryItem[], tabName: string, startIndex: number) {
   if (!catalogTableBody) return;
   items.forEach((item, i) => {
     const tr = createCatalogTableRow(item, startIndex + i, tabName);
@@ -1148,7 +1148,7 @@ export function appendCatalogTableRows(items: any[], tabName: string, startIndex
   });
 }
 
-export function renderCatalogTable(items: any[], tabName: string, _matchedOnlineRef: any = null) {
+export function renderCatalogTable(items: LibraryItem[], tabName: string, _matchedOnlineRef: any = null) {
   if (!ctx) return;
   const headers = document.getElementById('catalog-headers');
   if (!catalogTableBody) return;
@@ -1185,7 +1185,7 @@ export function highlightCatalogRow(idx: number) {
   });
 }
 
-export function createCatalogGridCard(item: any, idx: number, tabName: string) {
+export function createCatalogGridCard(item: LibraryItem, idx: number, tabName: string) {
   if (!ctx) return document.createElement('div');
   const lp = ctx;
   const card = document.createElement('div');
@@ -1316,7 +1316,7 @@ export function createCatalogGridCard(item: any, idx: number, tabName: string) {
   return card;
 }
 
-export function appendCatalogGridCards(items: any[], tabName: string, startIndex: number) {
+export function appendCatalogGridCards(items: LibraryItem[], tabName: string, startIndex: number) {
   if (!catalogGrid) return;
   items.forEach((item, i) => {
     const card = createCatalogGridCard(item, startIndex + i, tabName);
@@ -1324,7 +1324,7 @@ export function appendCatalogGridCards(items: any[], tabName: string, startIndex
   });
 }
 
-export function renderCatalogGrid(items: any[], tabName: string) {
+export function renderCatalogGrid(items: LibraryItem[], tabName: string) {
   if (!catalogGrid) return;
 
   // Clean up previous Pragmatic DND listeners on catalog items
@@ -1350,7 +1350,7 @@ const STAGEABLE_TAB_TYPES: Record<string, string> = {
  * double-click-to-Live and the Go Live button work, exactly as they do for
  * a real staged schedule item. Themes (not a schedulable item type) still
  * use the lightweight ad-hoc preview. */
-export function selectAndPreviewItem(item: any, tabName: string) {
+export function selectAndPreviewItem(item: LibraryItem, tabName: string) {
   if (!ctx) return;
   if (item?.remote) {
     // Reference-only result: the text is fetched when it is added or dragged to the schedule, not for a preview.
@@ -1369,7 +1369,7 @@ export function selectAndPreviewItem(item: any, tabName: string) {
   }
 }
 
-export function renderAssetPreview(item: any, tabName: string) {
+export function renderAssetPreview(item: LibraryItem, tabName: string) {
   if (!item || !resourcePreviewMonitor) return;
   if (!ctx) return;
   const lp = ctx;
@@ -1398,9 +1398,10 @@ export function renderAssetPreview(item: any, tabName: string) {
       if (matchIdx !== -1) targetVerseIdx = matchIdx;
     }
     const v1 = item.verses[targetVerseIdx] || item.verses[0];
+    if (!v1) return;
     const w1 = (v1.text || '').trim().split(/\s+/).filter(Boolean).length;
-    if (w1 < 20 && item.verses.length > targetVerseIdx + 1) {
-      const v2 = item.verses[targetVerseIdx + 1];
+    const v2 = item.verses[targetVerseIdx + 1];
+    if (w1 < 20 && v2) {
       const w2 = (v2.text || '').trim().split(/\s+/).filter(Boolean).length;
       if (w1 + w2 <= 40) {
         sampleText = `${v1.verse_number}. ${v1.text}\n\n${v2.verse_number}. ${v2.text}`;
@@ -1518,7 +1519,7 @@ export function renderAssetPreview(item: any, tabName: string) {
     if (addBtn) {
       addBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        addDualScriptureToSchedule(item, pVersion, lp.getSecondaryBibleVersion(), item.verses, currentDualSecondaryVerses);
+        addDualScriptureToSchedule(item, pVersion, lp.getSecondaryBibleVersion(), item.verses ?? [], currentDualSecondaryVerses);
       });
     }
 
@@ -1531,7 +1532,7 @@ export function renderAssetPreview(item: any, tabName: string) {
         if (localData && localData.verses && localData.verses.length > 0) {
           currentDualSecondaryVerses = localData.verses;
           const matchingVerses = localData.verses.filter((v: ScriptureVerse) =>
-            v.verse_number >= item.verse_start && v.verse_number <= item.verse_end
+            v.verse_number >= (item.verse_start ?? 0) && v.verse_number <= (item.verse_end ?? Infinity)
           );
           const vList = matchingVerses.length > 0 ? matchingVerses : localData.verses;
           
