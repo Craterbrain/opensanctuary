@@ -1,6 +1,6 @@
 # Client discovery & console pairing
 
-_Last edited: 2026-10-22_
+_Last edited: 2026-10-29_
 
 This covers two related things for **permanent display clients** — the
 Roku and Android TV apps, as opposed to someone opening `live.html` in a

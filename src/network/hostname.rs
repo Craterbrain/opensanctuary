@@ -196,7 +196,7 @@ pub fn render_terminal_qr(data: &str) -> Vec<String> {
 /// `forwarded_for` will be `None` in that case, so this just returns
 /// `connect_ip` unchanged.
 ///
-/// See docs/TUNNELS.md "A real gap this setup exposes" for why this exists:
+/// See docs/LOCAL_HTTPS.md "A real gap this setup exposes" for why this exists:
 /// without it, a reverse proxy on the same machine (e.g. Caddy fronting
 /// OS-Next with a trusted public HTTPS domain) makes every real visitor
 /// look like a loopback caller to the app, since that connection genuinely

@@ -89,6 +89,10 @@ if [ -f "$MIME_DIR/packages/opensanctuary.xml" ]; then
   $SUDO rm -f "$MIME_DIR/packages/opensanctuary.xml"
   if command -v update-mime-database >/dev/null 2>&1; then $SUDO update-mime-database "$MIME_DIR" >/dev/null 2>&1 || true; fi
 fi
+if [ "$SYSTEM" = 1 ]; then
+  $SUDO rm -f /usr/libexec/opensanctuary/setup-local-https /usr/share/polkit-1/actions/io.github.craterbrain.opensanctuary.local-https.policy
+  $SUDO rmdir /usr/libexec/opensanctuary 2>/dev/null || true
+fi
 if command -v update-desktop-database >/dev/null 2>&1; then $SUDO update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true; fi
 
 if [ "$DELETE_DATA" = 1 ]; then

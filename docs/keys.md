@@ -1,6 +1,6 @@
 # Setting up the release signing key
 
-_Last edited: 2026-10-15_
+_Last edited: 2026-10-29_
 
 This is the one key OpenSanctuary needs right now: the Ed25519 keypair
 (via `minisign`) that signs every release's `checksums.txt`, which
@@ -8,18 +8,11 @@ This is the one key OpenSanctuary needs right now: the Ed25519 keypair
 `packaging/install.sh` (the generic-Linux installer) both verify before
 ever installing anything. The design rationale and threat model are in
 `docs/update.md`'s "Release signing key" section — this doc is just the
-checklist for actually doing it, once, for real.
+checklist for generating or rotating it.
 
-**Current status**: done, and already rotated once. The live key (minisign
-ID `C12205725EA34858`) was generated 2026-10-11, replacing a 2026-10-06 key
-whose encrypted secret was lost before any release was ever signed with it
-(so that rotation needed none of "If the key is ever lost or compromised"
-below — nothing had shipped with the old key yet). The current key has
-signed real published releases (every release so far); see
-`docs/release-signing-key.txt` for its public half and
-`docs/workflow.md`'s "Current status" for the release history. The steps
-below are kept as the runbook for the *next* rotation, not a still-open
-task.
+**Current key**: minisign ID `C12205725EA34858`; its public half is in
+`docs/release-signing-key.txt`. Setup is complete, so the steps below are
+the runbook for the next rotation.
 
 Follow these in order. Steps 1–4 you do on your own machine, outside any
 CI system. Nothing in steps 1–4 ever touches GitHub.
@@ -135,14 +128,14 @@ The public key wants the opposite treatment from the private key — as
 visible and independently cross-checkable as possible, so the key baked
 into a binary isn't the sole source of truth for its own trust:
 
-1. **Embed it in the app** _(done)_: `RELEASE_PUBLIC_KEY_B64` in
+1. **Embed it in the app**: `RELEASE_PUBLIC_KEY_B64` in
    `src/network/updater.rs` and `PUBLIC_KEY` in `packaging/install.sh` hold
    the same `RW...` string as step 5's variable. This is what every
    installed copy of OpenSanctuary actually checks updates against.
-2. **Swap the repo too** _(done)_: `RELEASES_REPO` and `REPO` point at
+2. **Point at the repo**: `RELEASES_REPO` and `REPO` are
    `Craterbrain/opensanctuary`, which must be public for the updater.
-3. **Publish it independently** _(done: `docs/release-signing-key.txt`, README "Releases")_: create `docs/release-signing-key.txt`
-   containing the full contents of `opensanctuary_release.pub` (both
+3. **Publish it independently**: update `docs/release-signing-key.txt`
+   (and the README "Releases" section) with the full contents of `opensanctuary_release.pub` (both
    lines) plus a one-line note of when/how it was generated. Add a short
    "Verifying releases" mention in `README.md` pointing at it. The point
    of this step is that someone can confirm the key in a binary they

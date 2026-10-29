@@ -71,7 +71,7 @@ pub(super) fn require_host_token_and_console_lock(headers: &HeaderMap, app: &App
 }
 
 /// Minimal validation for a user-supplied public HTTPS URL (the "Public
-/// HTTPS URL" setting, docs/TUNNELS.md) -- deliberately not a full RFC 3986
+/// HTTPS URL" setting, docs/LOCAL_HTTPS.md) -- deliberately not a full RFC 3986
 /// parse (no new dependency for this one check), just enough to catch the
 /// realistic mistakes (wrong scheme, no host, stray whitespace) before the
 /// value is persisted and handed out in QR codes, the startup banner, and
@@ -159,7 +159,7 @@ pub(super) async fn verify_host_token_handler(
 /// never reaches them.
 ///
 /// "Real origin" is `resolve_real_client_ip`, not the raw TCP peer: a
-/// reverse proxy (Caddy, see docs/TUNNELS.md) running on this same machine
+/// reverse proxy (Caddy, see docs/LOCAL_HTTPS.md) running on this same machine
 /// makes every request's TCP peer loopback regardless of who's actually
 /// asking, since that's genuinely who connected to this process's listener.
 /// Trusting `X-Forwarded-For` *only* when the TCP peer is itself loopback

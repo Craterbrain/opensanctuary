@@ -1,4 +1,4 @@
-# Automates the Windows half of docs/TUNNELS.md: installs Caddy (with the
+# Automates the Windows half of docs/LOCAL_HTTPS.md: installs Caddy (with the
 # Cloudflare DNS-01 plugin) as a persistent background service (via NSSM,
 # since Windows Home has no built-in way to run a standalone .exe as a
 # service) reverse-proxying to OS-Next's loopback-only plane, so a church
@@ -7,11 +7,11 @@
 # Caddyfile/token and restarts the service rather than failing.
 #
 # Usage (Administrator PowerShell):
-#   .\packaging\setup-tunnel-windows.ps1 -Domain connect.yourchurch.org [-Port 8080] [-DryRun]
+#   .\packaging\setup-local-https-windows.ps1 -Domain connect.yourchurch.org [-Port 8080] [-DryRun]
 #   (The Cloudflare API token is prompted for securely, never passed as a
 #    parameter -- a plain parameter would land in PowerShell history.)
 #
-# What this does NOT automate (see docs/TUNNELS.md for why, and the manual
+# What this does NOT automate (see docs/LOCAL_HTTPS.md for why, and the manual
 # steps if you'd rather do any of this by hand):
 #   - The local DNS override that makes the domain resolve on-site even when
 #     the building's internet is down -- that's done in the church's router
@@ -25,6 +25,7 @@
 param(
     [string]$Domain = "",
     [string]$Port = "8080",
+    [string]$TokenFile = "",
     [switch]$DryRun
 )
 
@@ -56,17 +57,29 @@ if ([string]::IsNullOrWhiteSpace($Domain)) {
 }
 
 # Never echoed, never passed as a parameter -- only needs the Cloudflare
-# Zone.DNS:Edit permission scoped to this one zone (docs/TUNNELS.md), not
+# Zone.DNS:Edit + Zone.Zone:Read permissions scoped to this one zone (docs/LOCAL_HTTPS.md), not
 # full account access.
-$cfTokenSecure = Read-Host "Cloudflare API token (Zone.DNS:Edit, scoped to this zone)" -AsSecureString
-$cfToken = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($cfTokenSecure))
+# OpenSanctuary's Settings > Network setup button runs this non-interactively and
+# hands the token over in this environment variable instead.
+# (It writes the token to a file only this user can read and passes -TokenFile,
+# because an elevated process doesn't reliably inherit the caller's environment;
+# the file is deleted as soon as it has been read.)
+if ($TokenFile -and (Test-Path -LiteralPath $TokenFile)) {
+    $cfToken = (Get-Content -LiteralPath $TokenFile -Raw).Trim()
+    Remove-Item -LiteralPath $TokenFile -Force -ErrorAction SilentlyContinue
+} elseif ($env:CLOUDFLARE_API_TOKEN) {
+    $cfToken = $env:CLOUDFLARE_API_TOKEN
+} else {
+    $cfTokenSecure = Read-Host "Cloudflare API token (Zone.DNS:Edit + Zone.Zone:Read, scoped to this zone)" -AsSecureString
+    $cfToken = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($cfTokenSecure))
+}
 if ([string]::IsNullOrWhiteSpace($cfToken)) {
     Write-Error "A Cloudflare API token is required."
     exit 1
 }
 
 Write-Host "============================================================"
-Write-Host " OS-Next Tunnel Setup (Windows) -- docs/TUNNELS.md"
+Write-Host " OS-Next Local HTTPS Setup (Windows) -- docs/LOCAL_HTTPS.md"
 Write-Host "============================================================"
 Write-Host " Domain          : $Domain"
 Write-Host " OS-Next port    : $Port"
@@ -101,7 +114,7 @@ if ($portConflict) {
 
 # --- 2. Fetch Caddy with the Cloudflare DNS plugin ----------------------
 # Caddy's official download API builds a custom binary with exactly the
-# plugins requested -- the same official source docs/TUNNELS.md already
+# plugins requested -- the same official source docs/LOCAL_HTTPS.md already
 # points admins to for the manual download, just automated.
 $caddyDir = "C:\Caddy"
 $caddyExe = Join-Path $caddyDir "caddy.exe"
@@ -125,6 +138,7 @@ $caddyfileContent = @"
 $Domain {
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+        resolvers 1.1.1.1
     }
 
     reverse_proxy localhost:$Port
@@ -163,22 +177,22 @@ if ($serviceExists -and $serviceExists.Status -eq "Running") {
 }
 
 # --- 5. Firewall ---------------------------------------------------------
-Write-Host "==> Opening the firewall for 80/443..."
+Write-Host "==> Opening the firewall for 80/443 (local subnet only)..."
 function Show-FirewallManualFallback {
     Write-Host "   Could not open the firewall automatically. Open it manually (Administrator PowerShell):"
-    Write-Host "     New-NetFirewallRule -DisplayName 'Caddy-HTTP' -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow"
-    Write-Host "     New-NetFirewallRule -DisplayName 'Caddy-HTTPS' -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow"
-    Write-Host "   See docs/TUNNELS.md 'Setup for Windows' step 2 for the full reference."
+    Write-Host "     New-NetFirewallRule -DisplayName 'Caddy-HTTP' -Direction Inbound -LocalPort 80 -Protocol TCP -RemoteAddress LocalSubnet -Action Allow"
+    Write-Host "     New-NetFirewallRule -DisplayName 'Caddy-HTTPS' -Direction Inbound -LocalPort 443 -Protocol TCP -RemoteAddress LocalSubnet -Action Allow"
+    Write-Host "   See docs/LOCAL_HTTPS.md 'Setup for Windows' step 2 for the full reference."
 }
 try {
     Invoke-Step "New-NetFirewallRule -DisplayName 'Caddy-HTTP' -LocalPort 80" {
         if (-not (Get-NetFirewallRule -DisplayName "Caddy-HTTP" -ErrorAction SilentlyContinue)) {
-            New-NetFirewallRule -DisplayName "Caddy-HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow | Out-Null
+            New-NetFirewallRule -DisplayName "Caddy-HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -RemoteAddress LocalSubnet -Action Allow | Out-Null
         }
     }
     Invoke-Step "New-NetFirewallRule -DisplayName 'Caddy-HTTPS' -LocalPort 443" {
         if (-not (Get-NetFirewallRule -DisplayName "Caddy-HTTPS" -ErrorAction SilentlyContinue)) {
-            New-NetFirewallRule -DisplayName "Caddy-HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow | Out-Null
+            New-NetFirewallRule -DisplayName "Caddy-HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -RemoteAddress LocalSubnet -Action Allow | Out-Null
         }
     }
 } catch {
@@ -187,7 +201,7 @@ try {
 }
 
 Write-Host "============================================================"
-Write-Host " Still to do manually (docs/TUNNELS.md has the full detail):"
+Write-Host " Still to do manually (docs/LOCAL_HTTPS.md has the full detail):"
 Write-Host "============================================================"
 Write-Host " 1. Local DNS override: in the church's router (or Pi-hole/AdGuard),"
 Write-Host "    add an A record pointing $Domain -> this machine's LAN IP, so"
@@ -209,3 +223,5 @@ if (-not $DryRun) {
         Write-Host "    above isn't in place yet. Check the NSSM-managed service log for the actual certificate-issuance status."
     }
 }
+
+exit 0

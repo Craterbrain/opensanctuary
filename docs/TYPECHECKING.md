@@ -1,6 +1,6 @@
 # TypeScript type checking (2026-09-30)
 
-_Last edited: 2026-10-15_
+_Last edited: 2026-10-29_
 
 `web/` had no `tsconfig.json` and no `tsc` invocation anywhere before this —
 `bun build` transpiles TypeScript (strips types) without ever checking them,

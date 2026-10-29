@@ -1,6 +1,6 @@
 # Broadcasting OS-Next output (OBS setup)
 
-_Last edited: 2026-10-01 14:19_
+_Last edited: 2026-10-29 07:01_
 
 OS-Next has no built-in streaming encoder, RTMP/SRT output, or NDI sender, and it isn't getting one. The Live Display (FOH) page is a plain web page, and any screen-capture/streaming tool that can capture a web page can broadcast it. The recommended tool is **OBS Studio**, using its built-in **Browser Source** — no OS-Next code changes or plugins required.
 
@@ -31,7 +31,7 @@ That's out of scope by design. OBS (or vMix, Wirecast, etc.) already does encodi
      click-through the way a normal browser tab does. Two ways around it,
      neither independently verified against a current OBS version:
      - Put [Caddy](https://caddyserver.com) in front of OS-Next
-       (`docs/TUNNELS.md`) so the URL OBS loads has a real, CA-signed
+       (`docs/LOCAL_HTTPS.md`) so the URL OBS loads has a real, CA-signed
        certificate — this should work cleanly since OBS's objection is
        specifically to self-signed/untrusted certs, not HTTPS itself.
      - OBS can reportedly take extra Chromium/CEF command-line flags via a

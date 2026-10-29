@@ -1,6 +1,6 @@
 # Configurable Default Paths & Storage Architecture
 
-_Last edited: 2026-10-15_
+_Last edited: 2026-10-29_
 
 ## Overview & Background
 

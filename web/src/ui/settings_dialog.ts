@@ -1560,7 +1560,7 @@ function renderNetworkSettings(content: HTMLElement) {
   hostnameCard.appendChild(hostInputRow);
   content.appendChild(hostnameCard);
 
-  // 2b. Public HTTPS URL card (docs/TUNNELS.md -- Caddy reverse proxy with a
+  // 2b. Public HTTPS URL card (docs/LOCAL_HTTPS.md -- Caddy reverse proxy with a
   // real Let's Encrypt cert). Optional: an empty value just means "not set,
   // keep using the self-signed cert everywhere," so the badge stays quiet
   // until there's actually something to check.
@@ -1630,6 +1630,115 @@ function renderNetworkSettings(content: HTMLElement) {
   publicUrlInputRow.appendChild(publicUrlInputEl);
   publicUrlInputRow.appendChild(publicUrlBadge);
   publicUrlCard.appendChild(publicUrlInputRow);
+
+  // Guided setup: runs packaging/setup-local-https-*.{sh,ps1} (docs/LOCAL_HTTPS.md) and streams its log here.
+  const setupDetails = document.createElement('details');
+  setupDetails.className = 'network-card-desc';
+  setupDetails.style.marginTop = '10px';
+  const setupSummary = document.createElement('summary');
+  setupSummary.textContent = 'Set up automatically (Caddy + Cloudflare certificate)…';
+  setupSummary.style.cursor = 'pointer';
+  setupDetails.appendChild(setupSummary);
+
+  const setupInfo = document.createElement('div');
+  setupInfo.style.margin = '8px 0';
+  setupInfo.textContent = 'Installs Caddy on this computer and gets a trusted certificate for your domain through Cloudflare DNS. The domain must be on Cloudflare, and the token needs Zone · DNS · Edit and Zone · Zone · Read for that one zone. Nothing is opened to the internet: the firewall rules allow only your local network, and the token is only given to the setup script. You will be asked for administrator permission. See docs/LOCAL_HTTPS.md; you still need a local DNS override in your router.';
+  setupDetails.appendChild(setupInfo);
+
+  const setupDomain = document.createElement('input');
+  setupDomain.type = 'text';
+  setupDomain.className = 'search-input network-input-lg';
+  setupDomain.placeholder = 'connect.yourchurch.org';
+  setupDomain.autocomplete = 'off';
+  const setupToken = document.createElement('input');
+  setupToken.type = 'password';
+  setupToken.className = 'search-input network-input-lg';
+  setupToken.placeholder = 'Cloudflare API token';
+  setupToken.autocomplete = 'off';
+  const setupDry = document.createElement('label');
+  const setupDryBox = document.createElement('input');
+  setupDryBox.type = 'checkbox';
+  setupDryBox.checked = true;
+  setupDry.appendChild(setupDryBox);
+  setupDry.appendChild(document.createTextNode(' Dry run first (shows every step, changes nothing)'));
+  const setupBtn = document.createElement('button');
+  setupBtn.className = 'btn btn-primary';
+  setupBtn.textContent = 'Run setup';
+  const setupStatus = document.createElement('span');
+  setupStatus.className = 'network-badge network-badge--info';
+  setupStatus.style.display = 'none';
+  const setupLog = document.createElement('pre');
+  setupLog.id = 'network-local-https-log';
+  setupLog.style.cssText = 'display:none;max-height:260px;overflow:auto;margin-top:8px;padding:8px;background:#0b0b0e;color:#d8d8e0;font:12px/1.4 monospace;white-space:pre-wrap;border-radius:4px';
+
+  for (const el of [setupDomain, setupToken]) {
+    const row = document.createElement('div');
+    row.className = 'network-input-row';
+    row.appendChild(el);
+    setupDetails.appendChild(row);
+  }
+  const setupActions = document.createElement('div');
+  setupActions.className = 'network-input-row';
+  setupActions.appendChild(setupDry);
+  setupActions.appendChild(setupBtn);
+  setupActions.appendChild(setupStatus);
+  setupDetails.appendChild(setupActions);
+  setupDetails.appendChild(setupLog);
+
+  const showSetupStatus = (kind: 'info' | 'success' | 'warning', text: string) => {
+    setupStatus.className = `network-badge network-badge--${kind}`;
+    setupStatus.textContent = text;
+    setupStatus.style.display = 'inline-flex';
+  };
+
+  setupBtn.addEventListener('click', async () => {
+    const domain = setupDomain.value.trim();
+    const dryRun = setupDryBox.checked;
+    if (!domain) { showSetupStatus('warning', 'Enter the domain first'); return; }
+    if (!dryRun && !setupToken.value.trim()) { showSetupStatus('warning', 'Enter the Cloudflare token'); return; }
+    setupBtn.disabled = true;
+    setupLog.textContent = '';
+    setupLog.style.display = 'block';
+    showSetupStatus('info', 'Starting…');
+    try {
+      const started = await api.network.startLocalHttpsSetup({
+        domain,
+        dry_run: dryRun,
+        cloudflare_token: setupToken.value.trim(),
+      });
+      setupToken.value = '';
+      let since = 0;
+      showSetupStatus('info', dryRun ? 'Dry run in progress…' : 'Waiting for administrator permission, then running…');
+      while (setupDetails.isConnected) {
+        const { progress } = await api.network.localHttpsSetupProgress(started.task_id, since);
+        if (!progress) { showSetupStatus('warning', 'Lost track of the setup'); break; }
+        if (progress.lines.length) {
+          const atBottom = setupLog.scrollTop + setupLog.clientHeight >= setupLog.scrollHeight - 8;
+          setupLog.textContent += progress.lines.join('\n') + '\n';
+          if (atBottom) setupLog.scrollTop = setupLog.scrollHeight;
+        }
+        since = progress.next;
+        if (progress.is_complete) {
+          if (progress.status === 'completed') {
+            showSetupStatus('success', dryRun ? '✓ Dry run finished. Untick "Dry run" to do it for real.' : '✓ Done');
+            if (!dryRun) {
+              publicUrlInputEl.value = `https://${domain.toLowerCase()}`;
+              publicUrlInputEl.dispatchEvent(new Event('input'));
+            }
+          } else {
+            showSetupStatus('warning', `⚠️ ${progress.error || 'Setup failed'}`);
+          }
+          break;
+        }
+        await new Promise(r => setTimeout(r, 700));
+      }
+    } catch (e: any) {
+      showSetupStatus('warning', `⚠️ ${e?.message || 'Could not start the setup'}`);
+    } finally {
+      setupBtn.disabled = false;
+    }
+  });
+  publicUrlCard.appendChild(setupDetails);
   content.appendChild(publicUrlCard);
 
   // 3. HTTP & Remote Port Card

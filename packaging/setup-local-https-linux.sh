@@ -1,5 +1,5 @@
 #!/bin/bash
-# Automates the Linux half of docs/TUNNELS.md: installs Caddy (with the
+# Automates the Linux half of docs/LOCAL_HTTPS.md: installs Caddy (with the
 # Cloudflare DNS-01 plugin) as a systemd service reverse-proxying to
 # OS-Next's loopback-only plane, so a church gets a real, browser-trusted
 # HTTPS domain instead of self-signed-cert warnings. Idempotent -- re-running
@@ -7,11 +7,11 @@
 # failing.
 #
 # Usage:
-#   sudo packaging/setup-tunnel-linux.sh --domain connect.yourchurch.org [--port 8080] [--dry-run]
+#   sudo packaging/setup-local-https-linux.sh --domain connect.yourchurch.org [--port 8080] [--dry-run]
 #   (Cloudflare API token is prompted for, never passed as a CLI arg --
 #    a plain arg would land in shell history and `ps`.)
 #
-# What this does NOT automate (see docs/TUNNELS.md for why, and the manual
+# What this does NOT automate (see docs/LOCAL_HTTPS.md for why, and the manual
 # steps if you'd rather do any of this by hand):
 #   - The local DNS override that makes the domain resolve on-site even when
 #     the building's internet is down -- that's done in the church's router
@@ -63,9 +63,9 @@ if [ -z "$DOMAIN" ]; then
 fi
 
 # Never echoed, never passed as a CLI arg -- only needs the Cloudflare
-# Zone.DNS:Edit permission scoped to this one zone (docs/TUNNELS.md), not
+# Zone.DNS:Edit + Zone.Zone:Read permissions scoped to this one zone (docs/LOCAL_HTTPS.md), not
 # full account access.
-read -rsp "Cloudflare API token (Zone.DNS:Edit, scoped to this zone): " CLOUDFLARE_API_TOKEN
+read -rsp "Cloudflare API token (Zone.DNS:Edit + Zone.Zone:Read, scoped to this zone): " CLOUDFLARE_API_TOKEN
 echo
 if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
   echo "A Cloudflare API token is required." >&2
@@ -73,7 +73,7 @@ if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
 fi
 
 echo "============================================================"
-echo " OS-Next Tunnel Setup (Linux) -- docs/TUNNELS.md"
+echo " OS-Next Local HTTPS Setup (Linux) -- docs/LOCAL_HTTPS.md"
 echo "============================================================"
 echo " Domain          : $DOMAIN"
 echo " OS-Next port    : $PORT"
@@ -118,7 +118,7 @@ fi
 
 # --- 2. Fetch Caddy with the Cloudflare DNS plugin ----------------------
 # Caddy's official download API builds a custom binary with exactly the
-# plugins requested -- the same official source docs/TUNNELS.md already
+# plugins requested -- the same official source docs/LOCAL_HTTPS.md already
 # points admins to for the manual download, just automated.
 CADDY_BIN="/usr/bin/caddy"
 if [ -x "$CADDY_BIN" ] && "$CADDY_BIN" list-modules 2>/dev/null | grep -q "dns.providers.cloudflare"; then
@@ -130,9 +130,9 @@ else
     aarch64|arm64) ARCH="arm64" ;;
   esac
   DOWNLOAD_URL="https://caddyserver.com/api/download?os=linux&arch=${ARCH}&p=github.com/caddy-dns/cloudflare"
-  run curl -fsSL -o /tmp/caddy-tunnel-setup "$DOWNLOAD_URL"
-  run chmod +x /tmp/caddy-tunnel-setup
-  run mv /tmp/caddy-tunnel-setup "$CADDY_BIN"
+  run curl -fsSL -o /tmp/caddy-local-https-setup "$DOWNLOAD_URL"
+  run chmod +x /tmp/caddy-local-https-setup
+  run mv /tmp/caddy-local-https-setup "$CADDY_BIN"
 fi
 
 # --- 3. Caddyfile -------------------------------------------------------
@@ -143,6 +143,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
 $DOMAIN {
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+        resolvers 1.1.1.1
     }
 
     reverse_proxy localhost:$PORT
@@ -154,6 +155,7 @@ else
 $DOMAIN {
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+        resolvers 1.1.1.1
     }
 
     reverse_proxy localhost:$PORT
@@ -185,28 +187,32 @@ else
 fi
 
 # --- 5. Firewall ---------------------------------------------------------
-echo "==> Opening the firewall for 80/443..."
+echo "==> Opening the firewall for 80/443 (private LAN addresses only)..."
+LAN_NETS="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 firewall_manual_fallback() {
-  echo "   Could not open the firewall automatically. Open it manually with whichever of these applies:"
-  echo "     UFW (Debian/Ubuntu):      sudo ufw allow 80/tcp && sudo ufw allow 443/tcp"
-  echo "     firewalld (RHEL/Fedora):  sudo firewall-cmd --permanent --add-service=http --add-service=https && sudo firewall-cmd --reload"
-  echo "   See docs/TUNNELS.md 'Setup for Linux' step 2 for the full reference."
+  echo "   Could not open the firewall automatically. Allow ports 80/443 from private LAN addresses only"
+  echo "   ($LAN_NETS) -- never from anywhere. See docs/LOCAL_HTTPS.md 'Setup for Linux' step 2."
 }
+firewall_ok=1
 if command -v ufw >/dev/null 2>&1; then
-  if ! run ufw allow 80/tcp || ! run ufw allow 443/tcp; then
-    firewall_manual_fallback
-  fi
+  for net in $LAN_NETS; do
+    run ufw allow from "$net" to any port 80,443 proto tcp || firewall_ok=0
+  done
 elif command -v firewall-cmd >/dev/null 2>&1; then
-  if ! run firewall-cmd --permanent --add-service=http || ! run firewall-cmd --permanent --add-service=https || ! run firewall-cmd --reload; then
-    firewall_manual_fallback
-  fi
+  for net in $LAN_NETS; do
+    for p in 80 443; do
+      run firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=$net port port=$p protocol=tcp accept" || firewall_ok=0
+    done
+  done
+  run firewall-cmd --reload || firewall_ok=0
 else
   echo "   No supported firewall tool found (ufw/firewalld)."
-  firewall_manual_fallback
+  firewall_ok=0
 fi
+[ "$firewall_ok" -eq 1 ] || firewall_manual_fallback
 
 echo "============================================================"
-echo " Still to do manually (docs/TUNNELS.md has the full detail):"
+echo " Still to do manually (docs/LOCAL_HTTPS.md has the full detail):"
 echo "============================================================"
 echo " 1. Local DNS override: in the church's router (or Pi-hole/AdGuard),"
 echo "    add an A record pointing $DOMAIN -> this machine's LAN IP, so"

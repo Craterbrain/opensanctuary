@@ -1055,7 +1055,7 @@ export function buildPairingUrl(
 ): string {
   const tokenParam = sessionToken ? `?key=${encodeURIComponent(sessionToken)}` : '';
 
-  // A configured Public HTTPS URL (docs/TUNNELS.md) always wins: a real,
+  // A configured Public HTTPS URL (docs/LOCAL_HTTPS.md) always wins: a real,
   // browser-trusted cert removes any ambiguity around camera-API
   // secure-context requirements on stricter mobile browsers, which is the
   // whole reason this function prefers HTTPS at all.

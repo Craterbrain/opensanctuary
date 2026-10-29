@@ -255,7 +255,7 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
   {
     key: 'publicHttpsUrl',
     label: 'Public HTTPS URL',
-    description: 'A trusted public domain (e.g. a Caddy reverse proxy with a real Let\'s Encrypt cert — see docs/TUNNELS.md) to prefer over the self-signed certificate everywhere a URL or QR code is generated for a device off this machine.',
+    description: 'A trusted public domain (e.g. a Caddy reverse proxy with a real Let\'s Encrypt cert — see docs/LOCAL_HTTPS.md) to prefer over the self-signed certificate everywhere a URL or QR code is generated for a device off this machine.',
     category: 'network',
     control: 'text',
     placeholder: 'https://connect.yourchurch.org',

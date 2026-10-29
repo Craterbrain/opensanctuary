@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Lets OpenSanctuary's Settings > Network > "Set up automatically" run its local-HTTPS setup helper
+  (packaging/setup-local-https-linux.sh, installed as /usr/libexec/opensanctuary/setup-local-https)
+  as root, with a clear prompt instead of a generic "run bash as root". It always asks for an
+  administrator password and never remembers the answer. See docs/LOCAL_HTTPS.md.
+-->
+<policyconfig>
+  <vendor>OpenSanctuary</vendor>
+  <vendor_url>https://github.com/Craterbrain/opensanctuary</vendor_url>
+
+  <action id="io.github.craterbrain.opensanctuary.local-https">
+    <description>Set up trusted HTTPS for OpenSanctuary</description>
+    <message>Authentication is required to install Caddy and set up trusted HTTPS for OpenSanctuary on this computer</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/opensanctuary/setup-local-https</annotate>
+  </action>
+</policyconfig>

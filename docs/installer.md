@@ -1,6 +1,6 @@
 # Plan: installers (Windows, Linux)
 
-_Last edited: 2026-10-22_
+_Last edited: 2026-10-29_
 
 ## Current state
 

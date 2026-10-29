@@ -1,6 +1,6 @@
 # Licensed Bible text
 
-_Last edited: 2026-10-26_
+_Last edited: 2026-10-29_
 
 Some Bibles (the NIV, NASB, AMP and others, offered through the YouVersion Platform) are licensed to be **shown, not
 kept**. OpenSanctuary treats their text differently from a Bible you own (`docs/file-formats.md`, `bibles/<VERSION>.db`):

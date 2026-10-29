@@ -1,6 +1,6 @@
 # To-do
 
-_Last edited: 2026-10-25_
+_Last edited: 2026-10-29_
 
 What hasn't been done yet. Each item says where it came from, so the detail lives in one place. Remove an item when it ships.
 

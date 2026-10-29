@@ -1,6 +1,6 @@
 # Building OpenSanctuary (os-next)
 
-_Last edited: 2026-10-15_
+_Last edited: 2026-10-29_
 
 ## Prerequisites
 
@@ -35,7 +35,7 @@ firewall rules. `:8443` is HTTPS (self-signed by default) and is the only
 plane any other device (a second machine's browser, Remote Control phones,
 Android TV, a Stage Foldback monitor) can ever reach this app through --
 HTTPS can't be disabled. See `src/main.rs`'s loopback-bind comment, or
-`docs/TUNNELS.md` for fronting the HTTPS plane with Caddy for a real
+`docs/LOCAL_HTTPS.md` for fronting the HTTPS plane with Caddy for a real
 public cert. Useful flags:
 
 - `--headless --no-open` — server only, no desktop window (for a machine

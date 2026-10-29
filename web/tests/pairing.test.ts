@@ -381,7 +381,7 @@ describe('Universal QR Code Generation and Decoding Engine', () => {
     );
     expect(urlHttp).toBe('http://192.168.1.100:8080/pairing.html?key=pair_sess_plain456');
 
-    // 4. A configured Public HTTPS URL (docs/TUNNELS.md) always wins, even
+    // 4. A configured Public HTTPS URL (docs/LOCAL_HTTPS.md) always wins, even
     // over the self-signed https_enabled/https_port plane -- it's a real,
     // browser-trusted cert, the whole reason to set it up.
     const urlPublic = buildPairingUrl(

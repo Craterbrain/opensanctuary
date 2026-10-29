@@ -77,6 +77,7 @@ cp -r target/bundled-plugins/. "$STAGE/web/plugins/"  # packaging/fetch-plugins.
 # its own folder, and a fix to the script reaches installs with every release.
 # uninstall.sh does the reverse (keeps the library unless asked).
 cp packaging/install.sh packaging/uninstall.sh packaging/opensanctuary-mime.xml "$STAGE/"
+cp packaging/setup-local-https-linux.sh packaging/polkit/io.github.craterbrain.opensanctuary.local-https.policy "$STAGE/"
 chmod +x "$STAGE/install.sh" "$STAGE/uninstall.sh"
 [ "${SKIP_TV_APK:-0}" = "1" ] || cp "$TV_APK" "$STAGE/tv-client/opensanctuary-tv.apk"
 
