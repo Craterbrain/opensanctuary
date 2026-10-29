@@ -1,4 +1,4 @@
-use axum::extract::{Query, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::http::StatusCode;
@@ -59,7 +59,7 @@ pub(super) async fn get_network_info(
     // HTTPS itself failed to start (src/main.rs logs this loudly); even
     // then the resulting URL won't actually be reachable remotely, but it's
     // at least valid for whoever's sitting at this exact machine.
-    // A configured Public HTTPS URL (docs/TUNNELS.md -- a church running
+    // A configured Public HTTPS URL (docs/LOCAL_HTTPS.md -- a church running
     // Caddy as a reverse proxy with a real Let's Encrypt cert) always wins
     // over the self-signed lan_ip:https_port form: it's the whole point of
     // setting it, and unlike the self-signed cert, a browser never shows a
@@ -242,7 +242,7 @@ pub(super) struct CheckPublicUrlQuery {
 }
 
 /// GET /api/network/check-public-url?url=https://connect.yourchurch.org
-/// Live-verifies a candidate Public HTTPS URL (docs/TUNNELS.md) actually
+/// Live-verifies a candidate Public HTTPS URL (docs/LOCAL_HTTPS.md) actually
 /// round-trips back to *this* server, not just "some HTTPS server
 /// answered" -- by GETting `{url}/api/server-info` (zero-auth, see
 /// `show.rs::get_server_info`) and comparing its `instance_id` against this
@@ -296,7 +296,7 @@ pub(super) async fn check_public_url_handler(
         Ok(resp) => (false, format!("Reached a server, but it returned HTTP {}.", resp.status())),
         Err(e) if e.is_timeout() => (
             false,
-            "Timed out -- DNS may not have propagated yet, or Caddy/the port-forward isn't up.".to_string(),
+            "Timed out -- the local DNS override may not be in place yet, or Caddy isn't running.".to_string(),
         ),
         Err(e) => (false, format!("Not reachable: {}", e)),
     };
@@ -520,6 +520,52 @@ pub(super) async fn regenerate_tls_cert_handler(State(app): State<AppState>) -> 
     }
 }
 
+#[derive(Deserialize)]
+pub(super) struct StartLocalHttpsSetupRequest {
+    domain: String,
+    port: Option<u16>,
+    #[serde(default)]
+    dry_run: bool,
+    /// Cloudflare API token. Only ever handed to the setup script (stdin / child env), never stored or logged.
+    #[serde(default)]
+    cloudflare_token: String,
+}
+
+/// POST /api/network/local-https/setup
+///
+/// Console-only. Runs the local-HTTPS setup script (docs/LOCAL_HTTPS.md) as a background task and returns a
+/// `task_id`; the console polls `.../progress/{task_id}` to show the script's live output. Real runs ask the
+/// operating system for administrator rights (polkit on Linux); a dry run changes nothing.
+pub(super) async fn start_local_https_setup_handler(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<StartLocalHttpsSetupRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    require_host_token(&headers, &app)?;
+    let port = req.port.unwrap_or(app.server_port);
+    match crate::network::local_https_setup::start(&req.domain, port, req.dry_run, &req.cloudflare_token) {
+        Ok(task_id) => Ok(Json(serde_json::json!({ "task_id": task_id }))),
+        Err(e) => Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e })))),
+    }
+}
+
+#[derive(Deserialize)]
+pub(super) struct LocalHttpsProgressQuery {
+    since: Option<usize>,
+}
+
+/// GET /api/network/local-https/progress/{task_id}?since=N -- log lines from index N on, plus status.
+pub(super) async fn get_local_https_setup_progress_handler(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(task_id): AxumPath<String>,
+    Query(query): Query<LocalHttpsProgressQuery>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    require_host_token(&headers, &app)?;
+    let progress = crate::network::local_https_setup::get_progress(&task_id, query.since.unwrap_or(0));
+    Ok(Json(serde_json::json!({ "progress": progress })))
+}
+
 pub(super) fn router() -> Router<AppState> {
     use axum::routing::{get, post};
     Router::new()
@@ -528,6 +574,8 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/network/check-port", get(check_port_handler))
         .route("/api/network/check-hostname", get(check_hostname_handler))
         .route("/api/network/check-public-url", get(check_public_url_handler))
+        .route("/api/network/local-https/setup", post(start_local_https_setup_handler))
+        .route("/api/network/local-https/progress/{task_id}", get(get_local_https_setup_progress_handler))
         .route("/api/network/dedicated-mac/toggle", post(toggle_dedicated_mac_handler))
         .route("/api/network/broadcast-option12", post(broadcast_option12_handler))
         .route("/api/network/tls/regenerate", post(regenerate_tls_cert_handler))

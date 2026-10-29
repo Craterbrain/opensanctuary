@@ -216,6 +216,12 @@ if [ -f "$INSTALL_DIR/opensanctuary-mime.xml" ]; then
   $SUDO cp "$INSTALL_DIR/opensanctuary-mime.xml" "$MIME_DIR/packages/opensanctuary.xml"
   if command -v update-mime-database >/dev/null 2>&1; then $SUDO update-mime-database "$MIME_DIR" >/dev/null 2>&1 || true; fi
 fi
+# System installs also get the polkit helper behind Settings > Network > "Set up automatically" (docs/LOCAL_HTTPS.md):
+# a root-owned copy of the setup script plus the policy that makes its administrator prompt say what it is for.
+if [ "$SYSTEM_INSTALL" = 1 ] && [ -f "$INSTALL_DIR/setup-local-https-linux.sh" ] && [ -d /usr/share/polkit-1/actions ]; then
+  $SUDO install -D -m 0755 "$INSTALL_DIR/setup-local-https-linux.sh" /usr/libexec/opensanctuary/setup-local-https
+  $SUDO install -m 0644 "$INSTALL_DIR/io.github.craterbrain.opensanctuary.local-https.policy" /usr/share/polkit-1/actions/
+fi
 if command -v update-desktop-database >/dev/null 2>&1; then $SUDO update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true; fi
 
 echo

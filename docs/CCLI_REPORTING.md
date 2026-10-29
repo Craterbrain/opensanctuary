@@ -1,6 +1,6 @@
 # CCLI usage reporting
 
-_Last edited: 2026-10-02 22:40_
+_Last edited: 2026-10-29 07:01_
 
 CCLI requires churches to periodically report which copyrighted songs were
 actually used in services, for royalty distribution. The CSV export,

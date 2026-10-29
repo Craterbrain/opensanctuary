@@ -1,6 +1,6 @@
 # First-time setup
 
-_Last edited: 2026-10-22_
+_Last edited: 2026-10-29_
 
 Status: **implemented** — all 7 steps below are built (`web/src/ui/first_time_setup.ts`).
 What follows is the original plan, kept because it's still the accurate rationale and

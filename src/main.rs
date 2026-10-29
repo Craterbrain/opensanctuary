@@ -433,7 +433,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         format!("http://{}:{}/#host_token={}", lan_ip, server_port, host_session_token)
     };
-    // A configured Public HTTPS URL (docs/TUNNELS.md) always wins as the
+    // A configured Public HTTPS URL (docs/LOCAL_HTTPS.md) always wins as the
     // *primary* line/QR -- it's a real, browser-trusted cert, which is the
     // whole reason to set it up -- but the self-signed URL is still printed
     // underneath, never silently dropped: it depends on external DNS/Caddy

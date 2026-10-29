@@ -1,6 +1,6 @@
 # Test VMs
 
-_Last edited: 2026-09-26 14:57_
+_Last edited: 2026-10-29 07:01_
 
 Two disposable sandbox VMs (unprivileged QEMU/KVM, `qemu:///session` — no host
 root needed) for testing platform-specific code that can't be validated on

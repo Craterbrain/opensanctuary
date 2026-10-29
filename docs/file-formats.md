@@ -1,6 +1,6 @@
 # OpenSanctuary file formats
 
-_Last edited: 2026-10-24_
+_Last edited: 2026-10-29_
 
 OpenSanctuary has its own files for passing songs, presentations, services and Bibles between
 installs, or for a backup. Unlike `.ewsx` (EasyWorship's schema) and `.odp` (OpenDocument), they keep

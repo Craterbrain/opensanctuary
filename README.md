@@ -1,191 +1,251 @@
-# OpenSanctuary
+<div align="center">
 
-_Last edited: 2026-10-22_
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="web/logo-banner.svg">
+  <img alt="OpenSanctuary" src="docs/logo-banner-light.svg" width="560">
+</picture>
 
-A next-generation church presentation engine — the software that drives the
-screens during a church service (lyrics, scripture, announcements, video)
-— written in Rust with a TypeScript web-based control UI.
+**Free, open-source church presentation software. Lyrics, scripture, media and announcements on every screen, driven from a browser.**
 
-## Why this exists
+[![Latest release](https://img.shields.io/github/v/release/Craterbrain/opensanctuary?label=release&color=FF5722)](https://github.com/Craterbrain/opensanctuary/releases/latest)
+[![CI](https://github.com/Craterbrain/opensanctuary/actions/workflows/ci.yml/badge.svg)](https://github.com/Craterbrain/opensanctuary/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/Craterbrain/opensanctuary/actions/workflows/codeql.yml/badge.svg)](https://github.com/Craterbrain/opensanctuary/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-lightgrey)
 
-Existing church presentation tools are mostly older Windows-only desktop
-apps (EasyWorship, ProPresenter) with per-seat licensing, no real
-multi-display story, and formats that don't talk to each other. OpenSanctuary is built around a different set of assumptions:
+[**Download**](https://github.com/Craterbrain/opensanctuary/releases/latest) ·
+[Install](#install) ·
+[Features](#features) ·
+[Plugins](#plugins) ·
+[Documentation](#documentation) ·
+[Build from source](#build-from-source)
 
-- **A browser is the client.** The operator console, the Live/Stage/Remote
-  output screens, and the mobile remote control are all just web pages
-  served over the LAN. No per-machine install for anything but the one
-  server.
-- **Your existing library should still work.** Real import support for
-  EasyWorship (`.ewsx`, and EasyWorship 5 `.ews` schedules), OpenLP (`.sqlite`/`.osj`/`.osz`), FreeShow
-  (`.show`/`.project`), PowerPoint (`.pptx`), and OpenDocument Presentation
-  (`.odp`) — moving to OpenSanctuary shouldn't mean rebuilding years of songs
-  and slides by hand. `.odp` also exports, so a presentation can leave again.
-  OpenSanctuary also has its own files (`.ossong`, `.ospres`, `.osservice`,
-  `.osbible`) that carry a song, presentation, service or Bible together with
-  its pictures, videos and music — see [docs/file-formats.md](docs/file-formats.md).
-- **Cross-platform, not Windows-only.** One Rust binary; Linux, Windows, and (maybe eventually) macOS from the same codebase.
+</div>
+
+<br>
+
+![The OpenSanctuary operator console: schedule, preview, live output and song library](docs/screenshots/console.png)
+
+OpenSanctuary is the software that drives the screens during a church
+service. It is written in Rust with a TypeScript web UI, and it runs as one
+small server on one machine. Everything else is a web page: the operator
+console, the front-of-house output, the stage monitor, and a phone remote.
+
+> **Status: beta.** The latest release is
+> [`v0.4.1`](https://github.com/Craterbrain/opensanctuary/releases/latest).
+> There is no 1.0 yet. The scheduling engine, multi-display output, most
+> importers and plugins are built and used for real. CCLI reporting and
+> the local-network HTTPS certificate setup (Caddy) are built but **not yet
+> tested**. The Android TV app is a work in progress and the Roku channel is
+> not yet implemented. Each document under [`docs/`](docs/) says plainly
+> whether what it describes is implemented or still a design.
+
+> **Testing and bug reports are very welcome.** The most useful thing you can
+> do right now is use every feature and hunt for edge cases: odd import
+> files, unusual display setups, long services, unexpected input. Please
+> [open an issue](https://github.com/Craterbrain/opensanctuary/issues) with
+> what you did, what you expected and what happened.
+
+## Why OpenSanctuary
+
+Most church presentation tools are Windows-only desktop apps with per-seat
+licensing, a weak multi-display story, and file formats that don't talk to
+each other. OpenSanctuary starts from different assumptions:
+
+- **A browser is the client.** Output screens and the remote control are web
+  pages served over your LAN. Only the server needs installing.
+- **Your library comes with you.** Import from EasyWorship, OpenLP,
+  FreeShow, PowerPoint and OpenDocument, so a switch doesn't mean
+  rebuilding years of songs and slides.
+- **Cross-platform.** One Rust codebase for Linux and Windows.
 - **No per-seat licensing.** MIT-licensed. Run it on as many machines as
   your church has.
 
-Status: **beta** (currently beta 3, released as `v0.3.0`). No 1.0 yet. The
-core engine, multi-display output, most import paths, CCLI reporting, and
-reverse-proxy tunneling are built and used for real — each doc under
-`docs/` says plainly whether what it describes is implemented or still a
-design.
+## Install
 
-## Screenshots
+Grab the latest build from the
+[**Releases page**](https://github.com/Craterbrain/opensanctuary/releases/latest).
+Every release has these assets:
 
-The operator console (library, schedule, preview and live panes) and the slide builder:
+| Platform | Asset | Notes |
+|---|---|---|
+| Windows | `opensanctuary-setup-x64.exe` | Installer with Start Menu entry and uninstaller. Your library is kept on uninstall unless you tick the box. |
+| Windows | `opensanctuary-windows-x64-<version>.zip` | Portable, no install. |
+| Debian, Ubuntu, Mint | `opensanctuary_<version>-1_amd64.deb` | Installs with `apt`. |
+| Any Linux | `opensanctuary-<version>-x86_64.flatpak` | `flatpak install --user <file>` |
+| Any Linux | `opensanctuary-linux-x64-<version>.tar.gz` | Fetched and installed by [`packaging/install.sh`](packaging/install.sh). |
 
-![Operator console](docs/screenshots/console.png)
+macOS has no installer yet. You can [build from source](#build-from-source).
 
-![Slide builder](docs/screenshots/slide-builder.png)
+On first launch a setup wizard helps you pull in content: public-domain
+hymns, public-domain Bibles, or your own existing library. See
+[`docs/first-time.md`](docs/first-time.md).
+
+<details>
+<summary><b>Verifying a download</b></summary>
+
+Every release ships `checksums.txt` and a detached `checksums.txt.minisig`
+signature. The built-in updater and `install.sh` both verify the signature
+against an embedded public key before installing anything. To check by hand:
+
+```sh
+minisign -Vm checksums.txt -P RWRYSKNecgUiwS2YaMPmshtR2/ZAQA/XnunXaOBQw/SRkZPyMspLwhGw
+sha256sum -c --ignore-missing checksums.txt
+```
+
+The key ID is `C12205725EA34858`. It is also published separately in
+[`docs/release-signing-key.txt`](docs/release-signing-key.txt), so you can
+confirm the key in a binary matches the one the project published. The full
+story is in [`docs/update.md`](docs/update.md).
+
+</details>
 
 ## Features
 
-**Live production**
-- A scheduling engine for songs, scripture, media, and free-form slides,
-  with live/staged state (what's on screen vs. queued up next) kept in
-  sync over WebSocket across every connected display.
-- A slide editor with text styling, backgrounds, image/video elements,
-  autofit text, and themes.
-- Blackout, clear-text, and logo-override controls for the live output.
-- Video/audio playback with loop control. Online stock photos (Pexels/Pixabay)
-  for backgrounds come from a bundled plugin you approve in Settings > Plugins.
+### Live production
 
-**Displays & remote control**
-- **Live Output** (front-of-house) and **Stage Foldback** (confidence
-  monitor) as separate pages, each independently themeable.
-- **Remote Control** — a mobile-friendly page to drive the service from a
-  phone or tablet, paired via QR code.
-- **Android TV client** (`apps/android-tv`) for permanent displays. The
-  console installs it over ADB and makes it the TV's home app (the stock
-  launcher is switched off, and can be switched back on from the console),
-  so the TV boots straight into OpenSanctuary — no Play Store listing, no
-  typing an IP address on a remote. Pairing is always a phone scanning the
-  QR code on the TV.
-- **Roku channel** (`apps/roku`) also works as a basic client today —
-  type the server's IP into its Settings screen once. It doesn't have
-  Android TV's no-typing sideload-and-pair flow yet; that part of Roku
-  support is still just a documented design (`src/discovery.rs`).
-- Any screen capture tool (OBS Browser Source, etc.) can broadcast the
-  Live Output page directly — see `docs/BROADCASTING.md`.
+- A scheduling engine for songs, scripture, media and free-form slides. The
+  live and staged state (what's on screen versus queued next) stays in sync
+  over WebSocket across every connected display.
+- A slide editor with text styling, themes, backgrounds, image and video
+  elements, and autofit text.
+- Blackout, clear-text and logo-override controls for the live output.
+- Video and audio playback with loop control.
+- CCLI reporting for licensed songs: [`docs/CCLI_REPORTING.md`](docs/CCLI_REPORTING.md).
+  **Not yet tested.**
 
-**Content & import**
-- Real importers for EasyWorship, OpenLP, FreeShow, PowerPoint, and
-  OpenDocument Presentation (`.odp`) — not just "read the text," but slides,
-  backgrounds, and arrangements. YMMV. `.odp` round-trips: export a
-  presentation back out, e.g. to hand to someone using LibreOffice Impress.
-- Bible translations you own work out of the box (point at your own `.db`
-  files); downloading public-domain translations (64, in 30 languages, hosted in
-  [opensanctuary-bibles](https://github.com/Craterbrain/opensanctuary-bibles))
-  and looking up passages online is the **Online Bibles** plugin.
-- Song lyrics lookup is the **Song Lyrics** plugin (LRCLIB and Genius), online video import is
-  the **Video Downloader** (`yt-dlp`) plugin and free stock photos are the
-  **Stock Images** plugin — see [Plugins](#plugins). Downloaded H.264 video is
-  converted to VP9 automatically for native hardware-decoded playback on the
-  target TV hardware (`src/storage/transcode.rs`) — see `BUILDING.md`.
+![The slide builder](docs/screenshots/slide-builder.png)
 
-**Extensibility & operations**
-- A permissioned plugin system — sandboxed web plugins (and, with full
-  console access, console scripts), each approved by the operator — see
-  [Plugins](#plugins).
+### Displays and remote control
+
+- **Live Output** for front-of-house and **Stage Foldback** for the
+  confidence monitor. They are separate pages, each independently themeable.
+- **Remote Control**: a mobile page to run the service from a phone or
+  tablet, paired by QR code.
+- **Android TV app** ([`apps/android-tv`](apps/android-tv)) for permanent
+  displays. **Work in progress.** The goal is for the console to install it
+  over ADB and make it the TV's home app, so the TV boots straight into
+  OpenSanctuary, paired by a phone scanning the QR code on the TV.
+- **Roku channel** ([`apps/roku`](apps/roku)). **Not yet implemented.** Only a
+  rough outline exists so far.
+- **Broadcast:** point OBS or any capture tool at the Live Output page. See
+  [`docs/BROADCASTING.md`](docs/BROADCASTING.md).
+
+### Content and import
+
+| Source | Formats |
+|---|---|
+| EasyWorship | `.ewsx`, and EasyWorship 5 `.ews` schedules |
+| OpenLP | `.sqlite`, `.osj`, `.osz` |
+| FreeShow | `.show`, `.project` |
+| PowerPoint | `.pptx` |
+| OpenDocument Presentation | `.odp` (also exports, so a presentation can leave again) |
+
+Importers bring over slides, backgrounds and arrangements, not just text.
+Results vary by source file. OpenSanctuary also has its own formats
+(`.ossong`, `.ospres`, `.osservice`, `.osbible`) that carry a song,
+presentation, service or Bible together with its pictures, videos and music.
+See [`docs/file-formats.md`](docs/file-formats.md).
+
+Bible translations you own work out of the box: point the app at your own
+`.db` files. Sixty-four public-domain translations in 30 languages are
+hosted in [opensanctuary-bibles](https://github.com/Craterbrain/opensanctuary-bibles)
+and downloaded through the **Online Bibles** plugin.
+
+### Extensibility and operations
+
+- A permissioned [plugin system](#plugins). Nothing runs until the operator
+  approves it.
 - A notification center (the **Notices** button) that collects the app's own
-  messages and notices from plugins, with per-source muting.
+  messages and plugin notices, with per-source muting.
 - Network diagnostics: mDNS discovery, hostname-conflict detection, DHCP
-  Option 12 broadcasting, multi-interface management.
-- Host-token-gated console API — only the paired console can mutate the
-  library or trigger commands; display/remote clients are read-only or
+  Option 12 broadcasting and multi-interface management.
+- Trusted HTTPS on the local network, using Caddy and a Let's Encrypt DNS-01
+  certificate, so every device on-site gets a valid certificate with no
+  browser warning. This is for certificates only: it does not expose the
+  server to the internet, and nobody outside your network can connect. See
+  [`docs/LOCAL_HTTPS.md`](docs/LOCAL_HTTPS.md). **Not yet tested.**
+- A host-token-gated console API. Only the paired console can change the
+  library or run commands. Display and remote clients are read-only or
   explicitly paired.
-- Signed, verified auto-updates (Ed25519/minisign) with a background
-  check on startup — see `docs/update.md`.
+- Signed, verified auto-updates (Ed25519 via minisign) with a background
+  check on startup.
 
 ## Plugins
 
-Optional features are plugins, and nothing runs until the operator approves it in
-**Settings → Plugins**. The review screen shows exactly what a plugin asks for (which
-websites it may reach, whether it may write to your library, which commands it may run)
-with a risk level for each, and a plugin that changes on disk drops back to "needs
-review" until you look at it again. A sandboxed plugin never gets the console's own credentials. You can add your own with
-**Install plugin…** (a `.zip` package; it stays off until you review it) and remove it again later.
+Optional features are plugins. The review screen in **Settings → Plugins**
+shows exactly what a plugin asks for (which sites it may reach, whether it
+may write to your library, which commands it may run), with a risk level for
+each. A plugin that changes on disk drops back to "needs review". A
+sandboxed plugin never receives the console's own credentials.
 
-Bundled with the app (all sandboxed web plugins, off until you turn them on):
+Bundled plugins, all sandboxed and off until you turn them on:
 
 | Plugin | What it does | Where it appears |
 |---|---|---|
-| **Song Lyrics** | Search LRCLIB (an open lyrics database) and Genius, and import lyrics as formatted song slides | Songs library |
-| **Online Bibles** | Download public-domain translations, look up passages online | Scriptures library |
-| **Video Downloader (yt-dlp)** | Download video or audio from YouTube and 1000+ sites into your Media library. The app installs and updates `yt-dlp` itself (signature- and checksum-verified) | Media library, and the video background picker |
-| **Stock Images (Pexels & Pixabay)** | Search free stock photos and add them as backgrounds, using your own free API key from each site | Media library |
+| **Song Lyrics** | Searches LRCLIB and Genius, and imports lyrics as formatted song slides. | Songs library |
+| **Online Bibles** | Downloads public-domain translations and looks up passages online. | Scriptures library |
+| **Video Downloader** | Downloads video or audio from YouTube and 1000+ sites with `yt-dlp`, which the app installs and updates itself (signature- and checksum-verified). | Media library, video background picker |
+| **Stock Images** | Searches Pexels and Pixabay for free backgrounds, using your own free API key. | Media library |
 
-![Stock Images plugin](docs/screenshots/stock-media-plugin.png)
+![The Stock Images plugin](docs/screenshots/stock-media-plugin.png)
 
-Two kinds exist: **sandboxed web plugins** (an isolated page that can only ask the app
-for things through a permission-checked bridge, the recommended kind) and **console
-scripts** (run inside the console page with full console access, so they are marked
-Critical). Plugins can add panels to the library sidebars and buttons to the ribbon, run a
-declared command-line tool, share secrets, post to the notification center, and use the
-app's own icons and theme so they look native. There are no native (compiled library)
-plugins. To write one, start with
-`docs/PLUGINS.md` (the guide) and `docs/PLUGIN_PERMISSIONS.md` (the permission model);
-`web/plugins/` holds the bundled ones as worked examples.
+You can add your own with **Install plugin…** (a `.zip` package that stays off
+until you review it). There are two kinds: sandboxed web plugins, the
+recommended kind, and console scripts, which run with full console access and
+are marked Critical. There are no native (compiled) plugins.
 
-## Releases
+To write one, start with [`docs/PLUGINS.md`](docs/PLUGINS.md) and
+[`docs/PLUGIN_PERMISSIONS.md`](docs/PLUGIN_PERMISSIONS.md). The bundled
+plugins in [`web/plugins/`](web/plugins/) are worked examples.
 
-Published at
-[github.com/Craterbrain/opensanctuary/releases](https://github.com/Craterbrain/opensanctuary/releases) —
-three artifacts per version, all signed:
+## Documentation
 
-- **`.deb`** — Debian/Ubuntu/Mint, installs via `apt`.
-- **Generic Linux tarball** — Fedora, Arch, anything else; fetched and
-  installed by `packaging/install.sh`.
-- **Windows installer** (and a portable, no-install zip).
+| Topic | Read |
+|---|---|
+| First-run wizard | [`docs/first-time.md`](docs/first-time.md) |
+| Import and file formats | [`docs/file-formats.md`](docs/file-formats.md), [`docs/ewpx-import.md`](docs/ewpx-import.md), [`docs/bible-import.md`](docs/bible-import.md) |
+| Public-domain songs | [`docs/public-domain-songs.md`](docs/public-domain-songs.md) |
+| Where data lives on disk | [`docs/paths.md`](docs/paths.md) |
+| Pairing displays and remotes | [`docs/CLIENT_PAIRING.md`](docs/CLIENT_PAIRING.md) |
+| Broadcasting to OBS | [`docs/BROADCASTING.md`](docs/BROADCASTING.md) |
+| Trusted local HTTPS (Caddy) | [`docs/LOCAL_HTTPS.md`](docs/LOCAL_HTTPS.md) |
+| CCLI reporting | [`docs/CCLI_REPORTING.md`](docs/CCLI_REPORTING.md) |
+| Writing plugins | [`docs/PLUGINS.md`](docs/PLUGINS.md), [`docs/PLUGIN_PERMISSIONS.md`](docs/PLUGIN_PERMISSIONS.md) |
+| Updates and release signing | [`docs/update.md`](docs/update.md), [`docs/SIGNING.md`](docs/SIGNING.md) |
+| Installers and packaging | [`docs/installer.md`](docs/installer.md) |
+| Cutting a release | [`docs/workflow.md`](docs/workflow.md), [`docs/keys.md`](docs/keys.md) |
+| Open tasks | [`docs/TODO.md`](docs/TODO.md) |
 
-Every release ships a `checksums.txt` and a detached `checksums.txt.minisig`
-signature; the app's own auto-updater (`src/network/updater.rs`) verifies
-both against an embedded public key before ever applying an update, and
-`packaging/install.sh` does the same for a fresh install. See
-`docs/update.md` for the full verification story, and
-`docs/release-signing-key.txt` for the production public key, independent
-of any single binary.
+## Build from source
 
-Release signing public key (minisign, key ID `C12205725EA34858`):
-
-```
-RWRYSKNecgUiwS2YaMPmshtR2/ZAQA/XnunXaOBQw/SRkZPyMspLwhGw
-```
-
-Verify a download manually with
-`minisign -Vm checksums.txt -P RWRYSKNecgUiwS2YaMPmshtR2/ZAQA/XnunXaOBQw/SRkZPyMspLwhGw`,
-then check the installer's SHA-256 against `checksums.txt`.
-
-## Building from source
-
-See [BUILDING.md](BUILDING.md) — covers prerequisites, the headless-only
-build, cross-compiling for Windows, and the optional `ffmpeg` / `yt-dlp`
+See [`BUILDING.md`](BUILDING.md). It covers prerequisites, the headless-only
+build, cross-compiling for Windows, and the optional `ffmpeg` and `yt-dlp`
 tools used by video import and the Video Downloader plugin.
+
+### Repository layout
+
+| Path | Contents |
+|---|---|
+| `src/` | Rust backend: show engine, storage, network, media pipeline |
+| `web/` | TypeScript operator UI, the live, stage and remote output pages, and `web/plugins/` |
+| `apps/` | Companion display apps for Android TV and Roku |
+| `packaging/` | `.deb`, Flatpak and Windows installer build scripts, and `install.sh` |
+| `tests/` | Rust integration tests and import-format fixtures |
+| `docs/` | Architecture, protocol and feature notes |
+| `vms/` | Sandboxed VM test automation, see [`vms/vms.md`](vms/vms.md) |
 
 ## License
 
-MIT — see [LICENSE](LICENSE). This covers OpenSanctuary's own code only.
+MIT, see [`LICENSE`](LICENSE). This covers OpenSanctuary's own code only.
+Third-party dependencies and their licenses are listed in
+[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
 
-- Third-party dependencies and their licenses are listed in
-  [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
-- Bundled Bible translations (`bibles/`, not included in this repo — see
-  `BUILDING.md`) are public-domain texts (KJV, ASV, World English Bible);
-  the public-domain hymns (`songs/public_domain.db`, or the download in the first-run wizard / Import) are public-domain.
-  Copyrighted content (modern Bible translations, CCLI-licensed songs,
-  stock media) is intentionally not included.
+Copyrighted content (modern Bible translations, CCLI-licensed songs, stock
+media) is intentionally not included. The public-domain hymns and the
+public-domain Bible downloads are, and `BUILDING.md` explains the `bibles/`
+folder.
 
-## Repository layout
+---
 
-- `src/` — Rust backend (show engine, storage, network, media pipeline)
-- `web/` — TypeScript/HTML operator UI and live/stage/remote output pages;
-  `web/plugins/` holds the bundled plugins
-- `apps/` — companion apps (Android TV, Roku) for remote display output
-- `packaging/` — `.deb`/Windows installer build scripts, `install.sh`
-- `tests/` — Rust integration tests and import-format fixtures
-- `docs/` — architecture, protocol, and feature design notes — each one
-  states plainly whether what it describes is built yet
-- `vms/` — sandboxed VM test automation (see `vms/vms.md`)
+_Last edited: 2026-10-29_

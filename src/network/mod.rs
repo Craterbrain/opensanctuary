@@ -9,6 +9,7 @@
 //! call sites are unaffected by the split.
 
 pub mod adb;
+pub mod local_https_setup;
 #[cfg(target_os = "linux")]
 pub mod linux;
 #[cfg(target_os = "windows")]

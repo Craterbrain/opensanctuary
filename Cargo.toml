@@ -30,6 +30,8 @@ remote multi-display output, EasyWorship/OpenLP import, and theming."""
 assets = [
     { source = "target/release/os-next", dest = "usr/bin/opensanctuary", mode = "755" },
     { source = "packaging/opensanctuary.desktop", dest = "usr/share/applications/opensanctuary.desktop", mode = "644" },
+    { source = "packaging/setup-local-https-linux.sh", dest = "usr/libexec/opensanctuary/setup-local-https", mode = "755" },
+    { source = "packaging/polkit/io.github.craterbrain.opensanctuary.local-https.policy", dest = "usr/share/polkit-1/actions/io.github.craterbrain.opensanctuary.local-https.policy", mode = "644" },
     { source = "packaging/opensanctuary-mime.xml", dest = "usr/share/mime/packages/opensanctuary.xml", mode = "644" },
     { source = "web/favicon.svg", dest = "usr/share/icons/hicolor/scalable/apps/opensanctuary.svg", mode = "644" },
     { source = "packaging/icons/16x16.png", dest = "usr/share/icons/hicolor/16x16/apps/opensanctuary.png", mode = "644" },

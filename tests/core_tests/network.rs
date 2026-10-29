@@ -650,7 +650,7 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
     let host_token_json: serde_json::Value = host_token_resp.json().await.unwrap();
     assert_eq!(host_token_json["host_token"], host_token);
 
-    // 12b. A reverse proxy on this same machine (Caddy, see docs/TUNNELS.md)
+    // 12b. A reverse proxy on this same machine (Caddy, see docs/LOCAL_HTTPS.md)
     // makes every real request's TCP peer loopback -- this test's own
     // reqwest client already IS that loopback peer, so it can simulate one
     // directly by adding its own X-Forwarded-For header. A real, non-

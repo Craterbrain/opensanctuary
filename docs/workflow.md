@@ -1,6 +1,6 @@
 # Setting up and running the release workflow
 
-_Last edited: 2026-10-22_
+_Last edited: 2026-10-29_
 
 `.github/workflows/release.yml` builds, signs, and publishes a GitHub Release
 (`.deb`, Linux tarball, Windows installer, portable zip, `checksums.txt`,

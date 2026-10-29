@@ -1,6 +1,6 @@
 # Updater (verified releases from GitHub)
 
-_Last edited: 2026-10-25_
+_Last edited: 2026-10-29_
 
 The app checks `Craterbrain/opensanctuary` (a public repo, so the anonymous Releases API works) for a newer
 release, downloads the installer for its platform, and verifies it before offering it to the operator.

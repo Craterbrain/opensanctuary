@@ -1,6 +1,71 @@
 # Trusted, offline-capable HTTPS via Caddy + Let's Encrypt DNS-01 (design + setup doc)
 
-_Last edited: 2026-10-02 17:24_
+> **Local network only.** Nothing here makes OpenSanctuary reachable from the
+> internet. Do **not** forward any ports on the router. The internet is used
+> for one thing: Caddy's outbound request to the Cloudflare API to get the
+> certificate. Devices on the church network reach Caddy through a local DNS
+> override, and the firewall rules below allow only local-network addresses.
+
+_Last edited: 2026-10-06 19:40_
+
+## Start here: get a valid certificate, step by step
+
+You do **not** need a Cloudflare Tunnel (`cloudflared`) for this, and you
+should not set one up: a Cloudflare Tunnel publishes your server to the
+internet, which is the opposite of what we want. All Caddy needs from
+Cloudflare is the ability to add one temporary DNS TXT record, which proves
+to Let's Encrypt that you own the domain. That is a DNS-01 challenge, and it
+is an outbound request from Caddy to Cloudflare's API. No inbound
+connection, no port forwarding, no `A` record pointing at your church.
+
+**What you need first:** a domain whose DNS is hosted on Cloudflare (a free
+Cloudflare account is enough; add the domain and switch its nameservers to
+Cloudflare if it isn't already), and a machine on the church network to run
+OpenSanctuary and Caddy.
+
+1. **Pick the name.** For example `connect.yourchurch.org`. You never create
+   a public DNS record for it.
+2. **Create a scoped Cloudflare API token.** Cloudflare dashboard → *My
+   Profile* → *API Tokens* → *Create Token*. The *Edit zone DNS* template is
+   a good starting point, but check its summary: the Caddy Cloudflare plugin
+   needs **both** `Zone · Zone · Read` and `Zone · DNS · Edit`, so add
+   `Zone · Zone · Read` if the template doesn't include it. Zone Resources:
+   *Include* → *Specific zone* → your domain. Copy the token right away;
+   Cloudflare shows it only once.
+3. **Run the setup script on the OpenSanctuary machine** (it installs Caddy
+   with the Cloudflare plugin, writes the Caddyfile, registers the service
+   and opens the firewall to the local network only). It asks for the token
+   and never takes it as an argument.
+   - Linux: `sudo packaging/setup-local-https-linux.sh --domain connect.yourchurch.org`
+   - Windows (Administrator PowerShell):
+     `.\packaging\setup-local-https-windows.ps1 -Domain connect.yourchurch.org`
+   - Add `--dry-run` / `-DryRun` first to see every command without running it.
+   - Or skip the terminal: in OpenSanctuary, open *Settings → Network → Public
+     HTTPS URL → Set up automatically…*, enter the domain and token, and click
+     **Run setup**. It runs this same script and shows its output live. Leave
+     *Dry run* ticked the first time to see every step without changing
+     anything. A real run asks for administrator permission: a polkit
+     prompt on Linux, and the Windows UAC prompt on Windows. The .deb and
+     `install.sh --system` install a polkit policy so the prompt says what
+     it is for (other installs fall back to a generic polkit prompt). The Flatpak build can't ask, so use the terminal there.
+4. **Add the local DNS override** in your router, Pi-hole or AdGuard:
+   `connect.yourchurch.org` → the server's LAN IP. If the router has DNS
+   rebinding protection, allow-list the domain. Details in "Critical
+   prerequisite: offline local DNS" below. Without this, devices can't find
+   the server by name.
+5. **Tell OpenSanctuary.** *Settings → Network → Public HTTPS URL*, set it to
+   `https://connect.yourchurch.org`. The badge next to the field turns green
+   when the URL reaches this server.
+6. **Check it.** From a phone on the church Wi-Fi, open
+   `https://connect.yourchurch.org`. You should see a padlock and no
+   warning. Watch certificate issuance with `journalctl -u caddy -f` on
+   Linux. The full list is in "End-to-end verification checklist" at the
+   bottom.
+
+Caddy renews the certificate by itself, by default when 30 days (a third of
+a 90-day certificate's life) remain. If
+the internet is down at renewal time, it keeps serving the cached
+certificate and retries later.
 
 ## What this gets you, and why it matters for OS-Next
 
@@ -73,16 +138,15 @@ Internet (only for cert issuance/renewal, every ~60-90 days)
   arrived decrypted-then-re-encrypted-by-Caddy.
 - OS-Next's own HTTPS plane (`:8443`, self-signed) can no longer be
   disabled, and doesn't need to be -- it's LAN-reachable but never
-  port-forwarded, so it coexists peacefully as a fallback (a self-signed
+  exposed to the internet, so it coexists peacefully as a fallback (a self-signed
   cert warning, same as any device on the LAN gets without Caddy) alongside
   Caddy's real-cert public URL. There's nothing to turn off.
-- **Only forward ports 80/443** on the church's router, to whichever machine
-  runs Caddy. OS-Next's own ports (`8080`, `8443`) should stay LAN-internal —
-  never port-forwarded directly (`8080` can't be reached from the network at
-  all now regardless). Caddy is the only thing that needs to be
-  internet-reachable, and only for the DNS-01 challenge's outbound API call
-  to Cloudflare (inbound port 80 isn't even required for DNS-01, unlike
-  HTTP-01).
+- **Do not forward any ports.** Keep OS-Next's own ports (`8080`, `8443`)
+  and Caddy's `80`/`443` LAN-internal. `8080` can't be reached from the
+  network at all now regardless. Caddy needs the internet only for the
+  DNS-01 challenge's outbound API call to Cloudflare. No inbound connection
+  from the internet is needed, unlike HTTP-01. The firewall rules in the
+  setup steps allow only local-network source addresses.
 
 ### The reverse-proxy gap this setup exposed — fixed
 
@@ -141,8 +205,8 @@ $ curl -o /dev/null -w '%{http_code}\n' -H 'X-Forwarded-For: 127.0.0.1' http://1
 ```
 
 Caddy in front of OS-Next is now safe to run as described in this doc — no
-extra firewalling of `/api/internal/host-token` beyond the normal "only
-forward 80/443" guidance above is required.
+extra firewalling of `/api/internal/host-token` beyond the normal "forward nothing,
+LAN-only firewall" guidance above is required.
 
 ### Public HTTPS URL — preferring the trusted domain everywhere
 
@@ -208,15 +272,24 @@ port:
 connect.yourchurch.org {
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+        resolvers 1.1.1.1
     }
 
     reverse_proxy localhost:8080
 }
 ```
 
+`resolvers 1.1.1.1` makes Caddy check the DNS challenge against a public
+resolver instead of the machine's own. This matters here: once your router
+or Pi-hole overrides `connect.yourchurch.org` to a LAN IP, the server's own
+resolver can answer wrongly during the challenge and fail with errors such as
+`expected 1 zone, got 0` or `timed out waiting for record to fully
+propagate`. (That does need outbound access to `1.1.1.1`. Use another public
+resolver if your network blocks it.)
+
 Prefer an environment variable (`{env.CLOUDFLARE_API_TOKEN}`, set in the
 service definition below) over pasting the token directly into the
-Caddyfile — the token only needs the Cloudflare **Zone.DNS: Edit** permission
+Caddyfile — the token only needs the Cloudflare **Zone · DNS · Edit** and **Zone · Zone · Read** permissions
 scoped to this one zone, not full account access; create it as its own
 scoped API token in the Cloudflare dashboard, not your global API key.
 
@@ -228,12 +301,12 @@ fills that gap.
 
 ### Quickest path: run the script
 
-`packaging/setup-tunnel-windows.ps1` automates everything below — Caddy
+`packaging/setup-local-https-windows.ps1` automates everything below — Caddy
 download, Caddyfile, the NSSM service, and the firewall rules — in one
 command, from an **Administrator PowerShell**:
 
 ```powershell
-.\packaging\setup-tunnel-windows.ps1 -Domain connect.yourchurch.org
+.\packaging\setup-local-https-windows.ps1 -Domain connect.yourchurch.org
 ```
 
 It prompts for the Cloudflare API token securely (never a command-line
@@ -268,13 +341,14 @@ Go to the [Caddy download page](https://caddyserver.com/download), add
   `root * C:/ChurchSite` / Windows-style paths if serving static files
   instead of/alongside `reverse_proxy`).
 
-### 2. Open the firewall for HTTP/HTTPS
+### 2. Open the firewall for the local network only
 
-In an Administrator PowerShell:
+In an Administrator PowerShell (`-RemoteAddress LocalSubnet` keeps the rules
+from matching anything outside the machine's own subnet):
 
 ```powershell
-New-NetFirewallRule -DisplayName "Caddy-HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow
-New-NetFirewallRule -DisplayName "Caddy-HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow
+New-NetFirewallRule -DisplayName "Caddy-HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -RemoteAddress LocalSubnet -Action Allow
+New-NetFirewallRule -DisplayName "Caddy-HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -RemoteAddress LocalSubnet -Action Allow
 ```
 
 ### 3. Install and run Caddy as a background service
@@ -303,12 +377,12 @@ dropping.
 
 ### Quickest path: run the script
 
-`packaging/setup-tunnel-linux.sh` automates everything below — Caddy
+`packaging/setup-local-https-linux.sh` automates everything below — Caddy
 download, Caddyfile, the systemd service, and the firewall rules — in one
 command (needs root for binding 80/443, systemd, and the firewall):
 
 ```bash
-sudo packaging/setup-tunnel-linux.sh --domain connect.yourchurch.org
+sudo packaging/setup-local-https-linux.sh --domain connect.yourchurch.org
 ```
 
 It prompts for the Cloudflare API token securely (never a command-line
@@ -359,16 +433,21 @@ sudo xcaddy build --with github.com/caddy-dns/cloudflare --output /usr/bin/caddy
 github.com/caddyserver/xcaddy/cmd/xcaddy@latest` instead, then the same
 `xcaddy build` command.)
 
-### 2. Open the firewall
+### 2. Open the firewall for the local network only
+
+Allow only private (LAN) source addresses:
 
 ```bash
 # UFW (Debian/Ubuntu)
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
+for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+  sudo ufw allow from $net to any port 80,443 proto tcp
+done
 
 # firewalld (RHEL/Fedora)
-sudo firewall-cmd --permanent --add-service=http
-sudo firewall-cmd --permanent --add-service=https
+for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+  sudo firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=$net port port=80 protocol=tcp accept"
+  sudo firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=$net port port=443 protocol=tcp accept"
+done
 sudo firewall-cmd --reload
 ```
 

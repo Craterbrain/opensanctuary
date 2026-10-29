@@ -1,0 +1,13 @@
+#!/bin/sh
+# Bump `_Last edited:` in staged Markdown files. Enable once per clone with:
+#   git config core.hooksPath .githooks
+root=$(git rev-parse --show-toplevel)
+git diff --cached --name-only --diff-filter=AM -- '*.md' | while read -r f; do
+    if ! git diff --quiet -- "$f"; then
+        echo "pre-commit: $f has unstaged changes; skipping Last edited bump" >&2
+        continue
+    fi
+    if [ -n "$("$root/tools/update_last_edited.py" "$root/$f")" ]; then
+        git add -- "$f"
+    fi
+done

@@ -183,6 +183,25 @@ export const api = {
       api.get<any>(`/api/network/check-port?port=${port}`),
     checkPublicUrl: (url: string) =>
       api.get<any>(`/api/network/check-public-url?url=${encodeURIComponent(url)}`, { headers: hostTokenHeader() }),
+    // Runs the local-HTTPS setup script (docs/LOCAL_HTTPS.md) and streams its log. Console-only.
+    startLocalHttpsSetup: async (data: { domain: string; port?: number; dry_run?: boolean; cloudflare_token: string }) => {
+      await resolveHostSessionToken();
+      return api.post<{ task_id: string }>('/api/network/local-https/setup', data, { headers: hostTokenHeader() });
+    },
+    localHttpsSetupProgress: async (taskId: string, since: number) => {
+      await resolveHostSessionToken();
+      return api.get<{
+        progress: {
+          task_id: string;
+          status: string;
+          lines: string[];
+          next: number;
+          is_complete: boolean;
+          exit_code: number | null;
+          error: string | null;
+        } | null;
+      }>(`/api/network/local-https/progress/${encodeURIComponent(taskId)}?since=${since}`, { headers: hostTokenHeader() });
+    },
     toggleDedicatedMac: (enable: boolean, hostname?: string, confirmConflict?: boolean) =>
       api.post<any>('/api/network/dedicated-mac/toggle', { enable, hostname, confirm_conflict: !!confirmConflict }),
     regenerateTls: () =>
