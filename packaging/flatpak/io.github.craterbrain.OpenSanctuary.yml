@@ -39,5 +39,6 @@ modules:
       - if [ -n "$(ls -A tv-client 2>/dev/null)" ]; then cp -r tv-client /app/share/opensanctuary/tv-client; fi
       - install -Dm644 io.github.craterbrain.OpenSanctuary.desktop -t /app/share/applications
       - install -Dm644 io.github.craterbrain.OpenSanctuary.metainfo.xml -t /app/share/metainfo
+      - install -Dm644 io.github.craterbrain.OpenSanctuary.mime.xml /app/share/mime/packages/io.github.craterbrain.OpenSanctuary.xml
       - for s in 16 32 48 64 128 256 512; do install -Dm644 icons/${s}x${s}.png /app/share/icons/hicolor/${s}x${s}/apps/io.github.craterbrain.OpenSanctuary.png; done
       - install -Dm644 icons/scalable.svg /app/share/icons/hicolor/scalable/apps/io.github.craterbrain.OpenSanctuary.svg

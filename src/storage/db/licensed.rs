@@ -294,6 +294,13 @@ impl Database {
         Ok(())
     }
 
+    /// Deletes every kept passage, expired or not, for "delete them now" in Settings. Returns how many went.
+    pub fn purge_all_licensed(&self) -> Result<usize> {
+        let conn = self.main_conn.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = conn.execute_batch("PRAGMA secure_delete = ON;");
+        conn.execute("DELETE FROM licensed_passages", [])
+    }
+
     /// Deletes every expired passage. Returns how many went.
     pub fn purge_expired_licensed(&self, now_ms: i64) -> Result<usize> {
         let conn = self.main_conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -343,6 +350,16 @@ mod tests {
     }
 
     #[test]
+    fn the_operator_can_delete_every_kept_passage_at_once() {
+        let db = Database::in_memory().unwrap();
+        db.insert_licensed_scripture(&item("p1"), &meta("p1", 1_000)).unwrap();
+        db.insert_licensed_scripture(&item("p2"), &meta("p2", 9_000_000_000_000)).unwrap();
+        assert_eq!(db.purge_all_licensed().unwrap(), 2, "one expired, one still good: both go");
+        assert!(db.licensed_meta("p1").unwrap().is_none() && db.licensed_meta("p2").unwrap().is_none());
+        assert_eq!(db.purge_all_licensed().unwrap(), 0);
+    }
+
+    #[test]
     fn stored_text_is_sealed_expires_and_is_purged() {
         let db = Database::in_memory().unwrap();
         db.insert_licensed_scripture(&item("p1"), &meta("p1", 1_000)).unwrap();
@@ -367,6 +384,7 @@ mod tests {
         assert_eq!(db.get_licensed_scripture("p1", 5_000).unwrap().unwrap().0.verses[1].text, "SECRET-LICENSED-TEXT-17");
 
         assert_eq!(db.purge_expired_licensed(8_000).unwrap(), 1, "p1 (renewed to 7000) is now expired");
+
         assert!(db.licensed_meta("p1").unwrap().is_none());
         assert!(db.licensed_meta("p2").unwrap().is_some());
         db.delete_licensed_scripture("p2").unwrap();

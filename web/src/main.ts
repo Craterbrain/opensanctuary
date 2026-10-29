@@ -5,7 +5,7 @@ import { PluginManager } from "./core/plugins.ts";
 import { clock } from "./core/timesync.ts";
 import { VideoSyncController } from "./core/video_sync.ts";
 import { keyring } from "./core/keyring.ts";
-import { resolveHostSessionToken } from "./core/host_session.ts";
+import { resolveHostSessionToken, releaseConsoleLockOnClose } from "./core/host_session.ts";
 import { startSandboxedPlugin, stopSandboxedPlugin, isSandboxedPluginRunning } from "./core/plugin_bridge.ts";
 import { refreshPluginHints } from "./core/plugin_hints.ts";
 import { startEmojiIcons } from "./core/emoji_icons.ts";
@@ -33,7 +33,7 @@ window.addEventListener("os-plugin-changed", (ev) => {
 export const pluginManager = new PluginManager();
 
 // Expose core modules globally for legacy app migration
-(window as any).OS = {
+window.OS = {
     plugins: pluginManager,
     clock: clock,
     VideoSyncController: VideoSyncController,
@@ -47,7 +47,7 @@ clock.synchronize(5).then(async () => {
     //    app_ui.ts    — search, keyboard, menus, editors, importers (~2775 lines)
     await import("./app_core.ts");
     await import("./app_ui.ts");
-    (window as any).__APP_READY__ = true;
+    window.__APP_READY__ = true;
 
     // 4. Load only the web plugins the operator has approved (Settings > Plugins). The
     //    server also refuses to serve any other file under /plugins/.
@@ -58,6 +58,7 @@ clock.synchronize(5).then(async () => {
             const bell = document.getElementById("btn-notifications");
             if (bell) {
                 initNotificationBell(bell);
+                releaseConsoleLockOnClose();
                 void startNotificationFeed();
                 // Linux: an installed update waiting for a restart pops up the question (the host's notice triggers it live; this
                 // covers the case where the update finished before this page opened).
@@ -77,7 +78,7 @@ clock.synchronize(5).then(async () => {
             // Installed plugins not turned on yet: hints in the places they'd appear (core/plugin_hints.ts).
             void refreshPluginHints();
             const list = await res.json();
-            const approved = (Array.isArray(list) ? list : []).filter((p: any) => p && typeof p.id === "string");
+            const approved = (Array.isArray(list) ? list : []).filter((p) => p && typeof p.id === "string");
             const startAll = async () => {
                 if (approved.length) { markPluginsStarting(); watchConsoleHealth(); }
                 for (const p of approved) {

@@ -6,6 +6,7 @@
  * prompter displays, and mobile remote control views.
  */
 
+import type { ScheduleItem, Slide } from './models.ts';
 import { resolveSlideAt } from './presentation_helpers.ts';
 
 export interface BilingualText {
@@ -28,9 +29,9 @@ export interface NextPresentationPreview {
   /** Split bilingual components if '|||' was present */
   bilingual: BilingualText;
   /** Reference to the resolved slide object, if any */
-  slide: any | null;
+  slide: Slide | null;
   /** Reference to the next schedule item object, if rolling over to next item */
-  nextItem: any | null;
+  nextItem: ScheduleItem | null;
 }
 
 /**
@@ -63,8 +64,8 @@ export function parseBilingualSlideText(text: string | null | undefined): Biling
  * @param liveSlideIndex The current 0-indexed slide position in the live item
  */
 export function resolveNextPresentationPreview(
-  schedule: { items?: any[] } | null | undefined,
-  liveItem: any | null | undefined,
+  schedule: { items?: ScheduleItem[] } | null | undefined,
+  liveItem: ScheduleItem | null | undefined,
   liveSlideIndex: number
 ): NextPresentationPreview {
   if (!liveItem) {
@@ -101,11 +102,11 @@ export function resolveNextPresentationPreview(
 
   // 2. Rollover to the next item in the schedule
   const items = schedule?.items || [];
-  let nextScheduleItem: any = null;
+  let nextScheduleItem: ScheduleItem | null = null;
   if (items.length > 0) {
-    const curIdx = items.findIndex((it: any) => it.id === liveItem.id);
+    const curIdx = items.findIndex((it) => it.id === liveItem.id);
     if (curIdx >= 0 && curIdx + 1 < items.length) {
-      nextScheduleItem = items[curIdx + 1];
+      nextScheduleItem = items[curIdx + 1] ?? null;
     }
   }
 

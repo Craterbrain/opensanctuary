@@ -315,9 +315,12 @@ operator as a toast (`onCommandRejected` in `ws_client.ts`). The lock
 releases when that console's WS connection disconnects — via a `Drop` guard
 so it releases correctly even on an abrupt disconnect, not just a clean
 close (see `ConsoleLockGuard` in `handle_socket`). A console that only ever
-uses the HTTP fallback (its WS never connects) never triggers that release
-path; accepted as a known limitation since the app is WS-primary with HTTP
-as a fallback, not a first-class transport.
+uses the HTTP fallback (its WS never connects) has no socket to drop, so two
+other things release its lock: the page tells the host when it closes
+(`POST /api/console/release` from a `pagehide` handler, `releaseConsoleLockOnClose` in
+`host_session.ts`), and a lock nobody has touched for 60 seconds (`CONSOLE_HTTP_IDLE`) goes to
+the next console that asks. A lock backed by a live WebSocket is only ever released by that
+socket's own disconnect.
 
 `/api/command` and `/ws` accept *either* credential, since both a paired
 remote and the operator console send real commands through them: a paired

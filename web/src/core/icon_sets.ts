@@ -91,7 +91,7 @@ export function resolveTheme(options: ThemeOptions): { iconSet: string; colorThe
 export function hexToRgbTriplet(hex: string): string {
   const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
   if (!m) throw new Error(`Not a #rrggbb color: ${hex}`);
-  return `${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}`;
+  return `${parseInt(m[1] ?? '0', 16)}, ${parseInt(m[2] ?? '0', 16)}, ${parseInt(m[3] ?? '0', 16)}`;
 }
 
 let currentIconSet = DEFAULT_ICON_SET;

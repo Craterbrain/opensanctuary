@@ -343,6 +343,9 @@ pub struct CcliMetadata {
     pub author: Option<String>,
     pub copyright: Option<String>,
     pub ccli_number: Option<String>,
+    /// The song's "this is public domain" override, carried so the CCLI report and the copyright pop-ups honour it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_domain: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -524,6 +527,40 @@ pub struct Song {
     pub slides: Vec<Slide>,
     #[serde(default)]
     pub theme_name: Option<String>,
+    /// `Some(true)`: the operator says this song is public domain, whatever its copyright text says. `None`: decided from the text
+    /// (`copyright_text_is_public_domain`).
+    #[serde(default)]
+    pub public_domain_override: Option<bool>,
+}
+
+/// Words that say a rights holder exists: a copyright sign, "all rights reserved", a licence or publisher, or a date after 1930.
+fn has_rights_marker(lower: &str) -> bool {
+    const WORDS: [&str; 9] = ["©", "(c)", "℗", "copyright", "rights reserved", "permission", "administered", "admin.", "publishing"];
+    if WORDS.iter().any(|w| lower.contains(w)) {
+        return true;
+    }
+    // A year after 1930 (a modern arrangement, translation or tune) means someone still holds rights in part of it.
+    let b = lower.as_bytes();
+    let mut i = 0;
+    while i + 4 <= b.len() {
+        if b[i..i + 4].iter().all(u8::is_ascii_digit) && (i == 0 || !b[i - 1].is_ascii_digit()) && (i + 4 == b.len() || !b[i + 4].is_ascii_digit()) {
+            if lower[i..i + 4].parse::<u32>().is_ok_and(|y| (1931..=2100).contains(&y)) {
+                return true;
+            }
+            i += 4;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+/// Does a copyright line say the work is public domain, and *only* that? "Public Domain" alone, or "Words: Public Domain; Tune: Public Domain",
+/// qualifies. "Arr. © 2001 Example Music, based on a public domain hymn" does not: a song built on a public-domain work is often still protected,
+/// so any sign of a rights holder (see `has_rights_marker`) keeps it out and the operator can override it on the song.
+pub fn copyright_text_is_public_domain(copyright: &str) -> bool {
+    let t = copyright.trim().to_lowercase();
+    t == "pd" || (t.contains("public domain") && !has_rights_marker(&t))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1235,7 +1272,23 @@ fn split_one_slide(slide: &Slide) -> Option<(Slide, Slide)> {
 
 impl ToScheduleItem for Song {
     fn to_schedule_item(&self) -> ScheduleItem {
-        let slides = split_long_slides(self.slides.clone());
+        let mut slides = split_long_slides(self.slides.clone());
+        // The schedule item carries a song's copyright only on its slides' CCLI metadata, which is what the CCLI report and the service
+        // copyright pop-up read. A slide without its own entry gets the song's.
+        let copyright = self.copyright.clone().filter(|c| !c.trim().is_empty());
+        let ccli = self.ccli_number.clone().filter(|c| !c.trim().is_empty());
+        if copyright.is_some() || ccli.is_some() || self.public_domain_override.is_some() {
+            let meta = CcliMetadata {
+                song_title: Some(self.title.clone()),
+                author: Some(self.author.clone()),
+                copyright,
+                ccli_number: ccli,
+                public_domain: self.public_domain_override,
+            };
+            for s in slides.iter_mut().filter(|s| s.ccli_metadata.is_none()) {
+                s.ccli_metadata = Some(meta.clone());
+            }
+        }
         let arrangement = identity_arrangement(&slides);
         ScheduleItem {
             id: format!("sched_song_{}", self.id),
@@ -1372,7 +1425,7 @@ impl Song {
             copyright: None,
             ccli_number: None,
             slides: Vec::new(),
-            theme_name: None, alternate_title: None,
+            theme_name: None, alternate_title: None, public_domain_override: None,
         }
     }
     

@@ -12,30 +12,34 @@
  * already use, so this stays a one-way dependency (app_core.ts imports from here,
  * never the reverse).
  */
+import { errorMessage } from '../core/ui_utils.ts';
+import type { ThemeRow } from '../core/models.ts';
+import type { ThemeDefinition } from '../core/presentation_helpers.ts';
+import type { LibrarySlide, ScriptureVerse, LibraryItem, ShowCommand, InstalledBible, StateSnapshot } from '../core/models.ts';
 import { draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { parseScriptureReference } from '../core/bible_parser';
-import { escapeCssUrl, escapeHtml, escapeUserHtml, formatParallelSlide, resolveSlideBackgroundElement } from '../core/presentation_helpers.ts';
+import { escapeHtml, escapeUserHtml, formatParallelSlide, resolveSlideBackgroundElement } from '../core/presentation_helpers.ts';
 import { renderSlideVisual } from '../core/slide_render.ts';
 import { openThemeEditor, setThemeAsDefault, duplicateTheme, deleteThemeItem } from './theme_editor.ts';
 
 export interface LibraryPanelContext {
   getCurrentTab(): string;
   setCurrentTab(tab: string): void;
-  getSelectedLibraryItem(): any;
-  setSelectedLibraryItem(item: any): void;
+  getSelectedLibraryItem(): LibraryItem | null;
+  setSelectedLibraryItem(item: LibraryItem): void;
   getActiveBibleVersion(): string;
   setActiveBibleVersion(v: string): void;
   getSecondaryBibleVersion(): string;
   setSecondaryBibleVersion(v: string): void;
   getIsDualBibleMode(): boolean;
   setIsDualBibleMode(v: boolean): void;
-  getInstalledBibles(): any[];
+  getInstalledBibles(): InstalledBible[];
   getAppOptions(): Record<string, any>;
-  getAvailableThemes(): any[];
-  getCurrentSnapshot(): any;
+  getAvailableThemes(): ThemeDefinition[];
+  getCurrentSnapshot(): StateSnapshot | null;
   showToast(message: string, type?: string): void;
-  sendCommand(cmd: any): void;
-  escapeHtml(str: any): string;
+  sendCommand(cmd: ShowCommand): void;
+  escapeHtml(str: unknown): string;
   formatCssBackground(bg: string | null | undefined, defaultGradient?: string): string;
   showContextMenu(el: HTMLElement | null, x: number, y: number): void;
   setContextMenuTarget(target: any): void;
@@ -43,17 +47,17 @@ export interface LibraryPanelContext {
   setBibleVersionUserSelected(v: boolean): void;
   applyDefaultBibleVersionIfUnset(): void;
   formatMediaTime(sec: number): string;
-  setAdhocPreview(item: any, tabName: string): void;
+  setAdhocPreview(item: LibraryItem | null, tabName: string): void;
 }
 
 let ctx: LibraryPanelContext | null = null;
-let currentDualSecondaryVerses: any[] = [];
+let currentDualSecondaryVerses: ScriptureVerse[] = [];
 
-export function getCurrentDualSecondaryVerses(): any[] {
+export function getCurrentDualSecondaryVerses(): ScriptureVerse[] {
   return currentDualSecondaryVerses;
 }
 
-export function setCurrentDualSecondaryVerses(verses: any[]): void {
+export function setCurrentDualSecondaryVerses(verses: ScriptureVerse[]): void {
   currentDualSecondaryVerses = verses || [];
 }
 
@@ -65,14 +69,14 @@ let remoteMenuTarget: any = null;
  * lists "John 3:16 (NIV)" for each of them in scope, with no text. The text is fetched when the result is added to
  * the schedule or dragged there (the server makes a placeholder item and the plugin fills it in).
  */
-export function remoteReferenceItems(parsedRef: any, activeVersion: unknown): any[] {
+export function remoteReferenceItems(parsedRef: any, activeVersion: unknown): LibraryItem[] {
   if (!ctx || !parsedRef?.isReference || !parsedRef.book || !parsedRef.chapter) return [];
-  const all = ctx.getInstalledBibles().filter((b: any) => b.remote);
-  const scope = (!activeVersion || activeVersion === 'all') ? all : all.filter((b: any) => b.id === activeVersion);
+  const all = ctx.getInstalledBibles().filter((b) => b.remote);
+  const scope = (!activeVersion || activeVersion === 'all') ? all : all.filter((b) => b.id === activeVersion);
   const from = parsedRef.hasSpecificVerse ? (parsedRef.verseStart || 0) : 0;
   const to = parsedRef.hasSpecificVerse ? (parsedRef.verseEnd || from) : 0;
   const verses = from ? (to > from ? `:${from}-${to}` : `:${from}`) : '';
-  return scope.map((b: any) => ({
+  return scope.flatMap((b): LibraryItem[] => b.remote ? [{
     id: `yvref:${b.remote.source}:${b.remote.bible_id}:${parsedRef.book}:${parsedRef.chapter}:${from}:${to}`,
     book: parsedRef.book,
     chapter: parsedRef.chapter,
@@ -82,7 +86,7 @@ export function remoteReferenceItems(parsedRef: any, activeVersion: unknown): an
     reference: `${parsedRef.book} ${parsedRef.chapter}${verses} (${b.abbreviation})`,
     verses: [],
     remote: b.remote,
-  }));
+  }] : []);
 }
 
 export function initLibraryPanel(context: LibraryPanelContext) {
@@ -98,8 +102,8 @@ export function initLibraryPanel(context: LibraryPanelContext) {
       if (!res.ok || body.success === false) throw new Error(body.error || `status ${res.status}`);
       ctx.showToast(`Removed ${b.abbreviation} from the list.`, 'success');
       window.dispatchEvent(new CustomEvent('os-library-changed', { detail: { category: 'scriptures', bibles: true } }));
-    } catch (e: any) {
-      ctx.showToast(`Could not remove ${b.abbreviation}: ${e?.message ?? e}`, 'error');
+    } catch (e) {
+      ctx.showToast(`Could not remove ${b.abbreviation}: ${errorMessage(e)}`, 'error');
     }
   });
 
@@ -147,10 +151,10 @@ export function setActiveCategory(cat: string) { activeCategory = cat; }
 
 let contextMenuTargetTheme: any = null;
 
-let activeLibraryItems: any[] = [];
+let activeLibraryItems: LibraryItem[] = [];
 export function getActiveLibraryItems() { return activeLibraryItems; }
 
-let filteredLibraryItems: any[] = [];
+let filteredLibraryItems: LibraryItem[] = [];
 export function getFilteredLibraryItems() { return filteredLibraryItems; }
 
 let selectedCatalogIndex = 0;
@@ -307,7 +311,7 @@ let currentLibraryTabRequestId = 0;
  * "Save as OpenSanctuary File" applies to songs, presentations and Bibles only; on a Bible it says so, since
  * it saves the whole translation the clicked chapter belongs to.
  */
-function prepareBundleMenuItem(tabName: string, item: any): void {
+function prepareBundleMenuItem(tabName: string, item: LibraryItem): void {
   const el = document.getElementById('ctx-lib-export-bundle');
   if (!el) return;
   const bundleable = tabName === 'songs' || tabName === 'presentations' || tabName === 'scriptures';
@@ -684,7 +688,7 @@ export function normalizeBibleApiCode(str: unknown) {
   return s.substring(0, 8);
 }
 
-export function scriptureMatchesVersion(sc: any, versionId: unknown) {
+export function scriptureMatchesVersion(sc: LibraryItem, versionId: unknown) {
   if (!versionId || versionId === 'all') return true;
   if (areTranslationsEquivalent(sc.version, versionId)) return true;
   if (!ctx) return false;
@@ -700,7 +704,8 @@ if (btnToggleDualBible) {
     if (!ctx) return;
     const lp = ctx;
     lp.setIsDualBibleMode(!lp.getIsDualBibleMode());
-    const pVersion = (lp.getSelectedLibraryItem() && lp.getSelectedLibraryItem().version ? lp.getSelectedLibraryItem().version : (lp.getActiveBibleVersion() !== 'all' ? lp.getActiveBibleVersion() : (lp.getInstalledBibles()[0] ? lp.getInstalledBibles()[0].abbreviation : 'Primary'))).trim();
+    const selectedNow = lp.getSelectedLibraryItem();
+    const pVersion = (selectedNow && selectedNow.version ? selectedNow.version : (lp.getActiveBibleVersion() !== 'all' ? lp.getActiveBibleVersion() : (lp.getInstalledBibles()[0]?.abbreviation ?? 'Primary'))).trim();
 
     if (lp.getIsDualBibleMode()) {
       const otherInstalled = lp.getInstalledBibles().filter(b =>
@@ -710,7 +715,7 @@ if (btnToggleDualBible) {
       );
       if (!lp.getSecondaryBibleVersion() || areTranslationsEquivalent(lp.getSecondaryBibleVersion(), pVersion)) {
         if (otherInstalled.length > 0) {
-          lp.setSecondaryBibleVersion(otherInstalled[0].id);
+          if (otherInstalled[0]) lp.setSecondaryBibleVersion(otherInstalled[0].id);
         } else {
           const standardOnline = ['kjv', 'asv', 'web', 'bbe', 'hcsb'];
           const fallback = standardOnline.find(code => !areTranslationsEquivalent(code, pVersion));
@@ -724,7 +729,8 @@ if (btnToggleDualBible) {
     btnToggleDualBible.textContent = lp.getIsDualBibleMode()
       ? `👥 Dual: ${pAbbr} | ${sAbbr}`
       : '👥 Compare';
-    if (lp.getSelectedLibraryItem()) renderAssetPreview(lp.getSelectedLibraryItem(), 'scriptures');
+    const selectedPreview = lp.getSelectedLibraryItem();
+    if (selectedPreview) renderAssetPreview(selectedPreview, 'scriptures');
   });
 }
 
@@ -770,7 +776,7 @@ export function filterAndRenderCatalog() {
       const matchTitle = (s.title || '').toLowerCase().includes(query) || (s.alternate_title || '').toLowerCase().includes(query);
       const matchAuthor = (s.author || '').toLowerCase().includes(query);
       const matchCcli = (s.ccli_number || '').toLowerCase().includes(query) || (s.id || '').toLowerCase().includes(query);
-      const matchLyrics = s.slides && s.slides.some((sl: any) => (sl.text || '').toLowerCase().includes(query));
+      const matchLyrics = s.slides && s.slides.some((sl: LibrarySlide) => (sl.text || '').toLowerCase().includes(query));
 
       if (mode === 'title') return matchTitle;
       if (mode === 'lyrics') return matchLyrics;
@@ -782,9 +788,9 @@ export function filterAndRenderCatalog() {
       const parsedRef = parseScriptureReference(rawQuery);
       if (parsedRef.isReference) {
         matchedOnlineReference = parsedRef;
-        const matchingItems: any[] = [];
+        const matchingItems: LibraryItem[] = [];
         const refBook = parsedRef.book;
-        activeLibraryItems.forEach((sc: any) => {
+        activeLibraryItems.forEach((sc) => {
           if (!refBook) return;
           if (!scriptureMatchesVersion(sc, lp.getActiveBibleVersion())) return;
           const matchBook = (sc.book || '').toLowerCase() === refBook.toLowerCase();
@@ -795,10 +801,10 @@ export function filterAndRenderCatalog() {
             const startV = parsedRef.verseStart;
             if (startV === undefined || startV === null) return;
             const endV = parsedRef.verseEnd || startV;
-            if (sc.verse_start <= startV && sc.verse_end >= startV) {
-              const specificVerses = (sc.verses || []).filter((v: any) => v.verse_number >= startV && v.verse_number <= endV);
+            if ((sc.verse_start ?? 0) <= startV && (sc.verse_end ?? 0) >= startV) {
+              const specificVerses = (sc.verses || []).filter((v: ScriptureVerse) => v.verse_number >= startV && v.verse_number <= endV);
               if (specificVerses.length > 0) {
-                const cleanBook = sc.book;
+                const cleanBook = sc.book ?? '';
                 const refStr = (startV === endV)
                   ? `${cleanBook} ${sc.chapter}:${startV} (${sc.version})`
                   : `${cleanBook} ${sc.chapter}:${startV}-${endV} (${sc.version})`;
@@ -833,11 +839,11 @@ export function filterAndRenderCatalog() {
       const scored: any[] = [];
       const seenIds = new Set();
 
-      activeLibraryItems.forEach((sc: any) => {
+      activeLibraryItems.forEach((sc) => {
         if (!scriptureMatchesVersion(sc, lp.getActiveBibleVersion())) return;
         if (!sc.verses || sc.verses.length === 0) return;
 
-        sc.verses.forEach((v: any) => {
+        sc.verses.forEach((v: ScriptureVerse) => {
           const textLower = (v.text || '').toLowerCase();
           let score = 0;
           if (textLower.includes(query)) {
@@ -851,7 +857,7 @@ export function filterAndRenderCatalog() {
           });
 
           if (score > 0) {
-            const cleanBook = sc.book;
+            const cleanBook = sc.book ?? '';
             const refStr = `${cleanBook} ${sc.chapter}:${v.verse_number} (${sc.version})`;
             const itemId = `scrip_${cleanBook.replace(/\s+/g, '_')}_${sc.chapter}_${v.verse_number}_${v.verse_number}_${(sc.version || 'KJV').replace(/\s+/g, '_')}`;
             if (!seenIds.has(itemId)) {
@@ -874,7 +880,7 @@ export function filterAndRenderCatalog() {
       filteredLibraryItems = scored.map(s => s.item);
     }
   } else if (lp.getCurrentTab() === 'media') {
-    filteredLibraryItems = activeLibraryItems.filter((m: any) => {
+    filteredLibraryItems = activeLibraryItems.filter((m) => {
       const matchName = (m.name || '').toLowerCase().includes(query);
       const matchPath = (m.file_path || '').toLowerCase().includes(query);
       const matchType = (m.media_type || '').toLowerCase().includes(query);
@@ -895,14 +901,14 @@ export function filterAndRenderCatalog() {
     filteredLibraryItems = activeLibraryItems.filter(p => {
       const matchTitle = (p.title || '').toLowerCase().includes(query);
       const matchAuthor = (p.author || '').toLowerCase().includes(query);
-      const matchSlides = p.slides && p.slides.some((s: any) => (s.content || s.title || '').toLowerCase().includes(query));
+      const matchSlides = p.slides && p.slides.some((s: LibrarySlide) => (s.content || s.title || '').toLowerCase().includes(query));
       if (mode === 'title') return matchTitle;
       return matchTitle || matchAuthor || matchSlides;
     });
   } else if (lp.getCurrentTab() === 'themes') {
     const categoryMap: Record<string, string> = { 'song-themes': 'song', 'scripture-themes': 'scripture', 'presentation-themes': 'presentation' };
     const wantedCategory = categoryMap[activeCategory];
-    filteredLibraryItems = activeLibraryItems.filter((t: any) => {
+    filteredLibraryItems = activeLibraryItems.filter((t) => {
       if (wantedCategory && (t.category || 'song') !== wantedCategory) return false;
       const matchName = (t.name || '').toLowerCase().includes(query);
       const matchFont = (t.font_family || '').toLowerCase().includes(query);
@@ -915,7 +921,7 @@ export function filterAndRenderCatalog() {
   renderCatalog(filteredLibraryItems, lp.getCurrentTab(), matchedOnlineReference);
 }
 
-let currentCatalogItems: any[] = [];
+let currentCatalogItems: LibraryItem[] = [];
 let catalogVisibleCount = 100;
 const CATALOG_BATCH_SIZE = 100;
 
@@ -962,7 +968,7 @@ if (catalogScrollBodyEl) {
   });
 }
 
-export function renderCatalog(items: any[], tabName: string, matchedOnlineRef: any = null) {
+export function renderCatalog(items: LibraryItem[], tabName: string, matchedOnlineRef: any = null) {
   if (!ctx) return;
   const lp = ctx;
   currentCatalogItems = items;
@@ -988,13 +994,14 @@ export function renderCatalog(items: any[], tabName: string, matchedOnlineRef: a
     // Preserve selection if previously selected item is still in filtered results
     let targetIdx = 0;
     if (lp.getSelectedLibraryItem()) {
-      const foundIdx = items.findIndex(it => it.id === lp.getSelectedLibraryItem().id);
+      const foundIdx = items.findIndex(it => it.id === lp.getSelectedLibraryItem()?.id);
       if (foundIdx !== -1) {
         targetIdx = foundIdx;
       }
     }
     selectedCatalogIndex = targetIdx;
-    selectAndPreviewItem(items[targetIdx], tabName);
+    const target = items[targetIdx];
+    if (target) selectAndPreviewItem(target, tabName);
   } else if (!matchedOnlineRef) {
     if (resourcePreviewMonitor) {
       resourcePreviewMonitor.innerHTML = '<div class="asset-preview-empty">No items match query</div>';
@@ -1002,7 +1009,7 @@ export function renderCatalog(items: any[], tabName: string, matchedOnlineRef: a
   }
 }
 
-export function createCatalogTableRow(item: any, idx: number, tabName: string) {
+export function createCatalogTableRow(item: LibraryItem, idx: number, tabName: string) {
   if (!ctx) return document.createElement('tr');
   const lp = ctx;
   const tr = document.createElement('tr');
@@ -1018,7 +1025,7 @@ export function createCatalogTableRow(item: any, idx: number, tabName: string) {
       <td class="cell-meta">${escapeUserHtml(item.ccli_number || item.copyright || '')}</td>
     `;
   } else if (tabName === 'scriptures') {
-    const snippet = item.remote ? 'Text loads when added to the schedule' : (item.verses && item.verses.length > 0 ? item.verses[0].text : '');
+    const snippet = item.remote ? 'Text loads when added to the schedule' : (item.verses && item.verses.length > 0 ? (item.verses[0]?.text ?? '') : '');
     tr.innerHTML = `
       <td class="cell-title">📖 ${escapeUserHtml(item.reference)}</td>
       <td><span class="bible-lang-badge">${lp.escapeHtml(item.version)}</span>${item.remote ? ` <span class="bible-source-tag">${lp.escapeHtml(item.remote.tag)}</span>` : ''}</td>
@@ -1137,7 +1144,7 @@ export function createCatalogTableRow(item: any, idx: number, tabName: string) {
   return tr;
 }
 
-export function appendCatalogTableRows(items: any[], tabName: string, startIndex: number) {
+export function appendCatalogTableRows(items: LibraryItem[], tabName: string, startIndex: number) {
   if (!catalogTableBody) return;
   items.forEach((item, i) => {
     const tr = createCatalogTableRow(item, startIndex + i, tabName);
@@ -1145,7 +1152,7 @@ export function appendCatalogTableRows(items: any[], tabName: string, startIndex
   });
 }
 
-export function renderCatalogTable(items: any[], tabName: string, matchedOnlineRef: any = null) {
+export function renderCatalogTable(items: LibraryItem[], tabName: string, _matchedOnlineRef: any = null) {
   if (!ctx) return;
   const headers = document.getElementById('catalog-headers');
   if (!catalogTableBody) return;
@@ -1182,7 +1189,7 @@ export function highlightCatalogRow(idx: number) {
   });
 }
 
-export function createCatalogGridCard(item: any, idx: number, tabName: string) {
+export function createCatalogGridCard(item: LibraryItem, idx: number, tabName: string) {
   if (!ctx) return document.createElement('div');
   const lp = ctx;
   const card = document.createElement('div');
@@ -1233,7 +1240,7 @@ export function createCatalogGridCard(item: any, idx: number, tabName: string) {
   });
 
   if (tabName === 'themes') {
-    card.addEventListener('dblclick', () => openThemeEditor(item));
+    card.addEventListener('dblclick', () => openThemeEditor(item as ThemeRow));
   }
 
   // Register Pragmatic DnD Draggable on Grid Card
@@ -1313,7 +1320,7 @@ export function createCatalogGridCard(item: any, idx: number, tabName: string) {
   return card;
 }
 
-export function appendCatalogGridCards(items: any[], tabName: string, startIndex: number) {
+export function appendCatalogGridCards(items: LibraryItem[], tabName: string, startIndex: number) {
   if (!catalogGrid) return;
   items.forEach((item, i) => {
     const card = createCatalogGridCard(item, startIndex + i, tabName);
@@ -1321,7 +1328,7 @@ export function appendCatalogGridCards(items: any[], tabName: string, startIndex
   });
 }
 
-export function renderCatalogGrid(items: any[], tabName: string) {
+export function renderCatalogGrid(items: LibraryItem[], tabName: string) {
   if (!catalogGrid) return;
 
   // Clean up previous Pragmatic DND listeners on catalog items
@@ -1347,7 +1354,7 @@ const STAGEABLE_TAB_TYPES: Record<string, string> = {
  * double-click-to-Live and the Go Live button work, exactly as they do for
  * a real staged schedule item. Themes (not a schedulable item type) still
  * use the lightweight ad-hoc preview. */
-export function selectAndPreviewItem(item: any, tabName: string) {
+export function selectAndPreviewItem(item: LibraryItem, tabName: string) {
   if (!ctx) return;
   if (item?.remote) {
     // Reference-only result: the text is fetched when it is added or dragged to the schedule, not for a preview.
@@ -1366,7 +1373,7 @@ export function selectAndPreviewItem(item: any, tabName: string) {
   }
 }
 
-export function renderAssetPreview(item: any, tabName: string) {
+export function renderAssetPreview(item: LibraryItem, tabName: string) {
   if (!item || !resourcePreviewMonitor) return;
   if (!ctx) return;
   const lp = ctx;
@@ -1375,7 +1382,7 @@ export function renderAssetPreview(item: any, tabName: string) {
   let author = item.author || item.version || '';
   let sampleText = '';
   let bgStyle = 'linear-gradient(135deg, #0f2027, #203a43, #2c5364)';
-  let theme: any = null;
+  let theme: ThemeDefinition | null = null;
 
   if (item.slides && item.slides[0] && item.slides[0].background) {
     bgStyle = item.slides[0].background;
@@ -1391,13 +1398,14 @@ export function renderAssetPreview(item: any, tabName: string) {
     const qLower = (resourceSearchInput ? resourceSearchInput.value : '').trim().toLowerCase();
     let targetVerseIdx = 0;
     if (qLower && item.verses.length > 1) {
-      const matchIdx = item.verses.findIndex((v: any) => (v.text || '').toLowerCase().includes(qLower));
+      const matchIdx = item.verses.findIndex((v: ScriptureVerse) => (v.text || '').toLowerCase().includes(qLower));
       if (matchIdx !== -1) targetVerseIdx = matchIdx;
     }
     const v1 = item.verses[targetVerseIdx] || item.verses[0];
+    if (!v1) return;
     const w1 = (v1.text || '').trim().split(/\s+/).filter(Boolean).length;
-    if (w1 < 20 && item.verses.length > targetVerseIdx + 1) {
-      const v2 = item.verses[targetVerseIdx + 1];
+    const v2 = item.verses[targetVerseIdx + 1];
+    if (w1 < 20 && v2) {
       const w2 = (v2.text || '').trim().split(/\s+/).filter(Boolean).length;
       if (w1 + w2 <= 40) {
         sampleText = `${v1.verse_number}. ${v1.text}\n\n${v2.verse_number}. ${v2.text}`;
@@ -1423,7 +1431,7 @@ export function renderAssetPreview(item: any, tabName: string) {
 
   // Dual Translation Comparison Render in Scriptures Tab
   if (tabName === 'scriptures' && lp.getIsDualBibleMode()) {
-    const pVersion = (item.version || (lp.getActiveBibleVersion() !== 'all' ? lp.getActiveBibleVersion() : (lp.getInstalledBibles()[0] ? lp.getInstalledBibles()[0].abbreviation : 'Primary'))).trim();
+    const pVersion = (item.version || (lp.getActiveBibleVersion() !== 'all' ? lp.getActiveBibleVersion() : (lp.getInstalledBibles()[0]?.abbreviation ?? 'Primary'))).trim();
     const pAbbr = getBibleAbbreviation(pVersion);
     
     const otherInstalled = lp.getInstalledBibles().filter(b => 
@@ -1437,7 +1445,7 @@ export function renderAssetPreview(item: any, tabName: string) {
         areTranslationsEquivalent(lp.getSecondaryBibleVersion(), pVersion) ||
         areTranslationsEquivalent(lp.getSecondaryBibleVersion(), item.version)) {
       if (otherInstalled.length > 0) {
-        lp.setSecondaryBibleVersion(otherInstalled[0].id);
+        if (otherInstalled[0]) lp.setSecondaryBibleVersion(otherInstalled[0].id);
       } else {
         const fallback = standardOnline.find(code => !areTranslationsEquivalent(code, pVersion));
         lp.setSecondaryBibleVersion(fallback || 'asv');
@@ -1515,7 +1523,7 @@ export function renderAssetPreview(item: any, tabName: string) {
     if (addBtn) {
       addBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        addDualScriptureToSchedule(item, pVersion, lp.getSecondaryBibleVersion(), item.verses, currentDualSecondaryVerses);
+        addDualScriptureToSchedule(item, pVersion, lp.getSecondaryBibleVersion(), item.verses ?? [], currentDualSecondaryVerses);
       });
     }
 
@@ -1527,15 +1535,15 @@ export function renderAssetPreview(item: any, tabName: string) {
         const el = document.getElementById('dual-secondary-text');
         if (localData && localData.verses && localData.verses.length > 0) {
           currentDualSecondaryVerses = localData.verses;
-          const matchingVerses = localData.verses.filter((v: any) =>
-            v.verse_number >= item.verse_start && v.verse_number <= item.verse_end
+          const matchingVerses = localData.verses.filter((v: ScriptureVerse) =>
+            v.verse_number >= (item.verse_start ?? 0) && v.verse_number <= (item.verse_end ?? Infinity)
           );
           const vList = matchingVerses.length > 0 ? matchingVerses : localData.verses;
           
           const qLower = (resourceSearchInput ? resourceSearchInput.value : '').trim().toLowerCase();
           let targetIdx = 0;
           if (qLower && vList.length > 1) {
-            const foundIdx = vList.findIndex((v: any) => (v.text || '').toLowerCase().includes(qLower));
+            const foundIdx = vList.findIndex((v: ScriptureVerse) => (v.text || '').toLowerCase().includes(qLower));
             if (foundIdx !== -1) targetIdx = foundIdx;
           }
           
@@ -1736,8 +1744,8 @@ export async function addDualScriptureToSchedule(primaryItem: any, pVersionParam
 
   ctx.showToast('Creating Dual Translation schedule item...', 'info');
 
-  const pVersion = (pVersionParam && pVersionParam !== 'all' ? pVersionParam : (primaryItem.version || (ctx.getInstalledBibles()[0] ? ctx.getInstalledBibles()[0].id : 'KJV'))).trim();
-  const sVersion = (sVersionParam && sVersionParam !== 'all' ? sVersionParam : (ctx.getSecondaryBibleVersion() || (ctx.getInstalledBibles()[1] ? ctx.getInstalledBibles()[1].id : (ctx.getInstalledBibles()[0] ? ctx.getInstalledBibles()[0].id : 'ASV')))).trim();
+  const pVersion = (pVersionParam && pVersionParam !== 'all' ? pVersionParam : (primaryItem.version || (ctx.getInstalledBibles()[0]?.id ?? 'KJV'))).trim();
+  const sVersion = (sVersionParam && sVersionParam !== 'all' ? sVersionParam : (ctx.getSecondaryBibleVersion() || (ctx.getInstalledBibles()[1]?.id ?? ctx.getInstalledBibles()[0]?.id ?? 'ASV'))).trim();
 
   const pAbbr = getBibleAbbreviation(pVersion);
   const sAbbr = getBibleAbbreviation(sVersion);

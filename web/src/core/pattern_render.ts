@@ -93,7 +93,7 @@ export async function renderPatternFrame(key: string, tSec: number, size: FrameS
     const ctx = c.getContext('2d');
     if (!ctx) throw new Error('no 2d context');
     await paintLayers(ctx, size.width, size.height, st.images.map((image, i) => ({
-        image, size: st.sizes[i], position: st.positions[i], repeat: st.repeats[i],
+        image, size: st.sizes[i] ?? '', position: st.positions[i] ?? '', repeat: st.repeats[i] ?? 'no-repeat',
     })));
     return new Promise<Blob>((resolve, reject) =>
         c.toBlob(b => (b ? resolve(b) : reject(new Error('canvas export failed'))), 'image/png'));

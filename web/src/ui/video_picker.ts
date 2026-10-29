@@ -17,7 +17,7 @@ import { renderEmptyState } from './filter_bar.ts';
 export interface VideoPickerContext {
   showModal: (el: HTMLElement | null) => void;
   closeModal: (el: HTMLElement | null) => void;
-  escapeHtml: (str: any) => string;
+  escapeHtml: (str: unknown) => string;
   showToast?: (msg: string, type?: ToastType) => void;
 }
 
@@ -224,8 +224,11 @@ export async function prepareVideoPickerGrid(opts: {
     const found = currentVideos.find(v => v.file_path === opts.currentVideo);
     selectedVideoName = found ? found.name : opts.currentVideo.split('/').pop() || 'Video';
   } else if (currentVideos.length > 0 && !selectedVideoPath) {
-    selectedVideoPath = currentVideos[0].file_path;
-    selectedVideoName = currentVideos[0].name;
+    const firstVideo = currentVideos[0];
+    if (firstVideo) {
+      selectedVideoPath = firstVideo.file_path;
+      selectedVideoName = firstVideo.name;
+    }
   }
 
   setVideoSubtab('library');

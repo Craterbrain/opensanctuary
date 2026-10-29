@@ -265,16 +265,17 @@ const SMIL_EASE = (u: number): number => cubicBezier(0.45, 0, 0.2, 1, u);
 /** Value of a spline-eased key-time animation at loop position t (0..1), as text. */
 function evalAnim(a: Anim, t: number): string {
     const kt = a.kt;
-    if (t <= kt[0]) return a.values[0];
+    if (t <= (kt[0] ?? 0)) return a.values[0] ?? '';
     for (let i = 0; i < kt.length - 1; i++) {
-        if (t <= kt[i + 1]) {
-            const span = kt[i + 1] - kt[i];
-            const e = span <= 0 ? 1 : SMIL_EASE((t - kt[i]) / span);
-            const p = a.values[i].split(',').map(Number), q = a.values[i + 1].split(',').map(Number);
-            return p.map((v, k) => r1((v + (q[k] - v) * e) * 1000) / 1000).join(',');
+        const k0 = kt[i] ?? 0, k1 = kt[i + 1] ?? 1;
+        if (t <= k1) {
+            const span = k1 - k0;
+            const e = span <= 0 ? 1 : SMIL_EASE((t - k0) / span);
+            const p = (a.values[i] ?? '').split(',').map(Number), q = (a.values[i + 1] ?? '').split(',').map(Number);
+            return p.map((v, k) => r1((v + ((q[k] ?? v) - v) * e) * 1000) / 1000).join(',');
         }
     }
-    return a.values[a.values.length - 1];
+    return a.values[a.values.length - 1] ?? '';
 }
 
 const PLANT_LOOP_SEC = 28;
@@ -285,6 +286,7 @@ function growingPlants(): { image: string; imageAt: (phaseSec: number) => string
     const rand = seeded(2024);
     const PI = Math.PI;
     const LEAF_COLORS = ['#2f8f55', '#3fae63', '#62c46c', '#8bd873', '#b4e27a', '#4cb87a'];
+    const leafColor = (): string => LEAF_COLORS[Math.floor(rand() * LEAF_COLORS.length)] ?? '#2f8f55';
     const STEM_COLORS = ['#5aa469', '#6fbf73', '#86d07f'];
     const SPLINE = '0.45 0 0.2 1';
     const f = (n: number): string => String(Math.round(n * 1000) / 1000);
@@ -301,8 +303,8 @@ function growingPlants(): { image: string; imageAt: (phaseSec: number) => string
         const dx = Math.sin(rad), dy = -Math.cos(rad);
         const bend = (rand() - 0.5) * len * 0.55;
         const nx = -dy, ny = dx;
-        const p0 = [x0, y0], p1 = [x0 + dx * len * 0.5 + nx * bend, y0 + dy * len * 0.5 + ny * bend];
-        const p2 = [x0 + dx * len + nx * bend * 0.4, y0 + dy * len + ny * bend * 0.4];
+        const p0: [number, number] = [x0, y0], p1: [number, number] = [x0 + dx * len * 0.5 + nx * bend, y0 + dy * len * 0.5 + ny * bend];
+        const p2: [number, number] = [x0 + dx * len + nx * bend * 0.4, y0 + dy * len + ny * bend * 0.4];
         const at = (t: number): [number, number, number] => {
             const u = 1 - t;
             const x = u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0];
@@ -322,11 +324,11 @@ function growingPlants(): { image: string; imageAt: (phaseSec: number) => string
             leaves.push({
                 x, y, ang: a + side * (48 + rand() * 24),
                 size: (depth === 0 ? 150 : depth === 1 ? 118 : 92) * (1.05 - 0.45 * t) * (0.85 + rand() * 0.3),
-                tGrow: tStart + dur * t + 0.03, color: LEAF_COLORS[Math.floor(rand() * LEAF_COLORS.length)],
+                tGrow: tStart + dur * t + 0.03, color: leafColor(),
             });
         }
         const [tx, ty, ta] = at(1);
-        leaves.push({ x: tx, y: ty, ang: ta + (rand() - 0.5) * 20, size: (depth === 0 ? 170 : 110) * (0.9 + rand() * 0.2), tGrow: tStart + dur, color: LEAF_COLORS[Math.floor(rand() * LEAF_COLORS.length)] });
+        leaves.push({ x: tx, y: ty, ang: ta + (rand() - 0.5) * 20, size: (depth === 0 ? 170 : 110) * (0.9 + rand() * 0.2), tGrow: tStart + dur, color: leafColor() });
 
         if (depth < 2) {
             const kids = depth === 0 ? [0.32, 0.5, 0.68] : [0.45, 0.72];
@@ -894,7 +896,7 @@ function lerpTokens(from: string, to: string, e: number, k: number): string {
     return a.map((tok, i) => {
         const m = /^(-?\d*\.?\d+)(px|%)$/.exec(tok), n = /^(-?\d*\.?\d+)(px|%)$/.exec(b[i] ?? tok);
         if (!m || !n || m[2] !== n[2]) return tok;
-        const v = parseFloat(m[1]) + (parseFloat(n[1]) - parseFloat(m[1])) * e;
+        const v = parseFloat(m[1] ?? '0') + (parseFloat(n[1] ?? '0') - parseFloat(m[1] ?? '0')) * e;
         return m[2] === 'px' ? `${r1(v * k)}px` : `${r1(v * 1000) / 1000}%`;
     }).join(' ');
 }

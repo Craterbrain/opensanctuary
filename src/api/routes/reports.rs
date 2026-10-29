@@ -259,6 +259,10 @@ pub(super) async fn post_open_ccli_assist(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))))?;
     let csv = build_ccli_csv_text(&rows);
 
+    // The autofill is best effort (it was written without ever seeing the live site). So the same CSV is also saved as a plain file and
+    // its path is handed back: when the upload box isn't filled in, the operator chooses this file in the page's own Browse dialog.
+    let csv_path = write_assist_csv(&app.data_dir, q.start, q.end, &csv).ok();
+
     let (username, password) = KeyringService::get_secret(CCLI_KEYRING_SERVICE, CCLI_KEYRING_ACCOUNT)
         .ok()
         .flatten()
@@ -274,9 +278,19 @@ pub(super) async fn post_open_ccli_assist(
     let init_script = build_ccli_assist_init_script(&username, &password, &csv);
 
     match display_manager.open_external("CCLI Upload Assistant".to_string(), CCLI_LOGIN_URL.to_string(), init_script) {
-        Ok(()) => Ok(Json(serde_json::json!({ "ok": true }))),
+        Ok(()) => Ok(Json(serde_json::json!({ "ok": true, "csv_path": csv_path.map(|p| p.to_string_lossy().into_owned()) }))),
         Err(e) => Ok(Json(serde_json::json!({ "ok": false, "error": e }))),
     }
+}
+
+/// Saves the report's CSV under `<data dir>/ccli-reports/` (named for the dates it covers) and returns where it went.
+fn write_assist_csv(data_dir: &std::path::Path, start_ms: i64, end_ms: i64, csv: &str) -> std::io::Result<std::path::PathBuf> {
+    let day = |ms: i64| chrono::DateTime::from_timestamp_millis(ms).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "report".to_string());
+    let dir = data_dir.join("ccli-reports");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("ccli-usage-{}_to_{}.csv", day(start_ms), day(end_ms)));
+    std::fs::write(&path, csv)?;
+    Ok(path)
 }
 
 pub(super) fn router() -> Router<AppState> {
@@ -313,6 +327,15 @@ mod tests {
         assert!(csv.contains("Copyrighted Song"));
         assert!(!csv.contains("Amazing Grace"), "public domain rows must never reach the CSV CCLI actually sees");
         assert!(csv.starts_with("Title,Author,CCLI Song Number,Times Used,First Used,Last Used\n"));
+    }
+
+    #[test]
+    fn the_assist_csv_is_also_saved_as_a_file_named_for_its_dates() {
+        let dir = std::env::temp_dir().join(format!("os-ccli-{}", uuid::Uuid::new_v4()));
+        let p = write_assist_csv(&dir, 1_700_000_000_000, 1_700_900_000_000, "Title,Author\nX,Y\n").unwrap();
+        assert_eq!(p.file_name().unwrap().to_string_lossy(), "ccli-usage-2023-11-14_to_2023-11-25.csv");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "Title,Author\nX,Y\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

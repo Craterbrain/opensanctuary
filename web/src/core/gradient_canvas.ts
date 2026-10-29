@@ -39,8 +39,8 @@ export function parseColor(text: string): RGBA {
     }
     const m = /^rgba?\(([^)]*)\)$/.exec(t);
     if (m) {
-        const p = m[1].split(',').map(s => parseFloat(s));
-        return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
+        const p = (m[1] ?? '').split(',').map(s => parseFloat(s));
+        return [p[0] ?? NaN, p[1] ?? NaN, p[2] ?? NaN, p.length > 3 ? (p[3] ?? 1) : 1];
     }
     throw new Error(`unsupported colour: ${text}`);
 }
@@ -62,10 +62,10 @@ export function parseGradient(css: string): ParsedGradient | null {
     const m = /^(linear|radial|conic)-gradient\((.*)\)$/s.exec(css.trim());
     if (!m) return null;
     const kind = m[1] as ParsedGradient['kind'];
-    const parts = splitTop(m[2]);
+    const parts = splitTop(m[2] ?? '');
     const g: ParsedGradient = { kind, angleDeg: kind === 'linear' ? 180 : 0, rx: null, ry: null, cx: 50, cy: 50, stops: [], stopsInDeg: kind === 'conic' };
 
-    const first = parts[0];
+    const first = parts[0] ?? '';
     const isStop = (p: string): boolean => /^(#|rgb|transparent)/i.test(p);
     if (!isStop(first)) {
         parts.shift();
@@ -74,24 +74,25 @@ export function parseGradient(css: string): ParsedGradient | null {
         } else {
             const at = /at\s+(.+)$/.exec(first);
             if (at) {
-                if (at[1].trim() === 'center') { g.cx = 50; g.cy = 50; } else {
-                    const [x, y] = at[1].trim().split(/\s+/);
-                    g.cx = parseFloat(x); g.cy = parseFloat(y);
+                const where = (at[1] ?? '').trim();
+                if (where === 'center') { g.cx = 50; g.cy = 50; } else {
+                    const [x, y] = where.split(/\s+/);
+                    g.cx = parseFloat(x ?? ''); g.cy = parseFloat(y ?? '');
                 }
             }
             if (kind === 'conic') {
                 const from = /from\s+(-?[\d.]+)deg/.exec(first);
-                g.angleDeg = from ? parseFloat(from[1]) : 0;
+                g.angleDeg = from ? parseFloat(from[1] ?? '') : 0;
             } else {
                 const size = /ellipse\s+([\d.]+)%\s+([\d.]+)%/.exec(first);
-                if (size) { g.rx = parseFloat(size[1]); g.ry = parseFloat(size[2]); }
+                if (size) { g.rx = parseFloat(size[1] ?? ''); g.ry = parseFloat(size[2] ?? ''); }
             }
         }
     }
     for (const p of parts) {
         const m2 = /^(.*?)\s+(-?[\d.]+)(%|deg)$/.exec(p);
-        const colorText = m2 ? m2[1] : p;
-        g.stops.push({ color: parseColor(colorText), pos: m2 ? parseFloat(m2[2]) : null });
+        const colorText = (m2 ? m2[1] : undefined) ?? p;
+        g.stops.push({ color: parseColor(colorText), pos: m2 ? parseFloat(m2[2] ?? '') : null });
     }
     return g;
 }
@@ -132,13 +133,14 @@ function addStops(grad: CanvasGradient, resolved: Array<{ color: RGBA; t: number
         const prev = [...resolved.slice(0, i)].reverse().find(r => visible(r.color));
         const next = resolved.slice(i + 1).find(r => visible(r.color));
         const colours = [prev, next].filter(Boolean).map(r => r!.color);
-        if (colours.length === 0) { grad.addColorStop(s.t, 'rgba(0,0,0,0)'); return; }
-        if (colours.length === 2 && (colours[0][0] !== colours[1][0] || colours[0][1] !== colours[1][1] || colours[0][2] !== colours[1][2])) {
+        const [first, second] = colours;
+        if (!first) { grad.addColorStop(s.t, 'rgba(0,0,0,0)'); return; }
+        if (second && (first[0] !== second[0] || first[1] !== second[1] || first[2] !== second[2])) {
             // fade out the previous colour, then fade in the next one, at the same point
-            grad.addColorStop(s.t, css(colours[0], 0));
-            grad.addColorStop(s.t, css(colours[1], 0));
+            grad.addColorStop(s.t, css(first, 0));
+            grad.addColorStop(s.t, css(second, 0));
         } else {
-            grad.addColorStop(s.t, css(colours[0], 0));
+            grad.addColorStop(s.t, css(first, 0));
         }
     });
 }
@@ -232,11 +234,12 @@ export async function paintLayers(ctx: CanvasRenderingContext2D, W: number, H: n
     ctx.fillRect(0, 0, W, H);
     for (let i = layers.length - 1; i >= 0; i--) {
         const l = layers[i];
-        const [sw, sh] = l.size.split(/\s+/);
-        const [pxTok, pyTok] = l.position.split(/\s+/);
+        if (!l) continue;
+        const [sw = '', sh] = l.size.split(/\s+/);
+        const [pxTok = '', pyTok] = l.position.split(/\s+/);
         const w = px(sw, W), h = px(sh ?? sw, H);
         let x = pxTok.endsWith('%') ? ((W - w) * parseFloat(pxTok)) / 100 : parseFloat(pxTok);
-        let y = (pyTok ?? '0%').endsWith('%') ? ((H - h) * parseFloat(pyTok ?? '0')) / 100 : parseFloat(pyTok);
+        let y = (pyTok ?? '0%').endsWith('%') ? ((H - h) * parseFloat(pyTok ?? '0')) / 100 : parseFloat(pyTok ?? '');
         const repX = l.repeat === 'repeat' || l.repeat === 'repeat-x';
         const repY = l.repeat === 'repeat';
         if (repX && w > 0) x = ((x % w) - w) % w;
@@ -244,7 +247,7 @@ export async function paintLayers(ctx: CanvasRenderingContext2D, W: number, H: n
 
         const grad = parseGradient(l.image);
         const url = /^url\("(.*)"\)$/s.exec(l.image);
-        const img = !grad && url ? await loadSvg(url[1]) : null;
+        const img = !grad && url ? await loadSvg(url[1] ?? '') : null;
         if (!grad && !img) throw new Error('unsupported background layer');
 
         for (let ty = y; ty < (repY ? H : y + 1); ty += repY ? h : 1) {

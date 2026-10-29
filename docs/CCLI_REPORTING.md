@@ -38,12 +38,23 @@ so a song already up when the window opens isn't counted for still being up.
 
 CCLI doesn't require reporting on PD works. `is_public_domain` is derived
 (`looks_public_domain` in `src/storage/db/ccli.rs`) from the song's
-`CcliMetadata.copyright` (empty/absent, or contains "public domain") and no
-`ccli_number` — a heuristic, same as planned. No manual override checkbox on
-the song itself yet (open question below); for now a song can be corrected
-by giving it a `CcliMetadata` entry (even a minimal one) via the slide
-editor's notes pane, which flips the heuristic since a `ccli_number` alone
-already overrides it.
+`CcliMetadata`: the copyright line says "public domain" (or is empty) and there is
+no `ccli_number` — a heuristic, and shown as such (below).
+
+**A "public domain" line with a rights holder in it does not count**
+(`copyright_text_is_public_domain`, `src/core/models.rs`). Many copyrighted songs are built on a
+public-domain work ("Arr. © 2001 Example Music, based on a public domain hymn"). Any sign of a rights holder
+in the line — a ©, "(c)", "copyright", "all rights reserved", "permission", a publisher or administrator, or a
+year after 1930 — keeps the song out of public domain, so it is reported and the service copyright pop-up lists it.
+A line that says only that ("Public Domain", "Words: Public Domain; Tune: Public Domain") still counts.
+A blank line is still treated as traditional.
+
+**Override on the song.** The song editor has a checkbox, "This song is public domain (ignore the copyright text)", for the cases the
+text rule gets wrong (`Song.public_domain_override`). It wins over the text and over a CCLI number, files the song with the public-domain
+songs, and is carried on the song's slides (`CcliMetadata.public_domain`) so the report, the exclusion list and the bundle pop-up honour it.
+
+A song put on the schedule from the library now carries its copyright and CCLI number on its slides' metadata (until
+2026-10-27 only songs edited in the slide editor did, so the report saw nothing and treated them as public domain).
 
 The report view shows two sections, not a silent filter:
 - **Reportable** — counted, included in the CSV.
@@ -182,13 +193,14 @@ won't trigger (degrades to "nothing happens," not "something breaks"), and
 the selectors in `CCLI_ASSIST_SCRIPT_TEMPLATE` would need adjusting by
 whoever first tries this against a real account.
 
+## When the autofill does nothing
+
+The upload autofill is best effort (it was written without ever seeing the live site). The same CSV is therefore also saved as a plain file,
+`ccli-reports/ccli-usage-<start>_to_<end>.csv` in the data folder, and its path is shown in the report window's sidebar and in the message when the
+Upload Assistant opens: if the upload box isn't filled in, choose that file in the page's own Browse dialog.
+
 ## Open questions
 
-- Exact heuristic thresholds for "public domain" detection — copyright
-  string matching alone may need a curated list of known-PD phrases.
-- A manual PD-override checkbox directly on the song (rather than only via
-  giving it a `CcliMetadata` entry) — would make correcting a misfire more
-  discoverable.
 - **Whether CCLI's login/upload page DOM is stable enough to target
   reliably — genuinely still unresolved**, and unlike the others on this
   list, not resolvable from here at all: CCLI's site returns 403 to

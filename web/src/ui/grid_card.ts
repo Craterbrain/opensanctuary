@@ -7,7 +7,7 @@
  */
 
 import { formatMediaTime } from '../core/ui_utils.ts';
-import { escapeHtml, escapeUserHtml } from '../core/presentation_helpers.ts';
+import { escapeUserHtml } from '../core/presentation_helpers.ts';
 
 export type ThumbnailType = 'image' | 'video' | 'css' | 'icon';
 
@@ -190,23 +190,25 @@ export class GridSelectionController<T = any> {
     this.selectedId = id;
     if (!id) return;
     const idx = this.items.findIndex(it => this.options.getItemId(it) === id);
-    if (idx !== -1 && this.options.onSelect) {
-      this.options.onSelect(this.items[idx], idx);
+    const picked = this.items[idx];
+    if (idx !== -1 && picked !== undefined && this.options.onSelect) {
+      this.options.onSelect(picked, idx);
     }
   }
 
   public selectIndex(index: number): void {
     if (index >= 0 && index < this.items.length) {
       const item = this.items[index];
-      this.select(this.options.getItemId(item));
+      if (item !== undefined) this.select(this.options.getItemId(item));
     }
   }
 
   public activate(id: string): void {
     this.select(id);
     const idx = this.items.findIndex(it => this.options.getItemId(it) === id);
-    if (idx !== -1 && this.options.onActivate) {
-      this.options.onActivate(this.items[idx], idx);
+    const picked = this.items[idx];
+    if (idx !== -1 && picked !== undefined && this.options.onActivate) {
+      this.options.onActivate(picked, idx);
     }
   }
 
@@ -228,8 +230,9 @@ export class GridSelectionController<T = any> {
     } else if (e.key === 'ArrowUp') {
       targetIdx = Math.max(0, currentIdx - colsPerRow);
     } else if (e.key === 'Enter') {
-      if (currentIdx !== -1) {
-        this.activate(this.options.getItemId(this.items[currentIdx]));
+      const current = this.items[currentIdx];
+      if (currentIdx !== -1 && current !== undefined) {
+        this.activate(this.options.getItemId(current));
         return true;
       }
       return false;

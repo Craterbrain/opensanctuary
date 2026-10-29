@@ -1,4 +1,8 @@
 // OpenSanctuary Rust Client Show Controller & Bible Manager (app.js)
+import type { ShowCommand } from './core/models.ts';
+import { errorMessage } from './core/ui_utils.ts';
+import type { StateSnapshot, Schedule, ScheduleItem, Slide, ShowState, LibrarySlide, ScriptureVerse, LibraryItem, InstalledBible } from './core/models.ts';
+import { showLicensedLink } from './ui/licensed_link.ts';
 import { stripLicensedText } from './core/licensed';
 import { exportBundle } from './ui/bundle_ui.ts';
 import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
@@ -34,22 +38,14 @@ import { formatSlideLyricsHtml, applyAutoFitLyrics, renderSlideVisual } from './
 import { parseDisplayOutputs, serializeDisplayOutputs } from './core/display_config.ts';
 import { MediaSyncManager, type MediaSyncPayload } from './core/media_sync.ts';
 import {
-  parseScriptureReference,
-  parseScriptureReferenceAsync,
-  setParsedRefCache,
-  parsedRefCache
-} from './core/bible_parser.ts';
-import {
   initSettingsDialog,
-  onSettingsSearchInput,
-  resetOptionsModal,
-  saveNetworkSettings
+  resetOptionsModal
 } from './ui/settings_dialog.ts';
 import { initThemePicker, openThemePicker } from './ui/theme_picker.ts';
-import { initThemeEditor, openThemeEditor } from './ui/theme_editor.ts';
+import { initThemeEditor } from './ui/theme_editor.ts';
 import { buildSlideCardElement, buildSlideThumbElement, renderDeckEmptyState, slideDeckStyle } from './ui/slide_deck_view.ts';
 import { initArrangementModal, openArrangementModal } from './ui/arrangement_modal.ts';
-import { initCcliReportModal, openCcliReportModal } from './ui/ccli_report_modal.ts';
+import { initCcliReportModal } from './ui/ccli_report_modal.ts';
 import {
   initLibraryPanel,
   loadLibraryTab,
@@ -58,15 +54,8 @@ import {
   areTranslationsEquivalent,
   addItemToSchedule,
   renderAssetPreview,
-  selectAndPreviewItem,
   addDualScriptureToSchedule,
   updateSearchModeUI,
-  getActiveResourceViewMode,
-  setActiveResourceViewMode,
-  getActiveCategory,
-  setActiveCategory,
-  getActiveLibraryItems,
-  getFilteredLibraryItems,
 } from './ui/library_panel.ts';
 import {
   initPresentationPlayback,
@@ -88,10 +77,10 @@ import { createEngineWebSocket, EngineWebSocketClient } from './core/ws_client.t
 // reversing that order). app_ui.ts calls registerUiCallbacks() once, near
 // the end of its own module body, after all of these are declared.
 interface UiCallbacks {
-  editExistingItem: (item: any, scheduleContext?: { itemIndex: number; slideIndex?: number } | null) => void;
+  editExistingItem: (item: LibraryItem | ScheduleItem, scheduleContext?: { itemIndex: number; slideIndex?: number } | null) => void;
   openImportModal: (initialMode?: string) => void;
   openSlideEditor: (type?: string) => void;
-  promptNewSectionHeader: (insertIndex: any) => void;
+  promptNewSectionHeader: (insertIndex: number | null) => void;
   setImportMode: (mode: string) => void;
   switchToPairingTab: () => void;
   switchToAdbProvisionTab: () => void;
@@ -109,13 +98,13 @@ try { (globalThis as any).sendCommand = sendCommand; } catch (_) {}
 try { (globalThis as any).openThemePicker = openThemePicker; } catch (_) {}
 
 
-let ws: any = null;
+let ws: WebSocket | null = null;
 let engineWsClient: EngineWebSocketClient | null = null;
-export let currentSnapshot: any = null;
+export let currentSnapshot: StateSnapshot | null = null;
 let protocolMismatchWarned = false;
 let consoleLockedWarned = false;
 export let currentTab = 'songs';
-export let selectedLibraryItem: any = null;
+export let selectedLibraryItem: LibraryItem | null = null;
 export let currentEditorType = 'song';
 export let editingItemId: string | null = null;
 export let activeImportMode = 'local';
@@ -128,10 +117,11 @@ export let activeUndoPlaceholder: {
   index: number;
   title: string;
   createdAt: number;
-  timer: any;
+  timer: ReturnType<typeof setTimeout> | null;
 } | null = null;
 
 // Context Menu State
+/** What a right-click menu was opened on: a schedule item, a slide, a library row, a Bible... (the shape differs per menu; each handler reads what its menu stored). */
 export let currentContextMenuTarget: any = null;
 
 // Available Presentation Themes & Background Photos — canonical list lives in
@@ -189,7 +179,7 @@ export async function refreshAvailableThemes(force = false) {
 }
 
 // Bible Translations Management (Dynamic DB Lookups - Zero Hardcoded Defaults)
-export let installedBibles: any[] = [];
+export let installedBibles: InstalledBible[] = [];
 
 export async function refreshInstalledBibles() {
   try {
@@ -202,7 +192,8 @@ export async function refreshInstalledBibles() {
         const stored = installedBibles.filter(b => !b.remote);
         if (!appOptions.defaultBibleVersion && stored.length > 0) {
           const defaultObj = stored.find(b => b.is_default || b.isDefault);
-          appOptions.defaultBibleVersion = defaultObj ? defaultObj.id : stored[0].id;
+          const pick = defaultObj ? defaultObj.id : stored[0]?.id;
+          if (pick) appOptions.defaultBibleVersion = pick;
         }
         installedBibles.forEach(b => {
           b.isDefault = areTranslationsEquivalent(b.id, appOptions.defaultBibleVersion);
@@ -232,8 +223,8 @@ function applyDefaultBibleVersionIfUnset() {
 
 export let secondaryBibleVersion = '';
 export let isDualBibleMode = false;
-export let currentDualSecondaryVerses: any[] = [];
-let contextMenuTargetBible: any = null;
+export let currentDualSecondaryVerses: ScriptureVerse[] = [];
+let contextMenuTargetBible: InstalledBible | null = null;
 
 
 // Global Application Options (16:9 Default Standard)
@@ -357,7 +348,6 @@ const previewCanvasFooterRightEl = document.getElementById('preview-canvas-foote
 const previewCanvasImageEl = document.getElementById('preview-canvas-image');
 const previewCanvasElementsEl = document.getElementById('preview-canvas-elements');
 const previewSlideCounterTextEl = document.getElementById('preview-slide-counter-text');
-const btnPreviewGoLive = document.getElementById('btn-preview-golive');
 const liveTitleEl = document.getElementById('live-title-display');
 export const liveSlideMatrixEl = document.getElementById('live-slide-matrix');
 const canvasLyricsEl = document.getElementById('canvas-lyrics-text');
@@ -372,7 +362,6 @@ const slideCounterTextEl = document.getElementById('slide-counter-text');
 const liveCanvasEl = document.getElementById('live-canvas');
 
 // Search & Preview Actions
-const btnPreviewToSchedule = document.getElementById('btn-preview-to-schedule');
 export const btnToggleDualBible = document.getElementById('btn-toggle-dual-bible');
 
 // Ribbon Buttons
@@ -404,20 +393,13 @@ export const optionsModal = document.getElementById('options-modal');
 export const shortcutsModal = document.getElementById('shortcuts-modal');
 export const aboutModal = document.getElementById('about-modal');
 export const scheduleArticlesModal = document.getElementById('schedule-articles-modal');
-const confirmModal = document.getElementById('confirm-modal');
-let onConfirmDialogAccept = null;
 
 // Editor Elements
-const createModalTitle = document.getElementById('create-modal-title');
 export const createItemTitle = document.getElementById('create-item-title') as HTMLInputElement | null;
 export const createItemAuthor = document.getElementById('create-item-author') as HTMLInputElement | null;
-const createItemTheme = document.getElementById('create-item-theme');
 export const createItemCopyright = document.getElementById('create-item-copyright') as HTMLInputElement | null;
+export const createItemPublicDomain = document.getElementById('create-item-public-domain') as HTMLInputElement | null;
 export const createItemContent = document.getElementById('create-item-content') as HTMLInputElement | null;
-const editorPreviewCanvas = document.getElementById('editor-preview-canvas');
-const editorPreviewText = document.getElementById('editor-preview-text');
-const editorPreviewTitle = document.getElementById('editor-preview-title');
-const editorPreviewAuthor = document.getElementById('editor-preview-author');
 
 // ============================================================================
 // GLOBAL RIGHT-CLICK SUPPRESSION & CONTEXT MENU MANAGEMENT
@@ -427,7 +409,7 @@ document.addEventListener('contextmenu', (e) => {
   e.preventDefault();
 });
 
-export function showContextMenu(menuEl: any, x: number, y: number) {
+export function showContextMenu(menuEl: HTMLElement | null, x: number, y: number) {
   return contextMenuManager.showElement(menuEl, x, y);
 }
 
@@ -440,11 +422,11 @@ export function hideAllContextMenus() {
  * schedule item context menu. Merging is only offered between two adjacent,
  * non-header items (section headers/groups have no slides to merge).
  */
-function updateScheduleMergeMenuVisibility(idx: number, item: any, schedule: any) {
+function updateScheduleMergeMenuVisibility(idx: number, item: ScheduleItem, schedule: Schedule) {
   const prevBtn = document.getElementById('ctx-sched-merge-prev');
   const nextBtn = document.getElementById('ctx-sched-merge-next');
   const items = (schedule && schedule.items) || [];
-  const isMergeable = (it: any) => it && !it.is_section_header && (it.item_type || '').toLowerCase() !== 'header' && (it.item_type || '').toLowerCase() !== 'group';
+  const isMergeable = (it: ScheduleItem | undefined) => it && !it.is_section_header && (it.item_type || '').toLowerCase() !== 'header' && (it.item_type || '').toLowerCase() !== 'group';
 
   const canMergePrev = isMergeable(item) && idx > 0 && isMergeable(items[idx - 1]);
   const canMergeNext = isMergeable(item) && idx < items.length - 1 && isMergeable(items[idx + 1]);
@@ -454,7 +436,7 @@ function updateScheduleMergeMenuVisibility(idx: number, item: any, schedule: any
 }
 
 /** Shows "Set Slide Duration..." on the slide context menu only for presentation items. */
-function updateSlideDurationMenuVisibility(item: any) {
+function updateSlideDurationMenuVisibility(item: ScheduleItem | LibraryItem) {
   const btn = document.getElementById('ctx-slide-duration');
   if (btn) btn.style.display = (item && item.item_type === 'presentation') ? '' : 'none';
 }
@@ -470,13 +452,13 @@ initPresentationPlayback({
   sendCommand: sendCommand,
 });
 
-export function showModal(modalEl: any, options?: any) {
+export function showModal(modalEl: HTMLElement | null, options?: Parameters<typeof dialogManager.openModal>[1]) {
   if (!modalEl) return null;
   hideAllContextMenus();
   return dialogManager.openModal(modalEl, options);
 }
 
-export function closeModal(modalEl: any) {
+export function closeModal(modalEl: HTMLElement | null) {
   if (!modalEl) return false;
   return dialogManager.closeModal(modalEl);
 }
@@ -496,6 +478,7 @@ function resetCreateModal() {
   if (createItemAuthor) createItemAuthor.value = '';
   if (createItemContent) createItemContent.value = '';
   if (createItemCopyright) createItemCopyright.value = '';
+  if (createItemPublicDomain) createItemPublicDomain.checked = false;
   currentEditorType = 'song';
   document.querySelectorAll<HTMLElement>('.type-pill').forEach(pill => {
     pill.classList.toggle('active', pill.dataset.type === 'song');
@@ -591,7 +574,7 @@ dialogManager.registerResetHook('arrangement-modal', () => {
 dialogManager.setupConfirmModalBindings();
 
 // Backdrop click closes and resets modal
-document.querySelectorAll('.modal-backdrop').forEach(backdrop => {
+document.querySelectorAll<HTMLElement>('.modal-backdrop').forEach(backdrop => {
   backdrop.addEventListener('click', (e) => {
     if (e.target === backdrop) {
       closeModal(backdrop);
@@ -787,7 +770,7 @@ function showHostAuthBanner() {
   document.getElementById('os-host-auth-dismiss')?.addEventListener('click', () => banner.remove());
 }
 
-export function sendCommand(cmd: any) {
+export function sendCommand(cmd: ShowCommand) {
   if (engineWsClient) {
     engineWsClient.sendCommand(cmd);
   } else {
@@ -826,7 +809,7 @@ export function renderAll(snapshot = currentSnapshot) {
   }
 }
 
-function renderRibbon(state: any) {
+function renderRibbon(state: ShowState) {
   if (btnBlack) btnBlack.classList.toggle('active', !!state.is_blackout);
   if (btnClear) btnClear.classList.toggle('active', !!state.is_clear_text);
   if (btnLogo) btnLogo.classList.toggle('active', !!state.is_logo_override);
@@ -837,7 +820,6 @@ function renderRibbon(state: any) {
 // SCHEDULE PANEL: SINGLE ITEM EXPANSION & GROUP COLLAPSING (PRAGMATIC DND)
 // ============================================================================
 export let lastRenderedScheduleKey = '';
-let draggedPreviewSlideIndex: number | null = null;
 export const collapsedGroupIds = new Set<string>();
 
 // Cleanup subscriptions for dynamic DOM elements
@@ -881,7 +863,7 @@ function computeSafeDestinationIndex(startIndex: number, indexOfTarget: number, 
 function recordSchedulePositions(): Map<string, DOMRect> {
   const positions = new Map<string, DOMRect>();
   if (!scheduleListEl) return positions;
-  const els = scheduleListEl.querySelectorAll('[data-schedule-key]');
+  const els = scheduleListEl.querySelectorAll<HTMLElement>('[data-schedule-key]');
   els.forEach(el => {
     const key = el.getAttribute('data-schedule-key');
     if (key) {
@@ -897,8 +879,8 @@ function recordSchedulePositions(): Map<string, DOMRect> {
 function applyScheduleFLIP(prevPositions: Map<string, DOMRect>) {
   if (!scheduleListEl || !prevPositions || prevPositions.size === 0) return;
   requestAnimationFrame(() => {
-    const els = scheduleListEl.querySelectorAll('[data-schedule-key]');
-    els.forEach((el: any) => {
+    const els = scheduleListEl.querySelectorAll<HTMLElement>('[data-schedule-key]');
+    els.forEach((el) => {
       const key = el.getAttribute('data-schedule-key');
       if (key && prevPositions.has(key)) {
         const oldRect = prevPositions.get(key)!;
@@ -936,7 +918,7 @@ function clearAllScheduleDropIndicators() {
  * Reorders schedule items: optimistic array mutation immediately, backend command sent,
  * but full renderSchedule() deferred to next frame/microtask so nodes are not destroyed mid-gesture.
  */
-function reorderScheduleItemsAnimated(schedule: any, fromIdx: number, toIdx: number, focusTargetSelector?: string) {
+function reorderScheduleItemsAnimated(schedule: Schedule, fromIdx: number, toIdx: number, focusTargetSelector?: string) {
   const sched = (currentSnapshot && currentSnapshot.schedule) ? currentSnapshot.schedule : schedule;
   if (!sched || !sched.items || fromIdx === toIdx || fromIdx < 0 || toIdx < 0
       || fromIdx >= sched.items.length || toIdx >= sched.items.length) {
@@ -946,10 +928,10 @@ function reorderScheduleItemsAnimated(schedule: any, fromIdx: number, toIdx: num
   // 1. Optimistic in-memory mutation
   const prevPositions = recordSchedulePositions();
   const [moved] = sched.items.splice(fromIdx, 1);
-  sched.items.splice(toIdx, 0, moved);
+  if (moved) sched.items.splice(toIdx, 0, moved);
   if (schedule && schedule !== sched && schedule.items) {
     const [m2] = schedule.items.splice(fromIdx, 1);
-    schedule.items.splice(toIdx, 0, m2);
+    if (m2) schedule.items.splice(toIdx, 0, m2);
   }
   adjustExpandedIndexOnReorder(fromIdx, toIdx);
 
@@ -990,7 +972,7 @@ function reorderScheduleItemsAnimated(schedule: any, fromIdx: number, toIdx: num
  * Reorders child slides inside a schedule item: optimistic mutation immediately,
  * renderSchedule deferred to next frame so nodes are not destroyed mid-gesture.
  */
-function reorderChildSlidesAnimated(schedule: any, itemIdx: number, fromIdx: number, toIdx: number, focusTargetSelector?: string) {
+function reorderChildSlidesAnimated(schedule: Schedule, itemIdx: number, fromIdx: number, toIdx: number, focusTargetSelector?: string) {
   const sched = (currentSnapshot && currentSnapshot.schedule) ? currentSnapshot.schedule : schedule;
   const it = sched && sched.items ? sched.items[itemIdx] : null;
   const arr = effectiveArrangement(it);
@@ -1004,7 +986,7 @@ function reorderChildSlidesAnimated(schedule: any, itemIdx: number, fromIdx: num
     it.arrangement = effectiveArrangement(it);
   }
   const [movedEntry] = it.arrangement.splice(fromIdx, 1);
-  it.arrangement.splice(toIdx, 0, movedEntry);
+  if (movedEntry) it.arrangement.splice(toIdx, 0, movedEntry);
 
   if (schedule && schedule !== sched && schedule.items && schedule.items[itemIdx]) {
     const sItem = schedule.items[itemIdx];
@@ -1012,7 +994,7 @@ function reorderChildSlidesAnimated(schedule: any, itemIdx: number, fromIdx: num
       sItem.arrangement = effectiveArrangement(sItem);
     }
     const [m2] = sItem.arrangement.splice(fromIdx, 1);
-    sItem.arrangement.splice(toIdx, 0, m2);
+    if (m2) sItem.arrangement.splice(toIdx, 0, m2);
   }
 
   // Keep live item in sync if this is the currently live item
@@ -1023,7 +1005,7 @@ function reorderChildSlidesAnimated(schedule: any, itemIdx: number, fromIdx: num
       lItem.arrangement = effectiveArrangement(lItem);
     }
     const [mLive] = lItem.arrangement.splice(fromIdx, 1);
-    lItem.arrangement.splice(toIdx, 0, mLive);
+    if (mLive) lItem.arrangement.splice(toIdx, 0, mLive);
     if (currentSnapshot.state.live_slide_index === fromIdx) {
       currentSnapshot.state.live_slide_index = toIdx;
     } else if (fromIdx < toIdx && currentSnapshot.state.live_slide_index > fromIdx && currentSnapshot.state.live_slide_index <= toIdx) {
@@ -1041,7 +1023,7 @@ function reorderChildSlidesAnimated(schedule: any, itemIdx: number, fromIdx: num
       sItem.arrangement = effectiveArrangement(sItem);
     }
     const [mStaged] = sItem.arrangement.splice(fromIdx, 1);
-    sItem.arrangement.splice(toIdx, 0, mStaged);
+    if (mStaged) sItem.arrangement.splice(toIdx, 0, mStaged);
     if (currentSnapshot.state.staged_slide_index === fromIdx) {
       currentSnapshot.state.staged_slide_index = toIdx;
     } else if (fromIdx < toIdx && currentSnapshot.state.staged_slide_index > fromIdx && currentSnapshot.state.staged_slide_index <= toIdx) {
@@ -1071,12 +1053,12 @@ function reorderChildSlidesAnimated(schedule: any, itemIdx: number, fromIdx: num
 }
 
 // Active Panel / Deck Interaction Tracker
-document.addEventListener('click', (e: any) => {
-  if (e.target.closest('#preview-panel') || e.target.closest('#preview-slide-matrix')) {
+document.addEventListener('click', (e) => {
+  if ((e.target as Element | null)?.closest('#preview-panel') || (e.target as Element | null)?.closest('#preview-slide-matrix')) {
     lastActiveDeckContext = 'preview';
-  } else if (e.target.closest('#live-output-panel') || e.target.closest('#live-slide-matrix') || e.target.closest('#live-panel')) {
+  } else if ((e.target as Element | null)?.closest('#live-output-panel') || (e.target as Element | null)?.closest('#live-slide-matrix') || (e.target as Element | null)?.closest('#live-panel')) {
     lastActiveDeckContext = 'live';
-  } else if (e.target.closest('#schedule-panel') || e.target.closest('#schedule-items-list')) {
+  } else if ((e.target as Element | null)?.closest('#schedule-panel') || (e.target as Element | null)?.closest('#schedule-items-list')) {
     lastActiveDeckContext = 'schedule';
   }
 }, true);
@@ -1085,7 +1067,7 @@ document.addEventListener('click', (e: any) => {
  * Creates an interactive DOM placeholder row in the schedule where an item was just deleted.
  * Hangs around for a second (1500ms), pauses on hover, and undos on click.
  */
-function createUndoPlaceholderElement(ph: { index: number; title: string; createdAt: number; timer: any }): HTMLElement {
+function createUndoPlaceholderElement(ph: { index: number; title: string; createdAt: number; timer: ReturnType<typeof setTimeout> | null }): HTMLElement {
   const el = document.createElement('div');
   el.className = 'schedule-undo-placeholder';
   el.setAttribute('role', 'alert');
@@ -1212,7 +1194,7 @@ function deleteScheduleItemByIndex(index: number, title?: string) {
 // ============================================================================
 // SLIDE BADGE & VERSE NUMBER PRESERVATION HELPERS
 // ============================================================================
-export function getSlideBadge(slide: any, sIdx?: number): string {
+export function getSlideBadge(slide: Slide, sIdx?: number): string {
   if (!slide) return sIdx !== undefined ? `V${sIdx + 1}` : 'Slide';
 
   // 1. If explicit cached tag or tag already assigned, preserve it!
@@ -1335,7 +1317,7 @@ export function updateSlideSelectionVisuals() {
       const isSelected = activeSelectedSlide &&
         activeSelectedSlide.context === 'preview' &&
         activeSelectedSlide.slideIndex === idx;
-      el.classList.toggle('active-staged', !!isSelected || (currentSnapshot && currentSnapshot.state.staged_slide_index === idx));
+      el.classList.toggle('active-staged', !!isSelected || currentSnapshot?.state.staged_slide_index === idx);
     });
   }
 }
@@ -1349,7 +1331,7 @@ export function deleteSelectedSlideOrItem(): boolean {
   if (!activeSelectedSlide && lastActiveDeckContext === 'preview' && currentSnapshot && currentSnapshot.state.staged_item) {
     const stagedItem = currentSnapshot.state.staged_item;
     const sched = currentSnapshot.schedule;
-    const itemIdx = (sched && sched.items) ? sched.items.findIndex((it: any) => it.id === stagedItem.id) : -1;
+    const itemIdx = (sched && sched.items) ? sched.items.findIndex((it) => it.id === stagedItem.id) : -1;
     if (itemIdx >= 0) {
       activeSelectedSlide = {
         itemIndex: itemIdx,
@@ -1360,16 +1342,20 @@ export function deleteSelectedSlideOrItem(): boolean {
   }
 
   if (!activeSelectedSlide) return false;
+  const snap = currentSnapshot;
+  if (!snap) return false;
 
-  const sched = (currentSnapshot && currentSnapshot.schedule) ? currentSnapshot.schedule : null;
+  const sched = (snap && snap.schedule) ? snap.schedule : null;
   if (!sched || !sched.items || sched.items.length === 0) return false;
 
   let itemIdx = activeSelectedSlide.itemIndex;
   if (itemIdx < 0 || itemIdx >= sched.items.length) {
-    if (activeSelectedSlide.context === 'preview' && currentSnapshot.state.staged_item) {
-      itemIdx = sched.items.findIndex((it: any) => it.id === currentSnapshot.state.staged_item.id);
-    } else if (activeSelectedSlide.context === 'live' && currentSnapshot.state.live_item) {
-      itemIdx = sched.items.findIndex((it: any) => it.id === currentSnapshot.state.live_item.id);
+    const stagedNow = snap.state.staged_item;
+    const liveNow = snap.state.live_item;
+    if (activeSelectedSlide.context === 'preview' && stagedNow) {
+      itemIdx = sched.items.findIndex((it) => it.id === stagedNow.id);
+    } else if (activeSelectedSlide.context === 'live' && liveNow) {
+      itemIdx = sched.items.findIndex((it) => it.id === liveNow.id);
     }
   }
 
@@ -1382,6 +1368,7 @@ export function deleteSelectedSlideOrItem(): boolean {
   if (slideIdx < 0 || slideIdx >= item.slides.length) return false;
 
   const slideToDelete = item.slides[slideIdx];
+  if (!slideToDelete) return false;
   const slideTag = getSlideBadge(slideToDelete, slideIdx);
 
   if (item.slides.length > 1) {
@@ -1389,16 +1376,16 @@ export function deleteSelectedSlideOrItem(): boolean {
 
     // Optimistically update local schedule and state
     item.slides.splice(slideIdx, 1);
-    if (currentSnapshot.state.staged_item && currentSnapshot.state.staged_item.id === item.id) {
-      currentSnapshot.state.staged_item.slides = item.slides.slice();
-      if (currentSnapshot.state.staged_slide_index >= item.slides.length) {
-        currentSnapshot.state.staged_slide_index = Math.max(0, item.slides.length - 1);
+    if (snap.state.staged_item && snap.state.staged_item.id === item.id) {
+      snap.state.staged_item.slides = item.slides.slice();
+      if (snap.state.staged_slide_index >= item.slides.length) {
+        snap.state.staged_slide_index = Math.max(0, item.slides.length - 1);
       }
     }
-    if (currentSnapshot.state.live_item && currentSnapshot.state.live_item.id === item.id) {
-      currentSnapshot.state.live_item.slides = item.slides.slice();
-      if (currentSnapshot.state.live_slide_index >= item.slides.length) {
-        currentSnapshot.state.live_slide_index = Math.max(0, item.slides.length - 1);
+    if (snap.state.live_item && snap.state.live_item.id === item.id) {
+      snap.state.live_item.slides = item.slides.slice();
+      if (snap.state.live_slide_index >= item.slides.length) {
+        snap.state.live_slide_index = Math.max(0, item.slides.length - 1);
       }
     }
 
@@ -1413,9 +1400,9 @@ export function deleteSelectedSlideOrItem(): boolean {
     lastRenderedPreviewKey = '';
     lastRenderedLiveKey = '';
     renderSchedule(sched);
-    renderPreviewDeck(currentSnapshot.state);
-    renderLiveDeck(currentSnapshot.state);
-    renderPreviewOutput(currentSnapshot.state);
+    renderPreviewDeck(snap.state);
+    renderLiveDeck(snap.state);
+    renderPreviewOutput(snap.state);
 
     showToast(`✓ Removed slide (${slideTag})`, 'info');
     return true;
@@ -1461,7 +1448,7 @@ try {
   globalThis.clearActiveUndoPlaceholder = clearActiveUndoPlaceholder;
 } catch (_) {}
 
-export function renderSchedule(schedule: any) {
+export function renderSchedule(schedule: Schedule) {
   if (!scheduleListEl) return;
   if (scheduleTitleEl) scheduleTitleEl.textContent = schedule.title || 'UNTITLED';
 
@@ -1542,7 +1529,7 @@ export function renderSchedule(schedule: any) {
 
   let currentGroupIsCollapsed = false;
 
-  schedule.items.forEach((item: any, idx: number) => {
+  schedule.items.forEach((item, idx: number) => {
     if (activeUndoPlaceholder && activeUndoPlaceholder.index === idx) {
       scheduleListEl.appendChild(createUndoPlaceholderElement(activeUndoPlaceholder));
     }
@@ -1555,7 +1542,7 @@ export function renderSchedule(schedule: any) {
     if (typeLower === 'header' || typeLower === 'group') {
       let groupItemCount = 0;
       for (let j = idx + 1; j < schedule.items.length; j++) {
-        const nextType = (schedule.items[j].item_type || '').toLowerCase();
+        const nextType = (schedule.items[j]?.item_type || '').toLowerCase();
         if (nextType === 'header' || nextType === 'group') break;
         groupItemCount++;
       }
@@ -1585,8 +1572,8 @@ export function renderSchedule(schedule: any) {
       `;
 
       // Toggle group collapse on click (excluding the drag handle)
-      headerEl.addEventListener('click', (e: any) => {
-        if (e.target.closest('.schedule-drag-handle')) return;
+      headerEl.addEventListener('click', (e) => {
+        if ((e.target as Element | null)?.closest('.schedule-drag-handle')) return;
         if (collapsedGroupIds.has(item.id)) {
           collapsedGroupIds.delete(item.id);
         } else {
@@ -1608,7 +1595,7 @@ export function renderSchedule(schedule: any) {
       const headerHandle = headerEl.querySelector<HTMLElement>('.schedule-drag-handle');
       if (headerHandle) {
         headerHandle.addEventListener('click', (e) => e.stopPropagation());
-        headerHandle.addEventListener('keydown', (e: any) => {
+        headerHandle.addEventListener('keydown', (e) => {
           if ((e.altKey || e.ctrlKey) && e.key === 'ArrowUp') {
             e.preventDefault();
             e.stopPropagation();
@@ -1783,8 +1770,8 @@ export function renderSchedule(schedule: any) {
     }
 
     // Row Click: Stage item and auto-expand clicked item
-    itemEl.addEventListener('click', (e: any) => {
-      if (e.target.closest('.schedule-caret') || e.target.closest('.schedule-drag-handle')) return;
+    itemEl.addEventListener('click', (e) => {
+      if ((e.target as Element | null)?.closest('.schedule-caret') || (e.target as Element | null)?.closest('.schedule-drag-handle')) return;
       if (expandedScheduleIndex !== idx && item.slides && item.slides.length > 1) {
         expandedScheduleIndex = idx;
         const activeSched = (currentSnapshot && currentSnapshot.schedule) ? currentSnapshot.schedule : schedule;
@@ -1795,8 +1782,8 @@ export function renderSchedule(schedule: any) {
       sendCommand({ StageItem: { item_index: idx, slide_index: 0 } });
     });
 
-    itemEl.addEventListener('dblclick', (e: any) => {
-      if (e.target.closest('.schedule-drag-handle')) return;
+    itemEl.addEventListener('dblclick', (e) => {
+      if ((e.target as Element | null)?.closest('.schedule-drag-handle')) return;
       sendCommand({ GoLive: { item_index: idx, slide_index: 0 } });
     });
 
@@ -1813,7 +1800,7 @@ export function renderSchedule(schedule: any) {
     const itemHandle = itemEl.querySelector<HTMLElement>('.schedule-drag-handle');
     if (itemHandle) {
       itemHandle.addEventListener('click', (e) => e.stopPropagation());
-      itemHandle.addEventListener('keydown', (e: any) => {
+      itemHandle.addEventListener('keydown', (e) => {
         if ((e.altKey || e.ctrlKey) && e.key === 'ArrowUp') {
           e.preventDefault();
           e.stopPropagation();
@@ -1944,9 +1931,9 @@ export function renderSchedule(schedule: any) {
       const childContainer = document.createElement('div');
       childContainer.className = 'schedule-child-slides';
 
-      effectiveArr.forEach((entry: any, sIdx: number) => {
+      effectiveArr.forEach((entry, sIdx: number) => {
         const slide = resolveSlideAt(item, sIdx);
-        const isCurrentLiveSlide = isLive && currentSnapshot.state.live_slide_index === sIdx;
+        const isCurrentLiveSlide = isLive && currentSnapshot?.state.live_slide_index === sIdx;
         const isSelectedSlide = (activeSelectedSlide &&
           activeSelectedSlide.itemIndex === idx &&
           activeSelectedSlide.slideIndex === sIdx);
@@ -1981,8 +1968,8 @@ export function renderSchedule(schedule: any) {
           ${slideMediaBadge}
         `;
 
-        childEl.addEventListener('click', (e: any) => {
-          if (e.target.closest('.child-slide-drag-handle')) return;
+        childEl.addEventListener('click', (e) => {
+          if ((e.target as Element | null)?.closest('.child-slide-drag-handle')) return;
           if (childEl.classList.contains('dragging')) return;
           e.stopPropagation();
           lastActiveDeckContext = 'schedule';
@@ -1990,8 +1977,8 @@ export function renderSchedule(schedule: any) {
           clearAdhocPreview();
           sendCommand({ StageItem: { item_index: idx, slide_index: sIdx } });
         });
-        childEl.addEventListener('dblclick', (e: any) => {
-          if (e.target.closest('.child-slide-drag-handle')) return;
+        childEl.addEventListener('dblclick', (e) => {
+          if ((e.target as Element | null)?.closest('.child-slide-drag-handle')) return;
           if (childEl.classList.contains('dragging')) return;
           e.stopPropagation();
           lastActiveDeckContext = 'schedule';
@@ -2003,7 +1990,7 @@ export function renderSchedule(schedule: any) {
         const childHandle = childEl.querySelector<HTMLElement>('.child-slide-drag-handle');
         if (childHandle) {
           childHandle.addEventListener('click', (e) => e.stopPropagation());
-          childHandle.addEventListener('keydown', (e: any) => {
+          childHandle.addEventListener('keydown', (e) => {
             if ((e.altKey || e.ctrlKey) && e.key === 'ArrowUp') {
               e.preventDefault();
               e.stopPropagation();
@@ -2122,7 +2109,7 @@ export function renderSchedule(schedule: any) {
                     }
                   });
                   const mediaKind = isAud ? 'audio track' : (isVid ? 'video background' : 'image background');
-                  showToast(`✓ Assigned ${mediaKind} to slide ${sIdx + 1} (${slide.tag || 'Slide ' + (sIdx + 1)}): ${d.name}`, 'success');
+                  showToast(`✓ Assigned ${mediaKind} to slide ${sIdx + 1} (${slide?.tag || 'Slide ' + (sIdx + 1)}): ${d.name}`, 'success');
                 }
               } else if (d.type === 'theme-item') {
                 sendCommand({
@@ -2220,11 +2207,6 @@ const mediaSyncManager = new MediaSyncManager(() => liveVideoEl as HTMLVideoElem
 function broadcastLocalMediaSync(action: MediaSyncPayload['action'], currentTime?: number, isPlaying?: boolean, isLooping?: boolean, executeAtEpoch?: number | null) {
   mediaSyncManager.setLooping(isLooping !== undefined ? isLooping : isLiveVideoLooping);
   mediaSyncManager.broadcastSync(action, currentTime, isPlaying, isLooping, executeAtEpoch);
-}
-
-function startMediaSyncHeartbeat() {
-  mediaSyncManager.setLooping(isLiveVideoLooping);
-  mediaSyncManager.startHeartbeat();
 }
 
 function stopMediaSyncHeartbeat() {
@@ -2463,7 +2445,13 @@ let lastRenderedPreviewOutputKey = '';
 // Ad-hoc library preview: viewing a resource that isn't (yet) on the Schedule.
 // Purely a local rendering concern — never touches engine staged_item state,
 // so it can't accidentally be sent Live via a stale item_index.
-let adhocPreviewItem: any = null;
+/** A state with nothing live or staged, for drawing the library preview before the first snapshot has arrived. */
+const EMPTY_SHOW_STATE: ShowState = {
+  live_item: null, live_slide_index: 0, staged_item: null, staged_slide_index: 0, is_blackout: false, is_clear_text: false,
+  is_logo_override: false, alert_message: null, global_theme: null, global_background: null, sequence_number: 0, last_event_id: '', server_time_ms: 0,
+};
+
+let adhocPreviewItem: LibraryItem | null = null;
 let adhocPreviewTabName = '';
 let adhocPreviewSlideIndex = 0;
 
@@ -2473,11 +2461,11 @@ function clearAdhocPreview() {
   adhocPreviewSlideIndex = 0;
 }
 
-function setAdhocPreview(item: any, tabName: string) {
+function setAdhocPreview(item: LibraryItem | null, tabName: string) {
   adhocPreviewItem = item;
   adhocPreviewTabName = tabName;
   adhocPreviewSlideIndex = 0;
-  const state = currentSnapshot || {};
+  const state = currentSnapshot?.state ?? EMPTY_SHOW_STATE;
   renderPreviewDeck(state);
   renderPreviewOutput(state);
 }
@@ -2487,16 +2475,16 @@ function setAdhocPreview(item: any, tabName: string) {
  * "slides" for the ad-hoc Preview panel. This is a display-only projection —
  * it does not attempt to replicate the server-side AddToSchedule conversion.
  */
-function buildAdhocPreviewSlides(item: any, tabName: string): Array<{ text: string; background?: string }> {
+function buildAdhocPreviewSlides(item: LibraryItem, tabName: string): Array<{ text: string; background?: string }> {
   if (!item) return [];
 
   if ((tabName === 'songs' || tabName === 'presentations') && Array.isArray(item.slides) && item.slides.length > 0) {
-    return item.slides.map((s: any) => ({ text: s.text || s.content || s.title || '', background: s.background }));
+    return item.slides.map((s: LibrarySlide) => ({ text: s.text || s.content || s.title || '', background: s.background ?? undefined }));
   }
 
   if (tabName === 'scriptures') {
     if (Array.isArray(item.verses) && item.verses.length > 0) {
-      return item.verses.map((v: any) => ({ text: `${v.verse_number}. ${v.text}` }));
+      return item.verses.map((v: ScriptureVerse) => ({ text: `${v.verse_number}. ${v.text}` }));
     }
     return [{ text: item.reference || item.text || '' }];
   }
@@ -2516,7 +2504,8 @@ function reorderPreviewSlides(fromIdx: number, toIdx: number) {
   if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0) return;
   const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
   const state = currentSnapshot && currentSnapshot.state ? currentSnapshot.state : null;
-  const stagedItem = state ? state.staged_item : null;
+  if (!state) return;
+  const stagedItem = state.staged_item;
   if (!stagedItem || !stagedItem.slides || fromIdx >= stagedItem.slides.length || toIdx >= stagedItem.slides.length) return;
 
   // Reordering addresses its target by schedule index, unlike staging/going
@@ -2526,12 +2515,13 @@ function reorderPreviewSlides(fromIdx: number, toIdx: number) {
 
   // Optimistically swap slides in local memory
   const [moved] = stagedItem.slides.splice(fromIdx, 1);
+  if (!moved) return;
   stagedItem.slides.splice(toIdx, 0, moved);
 
   // Sync with schedule item slides if present
   if (sched && itemIdx >= 0 && sched.items[itemIdx] && sched.items[itemIdx].slides) {
     const [m2] = sched.items[itemIdx].slides.splice(fromIdx, 1);
-    sched.items[itemIdx].slides.splice(toIdx, 0, m2);
+    if (m2) sched.items[itemIdx].slides.splice(toIdx, 0, m2);
     lastRenderedScheduleKey = '';
     renderSchedule(sched);
   }
@@ -2539,7 +2529,7 @@ function reorderPreviewSlides(fromIdx: number, toIdx: number) {
   // Sync live item if it matches
   if (state && state.live_item && state.live_item.id === stagedItem.id && state.live_item.slides) {
     const [mLive] = state.live_item.slides.splice(fromIdx, 1);
-    state.live_item.slides.splice(toIdx, 0, mLive);
+    if (mLive) state.live_item.slides.splice(toIdx, 0, mLive);
     if (state.live_slide_index === fromIdx) {
       state.live_slide_index = toIdx;
     } else if (fromIdx < toIdx && state.live_slide_index > fromIdx && state.live_slide_index <= toIdx) {
@@ -2568,7 +2558,7 @@ function reorderPreviewSlides(fromIdx: number, toIdx: number) {
 }
 
 /** Paints a slide's resolved background onto a deck thumbnail, the way the main canvases do. */
-function slideBackgroundPainter(item: any, slideIdx: number, state: any): (el: HTMLElement) => void {
+function slideBackgroundPainter(item: ScheduleItem, slideIdx: number, state: ShowState): (el: HTMLElement) => void {
   const bg = resolveBackgroundAt(item, slideIdx, availableThemes, state.active_theme, state.global_theme);
   // An animated pattern on a slide in the decks: make sure its pre-rendered clip exists.
   const patternKey = parseAnimatedPatternMarker(bg);
@@ -2609,7 +2599,7 @@ export function refreshSlideDecks() {
   renderLiveDeck(state);
 }
 
-function renderPreviewDeck(state: any) {
+function renderPreviewDeck(state: ShowState) {
   if (!previewSlideMatrixEl) return;
 
   if (adhocPreviewItem) {
@@ -2660,6 +2650,7 @@ function renderPreviewDeck(state: any) {
 
   const stagedItem = state.staged_item;
   if (previewTitleEl) previewTitleEl.textContent = stagedItem ? stagedItem.title : 'No Staged Item';
+  showLicensedLink(previewTitleEl, stagedItem);
   applyDeckMode(previewSlideMatrixEl, 'preview', stagedItem ? stagedItem.item_type : '');
 
   const itemId = stagedItem ? stagedItem.id : '';
@@ -2732,7 +2723,7 @@ function renderPreviewDeck(state: any) {
     const cardHandle = cardEl.querySelector<HTMLElement>('.preview-card-drag-handle');
     if (cardHandle) {
       cardHandle.addEventListener('click', (e) => e.stopPropagation());
-      cardHandle.addEventListener('keydown', (e: any) => {
+      cardHandle.addEventListener('keydown', (e) => {
         if ((e.altKey || e.ctrlKey) && (e.key === 'ArrowLeft' || e.key === 'ArrowUp')) {
           e.preventDefault();
           e.stopPropagation();
@@ -2811,8 +2802,8 @@ function renderPreviewDeck(state: any) {
     );
 
     // Single click stages slide
-    cardEl.addEventListener('click', (e: any) => {
-      if (e.target.closest('.preview-card-drag-handle')) return;
+    cardEl.addEventListener('click', (e) => {
+      if ((e.target as Element | null)?.closest('.preview-card-drag-handle')) return;
       if (cardEl.classList.contains('dragging')) return;
       lastActiveDeckContext = 'preview';
       state.staged_slide_index = sIdx;
@@ -2822,7 +2813,7 @@ function renderPreviewDeck(state: any) {
       renderPreviewOutput(state);
 
       const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
-      const itemIdx = (sched && sched.items && stagedItem) ? sched.items.findIndex((it: any) => it.id === stagedItem.id) : -1;
+      const itemIdx = (sched && sched.items && stagedItem) ? sched.items.findIndex((it) => it.id === stagedItem.id) : -1;
       setActiveSelectedSlide({
         itemIndex: itemIdx >= 0 ? itemIdx : 0,
         slideIndex: sIdx,
@@ -2833,11 +2824,11 @@ function renderPreviewDeck(state: any) {
     });
 
     // Double click sends slide directly to Live
-    cardEl.addEventListener('dblclick', (e: any) => {
-      if (e.target.closest('.preview-card-drag-handle')) return;
+    cardEl.addEventListener('dblclick', (e) => {
+      if ((e.target as Element | null)?.closest('.preview-card-drag-handle')) return;
       if (cardEl.classList.contains('dragging')) return;
       const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
-      const itemIdx = (sched && sched.items && stagedItem) ? sched.items.findIndex((it: any) => it.id === stagedItem.id) : -1;
+      const itemIdx = (sched && sched.items && stagedItem) ? sched.items.findIndex((it) => it.id === stagedItem.id) : -1;
       sendCommand({ GoLive: { item_index: itemIdx >= 0 ? itemIdx : null, slide_index: sIdx } });
     });
 
@@ -2847,7 +2838,7 @@ function renderPreviewDeck(state: any) {
       e.stopPropagation();
       lastActiveDeckContext = 'preview';
       const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
-      const itemIdx = (sched && sched.items && stagedItem) ? sched.items.findIndex((it: any) => it.id === stagedItem.id) : -1;
+      const itemIdx = (sched && sched.items && stagedItem) ? sched.items.findIndex((it) => it.id === stagedItem.id) : -1;
       setActiveSelectedSlide({
         itemIndex: itemIdx >= 0 ? itemIdx : 0,
         slideIndex: sIdx,
@@ -2862,7 +2853,7 @@ function renderPreviewDeck(state: any) {
   });
 }
 
-function renderPreviewOutput(state: any) {
+function renderPreviewOutput(state: ShowState) {
   if (!previewCanvasLyricsEl) return;
 
   if (adhocPreviewItem) {
@@ -2978,9 +2969,10 @@ function renderPreviewOutput(state: any) {
 
 let lastRenderedLiveKey = '';
 
-function renderLiveDeck(state: any) {
+function renderLiveDeck(state: ShowState) {
   if (!liveSlideMatrixEl) return;
   if (liveTitleEl) liveTitleEl.textContent = state.live_item ? state.live_item.title : 'No Active Item';
+  showLicensedLink(liveTitleEl, state.live_item);
 
   const liveItem = state.live_item;
   applyDeckMode(liveSlideMatrixEl, 'live', liveItem ? liveItem.item_type : '');
@@ -3045,7 +3037,7 @@ function renderLiveDeck(state: any) {
     cardEl.addEventListener('click', () => {
       lastActiveDeckContext = 'live';
       const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
-      const itemIdx = (sched && sched.items && liveItem) ? sched.items.findIndex((it: any) => it.id === liveItem.id) : -1;
+      const itemIdx = (sched && sched.items && liveItem) ? sched.items.findIndex((it) => it.id === liveItem.id) : -1;
       setActiveSelectedSlide({ itemIndex: itemIdx >= 0 ? itemIdx : 0, slideIndex: sIdx, context: 'live' });
       sendCommand({ JumpSlide: sIdx });
     });
@@ -3056,7 +3048,7 @@ function renderLiveDeck(state: any) {
       e.stopPropagation();
       lastActiveDeckContext = 'live';
       const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
-      const itemIdx = (sched && sched.items && liveItem) ? sched.items.findIndex((it: any) => it.id === liveItem.id) : -1;
+      const itemIdx = (sched && sched.items && liveItem) ? sched.items.findIndex((it) => it.id === liveItem.id) : -1;
       setActiveSelectedSlide({ itemIndex: itemIdx >= 0 ? itemIdx : 0, slideIndex: sIdx, context: 'live' });
       currentContextMenuTarget = { type: 'slide', itemIndex: itemIdx >= 0 ? itemIdx : null, slideIndex: sIdx, item: liveItem, slide: slide };
       updateSlideDurationMenuVisibility(liveItem);
@@ -3067,7 +3059,7 @@ function renderLiveDeck(state: any) {
   });
 }
 
-function renderLiveOutput(state: any) {
+function renderLiveOutput(state: ShowState) {
   if (!canvasLyricsEl) return;
   const liveItem = state.live_item;
   const slideIdx = state.live_slide_index || 0;
@@ -3275,7 +3267,7 @@ function renderLiveOutput(state: any) {
     }
     if (canvasFooterRightEl) {
       canvasFooterRightEl.style.opacity = '1';
-      canvasFooterRightEl.textContent = currentSlide.footer || liveItem.subtitle || '';
+      canvasFooterRightEl.textContent = currentSlide?.footer || liveItem.subtitle || '';
     }
 
     if (liveCanvasEl) {
@@ -3330,7 +3322,7 @@ on('ctx-sched-theme', 'click', () => {
     openThemePicker(item, (theme) => {
       item.theme_name = theme.name;
       if (item.slides) {
-        item.slides.forEach((s: any) => s.background = theme.bg);
+        item.slides.forEach((s: LibrarySlide) => s.background = theme.bg);
       }
       sendCommand({
         SetItemTheme: {
@@ -3355,9 +3347,9 @@ on('ctx-sched-image', 'click', () => {
     const itemIdx = currentContextMenuTarget.index;
     openMediaImagePicker({
       currentImage: item.slides && item.slides[0] ? item.slides[0].background : null,
-      onSelectSlide: (filePath, cssBg, name) => {
+      onSelectSlide: (_filePath, cssBg) => {
         item.theme_name = name;
-        if (item.slides) item.slides.forEach((s: any) => s.background = cssBg);
+        if (item.slides) item.slides.forEach((s: LibrarySlide) => s.background = cssBg);
         sendCommand({
           SetItemTheme: {
             item_index: itemIdx,
@@ -3442,9 +3434,9 @@ on('ctx-sched-merge-next', 'click', () => {
  * currentSnapshot.schedule.items lets the caller's very next sendCommand
  * target that index immediately, without waiting on the round trip.
  */
-function ensureItemInSchedule(item: any): number {
+function ensureItemInSchedule(item: ScheduleItem): number {
   if (!currentSnapshot || !currentSnapshot.schedule || !item) return -1;
-  const existingIdx = currentSnapshot.schedule.items.findIndex((it: any) => it.id === item.id);
+  const existingIdx = currentSnapshot.schedule.items.findIndex((it) => it.id === item.id);
   if (existingIdx >= 0) return existingIdx;
   const newIdx = currentSnapshot.schedule.items.length;
   // A deep clone, not the same reference as `item` (state.staged_item/
@@ -3518,7 +3510,7 @@ on('ctx-slide-image', 'click', () => {
     const slideIdx = target.slideIndex;
     openMediaImagePicker({
       currentImage: target.slide ? target.slide.background : null,
-      onSelectSlide: (filePath, cssBg, name) => {
+      onSelectSlide: (_filePath, cssBg) => {
         if (target.slide) target.slide.background = cssBg;
         sendCommand({
           SetSlideBackground: {
@@ -3653,7 +3645,7 @@ on('ctx-lib-theme', 'click', () => {
     openThemePicker(item, async (theme) => {
       item.theme_name = theme.name;
       if (item.slides) {
-        item.slides.forEach((s: any) => s.background = theme.bg);
+        item.slides.forEach((s: LibrarySlide) => s.background = theme.bg);
       }
       try {
         if (tab === 'songs') {
@@ -3685,10 +3677,10 @@ on('ctx-lib-image', 'click', () => {
     const item = currentContextMenuTarget.item;
     const tab = currentContextMenuTarget.tab || currentTab;
     openMediaImagePicker({
-      onSelectSlide: async (filePath, cssBg, name) => {
+      onSelectSlide: async (_filePath, cssBg) => {
         item.theme_name = name;
         if (item.slides) {
-          item.slides.forEach((s: any) => s.background = cssBg);
+          item.slides.forEach((s: LibrarySlide) => s.background = cssBg);
         }
         try {
           if (tab === 'songs') {
@@ -3719,7 +3711,7 @@ on('ctx-lib-image', 'click', () => {
 on('ctx-lib-copy', 'click', () => {
   if (currentContextMenuTarget && currentContextMenuTarget.item) {
     const it = currentContextMenuTarget.item;
-    const text = it.slides ? it.slides.map((s: any) => s.text).join('\n\n') : (it.name || it.title || it.reference || '');
+    const text = it.slides ? it.slides.map((s: LibrarySlide) => s.text).join('\n\n') : (it.name || it.title || it.reference || '');
     copyToClipboard(text, '✓ Copied library item content to clipboard!');
   }
   hideAllContextMenus();
@@ -3748,8 +3740,8 @@ on('ctx-lib-export-odp', 'click', async () => {
     a.remove();
     URL.revokeObjectURL(url);
     showToast(`✓ Exported "${title}" (.odp)`, 'success');
-  } catch (e: any) {
-    showToast(`Export failed: ${e?.message ?? e}`, 'error');
+  } catch (e) {
+    showToast(`Export failed: ${errorMessage(e)}`, 'error');
   }
 });
 // Songs and presentations save one file each; a Bible saves the whole translation the chapter belongs to.
@@ -3816,14 +3808,15 @@ on('ctx-mon-foh', 'click', () => {
 
 // 5. Bible Versions Tree Context Menu Handlers
 on('ctx-set-default-bible', 'click', () => {
-  if (contextMenuTargetBible) {
-    appOptions.defaultBibleVersion = contextMenuTargetBible.id;
-    saveAppOptions({ defaultBibleVersion: contextMenuTargetBible.id });
-    installedBibles.forEach(b => b.isDefault = areTranslationsEquivalent(b.id, contextMenuTargetBible.id));
+  const targetBible = contextMenuTargetBible;
+  if (targetBible) {
+    appOptions.defaultBibleVersion = targetBible.id;
+    saveAppOptions({ defaultBibleVersion: targetBible.id });
+    installedBibles.forEach(b => b.isDefault = areTranslationsEquivalent(b.id, targetBible.id));
     renderCategoryTree('scriptures');
     updateSearchModeUI();
     filterAndRenderCatalog();
-    showToast(`✓ Set ${contextMenuTargetBible.abbreviation} (${contextMenuTargetBible.name}) as default translation`, 'success');
+    showToast(`✓ Set ${targetBible.abbreviation} (${targetBible.name}) as default translation`, 'success');
   }
   hideAllContextMenus();
 });

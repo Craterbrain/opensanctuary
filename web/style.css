@@ -6066,7 +6066,7 @@ video {
 /* A plugin that would add this entry once turned on (core/plugin_hints.ts): muted, opens its review card */
 .plugin-source-node--off { color: var(--os-text-tertiary); }
 .plugin-source-node--off::after { content: "plugin · off"; }
-.plugin-picker-hint[hidden], .import-tab-btn[hidden] { display: none; }
+.plugin-picker-hint[hidden], .import-tab-btn[hidden], .ribbon-btn[hidden] { display: none; }
 .plugin-offer + .plugin-offer { margin-top: var(--os-space-5); }
 .store-plugin-cards { display: contents; }
 .fts-plugin-offer { margin: var(--os-space-4) 0; }
@@ -6202,3 +6202,6 @@ video {
 .plugin-trust-choice { display: block; margin: 8px 0; font-size: 13px; }
 .plugin-publisher { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
 .plugin-publisher .settings-hint { flex: 1 1 200px; margin: 0; }
+
+/* The publisher link next to a licensed Bible passage's title (src/ui/licensed_link.ts). */
+.licensed-link { margin-left: 8px; font-size: 0.85em; color: var(--accent, #ff6a2b); text-decoration: underline; cursor: pointer; white-space: nowrap; }

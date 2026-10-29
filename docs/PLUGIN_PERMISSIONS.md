@@ -25,6 +25,8 @@ Status: **implemented.** This began as a design (written by an Opus design pass)
 - (a) The operator approves a plugin without knowing what it asks for. Consent and plain-language tiers address this.
 - (b) A plugin binary or script is swapped or updated after approval and runs on the old consent. Digest pinning and optional signature TOFU address this.
 - (c) A buggy but honest plugin uses host features it did not declare. Hook and host-API gating addresses this.
+
+**Slow work a plugin asks for runs off the request threads.** Moving a finished media file into the library (which across drives is a copy of up to gigabytes) and saving a downloaded file are done on the blocking pool with a 15-minute limit (`blocking_with_timeout` in `src/api/routes/plugins.rs`), so one plugin's slow disk work cannot stall the other requests the server is answering. Process jobs and downloads were already asynchronous.
 - (d) A plugin token is used beyond its purpose, whether stolen or misused. Scopes, TTLs and revocation address this.
 - (e) A device or remote credential tries to grant plugin permissions. Only console credentials may grant.
 

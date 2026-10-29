@@ -17,7 +17,7 @@ import { renderEmptyState } from './filter_bar';
 export interface MediaImagePickerContext {
   showModal(el: HTMLElement | null): void;
   closeModal(el: HTMLElement | null): void;
-  escapeHtml(str: any): string;
+  escapeHtml(str: unknown): string;
 }
 
 let ctx: MediaImagePickerContext | null = null;
@@ -76,7 +76,7 @@ export async function prepareMediaImagePickerGrid({ currentImage = null, onSelec
   } catch (err) {}
 
   const available = getAllAvailableImages();
-  selectedImageForPicker = currentImage || (available.length > 0 ? available[0].file_path : null);
+  selectedImageForPicker = currentImage || (available[0]?.file_path ?? null);
   onImagePickerSlideCallback = onSelectSlide;
   onImagePickerAllCallback = onSelectAll;
 
@@ -242,8 +242,8 @@ export function initMediaImagePicker(context: MediaImagePickerContext) {
   document.addEventListener('DOMContentLoaded', () => {
     const catWrap = document.getElementById('image-picker-categories');
     if (catWrap) {
-      catWrap.addEventListener('click', (e: any) => {
-        const btn = e.target.closest('.import-tab-btn');
+      catWrap.addEventListener('click', (e) => {
+        const btn = (e.target as Element | null)?.closest('.import-tab-btn');
         if (btn) {
           catWrap.querySelectorAll('.import-tab-btn').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');

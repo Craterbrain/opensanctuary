@@ -537,7 +537,10 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_songs_title ON songs(title);
             CREATE INDEX IF NOT EXISTS idx_songs_author ON songs(author);",
-        )
+        )?;
+        // Added after the first release; older song databases get the column here (the error just says it is already there).
+        let _ = conn.execute("ALTER TABLE songs ADD COLUMN public_domain_override INTEGER", []);
+        Ok(())
     }
 
     pub(super) fn init_scriptures_schema(conn: &Connection) -> Result<()> {
@@ -602,6 +605,7 @@ impl Database {
                             slides,
                             theme_name: row.get(6)?,
                             alternate_title: None,
+                            public_domain_override: None,
                         })
                     })?
                     .filter_map(|s| s.ok())

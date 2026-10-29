@@ -23,7 +23,10 @@ pub struct CcliUsageRow {
 /// the copyright string is either empty/absent or contains "public domain".
 /// Deliberately a heuristic, not authoritative -- the report UI surfaces
 /// this as a visible, overridable section rather than a silent filter.
-fn looks_public_domain(ccli_number: &Option<String>, copyright: &Option<String>) -> bool {
+fn looks_public_domain(ccli_number: &Option<String>, copyright: &Option<String>, override_pd: Option<bool>) -> bool {
+    if override_pd == Some(true) {
+        return true;
+    }
     if ccli_number.is_some() {
         return false;
     }
@@ -31,7 +34,7 @@ fn looks_public_domain(ccli_number: &Option<String>, copyright: &Option<String>)
         None => true,
         Some(c) => {
             let lower = c.trim().to_lowercase();
-            lower.is_empty() || lower.contains("public domain")
+            lower.is_empty() || crate::core::models::copyright_text_is_public_domain(&lower)
         }
     }
 }
@@ -89,7 +92,7 @@ impl Database {
                 .and_then(|m| m.author.clone())
                 .filter(|a| !a.trim().is_empty())
                 .unwrap_or_else(|| item.author_or_ref.clone());
-            let is_public_domain = looks_public_domain(&ccli_number, &copyright);
+            let is_public_domain = looks_public_domain(&ccli_number, &copyright, metadata.as_ref().and_then(|m| m.public_domain));
 
             let key = ccli_number.clone().unwrap_or_else(|| item.title.to_lowercase());
 
@@ -125,16 +128,21 @@ mod tests {
 
     #[test]
     fn public_domain_heuristic_matches_docs_ccli_reporting() {
-        assert!(looks_public_domain(&None, &None));
-        assert!(looks_public_domain(&None, &Some("".to_string())));
-        assert!(looks_public_domain(&None, &Some("Public Domain".to_string())));
-        assert!(looks_public_domain(&None, &Some("  public domain  ".to_string())));
-        assert!(!looks_public_domain(&None, &Some("© 2020 Example Music".to_string())));
-        assert!(!looks_public_domain(&Some("1234567".to_string()), &None));
+        assert!(looks_public_domain(&None, &None, None));
+        assert!(looks_public_domain(&None, &Some("".to_string()), None));
+        assert!(looks_public_domain(&None, &Some("Public Domain".to_string()), None));
+        assert!(looks_public_domain(&None, &Some("  public domain  ".to_string()), None));
+        assert!(!looks_public_domain(&None, &Some("© 2020 Example Music".to_string()), None));
+        assert!(!looks_public_domain(&Some("1234567".to_string()), &None, None));
         assert!(!looks_public_domain(
             &Some("1234567".to_string()),
-            &Some("Public Domain".to_string())
+            &Some("Public Domain".to_string()),
+            None
         ));
+        // The operator's override wins over the text and a CCLI number; a modern arrangement of a public-domain hymn is not public domain.
+        assert!(looks_public_domain(&Some("1234567".to_string()), &Some("© 2020 Example Music".to_string()), Some(true)));
+        assert!(!looks_public_domain(&None, &Some("Arr. © 2001 Example Music, based on a public domain hymn".to_string()), None));
+        assert!(!looks_public_domain(&None, &Some("Public Domain; arrangement 1998 Smith".to_string()), None));
     }
 
     fn song_item(id: &str, title: &str, ccli_metadata: Option<CcliMetadata>) -> ScheduleItem {
@@ -178,6 +186,7 @@ mod tests {
                 author: Some("Real Author".to_string()),
                 copyright: Some("© 2020 Example Music".to_string()),
                 ccli_number: Some("1234567".to_string()),
+                public_domain: None,
             }),
         );
         let pd_song = song_item("item-pd", "Amazing Grace", None);

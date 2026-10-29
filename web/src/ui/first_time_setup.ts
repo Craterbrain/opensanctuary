@@ -8,6 +8,7 @@
  * so dismissing it early never strands the user.
  */
 
+import { errorMessage } from '../core/ui_utils.ts';
 import { api, type PluginInfo } from "../core/api_client.ts";
 import { openPluginReview, placementsFor, pluginsAddingTo } from "../core/plugin_hints.ts";
 import { showToast } from "../core/ui_utils.ts";
@@ -68,7 +69,7 @@ function renderStep(): void {
   const skipBtn = document.getElementById("btn-first-time-skip") as HTMLButtonElement | null;
   if (!body) return;
 
-  const step = STEPS[stepIndex];
+  const step = STEPS[stepIndex] ?? "welcome";
   if (backBtn) backBtn.style.visibility = stepIndex === 0 ? "hidden" : "visible";
   if (skipBtn) skipBtn.style.display = step === "welcome" || step === "done" ? "none" : "";
   if (nextBtn) nextBtn.textContent = step === "done" ? "Done" : step === "welcome" ? "Let's Go ➜" : "Next ➜";
@@ -296,8 +297,8 @@ async function adoptLegacyLibrary(btn: HTMLButtonElement): Promise<void> {
       btn.disabled = false;
       btn.textContent = originalText || "Use This Library Instead";
     }
-  } catch (e: any) {
-    showToast(`Could not switch to that library: ${e?.message || e}`, "error");
+  } catch (e) {
+    showToast(`Could not switch to that library: ${errorMessage(e)}`, "error");
     btn.disabled = false;
     btn.textContent = originalText || "Use This Library Instead";
   }
@@ -314,8 +315,8 @@ async function enablePlugin(plugin: PluginInfo, btn: HTMLButtonElement): Promise
     const where = placementsFor(plugin).find((pl) => pl.slot === "library-source");
     showToast(`${plugin.name} is on${where ? `: find "${where.label || plugin.name}" in the ${where.tab} library` : ""}.`, "success");
     btn.textContent = `✓ ${plugin.name} is on`;
-  } catch (e: any) {
-    showToast(`Could not turn on ${plugin.name}: ${e?.message || e}`, "error");
+  } catch (e) {
+    showToast(`Could not turn on ${plugin.name}: ${errorMessage(e)}`, "error");
     btn.disabled = false;
     btn.textContent = originalText || `Turn on ${plugin.name}`;
   }
@@ -370,7 +371,7 @@ export function initFirstTimeSetup(): void {
   });
   nextBtn?.addEventListener("click", async () => {
     if (!body) return;
-    const step = STEPS[stepIndex];
+    const step = STEPS[stepIndex] ?? "welcome";
     await commitStep(step, body);
     if (step === "done") {
       closeWizard();

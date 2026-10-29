@@ -19,8 +19,6 @@ import {
   UrlSource,
   CanvasSink,
   AudioBufferSink,
-  type InputVideoTrack,
-  type InputAudioTrack,
 } from 'mediabunny';
 import { clock } from './timesync';
 
@@ -33,7 +31,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 export function isWebCodecsSupported(): boolean {
-  return typeof (window as any).VideoDecoder !== 'undefined' && typeof (window as any).AudioDecoder !== 'undefined';
+  return typeof window.VideoDecoder !== 'undefined' && typeof window.AudioDecoder !== 'undefined';
 }
 
 /** Mirrors TimecodeSyncEngine's masterState shape, pre-resolved into the
@@ -83,11 +81,8 @@ export async function canPlayWithWebCodecs(url: string): Promise<boolean> {
 }
 
 export class WebCodecsPlayer {
-  private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private input: Input;
-  private videoTrack: InputVideoTrack;
-  private audioTrack: InputAudioTrack | null;
   private canvasSink: CanvasSink;
   private audioSink: AudioBufferSink | null;
   private audioCtx: AudioContext | null = null;
@@ -106,18 +101,13 @@ export class WebCodecsPlayer {
   private constructor(
     canvas: HTMLCanvasElement,
     input: Input,
-    videoTrack: InputVideoTrack,
-    audioTrack: InputAudioTrack | null,
     canvasSink: CanvasSink,
     audioSink: AudioBufferSink | null,
   ) {
-    this.canvas = canvas;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('2D canvas context unavailable');
     this.ctx = ctx;
     this.input = input;
-    this.videoTrack = videoTrack;
-    this.audioTrack = audioTrack;
     this.canvasSink = canvasSink;
     this.audioSink = audioSink;
   }
@@ -151,7 +141,7 @@ export class WebCodecsPlayer {
     });
     const audioSink = audioTrack ? new AudioBufferSink(audioTrack) : null;
 
-    const player = new WebCodecsPlayer(canvas, input, videoTrack, audioTrack, canvasSink, audioSink);
+    const player = new WebCodecsPlayer(canvas, input, canvasSink, audioSink);
     player.onEndedCb = opts.onEnded ?? null;
     player.durationSec = await input.computeDuration([videoTrack, ...(audioTrack ? [audioTrack] : [])]);
 

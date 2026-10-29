@@ -50,6 +50,10 @@ struct Args {
     #[arg(long)]
     no_open: bool,
 
+    /// OpenSanctuary files (.ossong .ospres .osservice .osbible) to open, as when one is double-clicked.
+    #[arg(value_name = "FILE")]
+    files: Vec<String>,
+
     #[arg(long, help = "Never auto-show the first-time setup wizard (docs/first-time.md) -- for automated tests, which always boot against a fresh temp database and would otherwise see it on every run")]
     skip_first_time_setup: bool,
 }
@@ -102,6 +106,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.songs_dir.as_deref(),
         args.media_dir.as_deref(),
     );
+
+    // One OpenSanctuary per library. A file opened from the desktop while the program is already running is passed to that copy
+    // (it opens in the running console) and this process quits. Without files, a second start behaves as it always has.
+    let files: Vec<PathBuf> = args.files.iter().map(PathBuf::from).collect();
+    let args_files = files.clone();
+    let open_data_dir = resolved_paths.data_dir();
+    let _instance_lock = os_next::network::open_files::acquire_instance_lock(&resolved_paths.data_dir());
+    if _instance_lock.is_none() && !files.is_empty() {
+        match os_next::network::open_files::hand_off(&resolved_paths.data_dir(), &files) {
+            Ok(n) if n > 0 => {
+                println!("OpenSanctuary is already running; asked it to open {n} file(s).");
+                std::process::exit(0);
+            }
+            Ok(_) => tracing::warn!("None of the given files is an OpenSanctuary file that exists; starting normally."),
+            Err(e) => tracing::warn!("Couldn't hand the file to the running OpenSanctuary ({e}); starting a new one."),
+        }
+    }
 
     // Finish any data-directory move a previous run started (Settings ->
     // Move Data Directory): that run copied everything and pointed
@@ -557,6 +578,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 sticky: true,
                             });
                             return;
+                        }
+                    }
+                });
+            }
+
+            // Files the desktop asked this program to open: the ones on our own command line, and (every second) whatever a second launch
+            // handed over (network/open_files.rs). The console takes them from the waiting list; the notice wakes it up.
+            {
+                let bus = app_state.notifications.clone();
+                let data_dir = open_data_dir.clone();
+                let mut first: Vec<PathBuf> = args_files.clone();
+                tokio::spawn(async move {
+                    let announce = |names: Vec<String>| {
+                        let _ = bus.post("host", "OpenSanctuary", os_next::api::notifications::NewNotification {
+                            level: Some(os_next::api::notifications::Level::Info),
+                            title: "Opening file".into(),
+                            body: names.join(", "),
+                            key: Some("open-file".into()),
+                            ..Default::default()
+                        });
+                    };
+                    let queued: Vec<String> = first.drain(..).filter_map(|p| os_next::network::open_files::queue(&p)).map(|f| f.name).collect();
+                    if !queued.is_empty() {
+                        announce(queued);
+                    }
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+                    loop {
+                        interval.tick().await;
+                        let dir = data_dir.clone();
+                        let got = tokio::task::spawn_blocking(move || os_next::network::open_files::drain_requests(&dir)).await.unwrap_or_default();
+                        if !got.is_empty() {
+                            announce(got.into_iter().map(|f| f.name).collect());
                         }
                     }
                 });

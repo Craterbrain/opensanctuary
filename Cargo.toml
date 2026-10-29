@@ -1,6 +1,6 @@
 [package]
 name = "os-next"
-version = "0.3.11"
+version = "0.4.1"
 edition = "2021"
 authors = ["OpenSanctuary Core Team"]
 description = "Next-Generation Church Presentation Engine in Rust"
@@ -30,6 +30,7 @@ remote multi-display output, EasyWorship/OpenLP import, and theming."""
 assets = [
     { source = "target/release/os-next", dest = "usr/bin/opensanctuary", mode = "755" },
     { source = "packaging/opensanctuary.desktop", dest = "usr/share/applications/opensanctuary.desktop", mode = "644" },
+    { source = "packaging/opensanctuary-mime.xml", dest = "usr/share/mime/packages/opensanctuary.xml", mode = "644" },
     { source = "web/favicon.svg", dest = "usr/share/icons/hicolor/scalable/apps/opensanctuary.svg", mode = "644" },
     { source = "packaging/icons/16x16.png", dest = "usr/share/icons/hicolor/16x16/apps/opensanctuary.png", mode = "644" },
     { source = "packaging/icons/32x32.png", dest = "usr/share/icons/hicolor/32x32/apps/opensanctuary.png", mode = "644" },
@@ -81,6 +82,7 @@ assets = [
 assets = [
     { source = "target/release/os-next", dest = "usr/bin/opensanctuary", mode = "755" },
     { source = "packaging/opensanctuary.desktop", dest = "usr/share/applications/opensanctuary.desktop", mode = "644" },
+    { source = "packaging/opensanctuary-mime.xml", dest = "usr/share/mime/packages/opensanctuary.xml", mode = "644" },
     { source = "web/favicon.svg", dest = "usr/share/icons/hicolor/scalable/apps/opensanctuary.svg", mode = "644" },
     { source = "packaging/icons/16x16.png", dest = "usr/share/icons/hicolor/16x16/apps/opensanctuary.png", mode = "644" },
     { source = "packaging/icons/32x32.png", dest = "usr/share/icons/hicolor/32x32/apps/opensanctuary.png", mode = "644" },

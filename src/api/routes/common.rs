@@ -232,10 +232,20 @@ pub(super) fn is_same_machine_browser_request(headers: &HeaderMap) -> bool {
     host_ok && origin_ok && site_ok
 }
 
+/// POST /api/console/release -- a console page that is closing says so, so a console that only used the HTTP fallback (no WebSocket to
+/// drop and release the lock) hands the "one console at a time" lock back at once. Host token; the session is the caller's own.
+async fn release_console_handler(State(app): State<AppState>, headers: HeaderMap) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    require_host_token(&headers, &app)?;
+    let session_id = headers.get("x-console-session-id").and_then(|v| v.to_str().ok()).unwrap_or("").trim().to_string();
+    let released = !session_id.is_empty() && app.release_http_console(&session_id);
+    Ok(Json(serde_json::json!({ "success": true, "released": released })))
+}
+
 pub(super) fn router() -> Router<AppState> {
     use axum::routing::{get, post};
     Router::new()
         .route("/api/internal/host-token", get(get_internal_host_token))
+        .route("/api/console/release", post(release_console_handler))
         .route("/api/internal/verify-host-token", post(verify_host_token_handler))
 }
 

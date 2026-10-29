@@ -53,7 +53,7 @@ export class PropertiesPanel {
 
     if (this.selectedElements.length === 0) {
       this.renderSlideProperties();
-    } else if (this.selectedElements.length === 1) {
+    } else if (this.selectedElements.length === 1 && this.selectedElements[0]) {
       this.renderElementProperties(this.selectedElements[0]);
     } else {
       this.renderMultiSelectProperties();
@@ -99,7 +99,8 @@ export class PropertiesPanel {
       btn.addEventListener('click', () => {
         activeMode = m;
         modes.forEach(mode => {
-          tabButtons[mode].className = mode === activeMode ? 'active' : '';
+          const tab = tabButtons[mode];
+          if (tab) tab.className = mode === activeMode ? 'active' : '';
         });
         solidContainer.classList.toggle('hidden', activeMode !== 'solid');
         gradContainer.classList.toggle('hidden', activeMode !== 'gradient');
@@ -518,8 +519,12 @@ export class PropertiesPanel {
       const sc = textSection.querySelector('#prop-shadow-color') as HTMLInputElement;
 
       const ensureRun = () => {
-        if (!tb.runs[0]) tb.runs.push({ text: '' });
-        return tb.runs[0];
+        let run = tb.runs[0];
+        if (!run) {
+          run = { text: '' };
+          tb.runs.push(run);
+        }
+        return run;
       };
 
       if (ff) {

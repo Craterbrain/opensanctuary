@@ -48,7 +48,7 @@ async fn test_shorthand_catalog_item_expansion_and_route_handlers() {
     let song = os_next::models::Song {
         id: "song_101".to_string(),
         title: "Be Thou My Vision".to_string(),
-        alternate_title: None,
+        alternate_title: None, public_domain_override: None,
         author: "Eleanor Hull".to_string(),
         copyright: Some("Public Domain".to_string()),
         ccli_number: Some("12345".to_string()),

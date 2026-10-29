@@ -33,6 +33,11 @@ async function openSetupAt(page: Page, steps: number): Promise<void> {
   await page.click("#btn-first-time-next"); // "Let's Go" off the welcome step (it has no Skip)
   for (let i = 1; i < steps; i++) await page.click("#btn-first-time-skip");
 }
+// The Store button is hidden for now (docs/TODO.md); the dialog still works, so the tests open it directly.
+async function openStore(page: Page): Promise<void> {
+  expect(await page.locator("#btn-store").isHidden()).toBe(true);
+  await page.evaluate(() => (document.getElementById("btn-store") as HTMLElement).click());
+}
 const BIBLES_STEP = 3; // welcome, data-dir, church-name, bibles
 
 describe("E2E Live Test: plugin hints come from the installed plugins' manifests", () => {
@@ -89,7 +94,7 @@ describe("E2E Live Test: plugin hints come from the installed plugins' manifests
     expect(await page.textContent("#btn-video-subtab-ytdl")).toContain("Video Downloader");
 
     // The Store: one card per plugin not turned on yet, described by its own manifest.
-    await page.click("#btn-store");
+    await openStore(page);
     const storeCard = page.locator('#store-plugin-cards .store-card[data-plugin-id="online_bibles"]');
     await storeCard.waitFor({ state: "visible", timeout: 5000 });
     expect(await storeCard.innerText()).toContain("Download");
@@ -130,7 +135,7 @@ describe("E2E Live Test: plugin hints come from the installed plugins' manifests
     expect(await hintNodes(page).count()).toBe(0);
     expect(await page.locator("#btn-video-subtab-ytdl").evaluate((el) => (el as HTMLElement).hidden)).toBe(true);
     expect(await page.locator("#plugin-picker-hint").evaluate((el) => (el as HTMLElement).hidden)).toBe(true);
-    await page.click("#btn-store");
+    await openStore(page);
     expect(await page.locator("#store-plugin-cards .store-card").count()).toBe(0);
     // Nothing in the console text still points at a plugin by name.
     const text = await page.evaluate(() => document.body.innerText);

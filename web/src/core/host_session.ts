@@ -73,7 +73,7 @@ async function verifyTokenState(token: string): Promise<'valid' | 'invalid' | 'e
 
 function describeThisBrowser(): string {
   try {
-    const nav: any = typeof navigator !== 'undefined' ? navigator : {};
+    const nav = (typeof navigator !== 'undefined' ? navigator : {}) as Partial<Navigator> & { userAgentData?: { platform?: string } };
     const platform = (nav.userAgentData && nav.userAgentData.platform) || nav.platform || 'browser';
     return `Console (${platform}, ${new Date().toISOString().slice(0, 10)})`;
   } catch {
@@ -142,7 +142,7 @@ export function resolveHostSessionToken(): Promise<string | null> {
   resolvePromise = (async () => {
     if (typeof window === 'undefined') return null;
 
-    const injected = (window as any).__OS_HOST_TOKEN__;
+    const injected = window.__OS_HOST_TOKEN__;
     if (typeof injected === 'string' && injected) {
       cachedToken = injected;
       return cachedToken;
@@ -255,9 +255,8 @@ export function hostTokenHeader(): Record<string, string> {
  */
 export function installHostTokenFetch(): void {
   if (typeof window === 'undefined' || typeof window.fetch !== 'function') return;
-  const w = window as any;
-  if (w.__osHostTokenFetchInstalled) return;
-  w.__osHostTokenFetchInstalled = true;
+  if (window.__osHostTokenFetchInstalled) return;
+  window.__osHostTokenFetchInstalled = true;
   const originalFetch = window.fetch.bind(window);
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     if (!cachedToken) return originalFetch(input, init);
@@ -280,6 +279,24 @@ export function installHostTokenFetch(): void {
 }
 
 installHostTokenFetch();
+
+/** The request a closing console page sends so the "one console at a time" lock is handed back at once (needed when it only used the HTTP fallback). */
+export function consoleReleaseRequest(): { url: string; init: RequestInit } | null {
+  if (!cachedToken) return null;
+  return { url: '/api/console/release', init: { method: 'POST', keepalive: true, headers: hostTokenHeader() } };
+}
+
+let releaseOnCloseInstalled = false;
+
+/** Console pages only: tell the host when this page goes away. A reload comes straight back under the same session id and claims it again. */
+export function releaseConsoleLockOnClose(): void {
+  if (typeof window === 'undefined' || releaseOnCloseInstalled) return;
+  releaseOnCloseInstalled = true;
+  window.addEventListener('pagehide', () => {
+    const req = consoleReleaseRequest();
+    if (req) void fetch(req.url, req.init).catch(() => {});
+  });
+}
 
 let cachedConsoleSessionId: string | null = null;
 
