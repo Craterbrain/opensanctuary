@@ -4,6 +4,7 @@ import { createDefaultShape } from './shape_library';
 import { createDefaultLine } from './line_tool';
 import { createDefaultTable } from './table';
 import { ensurePatternClip } from '../core/pattern_render';
+import { importImagesFromComputer } from '../core/media_upload';
 import { parseAnimatedPatternMarker, backgroundPresetDataString } from '../core/presentation_helpers';
 import { applyBackgroundThumbnail } from '../core/pattern_thumbs';
 
@@ -388,15 +389,23 @@ export class EditorToolbar {
       this.callbacks.onInsertElement(el);
     });
 
-    this.req<HTMLButtonElement>('tb-insert-image').addEventListener('click', () => {
-      const url = prompt('Enter Image URL or Path:', 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=800');
-      if (url) {
+    this.req<HTMLButtonElement>('tb-insert-image').addEventListener('click', async (ev) => {
+      let src: string | null = null;
+      let alt = 'Inserted Image';
+      if (ev.shiftKey) {
+        // Shift-click keeps the old "type a web address" route.
+        src = prompt('Enter Image URL or Path:', 'https://');
+      } else {
+        const [img] = await importImagesFromComputer();
+        if (img) { src = img.file_path; alt = img.name; }
+      }
+      if (src) {
         const el: SlideElement = {
           type: 'Image',
           id: `img-${Date.now()}`,
           transform: { x: 0.15, y: 0.15, w: 0.7, h: 0.7, rotation_deg: 0, z_index: 10, locked: false, opacity: 1.0 },
-          file_path: url,
-          alt_text: 'Inserted Image'
+          file_path: src,
+          alt_text: alt
         };
         this.callbacks.onInsertElement(el);
       }
@@ -666,6 +675,9 @@ export class EditorToolbar {
         <input type="text" id="pop-media-url" class="bg-popover-input" placeholder="https://... or /assets/...">
       </div>
       <div class="prop-row">
+        <button id="pop-import-img" class="btn btn-sm btn-primary bg-popover-grow" title="Choose a picture on this computer">Choose Image from Computer…</button>
+      </div>
+      <div class="prop-row">
         <button id="pop-apply-img" class="btn btn-sm bg-popover-grow">Apply Image</button>
         <button id="pop-apply-vid" class="btn btn-sm bg-popover-grow">Apply Video</button>
       </div>
@@ -682,6 +694,15 @@ export class EditorToolbar {
       const urlInput = mediaPane.querySelector('#pop-media-url') as HTMLInputElement;
       const applyImg = mediaPane.querySelector('#pop-apply-img') as HTMLButtonElement;
       const applyVid = mediaPane.querySelector('#pop-apply-vid') as HTMLButtonElement;
+      const importImg = mediaPane.querySelector('#pop-import-img') as HTMLButtonElement;
+      importImg?.addEventListener('click', async () => {
+        const [img] = await importImagesFromComputer();
+        if (img && this.callbacks.onUpdateBackground) {
+          const bg: SlideBackground = { kind: 'Image', data: { file_path: img.file_path, opacity: 1.0 } };
+          this.callbacks.onUpdateBackground(bg);
+          this.updateBackgroundState(bg);
+        }
+      });
       applyImg?.addEventListener('click', () => {
         const val = urlInput.value.trim();
         if (val && this.callbacks.onUpdateBackground) {

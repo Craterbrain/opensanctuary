@@ -152,6 +152,52 @@ pub fn write_sniffed_media(dir: &Path, prefix: &str, bytes: &[u8]) -> Option<Str
     Some(name)
 }
 
+/// Stores a picture the operator chose on their own computer (the editor's
+/// "import an image" button). Only formats a browser can actually draw are
+/// accepted, judged by content like every other importer; the visible name is
+/// kept as a sanitised prefix of the stored file name.
+pub fn store_uploaded_image(dir: &Path, original_name: &str, bytes: &[u8]) -> Result<String, &'static str> {
+    match sniff_media_ext(bytes) {
+        Some("png" | "jpg" | "gif" | "webp" | "bmp" | "avif") => {}
+        Some(_) => return Err("That file isn't a picture this app can show. Use PNG, JPEG, GIF, WebP, BMP or AVIF."),
+        None => return Err("That doesn't look like an image file."),
+    }
+    let stem: String = Path::new(original_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .take(40)
+        .collect();
+    let stem = stem.trim_matches('-');
+    let stem = if stem.is_empty() { "image" } else { stem };
+
+    // Name by content, so importing the same picture twice reuses the file instead of piling up
+    // copies. 32 bits of FNV-1a keeps names short; on the (very unlikely) clash with a different
+    // picture, fall back to the full 64 bits.
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in bytes {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    let ext = sniff_media_ext(bytes).ok_or("That doesn't look like an image file.")?;
+    std::fs::create_dir_all(dir).map_err(|_| "Could not save the image.")?;
+    for tag in [format!("{:08x}", h >> 32), format!("{:016x}", h)] {
+        let name = format!("{stem}_{tag}.{ext}");
+        let path = dir.join(&name);
+        match std::fs::read(&path) {
+            Ok(existing) if existing == bytes => return Ok(name),
+            Ok(_) => continue,
+            Err(_) => {
+                std::fs::write(&path, bytes).map_err(|_| "Could not save the image.")?;
+                return Ok(name);
+            }
+        }
+    }
+    Err("Could not save the image.")
+}
+
 /// `write_sniffed_media` for a file already on disk (the source of a path
 /// referenced by an imported document).
 pub fn copy_sniffed_media(src: &Path, dir: &Path, prefix: &str) -> Option<String> {
@@ -166,6 +212,26 @@ pub fn copy_sniffed_media(src: &Path, dir: &Path, prefix: &str) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uploaded_images_are_judged_by_content_and_named_safely() {
+        let dir = tempfile::tempdir().unwrap();
+        let jpg = [0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, b'J', b'F', b'I', b'F'];
+        let name = store_uploaded_image(dir.path(), "../My Photo (1).JPG", &jpg).unwrap();
+        assert!(name.starts_with("My-Photo--1_") && name.ends_with(".jpg"), "{name}");
+        assert!(dir.path().join(&name).is_file());
+        // The same picture again reuses the file; a different one gets its own.
+        assert_eq!(store_uploaded_image(dir.path(), "../My Photo (1).JPG", &jpg).unwrap(), name);
+        let mut other = jpg.to_vec();
+        other.push(1);
+        assert_ne!(store_uploaded_image(dir.path(), "../My Photo (1).JPG", &other).unwrap(), name);
+        assert!(store_uploaded_image(dir.path(), "", &jpg).unwrap().starts_with("image_"));
+        // Wrong extension doesn't matter, content does; scripts and video are refused.
+        assert!(store_uploaded_image(dir.path(), "x.png", b"<svg onload='x()'/>").is_err());
+        assert!(store_uploaded_image(dir.path(), "x.jpg", b"<html><script>1</script>").is_err());
+        assert!(store_uploaded_image(dir.path(), "x.jpg", b"\0\0\0\x18ftypmp42\0\0\0\0").is_err());
+        assert!(store_uploaded_image(dir.path(), "x.heic", b"\0\0\0\x18ftypheic\0\0\0\0").is_err());
+    }
 
     #[test]
     fn accepts_known_media_and_rejects_active_content() {

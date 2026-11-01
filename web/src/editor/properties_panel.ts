@@ -1,5 +1,6 @@
 import { EditorSlide, SlideElement, SOLID_PALETTE_PRESETS, GRADIENT_PRESETS, PATTERN_PRESETS, FONT_FAMILY_GROUPS } from './types';
 import { ensurePatternClip } from '../core/pattern_render';
+import { importImagesFromComputer } from '../core/media_upload';
 import { parseAnimatedPatternMarker, backgroundPresetDataString, escapeHtml } from '../core/presentation_helpers';
 import { applyBackgroundThumbnail } from '../core/pattern_thumbs';
 
@@ -214,7 +215,8 @@ export class PropertiesPanel {
         <label class="prop-label">Image URL / Path</label>
         <div class="prop-row">
           <input type="text" id="prop-bg-img-path" value="${escapeHtml(imgPath)}" placeholder="https://... or /assets/...">
-          <button type="button" id="prop-bg-browse-btn" class="btn btn-sm" title="Open Background Grid Picker">Browse…</button>
+          <button type="button" id="prop-bg-browse-btn" class="btn btn-sm" title="Pick from the image library">Browse…</button>
+          <button type="button" id="prop-bg-import-btn" class="btn btn-sm btn-primary" title="Choose a picture on this computer">From computer…</button>
         </div>
       </div>
       <div class="prop-field">
@@ -231,6 +233,17 @@ export class PropertiesPanel {
         this.onOpenBackgroundPickerCb?.();
       });
     }
+    const importBtn = imgContainer.querySelector('#prop-bg-import-btn') as HTMLButtonElement | null;
+    importBtn?.addEventListener('click', async () => {
+      const [img] = await importImagesFromComputer();
+      if (img) {
+        const op = imgOpacInput ? parseFloat(imgOpacInput.value) : 1.0;
+        if (imgPathInput) imgPathInput.value = img.file_path;
+        this.currentSlide!.background_v2 = { kind: 'Image', data: { file_path: img.file_path, opacity: op } };
+        this.currentSlide!.background = `url("${img.file_path}")`;
+        this.notifyChange();
+      }
+    });
     if (imgPathInput && imgOpacInput) {
       const onImgChange = () => {
         const url = imgPathInput.value.trim();
