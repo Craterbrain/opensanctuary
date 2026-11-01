@@ -17,7 +17,7 @@ export interface UploadedImage {
   name: string;
 }
 
-export const IMAGE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,image/bmp,image/avif,.png,.jpg,.jpeg,.gif,.webp,.bmp,.avif';
+export const IMAGE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,image/bmp,.png,.jpg,.jpeg,.gif,.webp,.bmp';
 
 /** Uploads one already-chosen file. Throws an Error with a message fit to show the operator. */
 export async function uploadImageFile(file: File): Promise<UploadedImage> {
@@ -53,6 +53,9 @@ export function chooseImageFiles(multiple = false): Promise<File[]> {
     };
     input.addEventListener('change', () => finish(Array.from(input.files ?? [])));
     input.addEventListener('cancel', () => finish([]));
+    // Not every webview fires `cancel`. The page regains focus when the system dialog closes, and
+    // `change` (if any) follows within a moment, so give it a grace period before calling it a cancel.
+    window.addEventListener('focus', () => setTimeout(() => finish(Array.from(input.files ?? [])), 1000), { once: true });
     document.body.appendChild(input);
     input.click();
   });

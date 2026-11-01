@@ -235,12 +235,14 @@ export class PropertiesPanel {
     }
     const importBtn = imgContainer.querySelector('#prop-bg-import-btn') as HTMLButtonElement | null;
     importBtn?.addEventListener('click', async () => {
+      // The slide this click was for: the operator can switch slides while the system dialog is open.
+      const slide = this.currentSlide;
       const [img] = await importImagesFromComputer();
-      if (img) {
+      if (img && slide && slide === this.currentSlide) {
         const op = imgOpacInput ? parseFloat(imgOpacInput.value) : 1.0;
         if (imgPathInput) imgPathInput.value = img.file_path;
-        this.currentSlide!.background_v2 = { kind: 'Image', data: { file_path: img.file_path, opacity: op } };
-        this.currentSlide!.background = `url("${img.file_path}")`;
+        slide.background_v2 = { kind: 'Image', data: { file_path: img.file_path, opacity: op } };
+        slide.background = `url("${img.file_path}")`;
         this.notifyChange();
       }
     });

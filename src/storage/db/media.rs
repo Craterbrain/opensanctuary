@@ -140,6 +140,7 @@ impl Database {
 
             // Derive a clean, human-readable display name from filename
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(filename);
+            let stem = strip_unique_suffix(stem);
             let display_name = stem
                 .replace(['-', '_'], " ")
                 .split_whitespace()
@@ -280,5 +281,33 @@ impl Database {
         }
 
         Ok(added_count)
+    }
+}
+
+/// `Sunset_3f2a1b4c` / `Sunset_<uuid>` -> `Sunset`: the machine-made suffix that keeps stored file
+/// names unique (uploads: a content hash; importers: a UUID) isn't part of the picture's name.
+fn strip_unique_suffix(stem: &str) -> &str {
+    if let Some((head, tail)) = stem.rsplit_once('_') {
+        let hex = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_hexdigit());
+        let uuid_like = tail.len() == 36 && tail.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-');
+        if !head.is_empty() && ((matches!(tail.len(), 8 | 16 | 32) && hex(tail)) || uuid_like) {
+            return head;
+        }
+    }
+    stem
+}
+
+#[cfg(test)]
+mod display_name_tests {
+    use super::strip_unique_suffix;
+
+    #[test]
+    fn drops_hash_and_uuid_suffixes_only() {
+        assert_eq!(strip_unique_suffix("David_e58f6b28"), "David");
+        assert_eq!(strip_unique_suffix("pexels_49fd9c8f-5748-45cb-9334-0a1b2c3d4e5f"), "pexels");
+        assert_eq!(strip_unique_suffix("sunset_beach_waves"), "sunset_beach_waves");
+        assert_eq!(strip_unique_suffix("cafe_deadbeef_x"), "cafe_deadbeef_x");
+        assert_eq!(strip_unique_suffix("_e58f6b28"), "_e58f6b28");
+        assert_eq!(strip_unique_suffix("plain"), "plain");
     }
 }

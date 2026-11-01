@@ -145,15 +145,18 @@ pub(super) async fn upload_media_image(
     let dir = app.media_dir.join("images");
     let db = app.db.clone();
     let original = q.name.unwrap_or_default();
-    let bytes = body.to_vec();
+    use crate::storage::media_sniff::UploadError;
     let stored = tokio::task::spawn_blocking(move || {
-        let file = crate::storage::media_sniff::store_uploaded_image(&dir, &original, &bytes)?;
+        let file = crate::storage::media_sniff::store_uploaded_image(&dir, &original, &body)?;
         let _ = db.sync_media_folder(&dir);
-        Ok::<String, &'static str>(file)
+        Ok::<String, UploadError>(file)
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(|msg| (StatusCode::UNSUPPORTED_MEDIA_TYPE, msg.to_string()))?;
+    .map_err(|e| match e {
+        UploadError::Rejected(msg) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, msg.to_string()),
+        UploadError::Storage(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string()),
+    })?;
     Ok(Json(serde_json::json!({ "file_path": format!("/media/images/{stored}"), "file_name": stored })))
 }
 

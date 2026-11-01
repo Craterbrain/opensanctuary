@@ -65,10 +65,15 @@ describe("E2E Live Test: importing an image from the computer in the slide edito
   test("the server refuses anything that is not a picture, and anonymous callers", async () => {
     const url = `http://127.0.0.1:${PORT}/api/media/upload?name=x.png`;
     expect((await fetch(url, { method: "POST", body: PNG_2X2 })).status).toBe(401);
-    const token = await page.evaluate(() => (window as any).__hostToken ?? sessionStorage.getItem("os-host-token"));
-    if (token) {
-      const bad = await fetch(url, { method: "POST", headers: { "x-host-token": token }, body: "<svg onload='x()'/>" });
-      expect(bad.status).toBe(415);
-    }
+    // Same way the other e2e tests act as the console: fetch the loopback token, then send it.
+    const post = (body: string | Uint8Array) => page.evaluate(async ([b]) => {
+      const j = await (await fetch("/api/internal/host-token")).json();
+      const headers = { "x-host-token": j.token ?? j.host_token, "x-console-session-id": sessionStorage.getItem("os_console_session_id") ?? "" };
+      const r = await fetch("/api/media/upload?name=x.png", { method: "POST", headers, body: typeof b === "string" ? b : new Uint8Array(b as number[]) });
+      return r.status;
+    }, [typeof body === "string" ? body : Array.from(body)] as const);
+    expect(await post("<svg onload='x()'/>")).toBe(415);
+    expect(await post("<script>alert(1)</script>")).toBe(415);
+    expect(await post(PNG_2X2)).toBe(200);
   });
 });

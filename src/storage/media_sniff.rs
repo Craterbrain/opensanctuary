@@ -152,16 +152,26 @@ pub fn write_sniffed_media(dir: &Path, prefix: &str, bytes: &[u8]) -> Option<Str
     Some(name)
 }
 
+/// Why [`store_uploaded_image`] said no: the file itself is unacceptable (client's problem, shown to
+/// the operator as is), or the server couldn't store it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum UploadError {
+    Rejected(&'static str),
+    Storage(&'static str),
+}
+
 /// Stores a picture the operator chose on their own computer (the editor's
-/// "import an image" button). Only formats a browser can actually draw are
-/// accepted, judged by content like every other importer; the visible name is
-/// kept as a sanitised prefix of the stored file name.
-pub fn store_uploaded_image(dir: &Path, original_name: &str, bytes: &[u8]) -> Result<String, &'static str> {
-    match sniff_media_ext(bytes) {
-        Some("png" | "jpg" | "gif" | "webp" | "bmp" | "avif") => {}
-        Some(_) => return Err("That file isn't a picture this app can show. Use PNG, JPEG, GIF, WebP, BMP or AVIF."),
-        None => return Err("That doesn't look like an image file."),
-    }
+/// "import an image" button). Only formats the media library lists and a browser can draw are
+/// accepted, judged by content like every other importer. The file is named
+/// `<sanitised original name>_<content hash>.<ext>`, so importing the same picture again reuses
+/// the file instead of piling up copies.
+pub fn store_uploaded_image(dir: &Path, original_name: &str, bytes: &[u8]) -> Result<String, UploadError> {
+    use sha2::{Digest, Sha256};
+    let ext = match sniff_media_ext(bytes) {
+        Some(e @ ("png" | "jpg" | "gif" | "webp" | "bmp")) => e,
+        Some(_) => return Err(UploadError::Rejected("That file isn't a picture this app can show. Use PNG, JPEG, GIF, WebP or BMP.")),
+        None => return Err(UploadError::Rejected("That doesn't look like an image file.")),
+    };
     let stem: String = Path::new(original_name)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -173,29 +183,31 @@ pub fn store_uploaded_image(dir: &Path, original_name: &str, bytes: &[u8]) -> Re
     let stem = stem.trim_matches('-');
     let stem = if stem.is_empty() { "image" } else { stem };
 
-    // Name by content, so importing the same picture twice reuses the file instead of piling up
-    // copies. 32 bits of FNV-1a keeps names short; on the (very unlikely) clash with a different
-    // picture, fall back to the full 64 bits.
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in bytes {
-        h ^= u64::from(*b);
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    let ext = sniff_media_ext(bytes).ok_or("That doesn't look like an image file.")?;
-    std::fs::create_dir_all(dir).map_err(|_| "Could not save the image.")?;
-    for tag in [format!("{:08x}", h >> 32), format!("{:016x}", h)] {
-        let name = format!("{stem}_{tag}.{ext}");
+    std::fs::create_dir_all(dir).map_err(|_| UploadError::Storage("Could not save the image."))?;
+    let digest = Sha256::digest(bytes);
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    // 8 hex characters keeps names short; on a (vanishingly unlikely) clash with a different
+    // picture, use more of the digest.
+    for len in [8, 16, 32] {
+        let name = format!("{stem}_{}.{ext}", &hex[..len]);
         let path = dir.join(&name);
         match std::fs::read(&path) {
             Ok(existing) if existing == bytes => return Ok(name),
             Ok(_) => continue,
-            Err(_) => {
-                std::fs::write(&path, bytes).map_err(|_| "Could not save the image.")?;
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Write beside it and rename into place, so a concurrent reader never sees half a file.
+                let tmp = dir.join(format!(".upload-{}.tmp", uuid::Uuid::new_v4()));
+                std::fs::write(&tmp, bytes).map_err(|_| UploadError::Storage("Could not save the image."))?;
+                std::fs::rename(&tmp, &path).map_err(|_| {
+                    let _ = std::fs::remove_file(&tmp);
+                    UploadError::Storage("Could not save the image.")
+                })?;
                 return Ok(name);
             }
+            Err(_) => return Err(UploadError::Storage("Could not save the image.")),
         }
     }
-    Err("Could not save the image.")
+    Err(UploadError::Storage("Could not save the image."))
 }
 
 /// `write_sniffed_media` for a file already on disk (the source of a path
@@ -227,10 +239,19 @@ mod tests {
         assert_ne!(store_uploaded_image(dir.path(), "../My Photo (1).JPG", &other).unwrap(), name);
         assert!(store_uploaded_image(dir.path(), "", &jpg).unwrap().starts_with("image_"));
         // Wrong extension doesn't matter, content does; scripts and video are refused.
-        assert!(store_uploaded_image(dir.path(), "x.png", b"<svg onload='x()'/>").is_err());
-        assert!(store_uploaded_image(dir.path(), "x.jpg", b"<html><script>1</script>").is_err());
-        assert!(store_uploaded_image(dir.path(), "x.jpg", b"\0\0\0\x18ftypmp42\0\0\0\0").is_err());
-        assert!(store_uploaded_image(dir.path(), "x.heic", b"\0\0\0\x18ftypheic\0\0\0\0").is_err());
+        for bad in [
+            &b"<svg onload='x()'/>"[..],
+            &b"<html><script>1</script>"[..],
+            &b"\0\0\0\x18ftypmp42\0\0\0\0"[..],  // video
+            &b"\0\0\0\x18ftypheic\0\0\0\0"[..],  // browsers can't draw it
+            &b"\0\0\0\x18ftypavif\0\0\0\0"[..],  // not in the library's list
+        ] {
+            assert!(matches!(store_uploaded_image(dir.path(), "x.png", bad), Err(UploadError::Rejected(_))));
+        }
+        // A storage problem is not the client's fault.
+        let file_not_dir = dir.path().join(&name);
+        assert!(matches!(store_uploaded_image(&file_not_dir, "x.jpg", &jpg), Err(UploadError::Storage(_))));
+        assert!(std::fs::read_dir(dir.path()).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
     }
 
     #[test]
