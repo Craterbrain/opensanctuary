@@ -504,7 +504,7 @@
 
             <div class="ribbon-insert-group">
               <button class="ribbon-insert-btn" id="tb-insert-text" title="Insert Text Box"><span class="ribbon-insert-icon">🔤</span><span class="studio-label">Text</span></button>
-              <button class="ribbon-insert-btn" id="tb-insert-image" title="Insert Image"><span class="ribbon-insert-icon">🖼️</span><span class="studio-label">Image</span></button>
+              <button class="ribbon-insert-btn" id="tb-insert-image" title="Insert Image from this computer (Shift-click to enter a web address; browser only)"><span class="ribbon-insert-icon">🖼️</span><span class="studio-label">Image</span></button>
               <button class="ribbon-insert-btn" id="tb-insert-video" title="Insert Video Element"><span class="ribbon-insert-icon">🎥</span><span class="studio-label">Video</span></button>
             </div>
             <div class="studio-divider"></div>
@@ -1475,6 +1475,7 @@
           <div id="bg-picker-panel-images" class="picker-pane" style="display: flex;">
             <div class="picker-toolbar">
               <input type="text" class="search-input picker-search" id="image-picker-search" placeholder="Filter images by name...">
+              <button class="btn btn-primary" id="btn-image-picker-import" type="button" title="Add pictures from this computer to the library">Import from computer…</button>
               <div class="import-mode-tabs" id="image-picker-categories">
                 <button class="import-tab-btn active" data-cat="all">All Photos</button>
                 <button class="import-tab-btn" data-cat="nature">Nature</button>

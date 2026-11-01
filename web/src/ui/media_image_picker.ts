@@ -13,6 +13,7 @@ import { prepareThemePickerGrid, setBgPickerTab } from './theme_picker';
 import { prepareVideoPickerGrid } from './video_picker';
 import { buildGridCard } from './grid_card';
 import { renderEmptyState } from './filter_bar';
+import { importImagesFromComputer } from '../core/media_upload.ts';
 
 export interface MediaImagePickerContext {
   showModal(el: HTMLElement | null): void;
@@ -237,6 +238,25 @@ export function initMediaImagePicker(context: MediaImagePickerContext) {
   });
 
   document.getElementById('image-picker-search')?.addEventListener('input', () => renderMediaImagePickerGrid());
+
+  // Bring pictures in from this computer, then show them selected in the grid.
+  document.getElementById('btn-image-picker-import')?.addEventListener('click', async () => {
+    const added = await importImagesFromComputer(true);
+    if (added.length === 0) return;
+    try {
+      const res = await fetch('/api/media');
+      if (res.ok) resourcesCache.media = await res.json();
+    } catch (_) { /* keep the cached list; the file is on disk and shows on the next open */ }
+    const search = document.getElementById('image-picker-search') as HTMLInputElement | null;
+    if (search) search.value = '';
+    currentImageCategoryFilter = 'all';
+    document.querySelectorAll('#image-picker-categories .import-tab-btn').forEach(b => {
+      b.classList.toggle('active', b.getAttribute('data-cat') === 'all');
+    });
+    selectedImageForPicker = added[added.length - 1]!.file_path;
+    renderMediaImagePickerGrid();
+    document.querySelector('.media-image-card.selected')?.scrollIntoView({ block: 'nearest' });
+  });
 
   // Category filter tabs
   document.addEventListener('DOMContentLoaded', () => {

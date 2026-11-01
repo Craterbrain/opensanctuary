@@ -126,6 +126,40 @@ pub(super) async fn create_media(
     Ok(Json(item))
 }
 
+#[derive(Deserialize)]
+pub(super) struct UploadQuery {
+    name: Option<String>,
+}
+
+/// POST /api/media/upload?name=<original file name> -- raw image bytes from the file the operator
+/// chose in the browser. Saved into the media library's images folder (so it shows up in every
+/// background picker) after a content check; returns the `/media/images/...` path to use.
+pub(super) async fn upload_media_image(
+    State(app): State<AppState>,
+    Query(q): Query<UploadQuery>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    if body.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "That file is empty.".to_string()));
+    }
+    let dir = app.media_dir.join("images");
+    let db = app.db.clone();
+    let original = q.name.unwrap_or_default();
+    use crate::storage::media_sniff::UploadError;
+    let stored = tokio::task::spawn_blocking(move || {
+        let file = crate::storage::media_sniff::store_uploaded_image(&dir, &original, &body)?;
+        let _ = db.sync_media_folder(&dir);
+        Ok::<String, UploadError>(file)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| match e {
+        UploadError::Rejected(msg) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, msg.to_string()),
+        UploadError::Storage(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string()),
+    })?;
+    Ok(Json(serde_json::json!({ "file_path": format!("/media/images/{stored}"), "file_name": stored })))
+}
+
 pub(super) async fn delete_media(
     State(app): State<AppState>,
     headers: HeaderMap,
@@ -255,6 +289,7 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/scriptures", get(get_scriptures).post(create_scripture))
         .route("/api/scriptures/{id}", delete(delete_scripture))
         .route("/api/media", get(get_media).post(create_media))
+        .route("/api/media/upload", axum::routing::post(upload_media_image))
         .route("/api/media/{id}", delete(delete_media))
         .route("/api/themes", get(get_themes).post(create_theme))
         .route("/api/themes/{name}", delete(delete_theme))
