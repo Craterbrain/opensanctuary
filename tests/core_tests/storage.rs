@@ -868,3 +868,62 @@ fn a_song_marked_public_domain_by_the_operator_is_filed_and_scheduled_as_public_
     assert_eq!(back.public_domain_override, None);
     assert_eq!(db.get_songs().unwrap().iter().filter(|s| s.id == song.id).count(), 1, "never in both song files");
 }
+
+mod scriptures_json {
+    use os_next::core::models::{ScriptureItem, ScriptureVerse};
+    use os_next::storage::db::{Database, LicensedMeta};
+
+    fn chapter(version: &str, book: &str, chapter: u32, texts: &[&str]) -> ScriptureItem {
+        ScriptureItem {
+            id: format!("scrip_{book}_{chapter}_{version}"), book: book.into(), chapter, verse_start: 1, verse_end: texts.len() as u32,
+            version: version.into(), reference: format!("{book} {chapter} ({version})"),
+            verses: texts.iter().enumerate().map(|(i, t)| ScriptureVerse { verse_number: i as u32 + 1, text: t.to_string() }).collect(),
+            theme_name: if chapter == 2 { Some("Gold".into()) } else { None },
+        }
+    }
+
+    fn same_as_get_scriptures(db: &Database) {
+        let fast: serde_json::Value = serde_json::from_slice(&db.get_scriptures_json().unwrap()).unwrap();
+        let slow = serde_json::to_value(db.get_scriptures().unwrap()).unwrap();
+        assert_eq!(fast, slow);
+    }
+
+    #[test]
+    fn get_scriptures_json_matches_get_scriptures_including_bad_rows() {
+        let dir = std::env::temp_dir().join(format!("os-scrip-json-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Database::new_with_dirs(dir.join("library.db"), dir.join("bibles"), dir.join("songs")).unwrap();
+        db.insert_scriptures_batch(&[
+            chapter("KJV", "John", 3, &["For God so loved the world", "quote \" backslash \\ tab \t newline \n end"]),
+            chapter("KJV", "Genesis", 1, &["In the beginning", "Unicode: \u{05d0} \u{1F54A} \u{0007}"]),
+            chapter("KJV", "Psalm", 2, &["Why do the heathen rage"]),
+        ]).unwrap();
+        db.insert_scriptures_batch(&[chapter("WEB", "John", 3, &["For God so loved the world"])]).unwrap();
+        // Rows another writer could have left: unreadable verses and the wrong shape -> `[]` either way.
+        let conn = rusqlite::Connection::open(dir.join("bibles/KJV.db")).unwrap();
+        for (id, verses) in [("bad1", "not json"), ("bad2", r#"[{"verse_number":"one","text":"x"}]"#), ("bad3", r#"{"verse_number":1}"#), ("bad4", r#"[{"verse_number":1,"text":2}]"#)] {
+            conn.execute(
+                "INSERT INTO scriptures (id, book, chapter, verse_start, verse_end, version, reference, verses_json, theme_name) VALUES (?1, 'Ruth', 1, 1, 1, 'KJV', ?2, ?3, NULL)",
+                rusqlite::params![id, format!("Ruth 1 {id}"), verses],
+            ).unwrap();
+        }
+        drop(conn);
+        same_as_get_scriptures(&db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn get_scriptures_json_includes_licensed_passages_in_order() {
+        let db = Database::in_memory().unwrap();
+        db.insert_scriptures_batch(&[chapter("KJV", "John", 3, &["For God so loved the world"]), chapter("KJV", "Acts", 2, &["Pentecost"])]).unwrap();
+        let lic = ScriptureItem { id: "lic1".into(), reference: "Isaiah 40 (NIV)".into(), version: "NIV".into(), ..chapter("NIV", "Isaiah", 40, &["Comfort, comfort my people"]) };
+        let meta = LicensedMeta {
+            id: lic.id.clone(), source: "youversion".into(), bible_id: 111, usfm: "ISA.40".into(), tag: "NIV".into(),
+            copyright: "Biblica".into(), link: "https://www.biblica.com".into(), expires_at_ms: i64::MAX / 2,
+        };
+        db.insert_licensed_scripture(&lic, &meta).unwrap();
+        assert_eq!(db.get_scriptures().unwrap().len(), 3);
+        same_as_get_scriptures(&db);
+    }
+}

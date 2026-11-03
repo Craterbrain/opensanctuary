@@ -557,7 +557,9 @@ impl Database {
                 theme_name TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_scriptures_reference ON scriptures(reference);
-            CREATE INDEX IF NOT EXISTS idx_scriptures_book ON scriptures(book);",
+            CREATE INDEX IF NOT EXISTS idx_scriptures_book ON scriptures(book);
+            -- get_installed_bibles' GROUP BY version: a covering-index scan, not every chapter row.
+            CREATE INDEX IF NOT EXISTS idx_scriptures_version ON scriptures(version);",
         )
     }
 
