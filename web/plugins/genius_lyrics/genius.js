@@ -3,21 +3,12 @@
 (function (root) {
   'use strict';
 
-  var CHRISTIAN_KEYWORDS = [
-    'worship', 'christian', 'gospel', 'praise', 'hymn', 'church', 'jesus', 'god', 'lord', 'holy',
-    'faith', 'grace', 'savior', 'christ', 'cross', 'hallelu'
-  ];
-
-  function hasChristianKeyword(text) {
-    var t = String(text).toLowerCase();
-    return CHRISTIAN_KEYWORDS.some(function (k) { return t.indexOf(k) !== -1; });
-  }
-
-  /** The search term sent to Genius: bias toward worship music unless the user already did. */
+  /** The search term sent to Genius: what the user typed. (Adding "christian worship" to bias the
+   *  results used to push the actual song out of them -- "Lead On Good Shepherd christian worship"
+   *  finds nothing, the plain title finds it. Non-Christian results are now filtered by genre
+   *  instead; see classifyHits.) */
   function searchTerms(query) {
-    var q = String(query).trim();
-    if (!q) return '';
-    return hasChristianKeyword(q) ? q : q + ' christian worship';
+    return String(query).trim();
   }
 
   function searchUrl(query) {
@@ -330,7 +321,132 @@
     return song;
   }
 
+  // ---- Christian-music filter: genres from Apple's iTunes Search API ------------------------------------------
+  // Neither LRCLIB nor Genius says what kind of music a song is (Genius tags a worship song like "Lead On Good
+  // Shepherd" plain "Pop"). The iTunes store files every commercial release under a genre, and Christian music
+  // has its own ("Christian", "Gospel", "CCM", "Southern Gospel", ...). One song search per query covers most
+  // results; artists it doesn't cover are looked up on their own (an artist's primary genre).
+
+  var CHRISTIAN_GENRE = /christian|gospel|\bccm\b|worship|inspirational/i;
+  var CHRISTIAN_ARTIST_WORDS = /\b(worship|church|gospel|praise|christian|hymns?|ministr(y|ies)|tabernacle)\b/i;
+
+  function isChristianGenre(genre) { return CHRISTIAN_GENRE.test(String(genre || '')); }
+
+  function itunesSongSearchUrl(query) {
+    var q = String(query).trim();
+    return q ? 'https://itunes.apple.com/search?media=music&entity=song&limit=200&term=' + encodeURIComponent(q) : '';
+  }
+
+  function itunesArtistSearchUrl(artist) {
+    var a = String(artist).trim();
+    return a ? 'https://itunes.apple.com/search?media=music&entity=musicArtist&limit=5&term=' + encodeURIComponent(a) : '';
+  }
+
+  /** A name compared loosely: lower case, accents and punctuation dropped, "the" dropped. */
+  function normName(text) {
+    return String(text || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9À-￿]+/g, ' ').replace(/^the /, '').trim();
+  }
+
+  /** Every artist credited in a credit line, the primary one first: "Patrick Mayberry & Crowder",
+   *  "Bethel Music (Ft. Brian Johnson)". */
+  function artistNames(credit) {
+    return String(credit || '')
+      // Only the separators credit lines actually use: splitting on "and" would turn "Hillsong Young and
+      // Free" into an artist called "Free" (a rock band).
+      .split(/\s*(?:,|&|\+|•|\/|\(|\)|\[|\]|\bfeat\.?|\bft\.?|\bfeaturing\b)\s*/i)
+      .map(normName)
+      .filter(function (n) { return n && n !== 'recommended for you'; });
+  }
+
+  /** A title without its "(Live)", "[feat. ...]", " - Radio Edit" decorations. */
+  function coreTitle(title) {
+    return normName(String(title || '').replace(/\([^)]*\)|\[[^\]]*\]/g, ' ').replace(/\s[-–—]\s.*$/, ''));
+  }
+
+  /** iTunes song search JSON (text) -> [{ title, artists, genre }]. */
+  function parseItunesSongs(jsonText) {
+    var data;
+    try { data = JSON.parse(jsonText); } catch (e) { return []; }
+    return ((data && data.results) || []).filter(function (r) { return r && r.trackName && r.primaryGenreName; })
+      .map(function (r) { return { title: coreTitle(r.trackName), artists: artistNames(r.artistName), genre: String(r.primaryGenreName) }; });
+  }
+
+  /** iTunes artist search JSON (text) -> the primary genre of the artist named exactly `artist`, or null. */
+  function parseItunesArtistGenre(jsonText, artist) {
+    var data;
+    try { data = JSON.parse(jsonText); } catch (e) { return null; }
+    var want = normName(artist);
+    var hit = ((data && data.results) || []).find(function (r) { return r && r.primaryGenreName && normName(r.artistName) === want; });
+    return hit ? String(hit.primaryGenreName) : null;
+  }
+
+  function overlaps(a, b) { return a.some(function (x) { return b.indexOf(x) !== -1; }); }
+
+  /** Genres known for each artist from song records: { "patrick mayberry": ["Christian"], ... }. */
+  function genresByArtist(records) {
+    var map = {};
+    records.forEach(function (r) {
+      r.artists.forEach(function (a) { (map[a] = map[a] || []).push(r.genre); });
+    });
+    return map;
+  }
+
+  /** The verdict for one artist from the genres known for them: 'christian', 'other' or null (no idea). */
+  function verdict(genres) {
+    if (!genres || !genres.length) return null;
+    return genres.some(isChristianGenre) ? 'christian' : 'other';
+  }
+
+  /**
+   * Labels each hit `faith: 'christian' | 'other' | 'unknown'` (and `genre` when known), in place:
+   *   1. the same song by the same artist in the iTunes results decides;
+   *   2. otherwise the artist's genres (their other songs there, or `artistGenres` from an artist lookup);
+   *   3. otherwise a worship word in the artist's name ("Generations Worship") counts as Christian -- not in
+   *      the title: plenty of songs called "Hallelujah" or "Grace" aren't;
+   *   4. otherwise it's unknown -- shown, but after the songs known to be Christian.
+   * Artist names must match exactly (after normalizing), so "Chris Brown" never vouches for "Dennis Brown".
+   */
+  function classifyHits(hits, songRecords, artistGenres) {
+    var byArtist = genresByArtist(songRecords);
+    artistGenres = artistGenres || {};
+    hits.forEach(function (hit) {
+      var artists = artistNames(hit.artist);
+      var title = coreTitle(hit.title);
+      var same = songRecords.filter(function (r) {
+        return overlaps(r.artists, artists) && (r.title === title || r.title.indexOf(title) === 0 || title.indexOf(r.title) === 0);
+      });
+      var v = verdict(same.map(function (r) { return r.genre; }));
+      var genre = same.length ? (same.find(function (r) { return isChristianGenre(r.genre); }) || same[0]).genre : null;
+      // The primary artist's genres decide before a featured artist's.
+      for (var i = 0; !v && i < artists.length; i++) {
+        var known = (byArtist[artists[i]] || []).concat(artistGenres[artists[i]] ? [artistGenres[artists[i]]] : []);
+        v = verdict(known);
+        if (v) genre = known.find(isChristianGenre) || known[0];
+      }
+      if (!v && CHRISTIAN_ARTIST_WORDS.test(hit.artist)) v = 'christian';
+      hit.faith = v || 'unknown';
+      hit.genre = genre || null;
+    });
+    return hits;
+  }
+
+  /** Artists of hits the song records say nothing about: the ones worth an artist lookup (first `max`). */
+  function artistsToLookUp(hits, songRecords, max) {
+    var byArtist = genresByArtist(songRecords);
+    var out = [];
+    hits.forEach(function (hit) {
+      var artists = artistNames(hit.artist);
+      if (!artists.length || artists.some(function (a) { return byArtist[a]; })) return;
+      if (out.indexOf(artists[0]) === -1) out.push(artists[0]);
+    });
+    return out.slice(0, max);
+  }
+
   var api = {
+    isChristianGenre: isChristianGenre, itunesSongSearchUrl: itunesSongSearchUrl, itunesArtistSearchUrl: itunesArtistSearchUrl,
+    artistNames: artistNames, coreTitle: coreTitle, parseItunesSongs: parseItunesSongs, parseItunesArtistGenre: parseItunesArtistGenre,
+    classifyHits: classifyHits, artistsToLookUp: artistsToLookUp,
     searchTerms: searchTerms, answersQuery: answersQuery, searchUrl: searchUrl, parseSearchResponse: parseSearchResponse, isGeniusUrl: isGeniusUrl,
     lrclibSearchUrl: lrclibSearchUrl, parseLrclibResponse: parseLrclibResponse, plainLyricsToSong: plainLyricsToSong,
     extractCcli: extractCcli, stripHtml: stripHtml, extractLyrics: extractLyrics, lyricsToSong: lyricsToSong, pageToSong: pageToSong
