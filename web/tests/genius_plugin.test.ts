@@ -4,14 +4,13 @@ import { test, expect, describe } from "bun:test";
 import Genius from "../plugins/genius_lyrics/genius.js";
 
 describe("Genius plugin: search", () => {
-  test("biases toward worship music unless the query already says so", () => {
-    expect(Genius.searchTerms("Way Maker")).toBe("Way Maker christian worship");
-    expect(Genius.searchTerms("  Oceans  ")).toBe("Oceans christian worship");
-    expect(Genius.searchTerms("Goodness of God")).toBe("Goodness of God"); // 'god' counts as a Christian term
-    expect(Genius.searchTerms("Holy Forever")).toBe("Holy Forever"); // 'holy' already a Christian term
+  test("searches Genius for what was typed, nothing added", () => {
+    // "christian worship" used to be appended, which pushed the real song out of the results
+    // ("Lead On Good Shepherd christian worship" finds nothing); results are filtered by genre instead.
+    expect(Genius.searchTerms("  Lead On Good Shepherd  ")).toBe("Lead On Good Shepherd");
     expect(Genius.searchTerms("   ")).toBe("");
     expect(Genius.searchUrl("")).toBe("");
-    expect(Genius.searchUrl("Way Maker")).toBe("https://genius.com/api/search/multi?q=Way%20Maker%20christian%20worship");
+    expect(Genius.searchUrl("Way Maker")).toBe("https://genius.com/api/search/multi?q=Way%20Maker");
   });
 
   const response = (hits: any[], type = "song") => JSON.stringify({ response: { sections: [{ type, hits }] } });
@@ -183,5 +182,66 @@ describe("Lyrics plugin: LRCLIB", () => {
     expect(song).toMatchObject({ title: "So Much", author: "Life.Church Worship", ccli_number: null });
     expect(song.copyright).toContain("LRCLIB");
     expect(Genius.plainLyricsToSong("T", "A", "", "").slides).toEqual([]);
+  });
+});
+
+describe("Lyrics plugin: Christian-music filter (iTunes genres)", () => {
+  const itunesSongs = (rows: Array<[string, string, string]>) =>
+    JSON.stringify({ resultCount: rows.length, results: rows.map(([trackName, artistName, primaryGenreName]) => ({ trackName, artistName, primaryGenreName })) });
+  const hit = (title: string, artist: string) => ({ title, artist });
+
+  test("names and titles compare loosely; credits split on the separators they use, not on \"and\"", () => {
+    expect(Genius.artistNames("Bethel Music (Ft. Brian Johnson (Bethel))")).toEqual(["bethel music", "brian johnson", "bethel"]);
+    expect(Genius.artistNames("Patrick Mayberry & Crowder")).toEqual(["patrick mayberry", "crowder"]);
+    expect(Genius.artistNames("Hillsong Young and Free")).toEqual(["hillsong young and free"]);
+    expect(Genius.artistNames("The Brooklyn Tabernacle Choir")).toEqual(["brooklyn tabernacle choir"]);
+    expect(Genius.coreTitle("Psalm 23 (I Am Not Alone) [feat. Joshua Sherman] - Live")).toBe("psalm 23");
+    expect(Genius.isChristianGenre("Christian & Gospel")).toBe(true);
+    expect(Genius.isChristianGenre("Southern Gospel")).toBe(true);
+    expect(Genius.isChristianGenre("CCM")).toBe(true);
+    expect(Genius.isChristianGenre("Reggae")).toBe(false);
+    expect(Genius.itunesSongSearchUrl("Victory Is Mine")).toBe("https://itunes.apple.com/search?media=music&entity=song&limit=200&term=Victory%20Is%20Mine");
+    expect(Genius.itunesSongSearchUrl("  ")).toBe("");
+  });
+
+  test("the same song by the same artist decides; other artists' songs of the same name don't", () => {
+    const records = Genius.parseItunesSongs(itunesSongs([
+      ["Victory Is Mine", "Dorothy Norwood", "Christian"],
+      ["Victory Is Mine", "Virgin Steele", "Metal"],
+      ["Lead On Good Shepherd", "Patrick Mayberry & Crowder", "Christian"],
+    ]));
+    const hits = Genius.classifyHits([
+      hit("Victory Is Mine", "Dorothy Norwood"),
+      hit("Victory Is Mine", "Virgin Steele"),
+      hit("Lead On Good Shepherd", "Patrick Mayberry (Ft. Crowder)"),
+      hit("Victory Is Mine", "Dennis Brown"),
+    ], records, {});
+    expect(hits.map((h: any) => h.faith)).toEqual(["christian", "other", "christian", "unknown"]);
+    expect(hits[1].genre).toBe("Metal");
+  });
+
+  test("an artist the songs say nothing about is judged by an artist lookup, matched exactly", () => {
+    const records = Genius.parseItunesSongs(itunesSongs([["Psalm 23", "Teni", "Afrobeats"]]));
+    const hits = [hit("Psalm 23", "Sons of Korah"), hit("Psalm 23", "Dennis Brown"), hit("Psalm 23", "Teni"), hit("Psalm 23", "Nobody Known")];
+    expect(Genius.artistsToLookUp(hits, records, 5)).toEqual(["sons of korah", "dennis brown", "nobody known"]);
+    expect(Genius.artistsToLookUp(hits, records, 1)).toEqual(["sons of korah"]);
+    const artistSearch = JSON.stringify({ results: [{ artistName: "Chris Brown", primaryGenreName: "Christian" }, { artistName: "Dennis Brown", primaryGenreName: "Reggae" }] });
+    expect(Genius.parseItunesArtistGenre(artistSearch, "Dennis Brown")).toBe("Reggae");
+    expect(Genius.parseItunesArtistGenre(artistSearch, "Denis Brown")).toBeNull(); // never a near miss
+    expect(Genius.parseItunesArtistGenre("not json", "x")).toBeNull();
+    Genius.classifyHits(hits, records, { "sons of korah": "Christian", "dennis brown": "Reggae" });
+    expect(hits.map((h: any) => h.faith)).toEqual(["christian", "other", "other", "unknown"]);
+  });
+
+  test("a worship word in the artist's name counts, in the title it doesn't", () => {
+    const hits = Genius.classifyHits([hit("Lean On", "Generations Worship"), hit("Hallelujah", "Subtronics"), hit("Grace", "Some Band")], [], {});
+    expect(hits.map((h: any) => h.faith)).toEqual(["christian", "unknown", "unknown"]);
+  });
+
+  test("the primary artist's genre comes before a featured one's", () => {
+    const records = Genius.parseItunesSongs(itunesSongs([["Other Song", "Kirk Franklin", "Gospel"], ["Another", "Bono", "Rock"]]));
+    const [h] = Genius.classifyHits([hit("Lean On Me", "Kirk Franklin (Ft. Bono)")], records, {});
+    expect(h.faith).toBe("christian");
+    expect(h.genre).toBe("Gospel");
   });
 });

@@ -1,5 +1,5 @@
 // Song Lyrics: a sandboxed OpenSanctuary plugin. It has no network or console access of its own;
-// the host fetches for it (net.fetch, only lrclib.net and genius.com), stores the song (library.addSong) and
+// the host fetches for it (net.fetch, only lrclib.net, genius.com and itunes.apple.com), stores the song (library.addSong) and
 // runs the schedule commands it was granted. See docs/PLUGIN_PERMISSIONS.md.
 (function () {
   'use strict';
@@ -16,73 +16,162 @@
 
   function renderHits(hits) {
     listEl.textContent = '';
-    hits.forEach(function (hit) {
-      var li = document.createElement('li');
-      var thumb = document.createElement('div');
-      thumb.className = 'thumb';
-      thumb.textContent = '✨';
-      var meta = document.createElement('div');
-      meta.className = 'meta';
-      var title = document.createElement('div');
-      title.className = 'title';
-      title.textContent = hit.title;
-      var sub = document.createElement('div');
-      sub.className = 'sub';
-      sub.textContent = [hit.artist, hit.album, hit.length].filter(Boolean).join(' \u00b7 ');
-      meta.appendChild(title);
-      meta.appendChild(sub);
-      var badge = document.createElement('span');
-      badge.className = 'os-badge os-badge--accent';
-      badge.textContent = hit.source === 'lrclib' ? 'LRCLIB' : 'Genius';
-      var actions = document.createElement('div');
-      actions.className = 'actions';
-      var add = document.createElement('button');
-      add.type = 'button';
-      add.className = 'btn btn-sm btn-primary';
-      add.textContent = '📥 Import & stage';
-      add.addEventListener('click', function () { importHit(hit, false); });
-      var live = document.createElement('button');
-      live.type = 'button';
-      live.className = 'btn btn-sm';
-      live.textContent = 'Import & go live';
-      live.addEventListener('click', function () { importHit(hit, true); });
-      actions.appendChild(add);
-      actions.appendChild(live);
-      li.addEventListener('dblclick', function () { importHit(hit, false); });
-      li.appendChild(thumb);
-      li.appendChild(meta);
-      li.appendChild(badge);
-      li.appendChild(actions);
-      listEl.appendChild(li);
-    });
+    hits.forEach(function (hit) { listEl.appendChild(hitRow(hit)); });
   }
 
-  async function fetchHits(label, url, parse, query) {
-    var res = await OS.call('net.fetch', { url: url });
-    if (res.status !== 200) throw new Error(label + ' answered ' + res.status);
+  /** Christian songs first, then ones whose genre couldn't be told; the rest behind a "show" row. */
+  function renderFiltered(hits) {
+    var shown = hits.filter(function (h) { return h.faith === 'christian'; })
+      .concat(hits.filter(function (h) { return h.faith !== 'christian' && h.faith !== 'other'; }));
+    var others = hits.filter(function (h) { return h.faith === 'other'; });
+    renderHits(shown);
+    if (others.length) {
+      var li = document.createElement('li');
+      li.className = 'more-row';
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-sm';
+      btn.textContent = 'Show ' + others.length + ' other result' + (others.length === 1 ? '' : 's') + ' (not listed as Christian music)';
+      btn.addEventListener('click', function () {
+        li.remove();
+        others.forEach(function (hit) { listEl.appendChild(hitRow(hit)); });
+      });
+      li.appendChild(btn);
+      listEl.appendChild(li);
+    }
+    return { shown: shown.length, hidden: others.length };
+  }
+
+  function hitRow(hit) {
+    var li = document.createElement('li');
+    var thumb = document.createElement('div');
+    thumb.className = 'thumb';
+    thumb.textContent = '✨';
+    var meta = document.createElement('div');
+    meta.className = 'meta';
+    var title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = hit.title;
+    var sub = document.createElement('div');
+    sub.className = 'sub';
+    sub.textContent = [hit.artist, hit.album, hit.length, hit.genre || (hit.faith === 'unknown' ? 'genre unknown' : '')]
+      .filter(Boolean).join(' \u00b7 ');
+    meta.appendChild(title);
+    meta.appendChild(sub);
+    var badge = document.createElement('span');
+    badge.className = 'os-badge os-badge--accent';
+    badge.textContent = hit.source === 'lrclib' ? 'LRCLIB' : 'Genius';
+    var actions = document.createElement('div');
+    actions.className = 'actions';
+    var add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'btn btn-sm btn-primary';
+    add.textContent = '📥 Import & stage';
+    add.addEventListener('click', function () { importHit(hit, false); });
+    var live = document.createElement('button');
+    live.type = 'button';
+    live.className = 'btn btn-sm';
+    live.textContent = 'Import & go live';
+    live.addEventListener('click', function () { importHit(hit, true); });
+    actions.appendChild(add);
+    actions.appendChild(live);
+    li.addEventListener('dblclick', function () { importHit(hit, false); });
+    li.appendChild(thumb);
+    li.appendChild(meta);
+    li.appendChild(badge);
+    li.appendChild(actions);
+    return li;
+  }
+
+  function pause(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
+
+  /** net.fetch, tried again (twice, after a short pause) when the server says it's busy: LRCLIB often
+   *  answers 503 "The server is busy, please retry in a moment" -- about 4 searches in 10 at times. */
+  async function fetchPatiently(url) {
+    var res;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      if (attempt) await pause(attempt * 700);
+      res = await OS.call('net.fetch', { url: url });
+      if (res.status !== 429 && res.status < 500) return res;
+    }
+    return res;
+  }
+
+  function sourceError(label, status) {
+    return new Error(status === 429 || status === 503 ? label + ' is busy right now' : label + ' answered ' + status);
+  }
+
+  async function fetchHits(label, url, parse, query, patient) {
+    var res = patient ? await fetchPatiently(url) : await OS.call('net.fetch', { url: url });
+    if (res.status !== 200) throw sourceError(label, res.status);
     return parse(res.body, query);
   }
+
+  // Artist lookups already made while this panel is open (genre, or '' for "iTunes doesn't know them"):
+  // iTunes allows about 20 requests a minute, so a second search never spends one twice. No prototype,
+  // so an artist called "constructor" is never mistaken for one already looked up.
+  var artistGenreCache = Object.create(null);
+
+  /** Genre records for the query (one iTunes song search) plus a lookup for each artist that leaves
+   *  unexplained (up to 5 new ones). null when iTunes can't be reached: then nothing is filtered. */
+  async function genreRecords(songsPromise, hits) {
+    var records = await songsPromise;
+    if (!records) return null;
+    var artistGenres = {};
+    var pending = Lyrics.artistsToLookUp(hits, records, 50).filter(function (a) { return !(a in artistGenreCache); }).slice(0, 5);
+    await Promise.all(pending.map(async function (artist) {
+      try {
+        var res = await OS.call('net.fetch', { url: Lyrics.itunesArtistSearchUrl(artist) });
+        if (res.status === 200) artistGenreCache[artist] = Lyrics.parseItunesArtistGenre(res.body, artist) || '';
+      } catch (e) { /* unknown stays unknown, and is asked again next time */ }
+    }));
+    Object.keys(artistGenreCache).forEach(function (a) { if (artistGenreCache[a]) artistGenres[a] = artistGenreCache[a]; });
+    return { records: records, artistGenres: artistGenres };
+  }
+
+  // Bumped by each search; an older one still in flight never paints over a newer one's results.
+  var searchSeq = 0;
 
   async function search(query) {
     var q = String(query).trim();
     if (!q) return;
+    var mine = ++searchSeq;
     setStatus('\u2728 Searching LRCLIB and Genius for \u201c' + q + '\u201d\u2026');
     listEl.textContent = '';
+    // Genres come from iTunes, fetched alongside the lyrics searches.
+    var songsPromise = OS.call('net.fetch', { url: Lyrics.itunesSongSearchUrl(q) })
+      .then(function (res) { return res.status === 200 ? Lyrics.parseItunesSongs(res.body) : null; })
+      .catch(function () { return null; });
     // LRCLIB is an open lyrics database; Genius sits behind a bot filter that often refuses us, so it is
     // a bonus: its failure never hides LRCLIB's results.
     var results = await Promise.all([
-      fetchHits('LRCLIB', Lyrics.lrclibSearchUrl(q), Lyrics.parseLrclibResponse, q).catch(function (e) { return e; }),
+      fetchHits('LRCLIB', Lyrics.lrclibSearchUrl(q), Lyrics.parseLrclibResponse, q, true).catch(function (e) { return e; }),
       fetchHits('Genius', Lyrics.searchUrl(q), Lyrics.parseSearchResponse, q).catch(function (e) { return e; })
     ]);
+    if (mine !== searchSeq) return;
     var hits = [], problems = [];
     results.forEach(function (r) { if (r instanceof Error) problems.push(r.message); else hits = hits.concat(r); });
-    renderHits(hits);
-    if (hits.length) {
-      setStatus(hits.length + ' result' + (hits.length === 1 ? '' : 's') + (problems.length ? ' (' + problems.join('; ') + ')' : ''));
-    } else if (problems.length === results.length) {
-      setStatus('Search failed: ' + problems.join('; '), 'error');
+    var note = problems.length ? ' (' + problems.join('; ') + ')' : '';
+    if (!hits.length) {
+      if (problems.length === results.length) setStatus('Search failed: ' + problems.join('; ') + '. Try again in a moment.', 'error');
+      else setStatus('No song matching \u201c' + q + '\u201d' + note + '. Check the spelling, or try the title and artist.');
+      return;
+    }
+    setStatus('\u2728 Checking which of ' + hits.length + ' result' + (hits.length === 1 ? ' is' : 's are') + ' Christian music\u2026');
+    var genres = await genreRecords(songsPromise, hits);
+    if (mine !== searchSeq) return;
+    if (!genres) {
+      renderHits(hits);
+      setStatus(hits.length + ' result' + (hits.length === 1 ? '' : 's') + note + ' \u2014 couldn\u2019t check genres, so nothing is filtered.');
+      return;
+    }
+    Lyrics.classifyHits(hits, genres.records, genres.artistGenres);
+    var counts = renderFiltered(hits);
+    if (counts.shown) {
+      setStatus(counts.shown + ' result' + (counts.shown === 1 ? '' : 's') + note +
+        (counts.hidden ? ' \u00b7 ' + counts.hidden + ' other' + (counts.hidden === 1 ? '' : 's') + ' hidden' : ''));
     } else {
-      setStatus('No song matching \u201c' + q + '\u201d' + (problems.length ? ' (' + problems.join('; ') + ')' : '') + '. Try the title and artist.');
+      setStatus('Found ' + counts.hidden + ' song' + (counts.hidden === 1 ? '' : 's') + ' called that, none listed as Christian music' + note + '.');
     }
   }
 
