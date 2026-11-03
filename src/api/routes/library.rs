@@ -61,16 +61,14 @@ pub(super) async fn get_scriptures(
     State(app): State<AppState>,
     Query(query): Query<SearchQuery>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let scriptures = if let Some(q) = query.q.as_deref() {
-        if !q.trim().is_empty() {
-            app.db.search_scriptures(q).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        } else {
-            app.db.get_scriptures().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        }
-    } else {
-        app.db.get_scriptures().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    };
-    Ok(Json(scriptures))
+    if let Some(q) = query.q.as_deref().filter(|q| !q.trim().is_empty()) {
+        let found = app.db.search_scriptures(q).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        return Ok(Json(found).into_response());
+    }
+    // Every chapter of every installed Bible: serialized by the DB layer straight from the
+    // stored JSON (see get_scriptures_json) rather than through Vec<ScriptureItem>.
+    let json = app.db.get_scriptures_json().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "application/json")], json).into_response())
 }
 
 pub(super) async fn create_scripture(

@@ -195,6 +195,23 @@ body, html {
   font-size: clamp(11.5px, 0.4vw + 8px, 14px);
 }
 
+/* Boot (index.html starts as html.app-booting; main.ts drops it once the app is ready and
+   fades the shell in): no empty panels filling in piece by piece. A slow machine gets a
+   quiet mark after 150ms -- a fast one is ready before it shows -- and a CSS-only failsafe
+   reveals the shell after 4s even if the scripts never get there. */
+html.app-booting #app-container { opacity: 0; animation: os-boot-failsafe 0s linear 4s forwards; }
+html.app-booting body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: url(favicon.svg) center / 72px no-repeat;
+  opacity: 0.25;
+  animation: os-boot-mark-in 300ms ease-out 150ms both;
+  pointer-events: none;
+}
+@keyframes os-boot-failsafe { to { opacity: 1; } }
+@keyframes os-boot-mark-in { from { opacity: 0; } }
+
 #app-container {
   display: flex;
   flex-direction: column;
@@ -1807,6 +1824,8 @@ body:has(.modal-backdrop[style*="flex"]) .live-indicator-btn.active .icon {
   height: 2px;
   background: var(--os-brand-amber);
   width: 100%;
+  /* Shrinks via transform, not width: compositor-only, no layout pass every frame. */
+  transform-origin: left center;
   animation: undoProgressShrink 1.5s linear forwards;
 }
 
@@ -1837,8 +1856,8 @@ body:has(.modal-backdrop[style*="flex"]) .live-indicator-btn.active .icon {
 }
 
 @keyframes undoProgressShrink {
-  from { width: 100%; }
-  to { width: 0%; }
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
 }
 
 /* Schedule & Slide Drag Handles */
@@ -3102,6 +3121,19 @@ input.live-media-duration {
   align-items: center;
   justify-content: center;
 }
+
+/* Entrance: replays every time a modal goes from display:none to shown, so no JS hook per
+   dialog. Opacity/transform only (compositor), short enough to read as a response rather
+   than a wait, and it covers the slide editor's first build on slow machines. */
+@media (prefers-reduced-motion: no-preference) {
+  .modal-backdrop { animation: os-modal-backdrop-in 120ms ease-out; }
+  .modal-backdrop > .modal-dialog { animation: os-modal-dialog-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+}
+@keyframes os-modal-backdrop-in { from { opacity: 0; } }
+@keyframes os-modal-dialog-in { from { opacity: 0; transform: translateY(6px) scale(0.985); } }
+
+/* A click whose result comes back from the server (markPending in core/ui_utils.ts). */
+.is-pending { opacity: 0.55; transition: opacity 90ms ease-out; }
 
 /* Dialog shell: header (title + close) / body / footer (secondary left, actions right). */
 .modal-dialog {
@@ -6205,3 +6237,18 @@ video {
 
 /* The publisher link next to a licensed Bible passage's title (src/ui/licensed_link.ts). */
 .licensed-link { margin-left: 8px; font-size: 0.85em; color: var(--accent, #ff6a2b); text-decoration: underline; cursor: pointer; white-space: nowrap; }
+
+/* Hidden slides: kept in the presentation, skipped when presenting. */
+.slide-hidden {
+  opacity: 0.45;
+}
+.slide-hidden:hover {
+  opacity: 0.75;
+}
+.slide-hidden-badge {
+  margin-left: 4px;
+  font-size: 10px;
+}
+.schedule-child-item.slide-hidden {
+  font-style: italic;
+}

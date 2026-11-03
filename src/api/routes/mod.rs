@@ -14,6 +14,7 @@ mod reports;
 mod schedule;
 mod settings;
 mod show;
+mod static_gzip;
 mod system;
 
 pub(crate) use show::apply_default_theme_if_unset;
@@ -330,9 +331,15 @@ pub fn create_router(app_state: AppState) -> Router {
             tower::layer::Layer::layer(
                 &SetResponseHeaderLayer::overriding(
                     CACHE_CONTROL,
-                    HeaderValue::from_static("no-cache, no-store, must-revalidate"),
+                    // `no-cache` (not `no-store`): the browser must revalidate every load, so
+                    // a new build is never served stale, but ServeDir answers the
+                    // `If-Modified-Since` with a 304 instead of re-sending ~1MB of JS/CSS.
+                    HeaderValue::from_static("no-cache, must-revalidate"),
                 ),
-                ServeDir::new(web_dir),
+                tower::layer::Layer::layer(
+                    &axum::middleware::from_fn(static_gzip::gzip_static),
+                    ServeDir::new(web_dir),
+                ),
             )
         )
         // After the fallback so it also covers the static files; a layer only wraps what was

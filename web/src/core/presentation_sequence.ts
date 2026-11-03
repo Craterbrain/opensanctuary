@@ -7,7 +7,7 @@
  */
 
 import type { ScheduleItem, Slide } from './models.ts';
-import { resolveSlideAt } from './presentation_helpers.ts';
+import { resolveSlideAt, firstVisibleSlideIndex, hasShowableSlides } from './presentation_helpers.ts';
 
 export interface BilingualText {
   isBilingual: boolean;
@@ -82,9 +82,11 @@ export function resolveNextPresentationPreview(
   }
 
   // 1. Check for a next slide in the current live item
-  const nextSlide = resolveSlideAt(liveItem, liveSlideIndex + 1);
-  if (nextSlide) {
-    const label = nextSlide.label || `Slide ${liveSlideIndex + 2}`;
+  // Hidden slides are never shown live, so the lookahead skips them too.
+  const nextPos = firstVisibleSlideIndex(liveItem, liveSlideIndex + 1);
+  const nextSlide = nextPos === null ? null : resolveSlideAt(liveItem, nextPos);
+  if (nextSlide && nextPos !== null) {
+    const label = nextSlide.label || `Slide ${nextPos + 1}`;
     const rawText = nextSlide.text || `[Next: ${nextSlide.label || 'Slide'}]`;
     const bilingual = parseBilingualSlideText(nextSlide.text);
 
@@ -105,13 +107,15 @@ export function resolveNextPresentationPreview(
   let nextScheduleItem: ScheduleItem | null = null;
   if (items.length > 0) {
     const curIdx = items.findIndex((it) => it.id === liveItem.id);
-    if (curIdx >= 0 && curIdx + 1 < items.length) {
-      nextScheduleItem = items[curIdx + 1] ?? null;
+    if (curIdx >= 0) {
+      // An item whose slides are all hidden is stepped over, as the engine does.
+      nextScheduleItem = items.slice(curIdx + 1).find((it) => hasShowableSlides(it)) ?? null;
     }
   }
 
   if (nextScheduleItem) {
-    const firstSlide = resolveSlideAt(nextScheduleItem, 0) || (nextScheduleItem.slides && nextScheduleItem.slides[0]);
+    const firstPos = firstVisibleSlideIndex(nextScheduleItem, 0) ?? 0;
+    const firstSlide = resolveSlideAt(nextScheduleItem, firstPos) || (nextScheduleItem.slides && nextScheduleItem.slides[0]);
     const firstText = firstSlide ? (firstSlide.text || '') : '';
     const bilingual = parseBilingualSlideText(firstText);
     const snippet = firstText ? `${firstText.substring(0, 80)}...` : '';

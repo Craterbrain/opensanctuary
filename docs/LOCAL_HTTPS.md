@@ -6,7 +6,7 @@
 > certificate. Devices on the church network reach Caddy through a local DNS
 > override, and the firewall rules below allow only local-network addresses.
 
-_Last edited: 2026-10-06 19:40_
+_Last edited: 2026-11-03 14:21_
 
 ## Start here: get a valid certificate, step by step
 
@@ -26,12 +26,13 @@ OpenSanctuary and Caddy.
 1. **Pick the name.** For example `connect.yourchurch.org`. You never create
    a public DNS record for it.
 2. **Create a scoped Cloudflare API token.** Cloudflare dashboard → *My
-   Profile* → *API Tokens* → *Create Token*. The *Edit zone DNS* template is
-   a good starting point, but check its summary: the Caddy Cloudflare plugin
-   needs **both** `Zone · Zone · Read` and `Zone · DNS · Edit`, so add
-   `Zone · Zone · Read` if the template doesn't include it. Zone Resources:
-   *Include* → *Specific zone* → your domain. Copy the token right away;
-   Cloudflare shows it only once.
+   Profile* → *API Tokens* → *Create Token* → the *Edit zone DNS* template.
+   The template does not finish the job for you; follow
+   "Creating the Cloudflare API token" below, with screenshots. In short:
+   two permission rows (`Zone · DNS · Edit` and `Zone · Zone · Read`), one
+   specific zone, and copy the token right away because Cloudflare shows it
+   only once. If Cloudflare is asking you to set up two-factor
+   authentication first, do that first (see the same section).
 3. **Run the setup script on the OpenSanctuary machine** (it installs Caddy
    with the Cloudflare plugin, writes the Caddyfile, registers the service
    and opens the firewall to the local network only). It asks for the token
@@ -66,6 +67,194 @@ Caddy renews the certificate by itself, by default when 30 days (a third of
 a 90-day certificate's life) remain. If
 the internet is down at renewal time, it keeps serving the cached
 certificate and retries later.
+
+## Creating the Cloudflare API token
+
+The screenshots below are from a real run on a phone. The layout is the same
+on desktop.
+
+### Before the token: two-factor authentication
+
+Cloudflare may require two-factor authentication on the account before it lets
+you create a token. At the end of that wizard it shows a page titled *Review
+and save your two-factor authentication recovery codes* with eight one-time
+codes and *Download / Print / Copy* buttons.
+
+1. Save the codes in a password manager (*Copy* or *Download*), then click
+   **Next** and finish the wizard.
+2. Never screenshot or paste that page anywhere. If the codes were exposed,
+   regenerate them from the two-factor section of your Cloudflare profile.
+
+### The token form
+
+*My Profile → API Tokens → Create Token → Edit zone DNS → Use template.* The
+form has five parts: name, permissions, zone resources, expiration and client
+IP filtering.
+
+![The token form: name, permissions, zone resources, expiration, IP filtering](screenshots/cloudflare-token-form.png)
+
+**Token name.** Anything works. Use something you will recognise later, such
+as `caddy-acme-dns01`.
+
+**Permissions: exactly two rows.** The template starts with one row whose
+access level (the third dropdown) reads *Select...* and must be filled in.
+The screenshot below shows the three mistakes people make: row 1 has no
+access level, row 2 says *Edit* where it should say *Read*, and row 3 is an
+empty row left over from *Add more*.
+
+![Wrong: empty access level on the DNS row, Zone set to Edit, and a blank third row](screenshots/cloudflare-token-permissions-wrong.png)
+
+The finished list is:
+
+| Scope | Resource | Access | Why Caddy needs it |
+|---|---|---|---|
+| Zone | DNS | **Edit** | create and delete the temporary `_acme-challenge` TXT record |
+| Zone | Zone | **Read** | the Caddy plugin looks up the zone ID |
+
+![Correct: Zone / DNS / Edit and Zone / Zone / Read](screenshots/cloudflare-token-permissions-correct.png)
+
+Do not give `Zone · Zone` *Edit*. It can change zone settings, and the token
+does not need that. Delete the empty row with its **X**.
+
+**Zone Resources.** *Include* → *Specific zone* → your domain. Never choose
+*All zones*: a leaked token can then only touch this one domain. The token
+covers every subdomain of that zone, so there is no need for one token per
+subdomain.
+
+![Zone resources set to Include, Specific zone, and the domain](screenshots/cloudflare-token-zone.png)
+
+**Token expiration.** *No expiration* is the simplest. If you choose a date,
+set a calendar reminder: once the token expires Caddy can no longer renew, and
+the site stops being trusted about 30 days later. One year is a reasonable
+compromise.
+
+**Client IP address filtering.** Leave blank unless the server has a fixed
+public IP. DHCP and shared NAT make a filter easy to get wrong.
+
+### Create it and keep it safe
+
+1. Click **Continue to summary** and check it says *DNS:Edit* and *Zone:Read*
+   for your one zone.
+2. Click **Create Token** and copy the token immediately. If you lose it, use
+   *Roll* on the token and update the service.
+3. Verify it without printing it anywhere shared:
+
+   ```bash
+   curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+     https://api.cloudflare.com/client/v4/user/tokens/verify
+   ```
+
+   You want `"status":"active"`.
+4. Store it in a password manager, and in the service's environment file
+   (mode `600`), never in the Caddyfile, git, a chat or a screenshot. The
+   setup script prompts for it so it never lands in shell history.
+
+To rotate it, use *Roll* in the API Tokens list and update the environment
+file. To revoke it, delete it there: Caddy keeps serving until the current
+certificate expires, but cannot renew.
+
+## Optional: a plain DNS record instead of a local override
+
+The steps above use a local DNS override (router, Pi-hole or AdGuard) so no
+public record exists and the building works with the internet down. A simpler
+variant is to add a public record in Cloudflare:
+
+| Field | Value |
+|---|---|
+| Type | `A` |
+| Name | the subdomain, e.g. `connect` |
+| IPv4 address | the server's LAN IP, e.g. `192.168.1.50` |
+| Proxy status | **DNS only** (gray cloud) |
+
+It must be *DNS only*: Cloudflare cannot proxy a private address. Issuance
+works because Let's Encrypt only checks the TXT record, not your server.
+Trade-offs against the local override:
+
+- it only works on devices that can reach public DNS, so it fails when the
+  internet is down;
+- it publishes the server's private LAN IP;
+- routers with DNS rebinding protection still need the domain allow-listed.
+
+A wildcard record (`*`) lets one certificate cover `*.yourchurch.org` and
+needs no new record per service.
+
+Give the server a stable LAN address (a DHCP reservation on the router, or a
+static IP in NetworkManager). If the address changes, the DNS record points at
+the wrong machine.
+
+## Trying it in a VM or container first
+
+The prebuilt image
+[CaddyBuilds/caddy-cloudflare](https://github.com/CaddyBuilds/caddy-cloudflare)
+(`ghcr.io/caddybuilds/caddy-cloudflare:latest`) is stock Caddy with
+`caddy-dns/cloudflare` compiled in, so you can test the token and Caddyfile
+without building anything. Confirm the module with
+`docker run --rm ghcr.io/caddybuilds/caddy-cloudflare:latest caddy list-modules | grep cloudflare`.
+
+```yaml
+services:
+  caddy:
+    image: ghcr.io/caddybuilds/caddy-cloudflare:latest
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    env_file: cf.env            # CLOUDFLARE_API_TOKEN=..., mode 600
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+volumes: { caddy_data: , caddy_config: }
+```
+
+Test against Let's Encrypt **staging** first, so mistakes cost no rate-limit
+budget. Add this to the Caddyfile's global block and remove it for
+production:
+
+```caddyfile
+{
+	acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+```
+
+Watch `docker logs -f` for `certificate obtained successfully`. A staging
+certificate is untrusted by design, so use `curl -k` for that check only.
+After switching to production, repeat without `-k`; it must succeed.
+
+Put the token in the environment file without it touching shell history or a
+chat window (it reads silently from the terminal):
+
+```bash
+read -rs t && printf 'CLOUDFLARE_API_TOKEN=%s\n' "$t" > cf.env && chmod 600 cf.env
+```
+
+Then check the certificate itself, not just that the page loads. The issuer
+should be a Let's Encrypt (staging) intermediate and the subject your domain:
+
+```bash
+openssl s_client -connect connect.yourchurch.org:443 -servername connect.yourchurch.org </dev/null 2>/dev/null \
+  | openssl x509 -noout -issuer -subject -dates
+```
+
+Clean up the test with `docker compose down -v`, remove the test DNS record
+if you made one, and delete `cf.env`.
+
+**VM caveat (passt networking).** A libvirt user-mode VM with the `passt`
+backend gets the **same IP as the host** and only forwarded ports reach it.
+A DNS name pointing at the host's LAN IP therefore reaches the host, not the
+VM. Forward a port (for example `127.0.0.1:8443` to VM port `443`) and test
+with `curl --resolve connect.yourchurch.org:8443:127.0.0.1
+https://connect.yourchurch.org:8443`. Certificate issuance itself needs no
+inbound connection, so it works regardless.
+
+## Troubleshooting certificate issuance
+
+| Symptom | Likely cause |
+|---|---|
+| `Invalid request headers`, or Cloudflare error 6003 / 9109 | wrong, truncated or newline-damaged token in the environment file |
+| `Authentication error` (10000) | the token lacks *Zone · DNS · Edit*, or is scoped to a different zone |
+| `could not determine zone` / `expected 1 zone, got 0` | missing *Zone · Zone · Read*, or the local DNS override is answering the challenge lookup (add `resolvers 1.1.1.1`) |
+| `timed out waiting for record to fully propagate` | same resolver problem, or outbound DNS to `1.1.1.1` is blocked |
+| `too many certificates` / rate limited | you went to production repeatedly; return to staging |
+| browser still warns after production | cached staging certificate: clear Caddy's data volume and restart |
 
 ## What this gets you, and why it matters for OS-Next
 

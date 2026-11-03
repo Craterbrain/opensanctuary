@@ -344,16 +344,32 @@ pub fn broadcast_snapshot(app: &AppState) -> StateSnapshot {
         .swap(current_version, Ordering::Relaxed);
     let schedule_changed = previous_version != current_version;
 
-    if let Ok(mut value) = serde_json::to_value(&snapshot) {
-        if !schedule_changed {
-            value["schedule"] = serde_json::Value::Null;
-        }
-        if let Ok(json_str) = serde_json::to_string(&value) {
-            let _ = app.tx.send(json_str);
-        }
+    if let Ok(json_str) = broadcast_json(&snapshot, schedule_changed) {
+        let _ = app.tx.send(json_str);
     }
 
     snapshot
+}
+
+/// The snapshot as broadcast JSON, `schedule` set to `null` unless `include_schedule`.
+/// Serialized straight from borrows: no intermediate `serde_json::Value` tree of the whole
+/// schedule built only to be thrown away, on every slide change.
+fn broadcast_json(snapshot: &StateSnapshot, include_schedule: bool) -> serde_json::Result<String> {
+    #[derive(serde::Serialize)]
+    struct Broadcast<'a> {
+        protocol_version: u32,
+        sequence_number: u64,
+        timestamp_ms: u64,
+        state: &'a crate::core::models::ShowState,
+        schedule: Option<&'a crate::core::models::Schedule>,
+    }
+    serde_json::to_string(&Broadcast {
+        protocol_version: snapshot.protocol_version,
+        sequence_number: snapshot.sequence_number,
+        timestamp_ms: snapshot.timestamp_ms,
+        state: &snapshot.state,
+        schedule: include_schedule.then_some(&snapshot.schedule),
+    })
 }
 
 pub async fn ws_handler(
@@ -599,4 +615,64 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
         _ = (&mut send_task) => recv_task.abort(),
         _ = (&mut recv_task) => send_task.abort(),
     };
+}
+
+#[cfg(test)]
+mod broadcast_json_tests {
+    use super::broadcast_json;
+    use crate::core::engine::{ShowEngine, StateSnapshot};
+    use crate::core::event_log::EventLog;
+    use crate::core::models::{ScheduleItem, Slide};
+    use std::sync::Arc;
+
+    fn snapshot_with_schedule(items: usize, slides: usize) -> StateSnapshot {
+        let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+        let mut snap = engine.snapshot();
+        snap.schedule.items = (0..items).map(|i| ScheduleItem {
+            id: format!("item{i}"),
+            title: format!("Song {i}"),
+            item_type: "song".into(),
+            author_or_ref: "Someone".into(),
+            slides: (0..slides).map(|s| Slide { text: format!("Verse {s} line one\nline two of the verse\nand a third"), ..Default::default() }).collect(),
+            background: None, theme_name: None, is_expanded: false, is_section_header: false,
+            subtitle: None, notes: None, arrangement: Vec::new(), default_slide_duration_seconds: None,
+            slideshow_loop: false, licensed: None,
+        }).collect();
+        snap
+    }
+
+    /// What broadcast_snapshot used to send: the whole snapshot through a Value tree.
+    fn via_value(snapshot: &StateSnapshot, include_schedule: bool) -> String {
+        let mut value = serde_json::to_value(snapshot).unwrap();
+        if !include_schedule {
+            value["schedule"] = serde_json::Value::Null;
+        }
+        serde_json::to_string(&value).unwrap()
+    }
+
+    #[test]
+    fn same_json_as_the_value_round_trip() {
+        let snap = snapshot_with_schedule(5, 4);
+        for include in [true, false] {
+            let new: serde_json::Value = serde_json::from_str(&broadcast_json(&snap, include).unwrap()).unwrap();
+            let old: serde_json::Value = serde_json::from_str(&via_value(&snap, include)).unwrap();
+            assert_eq!(new, old, "include_schedule={include}");
+        }
+    }
+
+    #[test]
+    #[ignore = "timing, run with --ignored --nocapture"]
+    fn time_broadcast_json() {
+        let snap = snapshot_with_schedule(25, 12);
+        let n = 2000;
+        for include in [false, true] {
+            let t = std::time::Instant::now();
+            for _ in 0..n { std::hint::black_box(via_value(&snap, include)); }
+            let old = t.elapsed() / n;
+            let t = std::time::Instant::now();
+            for _ in 0..n { std::hint::black_box(broadcast_json(&snap, include).unwrap()); }
+            let new = t.elapsed() / n;
+            println!("include_schedule={include}: value round trip {old:?} -> direct {new:?}");
+        }
+    }
 }

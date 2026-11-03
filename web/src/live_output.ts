@@ -29,12 +29,10 @@ import { clock } from './core/timesync';
 import { lookupPatternClip } from './core/pattern_render';
 import { patternPhaseSec } from './core/background_patterns';
 import { createEngineWebSocket, EngineWebSocketClient } from './core/ws_client';
-import {
-  WebCodecsPlayer,
-  isWebCodecsSupported,
-  canPlayWithWebCodecs,
-  type WebCodecsSyncState,
-} from './core/webcodecs_player';
+// Types only: the player (and mediabunny with it) is dynamically imported in
+// switchVideoRenderer, so displays that never hit tier 2 never download it.
+import type { WebCodecsPlayer, WebCodecsSyncState } from './core/webcodecs_player';
+import { isWebCodecsSupported } from './core/webcodecs_support';
 
 /** Bridge injected by the Android TV app's WebView (apps/android-tv/.../MainActivity.kt,
  * AndroidTVBridge) when running there -- highest-priority renderer: native ExoPlayer
@@ -455,6 +453,8 @@ async function switchVideoRenderer(url: string, fit: 'contain' | 'cover', onRead
 
   if (!isWebCodecsSupported()) return;
   try {
+    const { WebCodecsPlayer, canPlayWithWebCodecs } = await import('./core/webcodecs_player');
+    if (token !== rendererSwitchToken) return;
     const playable = await canPlayWithWebCodecs(url);
     if (token !== rendererSwitchToken || !playable) return;
 

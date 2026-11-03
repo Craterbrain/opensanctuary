@@ -705,6 +705,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match tokio::net::TcpListener::from_std(std_listener) {
                 Ok(listener) => {
                     // with_connect_info: same reason as the HTTPS listener above.
+                    // TCP_NODELAY, as axum-server already sets on the HTTPS listener: without it
+                    // Nagle holds each small WS frame back for the client's delayed ACK, ~30ms
+                    // on every command round trip (go live, next slide, ...).
+                    use axum::serve::ListenerExt;
+                    let listener = listener.tap_io(|tcp| {
+                        if let Err(e) = tcp.set_nodelay(true) {
+                            tracing::warn!("Failed to set TCP_NODELAY on console connection: {}", e);
+                        }
+                    });
                     if let Err(e) = axum::serve(
                         listener,
                         router.into_make_service_with_connect_info::<SocketAddr>(),

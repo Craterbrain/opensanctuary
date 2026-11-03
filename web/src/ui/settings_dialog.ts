@@ -16,7 +16,7 @@ import {
   DISPLAY_CONTENT_SOURCES,
   createDefaultDisplayOutput,
 } from "../core/display_config.ts";
-import { debounce, showToast } from "../core/ui_utils.ts";
+import { debounce, fadeIn, showToast } from "../core/ui_utils.ts";
 import { hostTokenHeader } from "../core/host_session.ts";
 import { BACKGROUND_PATTERNS, patternAutoPrerender, patternFrameCount, patternLoopSec, patternPrerenderable, patternRevision } from "../core/background_patterns.ts";
 import { ensurePatternClip, modeFor, parsePatternModes, type PatternMode } from "../core/pattern_render.ts";
@@ -136,6 +136,8 @@ export function renderSettingsSidebar() {
       activeSettingsCategory = cat.id;
       renderSettingsSidebar();
       renderSettingsContent();
+      // Some panels (Plugins) fill in from the server a beat later; ease the switch over it.
+      fadeIn(document.getElementById('settings-content'), { duration: 140, rise: 3 });
     });
     list.appendChild(btn);
   });

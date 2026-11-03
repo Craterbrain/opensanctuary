@@ -1868,3 +1868,107 @@ fn test_undo_redo_replay_keeps_element_ids_and_the_unsaved_flag() {
     assert_eq!(restarted.snapshot().schedule.items, engine.snapshot().schedule.items);
     assert_eq!(restarted.snapshot().schedule.is_modified, engine.snapshot().schedule.is_modified);
 }
+
+fn live_slide(engine: &ShowEngine) -> usize {
+    engine.snapshot().state.live_slide_index
+}
+
+#[test]
+fn test_hidden_slides_are_skipped_and_blocked() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    engine.execute_command(ShowCommand::AddToSchedule(simple_item("a", "A", &["a0", "a1", "a2", "a3"])));
+    engine.execute_command(ShowCommand::AddToSchedule(simple_item("b", "B", &["b0", "b1"])));
+
+    // Hiding is a stored property of the slide; out-of-range targets are ignored.
+    engine.execute_command(ShowCommand::SetSlideHidden { item_index: 0, slide_index: 1, hidden: true });
+    engine.execute_command(ShowCommand::SetSlideHidden { item_index: 0, slide_index: 2, hidden: true });
+    let before = engine.snapshot().schedule.items[0].clone();
+    engine.execute_command(ShowCommand::SetSlideHidden { item_index: 0, slide_index: 99, hidden: true });
+    engine.execute_command(ShowCommand::SetSlideHidden { item_index: 9, slide_index: 0, hidden: true });
+    assert_eq!(engine.snapshot().schedule.items[0], before);
+    assert!(engine.snapshot().schedule.items[0].slides[1].hidden);
+    assert!(!engine.snapshot().schedule.items[0].slides[0].hidden);
+
+    // Next steps over hidden slides 1 and 2; Prev comes back the same way.
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(0), slide_index: None });
+    assert_eq!(live_slide(&engine), 0);
+    engine.execute_command(ShowCommand::NextSlide);
+    assert_eq!(live_slide(&engine), 3);
+    engine.execute_command(ShowCommand::PrevSlide);
+    assert_eq!(live_slide(&engine), 0);
+
+    // Jumping straight to a hidden slide is refused, and nothing changes.
+    engine.execute_command(ShowCommand::JumpSlide(1));
+    assert_eq!(live_slide(&engine), 0);
+    engine.execute_command(ShowCommand::JumpSlide(3));
+    assert_eq!(live_slide(&engine), 3);
+
+    // An explicit GoLive on a hidden slide is refused; the live item and slide stay put.
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(1), slide_index: Some(0) });
+    assert_eq!(engine.snapshot().state.live_item.as_ref().unwrap().id, "b");
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(0), slide_index: Some(2) });
+    assert_eq!(engine.snapshot().state.live_item.as_ref().unwrap().id, "b", "hidden slide must not go live");
+
+    // Hiding the first slide: a default GoLive opens on the first visible slide instead.
+    engine.execute_command(ShowCommand::SetSlideHidden { item_index: 0, slide_index: 0, hidden: true });
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(0), slide_index: None });
+    assert_eq!(live_slide(&engine), 3);
+
+    // Staging a hidden slide is refused too.
+    engine.execute_command(ShowCommand::StageItem { item_index: Some(0), slide_index: Some(1) });
+    assert!(engine.snapshot().state.staged_item.as_ref().map_or(true, |i| i.id != "a" || engine.snapshot().state.staged_slide_index != 1));
+
+    // Unhiding makes the slide reachable again.
+    engine.execute_command(ShowCommand::SetSlideHidden { item_index: 0, slide_index: 1, hidden: false });
+    engine.execute_command(ShowCommand::JumpSlide(1));
+    assert_eq!(live_slide(&engine), 1);
+}
+
+#[test]
+fn test_hidden_slides_across_items() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    engine.execute_command(ShowCommand::AddToSchedule(simple_item("a", "A", &["a0", "a1"])));
+    engine.execute_command(ShowCommand::AddToSchedule(simple_item("b", "B", &["b0", "b1"])));
+    engine.execute_command(ShowCommand::AddToSchedule(simple_item("c", "C", &["c0", "c1", "c2"])));
+
+    // B is fully hidden: Next from the end of A lands on C's first visible slide (C0 hidden).
+    engine.execute_command(ShowCommand::SetSlideHidden { item_index: 1, slide_index: 0, hidden: true });
+    engine.execute_command(ShowCommand::SetSlideHidden { item_index: 1, slide_index: 1, hidden: true });
+    engine.execute_command(ShowCommand::SetSlideHidden { item_index: 2, slide_index: 0, hidden: true });
+
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(0), slide_index: Some(1) });
+    engine.execute_command(ShowCommand::NextSlide);
+    let snap = engine.snapshot();
+    assert_eq!(snap.state.live_item.as_ref().unwrap().id, "c");
+    assert_eq!(snap.state.live_slide_index, 1);
+
+    // Prev from C's first visible slide goes back past hidden B to A's last slide.
+    engine.execute_command(ShowCommand::PrevSlide);
+    let snap = engine.snapshot();
+    assert_eq!(snap.state.live_item.as_ref().unwrap().id, "a");
+    assert_eq!(snap.state.live_slide_index, 1);
+
+    // A fully hidden item can't be sent live at all.
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(1), slide_index: None });
+    assert_eq!(engine.snapshot().state.live_item.as_ref().unwrap().id, "a");
+
+    // NextItem skips it too, and opens C on its first visible slide.
+    engine.execute_command(ShowCommand::NextItem);
+    let snap = engine.snapshot();
+    assert_eq!(snap.state.live_item.as_ref().unwrap().id, "c");
+    assert_eq!(snap.state.live_slide_index, 1);
+}
+
+#[test]
+fn test_hidden_flag_serde_is_backward_compatible() {
+    // Files written before the field existed load as visible slides ...
+    let slide: Slide = serde_json::from_str(r#"{"text":"x","header":null,"label":null,"background":null}"#).unwrap();
+    assert!(!slide.hidden);
+    // ... a visible slide doesn't write the field (existing files and bundles stay byte-identical) ...
+    assert!(!serde_json::to_string(&slide).unwrap().contains("hidden"));
+    // ... and a hidden one round-trips.
+    let hidden = Slide { hidden: true, ..slide };
+    let json = serde_json::to_string(&hidden).unwrap();
+    assert!(json.contains("\"hidden\":true"));
+    assert!(serde_json::from_str::<Slide>(&json).unwrap().hidden);
+}

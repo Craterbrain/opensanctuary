@@ -11,6 +11,7 @@ import { refreshPluginHints } from "./core/plugin_hints.ts";
 import { startEmojiIcons } from "./core/emoji_icons.ts";
 import { previousSessionHung, markPluginsStarting, watchConsoleHealth, showSafeModeBanner } from "./core/plugin_guard.ts";
 import { openSettingsAt } from "./ui/settings_dialog.ts";
+import { fadeIn } from "./core/ui_utils.ts";
 import { initNotificationBell, startNotificationFeed } from "./ui/notification_center.ts";
 
 // 0. Swap emoji for the themed SVG icons (static markup now, rendered content as it appears)
@@ -48,6 +49,9 @@ clock.synchronize(5).then(async () => {
     await import("./app_core.ts");
     await import("./app_ui.ts");
     window.__APP_READY__ = true;
+    // Reveal the shell index.html held back (html.app-booting in style.css), populated.
+    document.documentElement.classList.remove("app-booting");
+    fadeIn(document.getElementById("app-container"), { duration: 200, rise: 0 });
 
     // 4. Load only the web plugins the operator has approved (Settings > Plugins). The
     //    server also refuses to serve any other file under /plugins/.

@@ -26,6 +26,7 @@ mod network;
 mod packaging;
 mod console_lock;
 mod pd_songs;
+mod read_bench;
 mod plugins;
 mod restart;
 mod storage;

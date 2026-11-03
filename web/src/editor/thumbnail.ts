@@ -11,6 +11,7 @@ export interface ThumbnailCallbacks {
   onAddSlide: () => void;
   onUpdateSlideTag?: (index: number, tag: string | null) => void;
   onUpdateSlideDuration?: (index: number, durationSeconds: number | null) => void;
+  onToggleSlideHidden?: (index: number, hidden: boolean) => void;
 }
 
 export class FilmstripSidebar {
@@ -252,6 +253,7 @@ export class FilmstripSidebar {
   private createSlideCard(slide: EditorSlide, idx: number): HTMLElement {
     const card = document.createElement('div');
     card.className = `editor-filmstrip-card studio-filmstrip-card ${idx === this.activeIndex ? 'active' : ''}`;
+    if (slide.hidden) card.classList.add('slide-hidden');
     card.dataset.index = `${idx}`;
     card.draggable = true;
 
@@ -330,6 +332,22 @@ export class FilmstripSidebar {
     actionsWrap.style.gap = '4px';
     actionsWrap.style.flexShrink = '0';
 
+    // Hide/show: a hidden slide stays in the presentation but is skipped when presenting.
+    const hideBtn = document.createElement('button');
+    hideBtn.className = 'studio-btn-mini fs-slide-hide-btn';
+    hideBtn.title = slide.hidden ? 'Hidden slide (skipped when presenting). Click to show it again.' : 'Hide Slide (keep it, but skip it when presenting)';
+    hideBtn.textContent = slide.hidden ? '🚫' : '👁';
+    hideBtn.style.fontSize = '10px';
+    hideBtn.style.padding = '1px 3px';
+    hideBtn.style.background = 'transparent';
+    hideBtn.style.border = 'none';
+    hideBtn.style.color = 'var(--os-text-secondary)';
+    hideBtn.style.cursor = 'pointer';
+    hideBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.callbacks.onToggleSlideHidden?.(idx, !slide.hidden);
+    });
+
     const dupBtn = document.createElement('button');
     dupBtn.className = 'studio-btn-mini';
     dupBtn.title = 'Duplicate Slide';
@@ -360,6 +378,7 @@ export class FilmstripSidebar {
       this.callbacks.onDeleteSlide(idx);
     });
 
+    actionsWrap.appendChild(hideBtn);
     actionsWrap.appendChild(dupBtn);
     actionsWrap.appendChild(delBtn);
     cardHeader.appendChild(actionsWrap);

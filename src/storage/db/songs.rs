@@ -74,7 +74,8 @@ impl Database {
             all_songs.extend(cr_songs);
         }
 
-        all_songs.sort_by_key(|a| a.title.to_lowercase());
+        // Cached key: lowercase each title once, not twice per comparison.
+        all_songs.sort_by_cached_key(|a| a.title.to_lowercase());
         all_songs.dedup_by(|a, b| a.id == b.id);
         Ok(all_songs)
     }

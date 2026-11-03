@@ -21,6 +21,7 @@ import {
   AudioBufferSink,
 } from 'mediabunny';
 import { clock } from './timesync';
+import { isWebCodecsSupported } from './webcodecs_support';
 
 /** Matches video_sync.ts's tier-3 hard-seek threshold, for behavioral parity. */
 const HARD_SEEK_THRESHOLD_SEC = 0.5;
@@ -30,9 +31,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function isWebCodecsSupported(): boolean {
-  return typeof window.VideoDecoder !== 'undefined' && typeof window.AudioDecoder !== 'undefined';
-}
+export { isWebCodecsSupported };
 
 /** Mirrors TimecodeSyncEngine's masterState shape, pre-resolved into the
  * anchor math it already computes in calculateTargetTime -- the caller does

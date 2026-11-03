@@ -200,3 +200,42 @@ export function errorMessage(e: unknown): string {
   if (e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string') return (e as { message: string }).message;
   return String(e);
 }
+
+// --- Latency-hiding motion ---
+// Short entrances for the few interactions that can pass ~100ms on slow hardware (a library
+// click waiting on the server to stage the item, the slide editor's first build). Web
+// Animations API: opacity/transform only, so it stays on the compositor, no class juggling
+// or forced reflow, and nothing at all under prefers-reduced-motion.
+
+const reducedMotion = typeof matchMedia !== 'undefined' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+
+/** Fades `el` in (from `fromOpacity`, nudged up a few px). A no-op under reduced motion. */
+export function fadeIn(el: Element | null, opts: { fromOpacity?: number; duration?: number; rise?: number } = {}): void {
+  if (!el || reducedMotion?.matches || typeof (el as HTMLElement).animate !== 'function') return;
+  const rise = opts.rise ?? 4;
+  (el as HTMLElement).animate(
+    [{ opacity: opts.fromOpacity ?? 0, transform: `translateY(${rise}px)` }, { opacity: 1, transform: 'none' }],
+    { duration: opts.duration ?? 160, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' }
+  );
+}
+
+const pendingTimers = new WeakMap<Element, ReturnType<typeof setTimeout>>();
+
+/** Dims `el` at once (CSS `.is-pending`) to acknowledge a click whose result comes back
+ * from the server; `clearPending` undoes it, or it lifts by itself after `maxMs`. */
+export function markPending(el: Element | null, maxMs = 800): void {
+  if (!el) return;
+  el.classList.add('is-pending');
+  const prev = pendingTimers.get(el);
+  if (prev) clearTimeout(prev);
+  pendingTimers.set(el, setTimeout(() => clearPending(el), maxMs));
+}
+
+/** Lifts `markPending`; true if it was pending. */
+export function clearPending(el: Element | null): boolean {
+  if (!el || !el.classList.contains('is-pending')) return false;
+  el.classList.remove('is-pending');
+  const t = pendingTimers.get(el);
+  if (t) { clearTimeout(t); pendingTimers.delete(el); }
+  return true;
+}

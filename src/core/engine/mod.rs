@@ -141,6 +141,7 @@ impl ShowEngine {
             ShowCommand::SetItemTheme { .. }
             | ShowCommand::SetSlideBackground { .. }
             | ShowCommand::SetSlideDuration { .. }
+            | ShowCommand::SetSlideHidden { .. }
             | ShowCommand::SetPresentationDefaultDuration { .. }
             | ShowCommand::SetPresentationLoop { .. }
             | ShowCommand::SetGlobalTheme { .. } => themes::plan_theme_events(&state, &schedule, cmd),
@@ -238,6 +239,7 @@ impl ShowEngine {
             | ShowEvent::ScheduleItemThemeSet { .. }
             | ShowEvent::SlideBackgroundSet { .. }
             | ShowEvent::SlideDurationSet { .. }
+            | ShowEvent::SlideHiddenSet { .. }
             | ShowEvent::PresentationDefaultDurationSet { .. }
             | ShowEvent::PresentationLoopSet { .. }
             | ShowEvent::GlobalThemeSet { .. } => themes::apply_theme_event(state, schedule, event),

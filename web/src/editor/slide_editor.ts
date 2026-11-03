@@ -367,7 +367,8 @@ export class SlideEditor {
       onDeleteSlide: (idx) => this.deleteSlide(idx),
       onAddSlide: () => this.addNewSlide(),
       onUpdateSlideTag: (idx, tag) => this.setSlideTag(idx, tag),
-      onUpdateSlideDuration: (idx, duration) => this.setSlideDuration(idx, duration)
+      onUpdateSlideDuration: (idx, duration) => this.setSlideDuration(idx, duration),
+      onToggleSlideHidden: (idx, hidden) => this.setSlideHidden(idx, hidden)
     }, this.mode);
 
     // 2b. Center Canvas Viewport
@@ -574,6 +575,16 @@ export class SlideEditor {
     if (!slide) return;
     this.history.pushState(this.getActiveSlide());
     slide.duration_seconds = durationSeconds && durationSeconds > 0 ? durationSeconds : undefined;
+    this.filmstrip.setSlides(this.slides, this.activeIndex);
+    this.syncUIState();
+  }
+
+  public setSlideHidden(index: number, hidden: boolean): void {
+    if (index < 0 || index >= this.slides.length) return;
+    const slide = this.slides[index];
+    if (!slide) return;
+    this.history.pushState(this.getActiveSlide());
+    slide.hidden = hidden ? true : undefined;
     this.filmstrip.setSlides(this.slides, this.activeIndex);
     this.syncUIState();
   }

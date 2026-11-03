@@ -379,6 +379,10 @@ pub struct Slide {
     /// or pinned bottom instead of it always being baked into the verse body.
     #[serde(default)]
     pub reference_label: Option<String>,
+    /// A hidden slide stays in the presentation (and the editor) but is never shown:
+    /// Next/Prev, jumps and auto-advance step over it and it can't be sent live or staged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 impl Default for Slide {
@@ -398,6 +402,7 @@ impl Default for Slide {
             slide_document_version: 0,
             duration_seconds: None,
             reference_label: None,
+            hidden: false,
         }
     }
 }
@@ -426,6 +431,7 @@ impl Slide {
             slide_document_version: 0,
             duration_seconds: None,
             reference_label: None,
+            hidden: false,
         }
     }
 

@@ -27,6 +27,8 @@ export interface Slide {
   slide_document_version?: number;
   duration_seconds?: number | null;
   reference_label?: string | null;
+  /** A hidden slide stays in the presentation but is never shown live (Next/Prev, jumps and auto-advance step over it). */
+  hidden?: boolean;
   /** A footer line some sources attach to a slide (shown bottom right on the output); not part of the stored slide. */
   footer?: string | null;
 }
