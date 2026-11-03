@@ -441,6 +441,25 @@ function updateSlideDurationMenuVisibility(item: ScheduleItem | LibraryItem) {
   if (btn) btn.style.display = (item && item.item_type === 'presentation') ? '' : 'none';
 }
 
+/** A hidden slide stays in the lists but is dimmed and can't be staged or sent live (the engine refuses it too). */
+function markHiddenSlideCard(el: HTMLElement, slide: { hidden?: boolean | null } | null | undefined): boolean {
+  const hidden = !!(slide && slide.hidden);
+  el.classList.toggle('slide-hidden', hidden);
+  if (hidden) el.title = 'Hidden slide: it is skipped when presenting. Right-click it to show it again.';
+  return hidden;
+}
+
+function warnHiddenSlide() {
+  showToast('That slide is hidden. Right-click it and choose "Show Slide" to use it.', 'warning');
+}
+
+/** Points the slide context menu's hide/show entry at the slide it was opened on. */
+function updateSlideHideMenuLabel() {
+  const btn = document.getElementById('ctx-slide-hide');
+  const slide = currentContextMenuTarget && currentContextMenuTarget.slide;
+  if (btn) btn.textContent = slide && slide.hidden ? '👁️ Show Slide' : '🚫 Hide Slide';
+}
+
 // ============================================================================
 // MODAL MANAGEMENT & DIALOG RESET SYSTEM
 // ============================================================================
@@ -1939,7 +1958,7 @@ export function renderSchedule(schedule: Schedule) {
           activeSelectedSlide.slideIndex === sIdx);
 
         const childEl = document.createElement('div');
-        childEl.className = `schedule-child-item ${isCurrentLiveSlide ? 'live-child' : ''} ${isSelectedSlide ? 'selected-child-slide' : ''}`;
+        childEl.className = `schedule-child-item ${isCurrentLiveSlide ? 'live-child' : ''} ${isSelectedSlide ? 'selected-child-slide' : ''} ${slide && slide.hidden ? 'slide-hidden' : ''}`;
         childEl.dataset.slideIndex = String(sIdx);
         childEl.dataset.itemIndex = String(idx);
         childEl.setAttribute('data-schedule-key', `slide-${item.id}-${sIdx}`);
@@ -1966,12 +1985,14 @@ export function renderSchedule(schedule: Schedule) {
           <span style="font-weight: 700; color: ${badgeColor}; width: 28px; font-size: 11px;">${escapeHtml(badge)}</span>
           <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;">${escapeUserHtml(firstLine)}</span>
           ${slideMediaBadge}
+          ${slide && slide.hidden ? '<span class="slide-hidden-badge" title="Hidden slide: skipped when presenting">🚫</span>' : ''}
         `;
 
         childEl.addEventListener('click', (e) => {
           if ((e.target as Element | null)?.closest('.child-slide-drag-handle')) return;
           if (childEl.classList.contains('dragging')) return;
           e.stopPropagation();
+          if (slide && slide.hidden) { warnHiddenSlide(); return; }
           lastActiveDeckContext = 'schedule';
           setActiveSelectedSlide({ itemIndex: idx, slideIndex: sIdx, context: 'schedule' });
           clearAdhocPreview();
@@ -1981,6 +2002,7 @@ export function renderSchedule(schedule: Schedule) {
           if ((e.target as Element | null)?.closest('.child-slide-drag-handle')) return;
           if (childEl.classList.contains('dragging')) return;
           e.stopPropagation();
+          if (slide && slide.hidden) { warnHiddenSlide(); return; }
           lastActiveDeckContext = 'schedule';
           setActiveSelectedSlide({ itemIndex: idx, slideIndex: sIdx, context: 'schedule' });
           sendCommand({ GoLive: { item_index: idx, slide_index: sIdx } });
@@ -2131,6 +2153,7 @@ export function renderSchedule(schedule: Schedule) {
           e.stopPropagation();
           currentContextMenuTarget = { type: 'slide', itemIndex: idx, slideIndex: sIdx, item: item, slide: slide };
           updateSlideDurationMenuVisibility(item);
+          updateSlideHideMenuLabel();
           showContextMenu(document.getElementById('slide-context-menu'), e.clientX, e.clientY);
         });
 
@@ -2801,10 +2824,13 @@ function renderPreviewDeck(state: ShowState) {
       })
     );
 
+    markHiddenSlideCard(cardEl, slide);
+
     // Single click stages slide
     cardEl.addEventListener('click', (e) => {
       if ((e.target as Element | null)?.closest('.preview-card-drag-handle')) return;
       if (cardEl.classList.contains('dragging')) return;
+      if (slide && slide.hidden) { warnHiddenSlide(); return; }
       lastActiveDeckContext = 'preview';
       state.staged_slide_index = sIdx;
       previewSlideMatrixEl.querySelectorAll('.slide-card').forEach((c, idx) => {
@@ -2827,6 +2853,7 @@ function renderPreviewDeck(state: ShowState) {
     cardEl.addEventListener('dblclick', (e) => {
       if ((e.target as Element | null)?.closest('.preview-card-drag-handle')) return;
       if (cardEl.classList.contains('dragging')) return;
+      if (slide && slide.hidden) { warnHiddenSlide(); return; }
       const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
       const itemIdx = (sched && sched.items && stagedItem) ? sched.items.findIndex((it) => it.id === stagedItem.id) : -1;
       sendCommand({ GoLive: { item_index: itemIdx >= 0 ? itemIdx : null, slide_index: sIdx } });
@@ -2846,6 +2873,7 @@ function renderPreviewDeck(state: ShowState) {
       });
       currentContextMenuTarget = { type: 'slide', itemIndex: itemIdx >= 0 ? itemIdx : null, slideIndex: sIdx, item: stagedItem, slide: slide };
       updateSlideDurationMenuVisibility(stagedItem);
+      updateSlideHideMenuLabel();
       showContextMenu(document.getElementById('slide-context-menu'), e.clientX, e.clientY);
     });
 
@@ -3034,7 +3062,10 @@ function renderLiveDeck(state: ShowState) {
           showDragHandle: false
         });
 
+    markHiddenSlideCard(cardEl, slide);
+
     cardEl.addEventListener('click', () => {
+      if (slide && slide.hidden) { warnHiddenSlide(); return; }
       lastActiveDeckContext = 'live';
       const sched = currentSnapshot && currentSnapshot.schedule ? currentSnapshot.schedule : null;
       const itemIdx = (sched && sched.items && liveItem) ? sched.items.findIndex((it) => it.id === liveItem.id) : -1;
@@ -3052,6 +3083,7 @@ function renderLiveDeck(state: ShowState) {
       setActiveSelectedSlide({ itemIndex: itemIdx >= 0 ? itemIdx : 0, slideIndex: sIdx, context: 'live' });
       currentContextMenuTarget = { type: 'slide', itemIndex: itemIdx >= 0 ? itemIdx : null, slideIndex: sIdx, item: liveItem, slide: slide };
       updateSlideDurationMenuVisibility(liveItem);
+      updateSlideHideMenuLabel();
       showContextMenu(document.getElementById('slide-context-menu'), e.clientX, e.clientY);
     });
 
@@ -3450,7 +3482,9 @@ function ensureItemInSchedule(item: ScheduleItem): number {
 
 // 2. Slide Context Menu Handlers
 on('ctx-slide-golive', 'click', () => {
-  if (currentContextMenuTarget) {
+  if (currentContextMenuTarget && currentContextMenuTarget.slide && currentContextMenuTarget.slide.hidden) {
+    warnHiddenSlide();
+  } else if (currentContextMenuTarget) {
     if (currentContextMenuTarget.itemIndex !== null && currentContextMenuTarget.itemIndex !== undefined) {
       sendCommand({ GoLive: { item_index: currentContextMenuTarget.itemIndex, slide_index: currentContextMenuTarget.slideIndex } });
     } else if (currentContextMenuTarget.slideIndex !== null && currentContextMenuTarget.slideIndex !== undefined) {
@@ -3460,7 +3494,9 @@ on('ctx-slide-golive', 'click', () => {
   hideAllContextMenus();
 });
 on('ctx-slide-stage', 'click', () => {
-  if (currentContextMenuTarget) {
+  if (currentContextMenuTarget && currentContextMenuTarget.slide && currentContextMenuTarget.slide.hidden) {
+    warnHiddenSlide();
+  } else if (currentContextMenuTarget) {
     clearAdhocPreview();
     sendCommand({ StageItem: { item_index: currentContextMenuTarget.itemIndex, slide_index: currentContextMenuTarget.slideIndex } });
   }
@@ -3527,6 +3563,26 @@ on('ctx-slide-image', 'click', () => {
         }
       }
     });
+  }
+  hideAllContextMenus();
+});
+on('ctx-slide-hide', 'click', () => {
+  if (currentContextMenuTarget) {
+    const target = currentContextMenuTarget;
+    let itemIdx = target.itemIndex;
+    const playPos = target.slideIndex;
+    if ((itemIdx === null || itemIdx === undefined) && target.item) {
+      itemIdx = ensureItemInSchedule(target.item);
+    }
+    if (itemIdx !== null && itemIdx !== undefined && itemIdx >= 0 && playPos !== undefined && playPos !== null) {
+      // The cards list play positions (an arrangement can repeat or reorder slides); hiding is a
+      // property of the underlying slide.
+      const arr = target.item ? effectiveArrangement(target.item) : [];
+      const sourceIdx = arr[playPos] ? arr[playPos].source_slide_index : playPos;
+      const hidden = !(target.slide && target.slide.hidden);
+      sendCommand({ SetSlideHidden: { item_index: itemIdx, slide_index: sourceIdx, hidden } });
+      showToast(hidden ? '✓ Slide hidden. It is skipped when presenting.' : '✓ Slide shown again', 'success');
+    }
   }
   hideAllContextMenus();
 });

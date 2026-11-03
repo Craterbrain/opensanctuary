@@ -238,6 +238,8 @@ export interface EditorSlide {
   /** Scripture verse reference (e.g. "John 3:16"), kept separate from `text` so a
    * Scripture theme's reference_position can render it inline/top/bottom. */
   reference_label?: string;
+  /** Hidden slides stay in the presentation but are never shown live. */
+  hidden?: boolean;
 }
 
 /**

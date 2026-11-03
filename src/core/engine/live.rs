@@ -151,15 +151,54 @@ fn update_section_jump_cursor(state: &mut ShowState) {
     }
 }
 
+/// Whether the slide at an arrangement play position is hidden (never shown live).
+fn is_hidden_at(item: &ScheduleItem, play_position: usize) -> bool {
+    resolve_slide_at(item, play_position).is_some_and(|s| s.hidden)
+}
+
+/// The first non-hidden play position in `item` (at or after `from`), or `None` when every
+/// slide from there on is hidden.
+fn first_visible_from(item: &ScheduleItem, from: usize) -> Option<usize> {
+    (from..effective_arrangement(item).len()).find(|&i| !is_hidden_at(item, i))
+}
+
+/// The last non-hidden play position in `item`.
+fn last_visible(item: &ScheduleItem) -> Option<usize> {
+    (0..effective_arrangement(item).len()).rev().find(|&i| !is_hidden_at(item, i))
+}
+
+/// The nearest non-hidden play position before `pos`.
+fn prev_visible_before(item: &ScheduleItem, pos: usize) -> Option<usize> {
+    (0..pos.min(effective_arrangement(item).len())).rev().find(|&i| !is_hidden_at(item, i))
+}
+
+/// An item with slides, all of them hidden, has nothing to show. An item with no slides at
+/// all (media, for instance) is not "hidden", it just has no slide to hide.
+fn has_showable_content(item: &ScheduleItem) -> bool {
+    effective_arrangement(item).is_empty() || first_visible_from(item, 0).is_some()
+}
+
+/// The slide to open `item` on when `requested` is the wanted play position. An explicit
+/// request for a hidden slide is refused (`None`), while a default request (`explicit ==
+/// false`) moves on to the first visible slide, and is refused only when none exists.
+fn visible_start(item: &ScheduleItem, requested: usize, explicit: bool) -> Option<usize> {
+    if !is_hidden_at(item, requested) {
+        return Some(requested);
+    }
+    if explicit { None } else { first_visible_from(item, 0) }
+}
+
 /// The nearest schedule index before (`forward == false`) or after `from`
-/// that isn't a section header. Headers carry no slides, so landing on one
-/// while stepping through the service would put an empty item on the live
-/// output -- Next/Prev navigation steps over them instead.
+/// that isn't a section header and has something to show. Headers carry no
+/// slides, so landing on one while stepping through the service would put an
+/// empty item on the live output -- Next/Prev navigation steps over them
+/// instead. An item whose slides are all hidden is stepped over the same way.
 fn adjacent_content_index(schedule: &Schedule, from: usize, forward: bool) -> Option<usize> {
+    let usable = |i: &usize| !schedule.items[*i].is_section_header && has_showable_content(&schedule.items[*i]);
     if forward {
-        (from + 1..schedule.items.len()).find(|&i| !schedule.items[i].is_section_header)
+        (from + 1..schedule.items.len()).find(usable)
     } else {
-        (0..from.min(schedule.items.len())).rev().find(|&i| !schedule.items[i].is_section_header)
+        (0..from.min(schedule.items.len())).rev().find(usable)
     }
 }
 
@@ -196,32 +235,53 @@ pub(super) fn plan_live_events(state: &ShowState, schedule: &Schedule, cmd: &Sho
             let slide_idx = slide_index.unwrap_or_else(|| {
                 if uses_staged_item { state.staged_slide_index } else { 0 }
             });
+            // A hidden slide can't be sent live: refuse an explicit request for one, and
+            // move a default request on to the first visible slide.
+            let slide_idx = match &target_item {
+                Some(item) => match visible_start(item, slide_idx, slide_index.is_some()) {
+                    Some(i) => i,
+                    None => return events,
+                },
+                None => slide_idx,
+            };
             events.push(ShowEvent::ItemWentLive {
                 item: target_item,
                 slide_index: slide_idx,
             });
         }
         ShowCommand::StageItem { item_index, slide_index } => {
-            let slide_idx = slide_index.unwrap_or(0);
+            let explicit = slide_index.is_some();
+            let requested = slide_index.unwrap_or(0);
+            // Same rule as GoLive: a hidden slide can't be staged either.
+            let staged_start = |item: &Option<ScheduleItem>| match item {
+                Some(item) => visible_start(item, requested, explicit),
+                None => Some(requested),
+            };
             match item_index {
                 Some(idx) => {
                     let target_item = schedule.items.get(*idx).cloned();
-                    events.push(ShowEvent::ItemStaged {
-                        item: target_item,
-                        slide_index: slide_idx,
-                    });
-                }
-                None => {
-                    if state.staged_item.is_some() {
-                        events.push(ShowEvent::StagedSlideChanged {
-                            slide_index: slide_idx,
-                        });
-                    } else if let Some(sel_idx) = state.selected_item_index {
-                        let target_item = schedule.items.get(sel_idx).cloned();
+                    if let Some(slide_idx) = staged_start(&target_item) {
                         events.push(ShowEvent::ItemStaged {
                             item: target_item,
                             slide_index: slide_idx,
                         });
+                    }
+                }
+                None => {
+                    if state.staged_item.is_some() {
+                        if let Some(slide_idx) = staged_start(&state.staged_item) {
+                            events.push(ShowEvent::StagedSlideChanged {
+                                slide_index: slide_idx,
+                            });
+                        }
+                    } else if let Some(sel_idx) = state.selected_item_index {
+                        let target_item = schedule.items.get(sel_idx).cloned();
+                        if let Some(slide_idx) = staged_start(&target_item) {
+                            events.push(ShowEvent::ItemStaged {
+                                item: target_item,
+                                slide_index: slide_idx,
+                            });
+                        }
                     }
                 }
             }
@@ -234,31 +294,37 @@ pub(super) fn plan_live_events(state: &ShowState, schedule: &Schedule, cmd: &Sho
         }
         ShowCommand::NextSlide => {
             if let Some(ref live) = state.live_item {
-                let live_len = effective_arrangement(live).len();
-                if state.live_slide_index + 1 < live_len {
+                if let Some(next) = first_visible_from(live, state.live_slide_index + 1) {
                     events.push(ShowEvent::LiveSlideChanged {
-                        slide_index: state.live_slide_index + 1,
+                        slide_index: next,
                     });
                 } else if let Some(curr_idx) = state.selected_item_index {
                     // Advance to next schedule item
                     if let Some(next_idx) = adjacent_content_index(schedule, curr_idx, true) {
+                        let next_item = schedule.items.get(next_idx).cloned();
+                        let first = next_item.as_ref().and_then(|i| first_visible_from(i, 0)).unwrap_or(0);
                         events.push(ShowEvent::ItemWentLive {
-                            item: schedule.items.get(next_idx).cloned(),
-                            slide_index: 0,
+                            item: next_item,
+                            slide_index: first,
                         });
                     }
                 }
             }
         }
         ShowCommand::PrevSlide => {
-            if state.live_slide_index > 0 {
+            let prev_in_item = state.live_item.as_ref()
+                .and_then(|live| prev_visible_before(live, state.live_slide_index))
+                // No live item to inspect: keep the plain "one step back" behaviour.
+                .or_else(|| if state.live_item.is_none() { state.live_slide_index.checked_sub(1) } else { None });
+            if let Some(prev) = prev_in_item {
                 events.push(ShowEvent::LiveSlideChanged {
-                    slide_index: state.live_slide_index.saturating_sub(1),
+                    slide_index: prev,
                 });
             } else if let Some(curr_idx) = state.selected_item_index {
                 if let Some(prev_idx) = adjacent_content_index(schedule, curr_idx, false) {
                     if let Some(prev_item) = schedule.items.get(prev_idx).cloned() {
-                        let last_slide = effective_arrangement(&prev_item).len().saturating_sub(1);
+                        let last_slide = last_visible(&prev_item)
+                            .unwrap_or_else(|| effective_arrangement(&prev_item).len().saturating_sub(1));
                         events.push(ShowEvent::ItemWentLive {
                             item: Some(prev_item),
                             slide_index: last_slide,
@@ -270,24 +336,28 @@ pub(super) fn plan_live_events(state: &ShowState, schedule: &Schedule, cmd: &Sho
         ShowCommand::NextItem => {
             let current_idx = state.selected_item_index.unwrap_or(0);
             if let Some(next_idx) = adjacent_content_index(schedule, current_idx, true) {
+                let next_item = schedule.items.get(next_idx).cloned();
+                let first = next_item.as_ref().and_then(|i| first_visible_from(i, 0)).unwrap_or(0);
                 events.push(ShowEvent::ItemWentLive {
-                    item: schedule.items.get(next_idx).cloned(),
-                    slide_index: 0,
+                    item: next_item,
+                    slide_index: first,
                 });
             }
         }
         ShowCommand::PrevItem => {
             let current_idx = state.selected_item_index.unwrap_or(0);
             if let Some(prev_idx) = adjacent_content_index(schedule, current_idx, false) {
+                let prev_item = schedule.items.get(prev_idx).cloned();
+                let first = prev_item.as_ref().and_then(|i| first_visible_from(i, 0)).unwrap_or(0);
                 events.push(ShowEvent::ItemWentLive {
-                    item: schedule.items.get(prev_idx).cloned(),
-                    slide_index: 0,
+                    item: prev_item,
+                    slide_index: first,
                 });
             }
         }
         ShowCommand::JumpSlide(idx) => {
             if let Some(ref live) = state.live_item {
-                if *idx < effective_arrangement(live).len() {
+                if *idx < effective_arrangement(live).len() && !is_hidden_at(live, *idx) {
                     events.push(ShowEvent::LiveSlideChanged {
                         slide_index: *idx,
                     });
@@ -301,6 +371,7 @@ pub(super) fn plan_live_events(state: &ShowState, schedule: &Schedule, cmd: &Sho
                 let matches: Vec<usize> = arr.iter().enumerate()
                     .filter(|(_, e)| e.section_id.to_uppercase().starts_with(&prefix_upper))
                     .map(|(i, _)| i)
+                    .filter(|&i| !is_hidden_at(live, i))
                     .collect();
                 if !matches.is_empty() {
                     // Cycle forward from wherever this letter was last visited

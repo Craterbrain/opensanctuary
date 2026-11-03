@@ -291,7 +291,8 @@ function editExistingItem(item: any, scheduleContext: { itemIndex: number; slide
         background_v2: s.background_v2 ?? undefined,
         transition: s.transition ?? undefined,
         slide_document_version: s.slide_document_version || 2,
-        duration_seconds: s.duration_seconds
+        duration_seconds: s.duration_seconds,
+        hidden: s.hidden || undefined
       };
       base.elements = (s.elements && s.elements.length > 0) ? s.elements : applyArchetypeToSlide(layout, base);
       return base;
@@ -566,12 +567,25 @@ async function saveEditorItem(addToSchedule = false) {
     });
   }
 
+  // Hidden/shown is a slide-level flag the batch edit above doesn't carry, so push any change to
+  // the schedule's own copy of the item too (the REST save below only updates the library).
+  if (editingScheduleContext && currentSnapshot && currentSnapshot.schedule) {
+    const schedItem = currentSnapshot.schedule.items[editingScheduleContext.itemIndex];
+    const schedSlides = (schedItem && schedItem.slides) || [];
+    studioSlides.forEach((s, idx) => {
+      if (idx < schedSlides.length && !!schedSlides[idx]?.hidden !== !!s.hidden) {
+        sendCommand({ SetSlideHidden: { item_index: editingScheduleContext!.itemIndex, slide_index: idx, hidden: !!s.hidden } });
+      }
+    });
+  }
+
   const slides = studioSlides.map((s, idx) => ({
     id: s.id || `${Date.now()}-${idx}`,
     label: s.label || `Slide ${idx + 1}`,
     verse_tag: s.tag || `V${idx + 1}`,
     tag: s.tag || null,
     duration_seconds: s.duration_seconds ?? null,
+    hidden: s.hidden === true,
     text: s.text || '',
     content: s.text || '',
     notes: s.speaker_notes || s.notes || null,

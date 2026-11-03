@@ -92,6 +92,26 @@ export function resolveSlideAt(item: { slides?: Slide[]; arrangement?: Arrangeme
 }
 
 /**
+ * The first play position at or after `from` whose slide isn't hidden, or `null` when every
+ * remaining slide is hidden. Mirrors the engine's rule (hidden slides are never shown live).
+ */
+export function firstVisibleSlideIndex(item: { slides?: Slide[]; arrangement?: ArrangementEntry[] | null } | null | undefined, from: number = 0): number | null {
+    if (!item) return null;
+    const len = effectiveArrangement(item).length;
+    for (let i = Math.max(0, from); i < len; i++) {
+        const slide = resolveSlideAt(item, i);
+        if (!slide || !slide.hidden) return i;
+    }
+    return null;
+}
+
+/** True when an item has something to show: it has no slides at all, or at least one isn't hidden. */
+export function hasShowableSlides(item: { slides?: Slide[]; arrangement?: ArrangementEntry[] | null } | null | undefined): boolean {
+    if (!item) return false;
+    return effectiveArrangement(item).length === 0 || firstVisibleSlideIndex(item, 0) !== null;
+}
+
+/**
  * 7-Tier Background & Theme Resolution Cascade:
  * 1. Arrangement Per-Play Background Override
  * 2. Slide Background Override

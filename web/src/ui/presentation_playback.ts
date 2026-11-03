@@ -8,7 +8,7 @@
 import type { StateSnapshot } from '../core/models.ts';
 import type { ShowCommand } from '../core/models.ts';
 import type { ScheduleItem } from '../core/models.ts';
-import { effectiveArrangement } from '../core/presentation_helpers';
+import { firstVisibleSlideIndex } from '../core/presentation_helpers';
 
 export interface PresentationPlaybackContext {
   getCurrentSnapshot(): StateSnapshot | null;
@@ -80,14 +80,15 @@ function advancePresentationSlide() {
     stopPresentationPlayback();
     return;
   }
-  const slideCount = effectiveArrangement(liveItem).length;
   const curIdx = state.live_slide_index || 0;
-  const nextIdx = curIdx + 1;
-  if (nextIdx < slideCount) {
+  // Hidden slides are skipped, both on the way forward and when looping back to the start.
+  const nextIdx = firstVisibleSlideIndex(liveItem, curIdx + 1);
+  const loopIdx = liveItem.slideshow_loop ? firstVisibleSlideIndex(liveItem, 0) : null;
+  if (nextIdx !== null) {
     ctx!.sendCommand({ JumpSlide: nextIdx });
     schedulePresentationTick();
-  } else if (liveItem.slideshow_loop) {
-    ctx!.sendCommand({ JumpSlide: 0 });
+  } else if (loopIdx !== null) {
+    ctx!.sendCommand({ JumpSlide: loopIdx });
     schedulePresentationTick();
   } else {
     stopPresentationPlayback();

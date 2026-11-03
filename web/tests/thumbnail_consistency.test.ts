@@ -261,4 +261,25 @@ describe('Filmstrip Thumbnail Consistency & Slide Management', () => {
       expect(btn.style.display).not.toBe('none');
     });
   });
+
+  test('hide button shows the slide state and hidden cards are marked', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+
+    const slides: EditorSlide[] = [
+      { id: 'slide-1', text: 'Slide 1', elements: [] },
+      { id: 'slide-2', text: 'Slide 2', hidden: true, elements: [] }
+    ];
+    const filmstrip = new FilmstripSidebar(container, {}, 'presentation');
+    filmstrip.setSlides(slides, 0);
+
+    const hideBtns = container.querySelectorAll<HTMLElement>('.fs-slide-hide-btn');
+    expect(hideBtns.length).toBe(2);
+    const cards = container.querySelectorAll<HTMLElement>('.editor-filmstrip-card');
+    expect(cards[0].classList.contains('slide-hidden')).toBe(false);
+    expect(cards[1].classList.contains('slide-hidden')).toBe(true);
+    expect(hideBtns[0].textContent).toBe('👁');
+    expect(hideBtns[1].textContent).toBe('🚫');
+    expect(hideBtns[1].title).toContain('Hidden slide');
+  });
 });

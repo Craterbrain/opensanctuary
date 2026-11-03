@@ -33,6 +33,17 @@ pub(super) fn plan_theme_events(_state: &ShowState, schedule: &Schedule, cmd: &S
                 }
             }
         }
+        ShowCommand::SetSlideHidden { item_index, slide_index, hidden } => {
+            if let Some(item) = schedule.items.get(*item_index) {
+                if *slide_index < item.slides.len() {
+                    events.push(ShowEvent::SlideHiddenSet {
+                        item_index: *item_index,
+                        slide_index: *slide_index,
+                        hidden: *hidden,
+                    });
+                }
+            }
+        }
         ShowCommand::SetPresentationDefaultDuration { item_index, duration_seconds } => {
             if schedule.items.get(*item_index).is_some() {
                 events.push(ShowEvent::PresentationDefaultDurationSet {
@@ -111,6 +122,15 @@ pub(super) fn apply_theme_event(state: &mut ShowState, schedule: &mut Schedule, 
             if let Some(item) = schedule.items.get_mut(*item_index) {
                 if let Some(slide) = item.slides.get_mut(*slide_index) {
                     slide.duration_seconds = *duration_seconds;
+                    schedule.is_modified = true;
+                }
+                sync_item_in_state(state, schedule, *item_index);
+            }
+        }
+        ShowEvent::SlideHiddenSet { item_index, slide_index, hidden } => {
+            if let Some(item) = schedule.items.get_mut(*item_index) {
+                if let Some(slide) = item.slides.get_mut(*slide_index) {
+                    slide.hidden = *hidden;
                     schedule.is_modified = true;
                 }
                 sync_item_in_state(state, schedule, *item_index);

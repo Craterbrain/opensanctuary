@@ -369,6 +369,11 @@ export function renderSnapshot(snapshot: StateSnapshot) {
         const sc = doc!.createElement('div');
         sc.className = 'slide-card';
         const isCardActive = isCurrentItemLive && (idx === activePlayPos);
+        if (slide.hidden) {
+          // Hidden slides stay in the list so the operator can see them, but can't be used.
+          sc.classList.add('slide-hidden');
+          sc.title = 'Hidden slide';
+        }
         if (isCardActive) {
           sc.classList.add('is-active');
         }
@@ -384,6 +389,7 @@ export function renderSnapshot(snapshot: StateSnapshot) {
         `;
 
         sc.addEventListener('click', () => {
+          if (slide.hidden) return;
           const itemIdx = schedule.items.findIndex((it: ScheduleItem) => it.id === currentItem.id);
           const targetIdx = itemIdx !== -1 ? itemIdx : null;
           sendCommand({ GoLive: { item_index: targetIdx, slide_index: idx } });

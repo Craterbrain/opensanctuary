@@ -93,6 +93,11 @@ pub enum ShowEvent {
         slide_index: usize,
         duration_seconds: Option<f64>,
     },
+    SlideHiddenSet {
+        item_index: usize,
+        slide_index: usize,
+        hidden: bool,
+    },
     PresentationDefaultDurationSet {
         item_index: usize,
         duration_seconds: Option<f64>,

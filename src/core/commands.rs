@@ -46,6 +46,8 @@ pub enum ShowCommand {
     /// override, in seconds. `slide_index` addresses `ScheduleItem.slides` directly
     /// (master-slide index, not a play position).
     SetSlideDuration { item_index: usize, slide_index: usize, duration_seconds: Option<f64> },
+    /// Hide or unhide one slide of an item. A hidden slide is kept but never shown live.
+    SetSlideHidden { item_index: usize, slide_index: usize, hidden: bool },
     /// Sets (or clears, with `None`) the fallback slideshow duration for any slide
     /// in the item without its own `SetSlideDuration` override.
     SetPresentationDefaultDuration { item_index: usize, duration_seconds: Option<f64> },
