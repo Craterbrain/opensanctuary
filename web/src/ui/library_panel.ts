@@ -12,7 +12,7 @@
  * already use, so this stays a one-way dependency (app_core.ts imports from here,
  * never the reverse).
  */
-import { errorMessage } from '../core/ui_utils.ts';
+import { errorMessage, markPending } from '../core/ui_utils.ts';
 import type { ThemeRow } from '../core/models.ts';
 import type { ThemeDefinition } from '../core/presentation_helpers.ts';
 import type { LibrarySlide, ScriptureVerse, LibraryItem, ShowCommand, InstalledBible, StateSnapshot } from '../core/models.ts';
@@ -1367,6 +1367,9 @@ export function selectAndPreviewItem(item: LibraryItem, tabName: string) {
   const itemType = STAGEABLE_TAB_TYPES[tabName];
   if (itemType && item && item.id) {
     ctx.setAdhocPreview(null, '');
+    // The deck changes once the server stages it (~10ms here, ~80ms+ on a slow laptop):
+    // dim the current one now so the click registers at once.
+    markPending(document.getElementById('preview-slide-matrix'));
     ctx.sendCommand({ StageItem: { item_type: itemType, item_id: item.id } });
   } else {
     ctx.setAdhocPreview(item, tabName);

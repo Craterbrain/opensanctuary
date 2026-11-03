@@ -32,7 +32,7 @@ import {
 } from './core/presentation_helpers.ts';
 import { applyBackgroundThumbnail } from './core/pattern_thumbs.ts';
 import { deckModeFor, type DeckName } from './ui/deck_view_mode.ts';
-import { showToast, formatMediaTime, copyToClipboard } from './core/ui_utils.ts';
+import { showToast, formatMediaTime, copyToClipboard, fadeIn, clearPending } from './core/ui_utils.ts';
 export { showToast, formatMediaTime, copyToClipboard };
 import { formatSlideLyricsHtml, applyAutoFitLyrics, renderSlideVisual } from './core/slide_render.ts';
 import { parseDisplayOutputs, serializeDisplayOutputs } from './core/display_config.ts';
@@ -2463,6 +2463,7 @@ if (liveVideoEl) {
 }
 
 let lastRenderedPreviewKey = '';
+let lastRenderedPreviewItemId = '';
 let lastRenderedPreviewOutputKey = '';
 
 // Ad-hoc library preview: viewing a resource that isn't (yet) on the Schedule.
@@ -2688,6 +2689,7 @@ function renderPreviewDeck(state: ShowState) {
   const currentContentKey = `${itemId}|${slideCount}|${slideFingerprint}|${previewStyle}`;
 
   if (lastRenderedPreviewKey === currentContentKey && slideCount > 0) {
+    clearPending(previewSlideMatrixEl);
     const cards = previewSlideMatrixEl.querySelectorAll('.slide-card');
     cards.forEach((card, idx) => {
       card.classList.toggle('active-staged', idx === activeIdx);
@@ -2695,6 +2697,15 @@ function renderPreviewDeck(state: ShowState) {
     return;
   }
   lastRenderedPreviewKey = currentContentKey;
+  // A different item (not an edit to the same one) eases in from the dimmed state.
+  const previewItemChanged = itemId !== lastRenderedPreviewItemId;
+  lastRenderedPreviewItemId = itemId;
+  // (A re-render of the same item -- e.g. the local one a library click triggers before the
+  // server answers -- leaves a pending dim alone; the fast path above lifts it.)
+  if (previewItemChanged && itemId) {
+    clearPending(previewSlideMatrixEl);
+    fadeIn(previewSlideMatrixEl, { fromOpacity: 0.4 });
+  }
 
   // Clean up previous Pragmatic DND listeners on preview cards
   previewDndCleanups.forEach(fn => {

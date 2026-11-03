@@ -3105,6 +3105,19 @@ input.live-media-duration {
   justify-content: center;
 }
 
+/* Entrance: replays every time a modal goes from display:none to shown, so no JS hook per
+   dialog. Opacity/transform only (compositor), short enough to read as a response rather
+   than a wait, and it covers the slide editor's first build on slow machines. */
+@media (prefers-reduced-motion: no-preference) {
+  .modal-backdrop { animation: os-modal-backdrop-in 120ms ease-out; }
+  .modal-backdrop > .modal-dialog { animation: os-modal-dialog-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+}
+@keyframes os-modal-backdrop-in { from { opacity: 0; } }
+@keyframes os-modal-dialog-in { from { opacity: 0; transform: translateY(6px) scale(0.985); } }
+
+/* A click whose result comes back from the server (markPending in core/ui_utils.ts). */
+.is-pending { opacity: 0.55; transition: opacity 90ms ease-out; }
+
 /* Dialog shell: header (title + close) / body / footer (secondary left, actions right). */
 .modal-dialog {
   background: var(--os-bg-panel);
