@@ -195,6 +195,23 @@ body, html {
   font-size: clamp(11.5px, 0.4vw + 8px, 14px);
 }
 
+/* Boot (index.html starts as html.app-booting; main.ts drops it once the app is ready and
+   fades the shell in): no empty panels filling in piece by piece. A slow machine gets a
+   quiet mark after 150ms -- a fast one is ready before it shows -- and a CSS-only failsafe
+   reveals the shell after 4s even if the scripts never get there. */
+html.app-booting #app-container { opacity: 0; animation: os-boot-failsafe 0s linear 4s forwards; }
+html.app-booting body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: url(favicon.svg) center / 72px no-repeat;
+  opacity: 0.25;
+  animation: os-boot-mark-in 300ms ease-out 150ms both;
+  pointer-events: none;
+}
+@keyframes os-boot-failsafe { to { opacity: 1; } }
+@keyframes os-boot-mark-in { from { opacity: 0; } }
+
 #app-container {
   display: flex;
   flex-direction: column;

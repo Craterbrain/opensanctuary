@@ -319,6 +319,9 @@ function prepareBundleMenuItem(tabName: string, item: LibraryItem): void {
   el.textContent = tabName === 'scriptures' && item?.version ? `📦 Save the ${item.version} Bible as OpenSanctuary File...` : '📦 Save as OpenSanctuary File...';
 }
 
+/** Each tab's last `/api/<tab>` response: raw text (to tell an unchanged refetch cheaply) and the parsed items. */
+const libraryTabCache = new Map<string, { text: string; items: LibraryItem[] }>();
+
 export async function loadLibraryTab(tabName?: string, opts: { keepPluginView?: boolean } = {}) {
   if (!ctx) return;
   const lp = ctx;
@@ -354,20 +357,36 @@ export async function loadLibraryTab(tabName?: string, opts: { keepPluginView?: 
   if (normTab === 'scriptures') lp.applyDefaultBibleVersionIfUnset();
   renderCategoryTree(normTab);
 
+  // Stale-while-revalidate: show what this tab held last time at once (the song list is
+  // ~1.5MB of JSON, ~20ms to fetch+parse on a fast machine, far more on a slow one), then
+  // re-render only if the fresh response actually differs. The await below still ends on
+  // fresh data, so callers that reload after an edit see the edit.
+  const cached = libraryTabCache.get(normTab);
+  if (cached) {
+    activeLibraryItems = cached.items;
+    filterAndRenderCatalog();
+  }
+
   try {
     const res = await fetch(`/api/${normTab}`);
     if (reqId !== currentLibraryTabRequestId) return;
     if (res.ok) {
-      const data = await res.json();
+      const text = await res.text();
+      if (reqId !== currentLibraryTabRequestId) return;
+      if (cached && cached.text === text) return;
+      const data = JSON.parse(text);
       activeLibraryItems = Array.isArray(data) ? data : [];
+      libraryTabCache.set(normTab, { text, items: activeLibraryItems });
       filterAndRenderCatalog();
     } else {
+      libraryTabCache.delete(normTab);
       activeLibraryItems = [];
       filterAndRenderCatalog();
     }
   } catch (err) {
     if (reqId !== currentLibraryTabRequestId) return;
     console.error(`Error loading ${normTab}:`, err);
+    libraryTabCache.delete(normTab);
     activeLibraryItems = [];
     filterAndRenderCatalog();
   }
@@ -1001,7 +1020,7 @@ export function renderCatalog(items: LibraryItem[], tabName: string, matchedOnli
     }
     selectedCatalogIndex = targetIdx;
     const target = items[targetIdx];
-    if (target) selectAndPreviewItem(target, tabName);
+    if (target && !alreadyPreviewing(target)) selectAndPreviewItem(target, tabName);
   } else if (!matchedOnlineRef) {
     if (resourcePreviewMonitor) {
       resourcePreviewMonitor.innerHTML = '<div class="asset-preview-empty">No items match query</div>';
@@ -1017,6 +1036,9 @@ export function createCatalogTableRow(item: LibraryItem, idx: number, tabName: s
   tr.dataset.index = String(idx);
   tr.tabIndex = 0;
   if (idx === selectedCatalogIndex) tr.classList.add('selected');
+  // Handlers read the row's current position: a cached row is reused at whatever index the
+  // next render puts it (see appendCatalogTableRows).
+  const rowIndex = () => Number(tr.dataset.index);
 
   if (tabName === 'songs') {
     tr.innerHTML = `
@@ -1052,13 +1074,13 @@ export function createCatalogTableRow(item: LibraryItem, idx: number, tabName: s
   }
 
   tr.addEventListener('click', () => {
-    selectedCatalogIndex = idx;
-    highlightCatalogRow(idx);
+    selectedCatalogIndex = rowIndex();
+    highlightCatalogRow(rowIndex());
     selectAndPreviewItem(item, tabName);
   });
 
-  // Register Pragmatic DnD Draggable on Table Row
-  catalogDndCleanups.push(
+  // Register Pragmatic DnD Draggable on Table Row (cleaned up with the row cache, not per render)
+  const dndCleanup = (
     draggable({
       element: tr,
       getInitialData: () => ({
@@ -1077,6 +1099,7 @@ export function createCatalogTableRow(item: LibraryItem, idx: number, tabName: s
       onDrop: () => { tr.style.opacity = '1'; }
     })
   );
+  cacheCatalogRow(item, tabName, tr, dndCleanup);
 
   tr.draggable = true;
   tr.addEventListener('dragstart', (e) => {
@@ -1108,8 +1131,8 @@ export function createCatalogTableRow(item: LibraryItem, idx: number, tabName: s
   tr.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    selectedCatalogIndex = idx;
-    highlightCatalogRow(idx);
+    selectedCatalogIndex = rowIndex();
+    highlightCatalogRow(rowIndex());
     selectAndPreviewItem(item, tabName);
     lp.setContextMenuTarget({ type: 'library-item', tab: tabName, item: item });
     prepareBundleMenuItem(tabName, item);
@@ -1117,6 +1140,7 @@ export function createCatalogTableRow(item: LibraryItem, idx: number, tabName: s
   });
 
   tr.addEventListener('keydown', (e) => {
+    const idx = rowIndex();
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (idx === catalogVisibleCount - 1 && catalogVisibleCount < currentCatalogItems.length) {
@@ -1144,12 +1168,53 @@ export function createCatalogTableRow(item: LibraryItem, idx: number, tabName: s
   return tr;
 }
 
+// Rows for library items, kept across renders: clearing a search (or backspacing over it)
+// puts back the same rows instead of rebuilding 100 of them -- markup, listeners, drag
+// registration and emoji-icon swap. Only real library items are cached (a scripture search
+// builds fresh objects per keystroke), and the cache is dropped whenever the library list
+// itself is replaced, so a re-fetched/edited item always gets a fresh row.
+interface CachedRow { tab: string; tr: HTMLTableRowElement; cleanup: () => void }
+let catalogRowCache = new Map<LibraryItem, CachedRow>();
+let catalogRowCacheSource: LibraryItem[] | null = null;
+let catalogRowCacheMembers = new Set<LibraryItem>();
+
+function syncCatalogRowCache() {
+  if (catalogRowCacheSource === activeLibraryItems) return;
+  catalogRowCache.forEach((r) => { try { r.cleanup(); } catch (_) {} });
+  catalogRowCache = new Map();
+  catalogRowCacheSource = activeLibraryItems;
+  catalogRowCacheMembers = new Set(activeLibraryItems);
+}
+
+function cacheCatalogRow(item: LibraryItem, tabName: string, tr: HTMLTableRowElement, cleanup: () => void) {
+  syncCatalogRowCache();
+  if (catalogRowCacheMembers.has(item)) {
+    const prev = catalogRowCache.get(item);
+    if (prev) { try { prev.cleanup(); } catch (_) {} }
+    catalogRowCache.set(item, { tab: tabName, tr, cleanup });
+  } else {
+    catalogDndCleanups.push(cleanup);
+  }
+}
+
 export function appendCatalogTableRows(items: LibraryItem[], tabName: string, startIndex: number) {
   if (!catalogTableBody) return;
+  syncCatalogRowCache();
+  const frag = document.createDocumentFragment();
   items.forEach((item, i) => {
-    const tr = createCatalogTableRow(item, startIndex + i, tabName);
-    catalogTableBody.appendChild(tr);
+    const idx = startIndex + i;
+    const cached = catalogRowCache.get(item);
+    let tr: HTMLTableRowElement;
+    if (cached && cached.tab === tabName) {
+      tr = cached.tr;
+      tr.dataset.index = String(idx);
+      tr.classList.toggle('selected', idx === selectedCatalogIndex);
+    } else {
+      tr = createCatalogTableRow(item, idx, tabName);
+    }
+    frag.appendChild(tr);
   });
+  catalogTableBody.appendChild(frag);
 }
 
 export function renderCatalogTable(items: LibraryItem[], tabName: string, _matchedOnlineRef: any = null) {
@@ -1354,8 +1419,22 @@ const STAGEABLE_TAB_TYPES: Record<string, string> = {
  * double-click-to-Live and the Go Live button work, exactly as they do for
  * a real staged schedule item. Themes (not a schedulable item type) still
  * use the lightweight ad-hoc preview. */
+/** The library item `selectAndPreviewItem` last showed. Object identity: a library reload or a
+ * scripture search builds new objects, so anything re-fetched or re-derived previews afresh. */
+let lastPreviewedItem: LibraryItem | null = null;
+
+/** True if `item` is what the preview already shows and is still what's staged, so a re-render
+ * of the catalog (every search keystroke keeps the same top match selected) can skip
+ * re-rendering the preview and re-staging it on the server -- ~60% of a keystroke's cost. */
+function alreadyPreviewing(item: LibraryItem): boolean {
+  if (!ctx || item !== lastPreviewedItem || ctx.getSelectedLibraryItem() !== item) return false;
+  const staged = ctx.getCurrentSnapshot()?.state.staged_item;
+  return !!staged && staged.title === (item.title || item.name || item.reference);
+}
+
 export function selectAndPreviewItem(item: LibraryItem, tabName: string) {
   if (!ctx) return;
+  lastPreviewedItem = item;
   if (item?.remote) {
     // Reference-only result: the text is fetched when it is added or dragged to the schedule, not for a preview.
     ctx.setSelectedLibraryItem(item);
