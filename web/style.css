@@ -1807,6 +1807,8 @@ body:has(.modal-backdrop[style*="flex"]) .live-indicator-btn.active .icon {
   height: 2px;
   background: var(--os-brand-amber);
   width: 100%;
+  /* Shrinks via transform, not width: compositor-only, no layout pass every frame. */
+  transform-origin: left center;
   animation: undoProgressShrink 1.5s linear forwards;
 }
 
@@ -1837,8 +1839,8 @@ body:has(.modal-backdrop[style*="flex"]) .live-indicator-btn.active .icon {
 }
 
 @keyframes undoProgressShrink {
-  from { width: 100%; }
-  to { width: 0%; }
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
 }
 
 /* Schedule & Slide Drag Handles */
