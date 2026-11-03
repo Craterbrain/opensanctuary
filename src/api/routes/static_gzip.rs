@@ -11,7 +11,7 @@ use std::sync::{Mutex, OnceLock};
 use axum::body::{Body, Bytes};
 use axum::extract::Request;
 use axum::http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, LAST_MODIFIED, RANGE, VARY};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
@@ -61,7 +61,9 @@ fn gzipped(mut res: Response, gz: Bytes) -> Response {
 }
 
 pub(super) async fn gzip_static(req: Request, next: Next) -> Response {
-    let wants_gzip = accepts_gzip(req.headers()) && !req.headers().contains_key(RANGE);
+    // GET only: ServeDir answers HEAD with the file's length but an empty body, and gzipping
+    // (and caching) that would hand every later GET a compressed empty file.
+    let wants_gzip = req.method() == Method::GET && accepts_gzip(req.headers()) && !req.headers().contains_key(RANGE);
     let path = req.uri().path().to_owned();
     let mut res = next.run(req).await;
 
@@ -184,6 +186,21 @@ mod tests {
         let (res, body) = get(&d, "/style.css", &[]).await;
         assert_eq!(res.headers()[VARY], "accept-encoding");
         assert_eq!(body, css.as_bytes());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn a_head_request_neither_gets_nor_caches_a_gzip_of_its_empty_body() {
+        let d = tmp_dir("head");
+        let js = "console.log('head');\n".repeat(400);
+        std::fs::write(d.join("head.js"), &js).unwrap();
+        let req = Request::builder().method("HEAD").uri("/head.js").header(ACCEPT_ENCODING, "gzip").body(Body::empty()).unwrap();
+        let res = app(&d).call(req).await.unwrap();
+        assert!(res.headers().get(CONTENT_ENCODING).is_none());
+        // The GET after it must still get the real file.
+        let (res, body) = get(&d, "/head.js", &[(ACCEPT_ENCODING, "gzip")]).await;
+        assert_eq!(res.headers()[CONTENT_ENCODING], "gzip");
+        assert_eq!(gunzip(&body), js.as_bytes());
         let _ = std::fs::remove_dir_all(&d);
     }
 

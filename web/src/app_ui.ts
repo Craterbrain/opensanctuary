@@ -572,8 +572,11 @@ async function saveEditorItem(addToSchedule = false) {
   if (editingScheduleContext && currentSnapshot && currentSnapshot.schedule) {
     const schedItem = currentSnapshot.schedule.items[editingScheduleContext.itemIndex];
     const schedSlides = (schedItem && schedItem.slides) || [];
-    studioSlides.forEach((s, idx) => {
-      if (idx < schedSlides.length && !!schedSlides[idx]?.hidden !== !!s.hidden) {
+    // Slides carry no id to match on, only their position: if slides were added or removed in
+    // the editor (which the schedule's copy doesn't get), positions no longer line up and a
+    // flag would land on the wrong slide -- leave the schedule's copy alone then.
+    if (schedSlides.length === studioSlides.length) studioSlides.forEach((s, idx) => {
+      if (!!schedSlides[idx]?.hidden !== !!s.hidden) {
         sendCommand({ SetSlideHidden: { item_index: editingScheduleContext!.itemIndex, slide_index: idx, hidden: !!s.hidden } });
       }
     });

@@ -2683,7 +2683,8 @@ function renderPreviewDeck(state: ShowState) {
   const activeIdx = state.staged_slide_index || 0;
   const slideFingerprint = arr ? arr.map((entry, idx) => {
     const s = resolveSlideAt(stagedItem, idx);
-    return `${entry.section_id}:${entry.source_slide_index}:${(s?.text || '').slice(0, 20)}`;
+    // Hidden is part of the key: hiding a slide must re-render (dim it, re-bind its handlers).
+    return `${entry.section_id}:${entry.source_slide_index}:${s?.hidden ? 'h' : ''}:${(s?.text || '').slice(0, 20)}`;
   }).join(';') : '';
   const previewStyle = slideDeckStyle(stagedItem ? stagedItem.item_type : '', previewSlideMatrixEl.classList.contains('list-mode'));
   const currentContentKey = `${itemId}|${slideCount}|${slideFingerprint}|${previewStyle}`;
@@ -3021,7 +3022,8 @@ function renderLiveDeck(state: ShowState) {
   const activeIdx = state.live_slide_index || 0;
   const slideFingerprint = arr ? arr.map((entry, idx) => {
     const s = resolveSlideAt(liveItem, idx);
-    return `${entry.section_id}:${entry.source_slide_index}:${(s?.text || '').slice(0, 20)}`;
+    // Hidden is part of the key: hiding a slide must re-render (dim it, re-bind its handlers).
+    return `${entry.section_id}:${entry.source_slide_index}:${s?.hidden ? 'h' : ''}:${(s?.text || '').slice(0, 20)}`;
   }).join(';') : '';
   const liveStyle = slideDeckStyle(liveItem ? liveItem.item_type : '', liveSlideMatrixEl.classList.contains('list-mode'));
   const currentLiveKey = `${itemId}|${slideCount}|${slideFingerprint}|${liveStyle}`;

@@ -557,10 +557,13 @@ impl Database {
                 theme_name TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_scriptures_reference ON scriptures(reference);
-            CREATE INDEX IF NOT EXISTS idx_scriptures_book ON scriptures(book);
-            -- get_installed_bibles' GROUP BY version: a covering-index scan, not every chapter row.
-            CREATE INDEX IF NOT EXISTS idx_scriptures_version ON scriptures(version);",
-        )
+            CREATE INDEX IF NOT EXISTS idx_scriptures_book ON scriptures(book);",
+        )?;
+        // get_installed_bibles' GROUP BY version becomes a covering-index scan, not every chapter
+        // row. Only a speed-up, so best effort: failing to add it to an existing Bible file must
+        // never be what stops that Bible opening.
+        let _ = conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_scriptures_version ON scriptures(version);");
+        Ok(())
     }
 
     /// Automatically migrates existing songs and scriptures out of a single monolithic library.db
