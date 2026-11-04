@@ -3,8 +3,8 @@ import { chromium, type Browser, type Page } from "playwright";
 import { spawn } from "bun";
 import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join, resolve } from "path";
-import { spawnTestServer, teardownTestServer, pollUntil, type SpawnedTestServer } from "./e2e_helpers";
+import { dirname, join, resolve } from "path";
+import { spawnTestServer, teardownTestServer, pollUntil, testServerEnv, type SpawnedTestServer } from "./e2e_helpers";
 
 // Double-clicking an OpenSanctuary file: the desktop starts the program with the file's path. A second start hands the file to the
 // running program and quits; the running console opens it through the normal steps (so a copyrighted song still shows its advisory).
@@ -23,7 +23,7 @@ describe("E2E: opening a file from the desktop", () => {
   /** What a file manager does: start the program with the file's path, against the same library. */
   const launchWithFile = async (path: string, dbPath: string, port: number) => {
     const p = spawn([binary, "--headless", "--skip-first-time-setup", "--port", String(port), "--db-path", dbPath, "--web-dir", resolve(import.meta.dir, "../"), path], {
-      stdout: "pipe", stderr: "pipe", env: { ...process.env, OS_NEXT_TLS_KEY_STORE: "file" },
+      stdout: "pipe", stderr: "pipe", env: testServerEnv(dirname(dbPath)),
     });
     const code = await Promise.race([p.exited, new Promise<number>((r) => setTimeout(() => { p.kill(); r(-1); }, 15000))]);
     return { code, out: await new Response(p.stdout).text() };

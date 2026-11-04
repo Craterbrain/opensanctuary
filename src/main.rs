@@ -77,6 +77,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    if let Some(path) = std::env::var_os(os_next::storage::keyring::TEST_KEYRING_FILE_ENV).filter(|v| !v.is_empty()) {
+        tracing::warn!("Secrets go to the test keyring file {} instead of the OS keyring (test runs only)", std::path::Path::new(&path).display());
+    }
+
     let args = Args::parse();
 
     // The key that vouches for the app's own plugins and the plugin revocation list. Only a test run may change it.

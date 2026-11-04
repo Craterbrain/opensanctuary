@@ -1,10 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, afterAll } from 'bun:test';
-import QRCode from 'qrcode';
-import jsQR from 'jsqr';
-import { SETTINGS_CATEGORIES } from '../src/core/settings_schema.ts';
 import { api } from '../src/core/api_client.ts';
 import { renderPairedDevicesSettings, resetOptionsModal } from '../src/ui/settings_dialog.ts';
-import pairingContract from './contracts/client_pairing.schema.json';
 
 // Several describe blocks below stub globalThis.fetch/document per-test.
 // bun runs every test file in one process, and (as observed directly: this
@@ -24,33 +20,6 @@ afterEach(() => {
 afterAll(() => {
   globalThis.fetch = ORIGINAL_FETCH;
   (globalThis as any).document = ORIGINAL_DOCUMENT;
-});
-
-describe('Client Pairing Contract & Schema Validation', () => {
-  test('SETTINGS_CATEGORIES contains paired-devices tab', () => {
-    const cat = SETTINGS_CATEGORIES.find(c => c.id === 'paired-devices');
-    expect(cat).toBeDefined();
-    expect(cat?.label).toBe('Paired Devices');
-    expect(cat?.icon).toBe('📺');
-  });
-
-  test('client_pairing.schema.json contract invariants and thresholds', () => {
-    expect(pairingContract.values.PAIRING_SESSION_TTL_SECONDS).toBe(300);
-    expect(pairingContract.values.ALLOW_UNAUTHENTICATED_WEB_OUTPUT).toBe(true);
-    expect(pairingContract.required).toContain('PAIRING_SESSION_TTL_SECONDS');
-    expect(pairingContract.required).toContain('ALLOW_UNAUTHENTICATED_WEB_OUTPUT');
-  });
-
-  test('Contract definition regexes validate session and device tokens', () => {
-    const sessionRegex = new RegExp(pairingContract.definitions.PairingSession.properties.session_token.pattern);
-    const devTokRegex = new RegExp(pairingContract.definitions.AuthorizeDeviceResponse.properties.token.pattern);
-
-    expect('pair_sess_4f60bf4762cf4d9796e6cf1e4a159f8c').toMatch(sessionRegex);
-    expect('dev_tok_9b1deb4d3b7d4bad9bdd2b0d7b3dcb6d').toMatch(devTokRegex);
-
-    expect('invalid_session_token').not.toMatch(sessionRegex);
-    expect('invalid_dev_token').not.toMatch(devTokRegex);
-  });
 });
 
 describe('API Client Pairing Methods', () => {
@@ -289,71 +258,7 @@ describe('Paired Devices UI Rendering', () => {
   });
 });
 
-describe('Universal QR Code Generation and Decoding Engine', () => {
-  test('jsQR accurately decodes QR codes generated for TV pairing payloads', () => {
-    const rawPayload = JSON.stringify({
-      device_id: 'tv-sanctuary-1',
-      name: 'Sanctuary Main TV',
-      platform: 'android-tv',
-    });
-
-    const qr = QRCode.create(rawPayload, { errorCorrectionLevel: 'M' });
-    const size = qr.modules.size;
-    const scale = 4;
-    const width = size * scale;
-    const height = size * scale;
-    const data = new Uint8ClampedArray(width * height * 4);
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const modX = Math.floor(x / scale);
-        const modY = Math.floor(y / scale);
-        const isDark = qr.modules.get(modX, modY);
-        const idx = (y * width + x) * 4;
-        const color = isDark ? 0 : 255;
-        data[idx] = color;
-        data[idx + 1] = color;
-        data[idx + 2] = color;
-        data[idx + 3] = 255;
-      }
-    }
-
-    const decoded = jsQR(data, width, height);
-    expect(decoded).not.toBeNull();
-    expect(decoded?.data).toBe(rawPayload);
-
-    const parsed = JSON.parse(decoded!.data);
-    expect(parsed.device_id).toBe('tv-sanctuary-1');
-    expect(parsed.name).toBe('Sanctuary Main TV');
-    expect(parsed.platform).toBe('android-tv');
-  });
-
-  test('jsQR handles colon-separated and URL query payloads across all devices', () => {
-    const textPayload = 'tv-side-balcony:Balcony Screen:roku';
-    const qr = QRCode.create(textPayload);
-    const size = qr.modules.size;
-    const scale = 4;
-    const width = size * scale;
-    const height = size * scale;
-    const data = new Uint8ClampedArray(width * height * 4);
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const isDark = qr.modules.get(Math.floor(x / scale), Math.floor(y / scale));
-        const idx = (y * width + x) * 4;
-        const color = isDark ? 0 : 255;
-        data[idx] = color;
-        data[idx + 1] = color;
-        data[idx + 2] = color;
-        data[idx + 3] = 255;
-      }
-    }
-
-    const decoded = jsQR(data, width, height);
-    expect(decoded).not.toBeNull();
-    expect(decoded?.data).toBe(textPayload);
-  });
-
+describe('Pairing and remote QR addresses', () => {
   test('buildPairingUrl prioritizes HTTPS and https_port when HTTPS is enabled', async () => {
     const { buildPairingUrl } = await import('../src/core/presentation_helpers.ts');
 

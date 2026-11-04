@@ -32,6 +32,16 @@ export interface SpawnedTestServer {
 }
 
 /**
+ * The environment every test server runs with: its secrets (plugin API keys, the licensed-passage
+ * key, the TLS key) go to files in its own data dir, never the OS keyring of the machine running
+ * the tests -- where they would overwrite the real app's entries of the same name
+ * (src/storage/keyring.rs, OS_NEXT_TEST_KEYRING_FILE; src/network/tls.rs, OS_NEXT_TLS_KEY_STORE).
+ */
+export function testServerEnv(dataDir: string, extra: Record<string, string> = {}): Record<string, string | undefined> {
+  return { ...process.env, OS_NEXT_TLS_KEY_STORE: "file", OS_NEXT_TEST_KEYRING_FILE: join(dataDir, "keyring.json"), ...extra };
+}
+
+/**
  * Spawns the release binary headless against a fresh temp data dir and
  * waits until it accepts connections before returning. Throws (with the
  * server process already killed) if it never comes up within `timeoutMs`.
@@ -71,9 +81,7 @@ export async function spawnTestServer(opts: {
       cwd: resolve(import.meta.dir, "../../"),
       stdout: "pipe",
       stderr: "pipe",
-      // The TLS private key goes in a file in the temp dir, never the developer's real OS
-      // keyring (src/network/tls.rs, OS_NEXT_TLS_KEY_STORE).
-      env: { ...process.env, OS_NEXT_TLS_KEY_STORE: "file", ...(opts.env ?? {}) },
+      env: testServerEnv(testDir, opts.env),
     }
   );
 

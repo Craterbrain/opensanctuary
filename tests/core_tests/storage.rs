@@ -204,12 +204,12 @@ fn test_a_fresh_library_is_seeded_with_default_themes() {
     // this used to open "library.db" in the working directory, creating or modifying a real library in the
     // repo root on every run -- and passing only because of whatever that file already held.
     let tmp = tempfile::tempdir().unwrap();
-    let db = Database::new(tmp.path().join("library.db")).unwrap();
+    let db = open_db(tmp.path().join("library.db")).unwrap();
     assert!(!db.get_themes().unwrap().is_empty());
     // Reopening an existing library doesn't seed a second copy.
     let count = db.get_themes().unwrap().len();
     drop(db);
-    let reopened = Database::new(tmp.path().join("library.db")).unwrap();
+    let reopened = open_db(tmp.path().join("library.db")).unwrap();
     assert_eq!(reopened.get_themes().unwrap().len(), count);
 }
 
@@ -264,7 +264,7 @@ fn test_scriptures_batch_insert_and_installed_bibles() {
 fn test_graceful_storage_degradation_on_sqlite_failure() {
     let tmp_dir = std::env::temp_dir();
     let tmp_db_file = tmp_dir.join(format!("test_degradation_{}.db", uuid::Uuid::new_v4()));
-    let db = Database::new(tmp_db_file.to_str().unwrap()).expect("Must init temp db");
+    let db = open_db(tmp_db_file.to_str().unwrap()).expect("Must init temp db");
 
     let event_log = Arc::new(EventLog::new(100));
     let engine = ShowEngine::new(event_log);
@@ -350,7 +350,7 @@ fn test_split_database_architecture_and_folder_autocreation() {
     assert!(!songs_dir.exists(), "songs dir must not exist prior to db init");
 
     // 1. Initialize Database - server should automatically create expected folders
-    let db = Database::new(&db_path).expect("Database::new should succeed");
+    let db = open_db(&db_path).expect("Database::new should succeed");
     assert!(bibles_dir.exists(), "Server must auto-create bibles/ directory");
     assert!(songs_dir.exists(), "Server must auto-create songs/ directory");
 
@@ -477,7 +477,7 @@ fn test_bible_passage_query_and_routes() {
 
     let db_path = test_dir.join("library.db");
     let bibles_dir = test_dir.join("bibles");
-    let db = Database::new_with_dirs(&db_path, &bibles_dir, test_dir.join("songs")).unwrap();
+    let db = open_db_with_dirs(&db_path, &bibles_dir, test_dir.join("songs")).unwrap();
 
     // 1. Seed two chapters into a test KJV database
     let mut kjv_items = Vec::new();
@@ -527,7 +527,7 @@ fn test_bible_delete_installed_translation() {
 
     let db_path = test_dir.join("library.db");
     let bibles_dir = test_dir.join("bibles");
-    let db = Database::new_with_dirs(&db_path, &bibles_dir, test_dir.join("songs")).unwrap();
+    let db = open_db_with_dirs(&db_path, &bibles_dir, test_dir.join("songs")).unwrap();
 
     // 1. Seed a translation
     let mut item = ScriptureItem::new("Romans", 8, 28, 28, "ESV");
@@ -561,7 +561,7 @@ fn test_default_bible_setting_persistence_and_metadata_migration() {
 
     let db_path = test_dir.join("library.db");
     let bibles_dir = test_dir.join("bibles");
-    let db = Database::new_with_dirs(&db_path, &bibles_dir, test_dir.join("songs")).unwrap();
+    let db = open_db_with_dirs(&db_path, &bibles_dir, test_dir.join("songs")).unwrap();
 
     // 1. Seed two Bible translations: KJV and ESV
     let mut kjv = ScriptureItem::new("Genesis", 1, 1, 1, "KJV");
@@ -613,7 +613,7 @@ fn test_default_bible_setting_persistence_and_metadata_migration() {
 fn test_sync_media_folder_autopopulates_images() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_media_sync.db");
-    let db = Database::new(&db_path).expect("Database::new");
+    let db = open_db(&db_path).expect("Database::new");
 
     let media_images_dir = test_dir.path().join("media").join("images");
     std::fs::create_dir_all(&media_images_dir).unwrap();
@@ -646,7 +646,7 @@ fn test_sync_media_folder_autopopulates_images() {
 fn test_sync_media_videos_folder_autopopulates_videos() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_video_sync.db");
-    let db = Database::new(&db_path).expect("Database::new");
+    let db = open_db(&db_path).expect("Database::new");
 
     let media_videos_dir = test_dir.path().join("media").join("videos");
     std::fs::create_dir_all(&media_videos_dir).unwrap();
@@ -680,7 +680,7 @@ fn test_sync_media_videos_folder_autopopulates_videos() {
 async fn test_keyring_metadata_ownership_persistence() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_keyring.db");
-    let db = Database::new(&db_path).expect("Database::new");
+    let db = open_db(&db_path).expect("Database::new");
 
     // Initially unrecorded
     let owner = db.get_keyring_owner("OpenSanctuary:Plugin:obs", "api_key").unwrap();
@@ -768,7 +768,7 @@ fn test_opening_a_pre_split_library_migrates_songs_scriptures_and_themes() {
         "#).unwrap();
     }
 
-    let db = Database::new(&path).unwrap();
+    let db = open_db(&path).unwrap();
     let songs = db.get_songs().unwrap();
     let titles: Vec<&str> = songs.iter().map(|s| s.title.as_str()).collect();
     assert!(titles.contains(&"Amazing Grace") && titles.contains(&"Modern Song"), "songs after migration: {titles:?}");
@@ -797,7 +797,7 @@ fn test_opening_a_pre_split_library_migrates_songs_scriptures_and_themes() {
     // Reopening is a no-op: same songs, same themes, no duplicates.
     let (n_songs, n_themes) = (songs.len(), db.get_themes().unwrap().len());
     drop(db);
-    let again = Database::new(&path).unwrap();
+    let again = open_db(&path).unwrap();
     assert_eq!((again.get_songs().unwrap().len(), again.get_themes().unwrap().len()), (n_songs, n_themes));
 }
 
@@ -815,7 +815,7 @@ fn test_a_legacy_song_that_cant_be_migrated_keeps_the_legacy_table() {
             INSERT INTO songs VALUES ('bad', 'Unreadable', 'B', 'Public Domain', NULL, NULL, NULL);
         "#).unwrap();
     }
-    let db = Database::new(&path).unwrap();
+    let db = open_db(&path).unwrap();
     assert!(db.get_songs().unwrap().iter().any(|s| s.id == "ok"), "the readable song still migrates");
     drop(db);
     let c = rusqlite::Connection::open(&path).unwrap();
@@ -872,6 +872,7 @@ fn a_song_marked_public_domain_by_the_operator_is_filed_and_scheduled_as_public_
 mod scriptures_json {
     use os_next::core::models::{ScriptureItem, ScriptureVerse};
     use os_next::storage::db::{Database, LicensedMeta};
+    use crate::open_db_with_dirs;
 
     fn chapter(version: &str, book: &str, chapter: u32, texts: &[&str]) -> ScriptureItem {
         ScriptureItem {
@@ -893,7 +894,7 @@ mod scriptures_json {
         let dir = std::env::temp_dir().join(format!("os-scrip-json-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let db = Database::new_with_dirs(dir.join("library.db"), dir.join("bibles"), dir.join("songs")).unwrap();
+        let db = open_db_with_dirs(dir.join("library.db"), dir.join("bibles"), dir.join("songs")).unwrap();
         db.insert_scriptures_batch(&[
             chapter("KJV", "John", 3, &["For God so loved the world", "quote \" backslash \\ tab \t newline \n end"]),
             chapter("KJV", "Genesis", 1, &["In the beginning", "Unicode: \u{05d0} \u{1F54A} \u{0007}"]),

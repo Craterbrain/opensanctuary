@@ -35,16 +35,13 @@ pub(super) async fn start() -> Server {
     let data = dirs.path().join("data");
     std::fs::create_dir_all(&media).unwrap();
     std::fs::create_dir_all(&data).unwrap();
-    let db = Database::new(data.join("library.db").to_str().unwrap()).unwrap();
+    let db = open_db(data.join("library.db").to_str().unwrap()).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let token = "bundle_test_host_token".to_string();
     let state = AppState { media_dir: media.clone(), data_dir: data.clone(), host_session_token: token.clone(), server_port: addr.port(), ..base_app_state(db.clone()) };
     let engine = state.engine.clone();
-    let router = os_next::api::create_router(state);
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
+    serve(listener, state);
     Server { addr, token, db, engine, media, data, _dirs: dirs }
 }
 

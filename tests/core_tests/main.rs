@@ -29,12 +29,40 @@ mod pd_songs;
 mod read_bench;
 mod plugins;
 mod restart;
+mod routes;
 mod storage;
+
+/// Points every keyring call in this test binary at one throwaway file instead of the OS keyring
+/// of the machine running the tests, where the real app keeps entries of the same names (a plugin's
+/// API keys, the licensed-passage key, the TLS key). Idempotent; `base_app_state` calls it, and so
+/// must any test that reaches the keyring without one (src/storage/keyring.rs).
+fn isolate_keyring() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let dir = tempfile::tempdir().unwrap().keep();
+        std::env::set_var(os_next::storage::keyring::TEST_KEYRING_FILE_ENV, dir.join("keyring.json"));
+    });
+}
+
+/// `Database::new` for this test binary: an on-disk library reads the licensed-passage key from the
+/// keyring as it opens, so it isolates the keyring first. Tests open on-disk libraries only through
+/// these (an in-memory one never touches the keyring).
+fn open_db(path: impl AsRef<std::path::Path>) -> rusqlite::Result<Database> {
+    isolate_keyring();
+    Database::new(path)
+}
+
+/// `Database::new_with_dirs`, likewise.
+fn open_db_with_dirs(path: impl AsRef<std::path::Path>, bibles: impl AsRef<std::path::Path>, songs: impl AsRef<std::path::Path>) -> rusqlite::Result<Database> {
+    isolate_keyring();
+    Database::new_with_dirs(path, bibles, songs)
+}
 
 /// An `AppState` with the defaults nearly every test wants (an empty engine, a throwaway
 /// broadcast channel, no HTTPS, no display, a fresh plugin manager, port 8080). A test overrides
 /// only what it cares about: `AppState { host_session_token: "x".into(), ..base_app_state(db) }`.
 fn base_app_state(db: Database) -> os_next::api::ws::AppState {
+    isolate_keyring();
     let engine = Arc::new(ShowEngine::new(Arc::new(EventLog::with_initial_sequence(5000, 0))));
     os_next::api::ws::AppState {
         engine,
@@ -60,6 +88,15 @@ fn base_app_state(db: Database) -> os_next::api::ws::AppState {
         update_status: Arc::new(std::sync::Mutex::new(None)),
         plugin_release_key: os_next::network::updater::RELEASE_PUBLIC_KEY_B64.to_string(),
     }
+}
+
+/// Serves `state`'s router on `listener` in the background. Bind the listener first when the state
+/// needs to know its port (`server_port`).
+fn serve(listener: tokio::net::TcpListener, state: os_next::api::ws::AppState) {
+    let router = os_next::api::create_router(state);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
 }
 
 /// A blank presentation item: every field at its default except `id` and `title`. Tests state only what

@@ -8,7 +8,7 @@ use super::*;
 async fn spawn_test_app(host_session_token: &str) -> String {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_public_url.db");
-    let db = Database::new(&db_path).expect("Database::new");
+    let db = open_db(&db_path).expect("Database::new");
     let web_dir = test_dir.path().join("web");
     std::fs::create_dir_all(&web_dir).unwrap();
 
@@ -27,12 +27,9 @@ async fn spawn_test_app(host_session_token: &str) -> String {
         ..base_app_state(db.clone())
     };
 
-    let router = os_next::api::create_router(app_state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
+    serve(listener, app_state);
     format!("http://{}", addr)
 }
 
@@ -188,7 +185,7 @@ fn test_schedule_replace_vs_append_mode() {
 async fn test_network_api_routes_and_conflict_detection() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_network.db");
-    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let db = open_db(db_path.to_str().unwrap()).unwrap();
     let event_log = Arc::new(EventLog::with_initial_sequence(2000, 0));
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
@@ -208,10 +205,7 @@ async fn test_network_api_routes_and_conflict_detection() {
         ..base_app_state(db.clone())
     };
 
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
+    serve(listener, app_state);
 
     let client = reqwest::Client::new();
 
@@ -297,7 +291,7 @@ async fn test_network_api_routes_and_conflict_detection() {
 async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_conflict.db");
-    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let db = open_db(db_path.to_str().unwrap()).unwrap();
     let event_log = Arc::new(EventLog::with_initial_sequence(2100, 0));
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
@@ -318,10 +312,7 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
         ..base_app_state(db.clone())
     };
 
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
+    serve(listener, app_state);
 
     let client = reqwest::Client::new();
 
@@ -410,7 +401,7 @@ async fn test_conflicting_network_settings_are_held_back_unless_confirmed() {
 async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_pairing.db");
-    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let db = open_db(db_path.to_str().unwrap()).unwrap();
     let event_log = Arc::new(EventLog::with_initial_sequence(3000, 0));
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
@@ -693,7 +684,7 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
 async fn test_command_endpoint_requires_host_token_for_unpaired_callers() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_command_host_token.db");
-    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let db = open_db(db_path.to_str().unwrap()).unwrap();
     let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
@@ -714,10 +705,7 @@ async fn test_command_endpoint_requires_host_token_for_unpaired_callers() {
         ..base_app_state(db.clone())
     };
 
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
+    serve(listener, app_state);
 
     let client = reqwest::Client::new();
 
@@ -830,7 +818,7 @@ async fn test_command_endpoint_requires_host_token_for_unpaired_callers() {
 async fn test_library_mutation_and_admin_routes_require_host_token() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_library_auth.db");
-    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let db = open_db(db_path.to_str().unwrap()).unwrap();
     let event_log = Arc::new(EventLog::new(100));
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
@@ -855,10 +843,7 @@ async fn test_library_mutation_and_admin_routes_require_host_token() {
         ..base_app_state(db.clone())
     };
 
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
+    serve(listener, app_state);
 
     let client = reqwest::Client::new();
 
@@ -945,7 +930,7 @@ async fn test_library_mutation_and_admin_routes_require_host_token() {
 async fn test_tv_provision_start_and_progress_against_unreachable_device() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_tv_provision.db");
-    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let db = open_db(db_path.to_str().unwrap()).unwrap();
     let event_log = Arc::new(EventLog::new(100));
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
@@ -966,10 +951,7 @@ async fn test_tv_provision_start_and_progress_against_unreachable_device() {
         ..base_app_state(db.clone())
     };
 
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
+    serve(listener, app_state);
 
     let client = reqwest::Client::new();
 
@@ -1009,7 +991,7 @@ async fn test_tv_provision_start_and_progress_against_unreachable_device() {
 async fn test_update_check_and_status_routes_against_real_test_repo() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_update_routes.db");
-    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let db = open_db(db_path.to_str().unwrap()).unwrap();
     let event_log = Arc::new(EventLog::new(100));
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
@@ -1030,10 +1012,7 @@ async fn test_update_check_and_status_routes_against_real_test_repo() {
         ..base_app_state(db.clone())
     };
 
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
+    serve(listener, app_state);
 
     let client = reqwest::Client::new();
 
@@ -1083,7 +1062,7 @@ async fn test_update_check_and_status_routes_against_real_test_repo() {
 async fn test_only_one_console_connected_at_a_time() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_console_lock.db");
-    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let db = open_db(db_path.to_str().unwrap()).unwrap();
     let event_log = Arc::new(EventLog::with_initial_sequence(6000, 0));
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
@@ -1104,10 +1083,7 @@ async fn test_only_one_console_connected_at_a_time() {
         ..base_app_state(db.clone())
     };
 
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
+    serve(listener, app_state);
 
     use futures_util::{SinkExt, StreamExt};
     let client = reqwest::Client::new();
@@ -1171,7 +1147,7 @@ async fn test_only_one_console_connected_at_a_time() {
 async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_split_plane.db");
-    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let db = open_db(db_path.to_str().unwrap()).unwrap();
     let event_log = Arc::new(EventLog::with_initial_sequence(4000, 0));
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
@@ -1290,7 +1266,7 @@ async fn test_split_plane_http_https_listeners_and_zero_auth_displays() {
 async fn test_security_headers_and_cors_policies() {
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir.path().join("test_sec.db");
-    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let db = open_db(db_path.to_str().unwrap()).unwrap();
 
     // 1. Verify get_setting / set_setting on Database
     assert_eq!(db.get_setting("non_existent_key").unwrap(), None);
@@ -1448,7 +1424,7 @@ async fn test_check_public_url_rejects_non_https_scheme_without_a_network_call()
 async fn test_console_credential_survives_restart_and_is_revocable() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_console_credential.db");
-    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let db = open_db(db_path.to_str().unwrap()).unwrap();
 
     async fn start(db: os_next::storage::Database, dir: &std::path::Path, host_token: &str) -> std::net::SocketAddr {
         let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
@@ -1466,10 +1442,7 @@ async fn test_console_credential_survives_restart_and_is_revocable() {
             server_port: addr.port(),
             ..base_app_state(db)
         };
-        let router = os_next::api::create_router(app_state);
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, router).await;
-        });
+        serve(listener, app_state);
         addr
     }
 

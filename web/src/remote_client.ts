@@ -9,6 +9,7 @@ import type { ScheduleItem } from './core/models.ts';
 import { resolveSlideAt, escapeHtml } from './core/presentation_helpers.ts';
 import { createEngineWebSocket, type EngineWebSocketClient } from './core/ws_client.ts';
 import { resolveNextPresentationPreview } from './core/presentation_sequence.ts';
+import { swipeCommand, getItemTypeIcon, getTagClass } from './core/remote_helpers.ts';
 
 // --- Pairing (real device token, scanned via QR in the console's Pairing menu) ---
 //
@@ -147,29 +148,6 @@ function setupModeToggle() {
       vibrate(30);
     }
   });
-}
-
-export function getItemTypeIcon(type: string): string {
-  switch ((type || '').toLowerCase()) {
-    case 'song': return '🎵';
-    case 'scripture': return '📖';
-    case 'presentation': return '📽️';
-    case 'media': return '🎬';
-    case 'header': return '🏷️';
-    default: return '📄';
-  }
-}
-
-export function getTagClass(tag: string): string {
-  if (!tag) return '';
-  const t = tag.toUpperCase();
-  if (t.startsWith('V')) return 'tag-v';
-  if (t.startsWith('C')) return 'tag-c';
-  if (t.startsWith('B')) return 'tag-b';
-  if (t.startsWith('P')) return 'tag-p';
-  if (t.startsWith('E')) return 'tag-e';
-  if (t.startsWith('I')) return 'tag-i';
-  return '';
 }
 
 // --- Haptic Feedback Helper ---
@@ -466,24 +444,8 @@ function setupGestures() {
       const deltaY = touch.clientY - touchStartY;
       const elapsed = Date.now() - touchStartTime;
 
-      // Require swift swipe (< 450ms) and minimum distance (45px)
-      if (elapsed < 450) {
-        if (Math.abs(deltaX) > 45 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
-          // Horizontal Swipe: Next / Previous slide across all views
-          if (deltaX < 0) {
-            sendCommand('NextSlide'); // Swipe Left -> Next Slide
-          } else {
-            sendCommand('PrevSlide'); // Swipe Right -> Prev Slide
-          }
-        } else if (activeTab === 'view-prompter' && Math.abs(deltaY) > 45 && Math.abs(deltaY) > Math.abs(deltaX) * 1.5) {
-          // Vertical Swipe: ONLY in non-scrolling Prompter view
-          if (deltaY < 0) {
-            sendCommand('NextItem'); // Swipe Up -> Next Item
-          } else {
-            sendCommand('PrevItem'); // Swipe Down -> Prev Item
-          }
-        }
-      }
+      const cmd = swipeCommand(deltaX, deltaY, elapsed, activeTab);
+      if (cmd) sendCommand(cmd);
     }
   }, { passive: true });
 }

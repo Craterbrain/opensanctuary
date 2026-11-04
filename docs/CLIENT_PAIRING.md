@@ -1,6 +1,6 @@
 # Client discovery & console pairing
 
-_Last edited: 2026-10-29_
+_Last edited: 2026-11-03_
 
 This covers two related things for **permanent display clients** — the
 Roku and Android TV apps, as opposed to someone opening `live.html` in a
@@ -195,7 +195,9 @@ no keyring, the owner-only fallback file is `tls_private_key.pem` next to that
 install's database. On upgrade an install adopts the old shared key once, only
 if it still matches its own certificate, and leaves the shared entry alone for
 older builds. Test servers set `OS_NEXT_TLS_KEY_STORE=file`, which keeps the
-key in that file and never touches the OS keyring.
+key in that file, and `OS_NEXT_TEST_KEYRING_FILE`, which sends every other
+secret (plugin API keys, the licensed-passage key) to a file in the test's data
+folder: no test touches the OS keyring.
 
 ### Critical Invariant: Zero-Auth Open Access for Web *Displays*
 

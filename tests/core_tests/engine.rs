@@ -207,7 +207,7 @@ fn test_stage_item_preview_click_preserves_item() {
 #[test]
 fn test_event_log_persistence_resumption_and_idempotence() {
     let tmp_db_file = format!("/tmp/test_event_log_{}.db", uuid::Uuid::new_v4());
-    let db = os_next::storage::Database::new(&tmp_db_file).expect("Must open test db");
+    let db = open_db(&tmp_db_file).expect("Must open test db");
 
     // 1. Initial sequence should be 0 on empty db
     let initial_seq = db.get_max_event_sequence().expect("Must read max seq");
