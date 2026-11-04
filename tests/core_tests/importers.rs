@@ -1664,7 +1664,7 @@ fn test_odp_import_backgrounds_notes_bare_text_and_error_cases() {
     let os_next::core::models::SlideElement::TextBlock { block, .. } = &s1.elements[0] else { panic!() };
     assert_eq!(block.runs.len(), 1);
     assert_eq!(block.runs[0].text, "Bare paragraph, no span");
-    assert_eq!(block.runs[0].color, "#000000", "no style at all: black, as LibreOffice shows unstyled text");
+    assert_eq!(block.runs[0].color, "#ffffff", "no style at all: automatic, so white on this dark (#336699) page, as LibreOffice shows it");
 
     let s2 = &pres.slides[1];
     match s2.background_v2.as_ref().unwrap() {
@@ -1887,6 +1887,42 @@ fn test_odp_import_reconstructs_a_table_with_a_merged_cell_padded_out() {
     let (span, a, b) = (text_at("Spans both"), text_at("A"), text_at("B"));
     assert!(span.w > a.w + b.w * 0.5, "the merged cell is about as wide as both: {span:?} {a:?} {b:?}");
     assert!(a.y > span.y && (a.y - b.y).abs() < 1e-9 && b.x > a.x);
+}
+
+#[test]
+fn test_odp_import_shrinks_overflowing_shrink_to_fit_text_into_fixed_sizes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let media_dir = tmp.path().join("media/images");
+    let content_xml = |shrink: &str| format!(r##"<?xml version="1.0"?>
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"
+  xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"
+  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+  xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0">
+<office:automatic-styles>
+  <style:style style:name="gr1" style:family="graphic"><style:graphic-properties style:shrink-to-fit="{shrink}"/></style:style>
+  <style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="40pt"/></style:style>
+</office:automatic-styles>
+<office:body><office:presentation>
+  <draw:page draw:name="page1">
+    <draw:frame draw:style-name="gr1" svg:x="1cm" svg:y="1cm" svg:width="3cm" svg:height="1cm">
+      <draw:text-box><text:p><text:span text:style-name="T1">textbox</text:span></text:p><text:p><text:span text:style-name="T1"/></text:p><text:p><text:span text:style-name="T1"/></text:p></draw:text-box>
+    </draw:frame>
+  </draw:page>
+</office:presentation></office:body>
+</office:document-content>"##);
+    use os_next::core::models::SlideElement;
+    let size = |shrink: &str| {
+        let content = content_xml(shrink);
+        let zip_bytes = make_zip(&[("mimetype", b"application/vnd.oasis.opendocument.presentation"), ("content.xml", content.as_bytes())]);
+        let pres = os_next::storage::OdpImporter::import_odp_bytes(&zip_bytes, "Stem", &media_dir).unwrap();
+        let SlideElement::TextBlock { block, .. } = &pres.slides[0].elements[0] else { panic!("{:?}", pres.slides[0].elements[0]) };
+        assert!(!block.autofit, "imported text never takes the lyrics autofit");
+        block.runs.iter().find(|r| r.text == "textbox").unwrap().font_size_pt
+    };
+    let (full, shrunk) = (size("false"), size("true"));
+    // Three 40pt lines in a 1cm box: LibreOffice shrinks them to about a fifth.
+    assert!(shrunk < full * 0.3 && shrunk > full * 0.1, "{full} -> {shrunk}");
 }
 
 #[test]
@@ -3155,4 +3191,37 @@ fn test_pptx_import_draws_builtin_table_styles_controls_objects_and_shaped_pictu
     assert!(image_at(0.0).flatten().is_some_and(|m| m.starts_with("polygon(") && m.matches('%').count() > 60), "cropped to an ellipse");
     assert!(image_at(1_100_000.0).flatten().is_some_and(|m| m == "polygon(0% 100%, 50% 0%, 100% 100%)"), "a triangle filled with the picture: {:?}", image_at(1_100_000.0));
     assert_eq!(image_at(5_000_000.0), Some(None), "the ActiveX control's picture");
+}
+
+#[test]
+fn test_pptx_import_table_cell_borders_are_drawn_side_by_side() {
+    use os_next::core::models::SlideElement;
+    use std::io::{Cursor, Write};
+    use zip::write::FileOptions;
+    use zip::ZipWriter;
+
+    const NS: &str = r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main""#;
+    let line = |tag: &str| format!(r#"<{tag} w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></{tag}>"#);
+    let slide = format!(r#"<p:sld {NS}><p:cSld><p:spTree>
+        <p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="2" name="T"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="2000000" cy="740000"/></p:xfrm>
+          <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr/>
+            <a:tblGrid><a:gridCol w="2000000"/></a:tblGrid>
+            <a:tr h="370000"><a:tc><a:txBody><a:bodyPr/><a:p/></a:txBody><a:tcPr>{bottom}</a:tcPr></a:tc></a:tr>
+            <a:tr h="370000"><a:tc><a:txBody><a:bodyPr/><a:p/></a:txBody><a:tcPr>{l}{r}{t}{b}</a:tcPr></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>
+      </p:spTree></p:cSld></p:sld>"#,
+        bottom = line("a:lnB"), l = line("a:lnL"), r = line("a:lnR"), t = line("a:lnT"), b = line("a:lnB"));
+    let mut zw = ZipWriter::new(Cursor::new(Vec::new()));
+    zw.start_file("ppt/slides/slide1.xml", FileOptions::<()>::default()).unwrap();
+    zw.write_all(slide.as_bytes()).unwrap();
+    let media_dir = tempfile::tempdir().unwrap();
+    let pres = PptxImporter::import_pptx_bytes(&zw.finish().unwrap().into_inner(), "stem", media_dir.path()).expect("should parse");
+    let SlideElement::Group { children, .. } = &pres.slides[0].elements[0] else { panic!() };
+
+    // The first cell states only its bottom: one line, not a box around it.
+    let lines: Vec<_> = children.iter().filter_map(|c| match c { SlideElement::Line { transform, color, .. } => Some((transform.y, transform.h, color.clone())), _ => None }).collect();
+    assert_eq!(lines.len(), 1, "{children:?}");
+    assert_eq!(lines[0].1, 0.0, "a horizontal line");
+    assert_eq!(lines[0].2, "#ff0000");
+    // The second states all four alike: one outlined box.
+    assert_eq!(children.iter().filter(|c| matches!(c, SlideElement::Shape { stroke_color: Some(s), fill_color, .. } if s == "#ff0000" && fill_color == "none")).count(), 1, "{children:?}");
 }

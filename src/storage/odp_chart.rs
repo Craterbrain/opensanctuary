@@ -124,7 +124,7 @@ pub fn to_drawingml(doc: &str) -> Option<String> {
     };
     let main_kind = kind_of(class);
     let mut series_xml = String::new();
-    for (n, a, _) in children(plot_attrs_inner) {
+    for (n, a, inner) in children(plot_attrs_inner) {
         if n != "chart:series" {
             continue;
         }
@@ -138,8 +138,23 @@ pub fn to_drawingml(doc: &str) -> Option<String> {
         let sp = color.map(|c| format!(r#"<c:spPr><a:solidFill><a:srgbClr val="{}"/></a:solidFill></c:spPr>"#, c.trim_start_matches('#'))).unwrap_or_default();
         let show = style_prop(doc, st, "chart:data-label-number").is_some_and(|v| v != "none");
         let dl = if show { r#"<c:dLbls><c:showVal val="1"/></c:dLbls>"# } else { "" };
+        // Points with their own style (a pie's slices, usually), each `chart:repeated` times.
+        let mut points = String::new();
+        let mut idx = 0usize;
+        for (_, pa, _) in children(inner).into_iter().filter(|(n, _, _)| *n == "chart:data-point") {
+            let n = extract_attr(pa, "chart:repeated").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).clamp(1, 1000);
+            if let Some(c) = style_prop(doc, extract_attr(pa, "chart:style-name"), "draw:fill-color") {
+                for i in idx..idx + n {
+                    points.push_str(&format!(r#"<c:dPt><c:idx val="{i}"/><c:spPr><a:solidFill><a:srgbClr val="{}"/></a:solidFill></c:spPr></c:dPt>"#, c.trim_start_matches('#')));
+                }
+            }
+            idx += n;
+            if idx > 1000 {
+                break;
+            }
+        }
         series_xml.push_str(&format!(
-            r#"<c:ser><c:tx><c:strRef>{name}</c:strRef></c:tx>{sp}{dl}<c:cat><c:strRef>{cat}</c:strRef></c:cat><c:val><c:numRef>{val}</c:numRef></c:val></c:ser>"#,
+            r#"<c:ser><c:tx><c:strRef>{name}</c:strRef></c:tx>{sp}{points}{dl}<c:cat><c:strRef>{cat}</c:strRef></c:cat><c:val><c:numRef>{val}</c:numRef></c:val></c:ser>"#,
             name = cache(std::slice::from_ref(&name), false),
             cat = cache(&cats, false),
             val = cache(&values, true),
@@ -185,5 +200,23 @@ mod tests {
         assert!(x.contains(r#"<c:barChart><c:barDir val="col"/><c:grouping val="stacked"/>"#), "{x}");
         assert!(x.contains(r#"<c:v>2025</c:v>"#) && x.contains(r#"<c:v>Q2</c:v>"#) && x.contains(r#"<c:v>3.5</c:v>"#), "{x}");
         assert!(x.contains(r#"<a:srgbClr val="ff0000"/>"#) && x.contains("<a:t>Sales</a:t>") && x.contains(r#"<c:legendPos val="b"/>"#), "{x}");
+    }
+
+    #[test]
+    fn a_pie_keeps_its_slices_own_colours() {
+        let doc = r##"<office:document-content><office:automatic-styles>
+            <style:style style:name="p1" style:family="chart"><style:graphic-properties draw:fill-color="#5b9bd5"/></style:style>
+            <style:style style:name="p2" style:family="chart"><style:graphic-properties draw:fill-color="#ed7d31"/></style:style>
+          </office:automatic-styles><office:body><office:chart><chart:chart chart:class="chart:circle">
+            <chart:plot-area><chart:series chart:values-cell-range-address="local-table.$B$1:.$B$3">
+              <chart:data-point chart:style-name="p1"/><chart:data-point chart:style-name="p2" chart:repeated="2"/></chart:series></chart:plot-area>
+            <table:table table:name="local-table"><table:table-rows>
+              <table:table-row><table:table-cell/><table:table-cell office:value="1"/></table:table-row>
+              <table:table-row><table:table-cell/><table:table-cell office:value="2"/></table:table-row>
+              <table:table-row><table:table-cell/><table:table-cell office:value="3"/></table:table-row></table:table-rows></table:table>
+          </chart:chart></office:chart></office:body></office:document-content>"##;
+        let x = to_drawingml(doc).unwrap();
+        assert!(x.contains(r#"<c:dPt><c:idx val="0"/><c:spPr><a:solidFill><a:srgbClr val="5b9bd5"/>"#), "{x}");
+        assert!(x.contains(r#"<c:idx val="1"/><c:spPr><a:solidFill><a:srgbClr val="ed7d31"/>"#) && x.contains(r#"<c:idx val="2"/><c:spPr><a:solidFill><a:srgbClr val="ed7d31"/>"#), "{x}");
     }
 }

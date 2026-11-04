@@ -1086,7 +1086,37 @@ impl PathData {
 
 /// A line's width in canvas units (1080 to the canvas height), as path elements use.
 fn canvas_stroke(width_emu: f64, ctx: &Ctx) -> f64 {
-    ((width_emu.max(6_350.0) / ctx.geo.canvas_h * 1080.0) * 100.0).round() / 100.0
+    geo_stroke(width_emu, &ctx.geo)
+}
+
+/// A line `width_emu` wide as the canvas draws it (at least half a point).
+pub(crate) fn geo_stroke(width_emu: f64, geo: &Geo) -> f64 {
+    ((width_emu.max(6_350.0) / geo.canvas_h * 1080.0) * 100.0).round() / 100.0
+}
+
+/// A table cell's border in `rect` (EMU), each side (top, right, bottom, left) its own colour and
+/// width or none: one outlined box when all four agree, else a line per side.
+pub(crate) fn cell_edges(rect: [f64; 4], sides: &[Option<(String, f64)>; 4], geo: &Geo) -> Vec<SlideElement> {
+    let [x, y, w, h] = rect;
+    if sides.iter().all(|s| s.is_some() && *s == sides[0]) {
+        let (color, width) = sides[0].clone().expect("checked");
+        return vec![SlideElement::Shape { id: format!("el_{}", uuid::Uuid::new_v4()), transform: geo.transform(rect, 0.0), shape_kind: "path".into(), fill_color: "none".into(), stroke_color: Some(color), stroke_width: geo_stroke(width, geo), path: Some("M 0 0 L 100 0 L 100 100 L 0 100 Z".into()) }];
+    }
+    let ends = [((x, y), (x + w, y)), ((x + w, y), (x + w, y + h)), ((x, y + h), (x + w, y + h)), ((x, y), (x, y + h))];
+    sides.iter().zip(ends).filter_map(|(side, ((x1, y1), (x2, y2)))| {
+        let (color, width) = side.clone()?;
+        let horizontal = y1 == y2;
+        Some(SlideElement::Line {
+            id: format!("el_{}", uuid::Uuid::new_v4()),
+            transform: geo.transform([x1, y1, x2 - x1, y2 - y1], 0.0),
+            line_kind: "straight".into(),
+            color,
+            stroke_width: geo_stroke(width, geo),
+            start_arrow: false,
+            end_arrow: false,
+            path: Some(if horizontal { "M 0 0 L 100 0" } else { "M 0 0 L 0 100" }.into()),
+        })
+    }).collect()
 }
 
 fn xfrm_flips(shape_inner: &str) -> (bool, bool) {
@@ -1410,8 +1440,12 @@ struct CellLook {
     fill: Option<Option<String>>,
     text_color: Option<String>,
     bold: Option<bool>,
-    border: Option<(String, f64)>,
+    /// A style part's borders as it states them (a line, or `None` for none): left, right, top,
+    /// bottom, then inside horizontal and inside vertical.
+    borders: [Option<Option<(String, f64)>>; 6],
 }
+
+type Edge = Option<Option<(String, f64)>>;
 
 impl CellLook {
     fn over(&self, base: &CellLook) -> CellLook {
@@ -1419,8 +1453,17 @@ impl CellLook {
             fill: self.fill.clone().or_else(|| base.fill.clone()),
             text_color: self.text_color.clone().or_else(|| base.text_color.clone()),
             bold: self.bold.or(base.bold),
-            border: self.border.clone().or_else(|| base.border.clone()),
+            borders: std::array::from_fn(|i| self.borders[i].clone().or_else(|| base.borders[i].clone())),
         }
+    }
+
+    /// The sides (top, right, bottom, left) this part gives the cell spanning rows `r..r2` and
+    /// columns `c..c2`, the part covering rows `rr` and columns `cc`: its outer lines on the
+    /// region's edges, its inside lines between.
+    fn sides(&self, (r, r2, c, c2): (usize, usize, usize, usize), rr: (usize, usize), cc: (usize, usize)) -> [Edge; 4] {
+        let b = &self.borders;
+        let pick = |outer: bool, side: usize, inside: usize| if outer { b[side].clone() } else { b[inside].clone() };
+        [pick(r <= rr.0, 2, 4), pick(c2 >= cc.1, 1, 5), pick(r2 >= rr.1, 3, 4), pick(c <= cc.0, 0, 5)]
     }
 }
 
@@ -1453,10 +1496,16 @@ fn style_part(part_inner: &str, ctx: &Ctx) -> CellLook {
             look.fill = Some(if extract_attr(a, "idx") == Some("0") { None } else { pal.first_color(i, None) });
         }
         if let Some((_, _, bdr)) = child(tc, "a:tcBdr") {
-            look.border = children(bdr).into_iter().find_map(|(_, _, side)| {
-                child(side, "a:ln").and_then(|(_, a, i)| border_of(a, i, ctx))
-                    .or_else(|| child(side, "a:lnRef").filter(|(_, a, _)| extract_attr(a, "idx") != Some("0")).and_then(|(_, _, i)| Some((pal.first_color(i, None)?, 12_700.0))))
-            });
+            for (i, name) in ["a:left", "a:right", "a:top", "a:bottom", "a:insideH", "a:insideV"].iter().enumerate() {
+                let Some((_, _, side)) = child(bdr, name) else { continue };
+                look.borders[i] = Some(if let Some((_, a, l)) = child(side, "a:ln") {
+                    border_of(a, l, ctx)
+                } else if let Some((_, a, l)) = child(side, "a:lnRef") {
+                    if extract_attr(a, "idx") == Some("0") { None } else { pal.first_color(l, None).map(|c| (c, 12_700.0)) }
+                } else {
+                    None
+                });
+            }
         }
     }
     look
@@ -1474,18 +1523,38 @@ fn table_style<'a>(list: &'a str, id: &str) -> Option<&'a str> {
         .map(|(_, _, i)| i)
 }
 
-/// About how tall a text body wraps to at `width` EMU: each paragraph's characters at half an em
-/// each (a fair average for proportional fonts), in lines 1.2 of its size apart.
-fn estimated_text_height(txbody: &str, width: f64) -> f64 {
+/// About how tall a text body wraps to at `width` EMU: each paragraph word-wrapped by its runs'
+/// fonts (theme fonts resolved through the deck's theme), in lines 1.2 of its size apart.
+fn estimated_text_height(txbody: &str, width: f64, ctx: &Ctx) -> f64 {
+    use crate::storage::text_metrics::{wrapped_lines, Span};
     let mut total = 0.0;
     for (_, _, p) in children(txbody).into_iter().filter(|(nm, _, _)| *nm == "a:p") {
-        let size = next_tag(p, "a:rPr").or_else(|| next_tag(p, "a:endParaRPr")).and_then(|(a, _, _)| extract_attr(a, "sz")?.parse::<f64>().ok()).unwrap_or(1_800.0) / 100.0 * 12_700.0;
-        let chars: usize = children(p).into_iter().filter(|(nm, _, _)| *nm == "a:r" || *nm == "a:fld").map(|(_, _, r)| next_tag_content(r, "a:t").map_or(0, |(t, _)| decode_xml_entities(t).chars().count())).sum();
-        let breaks = children(p).into_iter().filter(|(nm, _, _)| *nm == "a:br").count();
+        let size_of = |rpr: Option<&str>| rpr.and_then(|a| extract_attr(a, "sz")?.parse::<f64>().ok()).map(|sz| sz / 100.0 * 12_700.0);
+        let para_size = size_of(next_tag(p, "a:rPr").or_else(|| next_tag(p, "a:endParaRPr")).map(|(a, _, _)| a)).unwrap_or(18.0 * 12_700.0);
         let indent = next_tag(p, "a:pPr").and_then(|(a, _, _)| extract_attr(a, "marL")?.parse::<f64>().ok()).unwrap_or(0.0);
-        let per_line = ((width - indent).max(size) / (size * 0.5)).max(1.0);
-        let lines = (chars as f64 / per_line).ceil().max(1.0) + breaks as f64;
-        total += lines * size * 1.2;
+        let wrap_width = (width - indent).max(para_size);
+        let mut texts: Vec<(String, String, bool, f64)> = Vec::new();
+        let mut lines = 0usize;
+        let flush = |texts: &mut Vec<(String, String, bool, f64)>, lines: &mut usize| {
+            let spans: Vec<Span> = texts.iter().map(|(t, f, b, s)| Span { text: t, family: f, bold: *b, size: *s }).collect();
+            *lines += wrapped_lines(&spans, wrap_width);
+            texts.clear();
+        };
+        for (nm, _, r) in children(p) {
+            match nm {
+                "a:r" | "a:fld" => {
+                    let rpr = next_tag(r, "a:rPr");
+                    let family = ctx.font(rpr.and_then(|(_, i, _)| next_tag(i, "a:latin")).and_then(|(a, _, _)| extract_attr(a, "typeface")));
+                    let bold = rpr.and_then(|(a, _, _)| extract_attr(a, "b")).is_some_and(|b| b == "1" || b == "true");
+                    let text = next_tag_content(r, "a:t").map_or(String::new(), |(t, _)| decode_xml_entities(t));
+                    texts.push((text, family, bold, size_of(rpr.map(|(a, _, _)| a)).unwrap_or(para_size)));
+                }
+                "a:br" => flush(&mut texts, &mut lines),
+                _ => {}
+            }
+        }
+        flush(&mut texts, &mut lines);
+        total += lines as f64 * para_size * 1.2;
     }
     total
 }
@@ -1537,7 +1606,7 @@ fn extract_table_element(gf_inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) 
             let tcpr = child(tc, "a:tcPr").map(|(_, a, _)| a).unwrap_or("");
             let m = |k: &str, d: f64| n(tcpr, k).unwrap_or(d);
             let width = col_x[span] - col_x[c] - m("marL", 91_440.0) - m("marR", 91_440.0);
-            let needed = next_tag(tc, "a:txBody").map(|(_, b, _)| estimated_text_height(b, width)).unwrap_or(0.0) + m("marT", 45_720.0) + m("marB", 45_720.0);
+            let needed = next_tag(tc, "a:txBody").map(|(_, b, _)| estimated_text_height(b, width, ctx)).unwrap_or(0.0) + m("marT", 45_720.0) + m("marB", 45_720.0);
             *h = h.max(needed);
         }
     }
@@ -1546,6 +1615,7 @@ fn extract_table_element(gf_inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) 
 
     let id = || format!("el_{}", uuid::Uuid::new_v4());
     let mut children_out = Vec::new();
+    let mut edges = Vec::new();
     for (r, (_, row)) in rows.iter().enumerate() {
         for (c, (_, tc_attrs, tc)) in children(row).into_iter().filter(|(nm, _, _)| *nm == "a:tc").enumerate().take(ncols) {
             if extract_attr(tc_attrs, "hMerge") == Some("1") || extract_attr(tc_attrs, "vMerge") == Some("1") {
@@ -1557,44 +1627,48 @@ fn extract_table_element(gf_inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) 
             let rect = [x0 + col_x[c], y0 + row_y[r], col_x[c2] - col_x[c], row_y[r2] - row_y[r]];
 
             // Low to high: whole table, banding, first/last column, last row, header row, the cell's own.
+            // Each part's borders apply over the region it covers (its row, its column, the table).
+            let cell = (r, r2, c, c2);
             let mut look = whole.clone();
+            let mut sides = whole.sides(cell, (0, nrows), (0, ncols));
+            let mut apply = |part: &CellLook, rr: (usize, usize), cc: (usize, usize), look: &mut CellLook| {
+                *look = part.over(look);
+                for (side, edge) in sides.iter_mut().zip(part.sides(cell, rr, cc)) {
+                    if edge.is_some() {
+                        *side = edge;
+                    }
+                }
+            };
             // Bands count from the first row (column) after the header, if there is one.
             let (band_r, band_c) = (r as isize - isize::from(on("firstRow")), c as isize - isize::from(on("firstCol")));
             if on("bandRow") && band_r >= 0 && band_r % 2 == 0 {
-                look = band1h.over(&look);
+                apply(&band1h, (r, r2), (0, ncols), &mut look);
             }
             if on("bandCol") && band_c >= 0 && band_c % 2 == 0 {
-                look = band1v.over(&look);
+                apply(&band1v, (0, nrows), (c, c2), &mut look);
             }
-            if on("firstCol") && c == 0 { look = first_col.over(&look); }
-            if on("lastCol") && c2 == ncols { look = last_col.over(&look); }
-            if on("lastRow") && r2 == nrows { look = last_row.over(&look); }
-            if on("firstRow") && r == 0 { look = first_row.over(&look); }
+            if on("firstCol") && c == 0 { apply(&first_col, (0, nrows), (0, 1), &mut look); }
+            if on("lastCol") && c2 == ncols { apply(&last_col, (0, nrows), (ncols - 1, ncols), &mut look); }
+            if on("lastRow") && r2 == nrows { apply(&last_row, (nrows - 1, nrows), (0, ncols), &mut look); }
+            if on("firstRow") && r == 0 { apply(&first_row, (0, 1), (0, ncols), &mut look); }
             let (tcpr_attrs, tcpr) = child(tc, "a:tcPr").map(|(_, a, i)| (a, i)).unwrap_or(("", ""));
             let mut own = CellLook::default();
             if let Some((name, _, inner)) = children(tcpr).into_iter().find(|(nm, _, _)| matches!(*nm, "a:noFill" | "a:solidFill" | "a:gradFill")) {
                 own.fill = Some(if name == "a:noFill" { None } else { fill_color(name, inner, ctx, None) });
             }
-            if let Some((_, a, i)) = ["a:lnB", "a:lnT", "a:lnL", "a:lnR"].iter().find_map(|t| child(tcpr, t)) {
-                own.border = Some(border_of(a, i, ctx).unwrap_or_else(|| ("none".into(), 0.0)));
+            // The cell's own lines, side by side, over the style's.
+            for (side, tag) in sides.iter_mut().zip(["a:lnT", "a:lnR", "a:lnB", "a:lnL"]) {
+                if let Some((_, a, i)) = child(tcpr, tag) {
+                    *side = Some(border_of(a, i, ctx));
+                }
             }
             let look = own.over(&look);
 
-            let fill = look.fill.clone().flatten();
-            let border = look.border.clone().filter(|(c, _)| c != "none");
-            if fill.is_some() || border.is_some() {
-                // A path rectangle, so the border keeps its own width rather than stretching with
-                // the cell (a short, wide cell would otherwise get a thick frame at its sides).
-                children_out.push(SlideElement::Shape {
-                    id: id(),
-                    transform: ctx.geo.transform(rect, 0.0),
-                    shape_kind: "path".into(),
-                    fill_color: fill.unwrap_or_else(|| "none".into()),
-                    stroke_width: border.as_ref().map_or(0.0, |(_, w)| canvas_stroke(*w, ctx)),
-                    stroke_color: border.map(|(c, _)| c),
-                    path: Some("M 0 0 L 100 0 L 100 100 L 0 100 Z".into()),
-                });
+            if let Some(fill) = look.fill.clone().flatten() {
+                children_out.push(SlideElement::Shape { id: id(), transform: ctx.geo.transform(rect, 0.0), shape_kind: "path".into(), fill_color: fill, stroke_width: 0.0, stroke_color: None, path: Some("M 0 0 L 100 0 L 100 100 L 0 100 Z".into()) });
             }
+            // Borders go over every cell's fill (a neighbour's would hide a shared edge).
+            edges.extend(cell_edges(rect, &sides.map(Option::flatten), &ctx.geo));
 
             if let Some((_, body, _)) = next_tag(tc, "a:txBody") {
                 let mut list = ctx.inh.default_style.clone();
@@ -1618,6 +1692,7 @@ fn extract_table_element(gf_inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) 
             }
         }
     }
+    children_out.extend(edges);
     if children_out.is_empty() {
         return None;
     }
@@ -2091,9 +2166,15 @@ pub(crate) fn tile_picture(src: &image::RgbaImage, dpi: Option<(f64, f64)>, tile
     let (sx, sy) = (num("sx", 100_000.0).abs() / 100_000.0, num("sy", 100_000.0).abs() / 100_000.0);
     // Bounded: a box is drawn at most 1920 x 1920 pixels.
     let (out_w, out_h) = ((size[0] * scale).round().clamp(1.0, 1920.0) as u32, (size[1] * scale).round().clamp(1.0, 1920.0) as u32);
-    let tile_w = (src.width() as f64 / dpi_x * 914_400.0 * sx * scale).round().clamp(1.0, out_w as f64) as u32;
-    let tile_h = (src.height() as f64 / dpi_y * 914_400.0 * sy * scale).round().clamp(1.0, out_h as f64) as u32;
-    let tile_img = image::imageops::resize(src, tile_w, tile_h, image::imageops::FilterType::Triangle);
+    // A tile may be bigger than the box (only part of it shows); past a bound it is sampled from
+    // the picture as it is rather than resized first.
+    let tile_w = (src.width() as f64 / dpi_x * 914_400.0 * sx * scale).round().clamp(1.0, 100_000.0) as u32;
+    let tile_h = (src.height() as f64 / dpi_y * 914_400.0 * sy * scale).round().clamp(1.0, 100_000.0) as u32;
+    let resized = (tile_w <= 4096 && tile_h <= 4096).then(|| image::imageops::resize(src, tile_w, tile_h, image::imageops::FilterType::Triangle));
+    let pixel = |u: u32, v: u32| match &resized {
+        Some(t) => *t.get_pixel(u, v),
+        None => *src.get_pixel((u as u64 * src.width() as u64 / tile_w as u64) as u32, (v as u64 * src.height() as u64 / tile_h as u64) as u32),
+    };
     let (tw, th) = (tile_w as f64 / scale, tile_h as f64 / scale);
     let algn = extract_attr(tile, "algn").unwrap_or("tl");
     let [ax0, ay0, aw, ah] = area;
@@ -2115,7 +2196,7 @@ pub(crate) fn tile_picture(src: &image::RgbaImage, dpi: Option<(f64, f64)>, tile
         if flip_y && cy.rem_euclid(2) == 1 {
             v = th - 1 - v;
         }
-        *px = *tile_img.get_pixel(u as u32, v as u32);
+        *px = pixel(u as u32, v as u32);
     }
     out
 }
