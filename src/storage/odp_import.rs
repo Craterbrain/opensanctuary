@@ -82,6 +82,8 @@ struct Styles {
     masters: HashMap<String, (String, Option<String>, String)>,
     /// Footer / date-time declarations by name (`presentation:footer-decl`).
     footers: HashMap<String, String>,
+    /// Table templates by name: each part ("first-row", "odd-rows", "body"...) -> cell style.
+    templates: HashMap<String, HashMap<String, String>>,
 }
 
 const EMU_PER_CM: f64 = 360_000.0;
@@ -141,7 +143,15 @@ impl Styles {
                 }
             }
             for st in ["office:styles", "office:automatic-styles"].iter().filter_map(|t| next_tag(doc, t).map(|(_, i, _)| i)) {
-                for (n, a, _) in children(st) {
+                for (n, a, inner) in children(st) {
+                    if n == "table:table-template" {
+                        // Named by `table:name` (ODF 1.3), or `text:style-name` as LibreOffice once wrote it.
+                        if let Some(name) = extract_attr(a, "table:name").or_else(|| extract_attr(a, "text:style-name")) {
+                            let parts = children(inner).into_iter().filter_map(|(pn, pa, _)| Some((pn.trim_start_matches("table:").to_string(), extract_attr(pa, "table:style-name")?.to_string()))).collect();
+                            s.templates.entry(name.to_string()).or_insert(parts);
+                        }
+                        continue;
+                    }
                     let Some(name) = extract_attr(a, "draw:name") else { continue };
                     match n {
                         "draw:gradient" => { s.gradients.entry(name.to_string()).or_insert_with(|| a.to_string()); }
@@ -494,6 +504,10 @@ fn shape_box(attrs: &str) -> Option<([f64; 4], f64)> {
 /// The elements one page-level tag draws.
 fn shape_elements(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str, attrs: &str, inner: &str, ctx: &Ctx) -> Vec<SlideElement> {
     let mut out = Vec::new();
+    // A shape kept out of view ("none") or only printed isn't on screen.
+    if ["draw:display", "drawooo:display"].iter().any(|k| matches!(extract_attr(attrs, k), Some("none" | "printer"))) {
+        return out;
+    }
     match name {
         "draw:frame" => out.extend(frame_elements(archive, attrs, inner, ctx)),
         "draw:g" => {
@@ -625,7 +639,7 @@ fn shape_stroke(chain: &[&Style]) -> Option<(String, f64)> {
 
 /// A line's width in canvas units (1080 to the canvas height), as path elements use.
 fn canvas_stroke(width_emu: f64, geo: &Geo) -> f64 {
-    ((width_emu.max(6_350.0) / geo.canvas_h * 1080.0) * 100.0).round() / 100.0
+    pptx::geo_stroke(width_emu, geo)
 }
 
 /// The elements an evaluated geometry draws in `rect` (turned `rot`): a `Shape` per filled look,
@@ -961,22 +975,25 @@ fn frame_elements(archive: &mut ZipArchive<Cursor<&[u8]>>, attrs: &str, inner: &
     let Some(([x, y, w, h], rot)) = shape_box(attrs) else { return Vec::new() };
     let rect = [x, y, w, h];
     let mut out = Vec::new();
-    // A frame's own fill and outline (a filled text box, a framed picture).
+    let kids = children(inner);
+    // A frame's own fill and outline (a filled text box, a framed picture); a table has none, its
+    // cells drawing their own.
     let mut chain = ctx.shape_chain(attrs);
     chain.extend(ctx.defaults("graphic"));
+    let table = kids.iter().any(|(n, _, _)| *n == "table:table");
     let fill = match prop(&chain, "draw:fill") {
+        _ if table => None,
         Some("none") | None => None,
         _ => shape_fill(&chain, ctx).and_then(Result::ok),
     };
-    let stroke = (prop(&chain, "draw:stroke").is_some_and(|s| s != "none")).then(|| shape_stroke(&chain)).flatten();
+    let stroke = (!table && prop(&chain, "draw:stroke").is_some_and(|s| s != "none")).then(|| shape_stroke(&chain)).flatten();
     if fill.is_some() || stroke.is_some() {
         out.extend(geometry_elements(&rect_geometry(w, h, 0.0), fill.as_deref(), stroke.as_ref(), (false, false), rect, rot, &ctx.geo));
     }
-    let kids = children(inner);
     if let Some((_, _, ti)) = kids.iter().find(|(n, _, _)| *n == "draw:text-box") {
         out.extend(text_block(ti, attrs, rect, rot, &ctx.over(fill.as_deref()), false));
-    } else if let Some((_, _, ti)) = kids.iter().find(|(n, _, _)| *n == "table:table") {
-        out.extend(table_element(ti, attrs, rect, ctx));
+    } else if let Some((_, ta, ti)) = kids.iter().find(|(n, _, _)| *n == "table:table") {
+        out.extend(table_element(archive, ti, ta, rect, ctx));
     } else if let Some(chart) = kids.iter().find(|(n, _, _)| *n == "draw:object").and_then(|(_, a, _)| extract_attr(a, "xlink:href"))
         .and_then(|h| read_zip_text(archive, &format!("{}/content.xml", h.trim_start_matches("./").trim_end_matches('/'))).ok())
         .and_then(|doc| crate::storage::odp_chart::to_drawingml(&doc))
@@ -1040,10 +1057,29 @@ fn picture_fill(archive: &mut ZipArchive<Cursor<&[u8]>>, image: &str, chain: &[&
 fn fill_picture(archive: &mut ZipArchive<Cursor<&[u8]>>, href: &str, chain: &[&Style], size: [f64; 2], area: [f64; 4], paper: bool, ctx: &Ctx) -> Option<String> {
     let repeat = prop(chain, "style:repeat").unwrap_or("repeat");
     let bytes = read_zip_bytes(archive, href).ok()?;
+    // A page is drawn over white paper, so its see-through picture is blended onto white here
+    // (the app's own background opacity isn't drawn by every view).
+    let fade = if paper { prop(chain, "draw:opacity").and_then(|o| o.trim_end_matches('%').parse::<f64>().ok()).map_or(1.0, |p| (p / 100.0).clamp(0.0, 1.0)) } else { 1.0 };
+    let on_paper = |mut img: image::RgbaImage| {
+        for px in img.pixels_mut() {
+            let a = px[3] as f64 / 255.0 * fade;
+            let c = |v: u8| (v as f64 * a + 255.0 * (1.0 - a)).round() as u8;
+            *px = image::Rgba([c(px[0]), c(px[1]), c(px[2]), 255]);
+        }
+        img
+    };
     if repeat == "stretch" {
+        if fade < 1.0 {
+            if let Ok(src) = image::load_from_memory(&bytes) {
+                return ctx.store(format!("{href}#paper:{fade}"), &pptx::encode_picture(on_paper(src.to_rgba8()))?);
+            }
+        }
         return ctx.store(href.to_string(), &bytes);
     }
-    let key = format!("{href}#tile:{}x{}:{:?}:{paper}", size[0].round(), size[1].round(), area);
+    // Pages and shapes sharing a picture may tile it differently, so the key holds every setting.
+    let settings: Vec<Option<&str>> = ["draw:fill-image-width", "draw:fill-image-height", "draw:fill-image-ref-point", "draw:fill-image-ref-point-x", "draw:fill-image-ref-point-y", "draw:tile-repeat-offset"]
+        .iter().map(|k| prop(chain, k)).collect();
+    let key = format!("{href}#tile:{}x{}:{:?}:{paper}:{fade}:{repeat}:{settings:?}", size[0].round(), size[1].round(), area);
     if let Some(done) = ctx.media.borrow().get(&key) {
         return Some(done.clone());
     }
@@ -1058,7 +1094,9 @@ fn fill_picture(archive: &mut ZipArchive<Cursor<&[u8]>>, href: &str, chain: &[&S
     let algn = match prop(chain, "draw:fill-image-ref-point").unwrap_or("top-left") {
         "top" => "t", "top-right" => "tr", "left" => "l", "center" => "ctr", "right" => "r", "bottom-left" => "bl", "bottom" => "b", "bottom-right" => "br", _ => "tl",
     };
-    let tile = format!(r#"sx="{}" sy="{}" algn="{algn}""#, tw / nat_w * 100_000.0, th / nat_h * 100_000.0);
+    // The tiles start shifted by a share of their own size.
+    let shift = |k: &str, len: f64| prop(chain, k).and_then(|v| v.trim_end_matches('%').parse::<f64>().ok()).map_or(0.0, |p| len * p / 100.0);
+    let tile = format!(r#"sx="{}" sy="{}" algn="{algn}" tx="{}" ty="{}""#, tw / nat_w * 100_000.0, th / nat_h * 100_000.0, shift("draw:fill-image-ref-point-x", tw), shift("draw:fill-image-ref-point-y", th));
     let mut out = pptx::tile_picture(&src, Some(dpi), &tile, size, area, 1920.0 / ctx.geo.canvas_w);
     if repeat == "no-repeat" {
         // One copy only: everything outside the first tile is cleared.
@@ -1076,6 +1114,7 @@ fn fill_picture(archive: &mut ZipArchive<Cursor<&[u8]>>, href: &str, chain: &[&S
             }
         }
     }
+    let out = if fade < 1.0 { on_paper(out) } else { out };
     ctx.store(key, &pptx::encode_picture(out)?)
 }
 
@@ -1092,7 +1131,7 @@ fn page_background(archive: &mut ZipArchive<Cursor<&[u8]>>, chain: &[&Style], ct
             let area = [geo.x_off, geo.y_off, geo.canvas_w - 2.0 * geo.x_off, geo.canvas_h - 2.0 * geo.y_off];
             // Tiled over the whole canvas; a stretched picture is the slide's own size.
             let file_path = fill_picture(archive, &href, chain, [geo.canvas_w, geo.canvas_h], area, true, ctx)?;
-            Some(SlideBackground::Image { file_path, opacity: opacity.and_then(|o| o.trim_end_matches('%').parse::<f64>().ok()).map_or(1.0, |p| p / 100.0) })
+            Some(SlideBackground::Image { file_path, opacity: 1.0 })
         }
         "hatch" => prop(chain, "draw:fill-color").map(|c| SlideBackground::Solid(c.to_lowercase())),
         _ => None,
@@ -1102,7 +1141,7 @@ fn page_background(archive: &mut ZipArchive<Cursor<&[u8]>>, chain: &[&Style], ct
 /// A table: in a file this app wrote, its own `Table`; otherwise drawn as a group of cells (fill
 /// and border from each cell's style) with their text, columns and rows as wide and tall as the
 /// table's styles say.
-fn table_element(table_inner: &str, attrs: &str, rect: [f64; 4], ctx: &Ctx) -> Option<SlideElement> {
+fn table_element(archive: &mut ZipArchive<Cursor<&[u8]>>, table_inner: &str, attrs: &str, rect: [f64; 4], ctx: &Ctx) -> Option<SlideElement> {
     let cols_xml: Vec<(&str, &str, &str)> = children(table_inner).into_iter().filter(|(n, _, _)| *n == "table:table-column").collect();
     let rows_xml: Vec<(&str, &str, &str)> = children(table_inner).into_iter().filter(|(n, _, _)| *n == "table:table-row").collect();
     let ncols: usize = cols_xml.iter().map(|(_, a, _)| extract_attr(a, "table:number-columns-repeated").and_then(|n| n.parse::<usize>().ok()).unwrap_or(1).min(64)).sum::<usize>().max(1);
@@ -1118,7 +1157,29 @@ fn table_element(table_inner: &str, attrs: &str, rect: [f64; 4], ctx: &Ctx) -> O
         }
         return Some(SlideElement::Table { id: new_id(), transform: ctx.geo.transform(rect, 0.0), rows: cells.len(), cols: ncols, cells, text_color: None, border_color: None, font_size_pt: None });
     }
-    let _ = attrs;
+    // The table's template (its look by position: header row, banded rows...) under each cell's own style.
+    let template = extract_attr(attrs, "table:template-name").and_then(|n| ctx.styles.templates.get(n));
+    let uses = |k: &str| extract_attr(attrs, k) == Some("true");
+    let nrows = rows_xml.len();
+    let template_style = |r: usize, c: usize| -> Option<&str> {
+        let t = template?;
+        let part = if r == 0 && uses("table:use-first-row-styles") {
+            "first-row"
+        } else if r + 1 == nrows && uses("table:use-last-row-styles") {
+            "last-row"
+        } else if c == 0 && uses("table:use-first-column-styles") {
+            "first-column"
+        } else if c + 1 == ncols && uses("table:use-last-column-styles") {
+            "last-column"
+        } else if r % 2 == 1 && uses("table:use-banding-rows-styles") {
+            "odd-rows"
+        } else if c % 2 == 1 && uses("table:use-banding-columns-styles") {
+            "odd-columns"
+        } else {
+            "body"
+        };
+        t.get(part).or_else(|| t.get("body")).map(String::as_str)
+    };
     let style = |family: &str, name: Option<&str>| ctx.styles.chain(ctx.scope, family, name);
     let mut widths: Vec<f64> = Vec::new();
     for (_, a, _) in &cols_xml {
@@ -1130,54 +1191,126 @@ fn table_element(table_inner: &str, attrs: &str, rect: [f64; 4], ctx: &Ctx) -> O
     if total <= 0.0 {
         widths = vec![rect[2] / ncols as f64; ncols];
     }
-    let heights: Vec<f64> = rows_xml.iter().map(|(_, a, _)| {
+    let col_defaults: Vec<Option<&str>> = cols_xml.iter().flat_map(|(_, a, _)| {
+        let n = extract_attr(a, "table:number-columns-repeated").and_then(|n| n.parse::<usize>().ok()).unwrap_or(1).min(64);
+        std::iter::repeat_n(extract_attr(a, "table:default-cell-style-name"), n)
+    }).collect();
+    let mut heights: Vec<f64> = rows_xml.iter().map(|(_, a, _)| {
         let st = style("table-row", extract_attr(a, "table:style-name"));
         prop(&st, "style:row-height").or_else(|| prop(&st, "style:min-row-height")).and_then(length_emu).unwrap_or(rect[3] / rows_xml.len().max(1) as f64)
     }).collect();
     let col_x: Vec<f64> = std::iter::once(0.0).chain(widths.iter().scan(0.0, |acc, w| { *acc += w; Some(*acc) })).collect();
-    let row_y: Vec<f64> = std::iter::once(0.0).chain(heights.iter().scan(0.0, |acc, h| { *acc += h; Some(*acc) })).collect();
+    // A row's height is its least: first each row grows to fit its cells' text, then they're drawn.
     let mut kids = Vec::new();
-    for (r, (_, _, row)) in rows_xml.iter().enumerate().take(256) {
-        let mut c = 0;
-        for (n, a, cell) in children(row) {
-            if c >= ncols {
-                break;
+    // Borders go over every cell's fill (a neighbour's would hide a shared edge).
+    let mut edges = Vec::new();
+    for measuring in [true, false] {
+        let row_y: Vec<f64> = std::iter::once(0.0).chain(heights.iter().scan(0.0, |acc, h| { *acc += h; Some(*acc) })).collect();
+        for (r, (_, row_attrs, row)) in rows_xml.iter().enumerate().take(256) {
+            let mut c = 0;
+            for (n, a, cell) in children(row) {
+                if c >= ncols {
+                    break;
+                }
+                if n == "table:covered-table-cell" {
+                    c += 1;
+                    continue;
+                }
+                if n != "table:table-cell" {
+                    continue;
+                }
+                let span_c = extract_attr(a, "table:number-columns-spanned").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).max(1);
+                let span_r = extract_attr(a, "table:number-rows-spanned").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).max(1);
+                let (c2, r2) = ((c + span_c).min(ncols), (r + span_r).min(rows_xml.len()));
+                let cell_rect = [rect[0] + col_x[c], rect[1] + row_y[r], col_x[c2] - col_x[c], row_y[r2] - row_y[r]];
+                // A cell without a style of its own takes its row's default, else its column's.
+                let cell_style = extract_attr(a, "table:style-name")
+                    .or_else(|| extract_attr(row_attrs, "table:default-cell-style-name"))
+                    .or_else(|| col_defaults.get(c).copied().flatten());
+                let mut chain = style("table-cell", cell_style);
+                chain.extend(style("table-cell", template_style(r, c)));
+                // The text inside reads the same styles (its padding, its alignment, its colour); the
+                // template's goes in an attribute of this importer's own.
+                let mut cell_attrs = std::borrow::Cow::Borrowed(a);
+                if let (None, Some(name)) = (extract_attr(a, "table:style-name"), cell_style) {
+                    cell_attrs = std::borrow::Cow::Owned(format!(r#"{a} table:style-name="{name}""#));
+                }
+                if let Some(name) = template_style(r, c) {
+                    cell_attrs = std::borrow::Cow::Owned(format!(r#"{cell_attrs} os:template-style="{name}""#));
+                }
+                chain.extend(ctx.defaults("table-cell"));
+                let fill = match prop(&chain, "draw:fill") {
+                    Some("solid") | None if prop(&chain, "draw:fill-color").is_some() => prop(&chain, "draw:fill-color").map(|c| with_opacity(c, prop(&chain, "draw:opacity"))),
+                    Some("solid") => prop(&chain, "fo:background-color").filter(|c| *c != "transparent").map(str::to_lowercase),
+                    None => prop(&chain, "fo:background-color").filter(|c| *c != "transparent").map(str::to_lowercase),
+                    Some("gradient" | "hatch") => shape_fill(&chain, ctx).and_then(Result::ok),
+                    _ => None,
+                };
+                // Each side's `fo:border-<side>`, else `fo:border`, from the nearest style stating
+                // either: "0.03cm solid #000000".
+                let sides = ["top", "right", "bottom", "left"].map(|side| {
+                    let b = chain.iter().find_map(|st| st.props.get(&format!("fo:border-{side}")).or_else(|| st.props.get("fo:border")))?;
+                    let parts: Vec<&str> = b.split_whitespace().collect();
+                    if b.contains("none") || b.contains("hidden") {
+                        return None;
+                    }
+                    let color = parts.iter().find(|p| p.starts_with('#'))?.to_lowercase();
+                    let width = parts.iter().find_map(|p| length_emu(p)).unwrap_or(9_525.0);
+                    Some((color, width))
+                });
+                let cell_fill = fill.clone();
+                if measuring {
+                    if span_r == 1 {
+                        let text = text_block(cell, &cell_attrs, cell_rect, 0.0, &ctx.over(cell_fill.as_deref()), true);
+                        let needed = text.iter().map(|el| match el {
+                            SlideElement::TextBlock { block, transform, .. } => estimated_height(block, transform.w * ctx.geo.canvas_w, ctx.font_scale) + cell_rect[3] - transform.h * ctx.geo.canvas_h,
+                            _ => 0.0,
+                        }).fold(0.0, f64::max);
+                    heights[r] = heights[r].max(needed);
+                    }
+                    c += span_c;
+                    continue;
+                }
+                // A picture fill: the picture over the cell, under its border.
+                if prop(&chain, "draw:fill") == Some("bitmap") {
+                    if let Some(image) = prop(&chain, "draw:fill-image-name") {
+                        kids.extend(picture_fill(archive, image, &chain, &rect_geometry(cell_rect[2], cell_rect[3], 0.0), cell_rect, 0.0, ctx));
+                    }
+                }
+                if let Some(fill) = fill {
+                    kids.push(SlideElement::Shape { id: new_id(), transform: ctx.geo.transform(cell_rect, 0.0), shape_kind: "path".into(), fill_color: fill, stroke_width: 0.0, stroke_color: None, path: Some("M 0 0 L 100 0 L 100 100 L 0 100 Z".into()) });
+                }
+                edges.extend(pptx::cell_edges(cell_rect, &sides, &ctx.geo));
+                kids.extend(text_block(cell, &cell_attrs, cell_rect, 0.0, &ctx.over(cell_fill.as_deref()), true));
+                c += span_c;
             }
-            if n == "table:covered-table-cell" {
-                c += 1;
-                continue;
-            }
-            if n != "table:table-cell" {
-                continue;
-            }
-            let span_c = extract_attr(a, "table:number-columns-spanned").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).max(1);
-            let span_r = extract_attr(a, "table:number-rows-spanned").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).max(1);
-            let (c2, r2) = ((c + span_c).min(ncols), (r + span_r).min(rows_xml.len()));
-            let cell_rect = [rect[0] + col_x[c], rect[1] + row_y[r], col_x[c2] - col_x[c], row_y[r2] - row_y[r]];
-            let mut chain = style("table-cell", extract_attr(a, "table:style-name"));
-            chain.extend(ctx.defaults("table-cell"));
-            let fill = match prop(&chain, "draw:fill") {
-                Some("solid") | None if prop(&chain, "draw:fill-color").is_some() => prop(&chain, "draw:fill-color").map(|c| with_opacity(c, prop(&chain, "draw:opacity"))),
-                Some("solid") => prop(&chain, "fo:background-color").filter(|c| *c != "transparent").map(str::to_lowercase),
-                None => prop(&chain, "fo:background-color").filter(|c| *c != "transparent").map(str::to_lowercase),
-                _ => None,
-            };
-            // `fo:border` (or its first side): "0.03cm solid #000000".
-            let border = ["fo:border", "fo:border-top", "fo:border-left", "fo:border-bottom", "fo:border-right"].iter().find_map(|k| prop(&chain, k)).filter(|b| !b.contains("none")).and_then(|b| {
-                let parts: Vec<&str> = b.split_whitespace().collect();
-                let color = parts.iter().find(|p| p.starts_with('#'))?.to_lowercase();
-                let width = parts.iter().find_map(|p| length_emu(p)).unwrap_or(9_525.0);
-                Some((color, width))
-            });
-            let cell_fill = fill.clone();
-            if fill.is_some() || border.is_some() {
-                kids.push(SlideElement::Shape { id: new_id(), transform: ctx.geo.transform(cell_rect, 0.0), shape_kind: "path".into(), fill_color: fill.unwrap_or_else(|| "none".into()), stroke_width: border.as_ref().map_or(0.0, |(_, w)| canvas_stroke(*w, &ctx.geo)), stroke_color: border.map(|(c, _)| c), path: Some("M 0 0 L 100 0 L 100 100 L 0 100 Z".into()) });
-            }
-            kids.extend(text_block(cell, a, cell_rect, 0.0, &ctx.over(cell_fill.as_deref()), true));
-            c += span_c;
         }
     }
+    kids.extend(edges);
     (!kids.is_empty()).then(|| group_of(kids))
+}
+
+/// About how tall a text block wraps to at `width` EMU: each paragraph word-wrapped by its
+/// runs' fonts, its lines `line_height` (1.2 when single) of its largest size apart.
+fn estimated_height(block: &crate::core::models::TextBlock, width: f64, font_scale: f64) -> f64 {
+    use crate::storage::text_metrics::{wrapped_lines, Span};
+    let style = &block.paragraph_style;
+    let emu = |pt: f64| pt / font_scale.max(1e-6) * 12_700.0;
+    let mut paragraphs: Vec<Vec<Span>> = vec![Vec::new()];
+    for run in &block.runs {
+        for (i, piece) in run.text.split('\n').enumerate() {
+            if i > 0 {
+                paragraphs.push(Vec::new());
+            }
+            paragraphs.last_mut().expect("never empty").push(Span { text: piece, family: &run.font_family, bold: run.bold, size: emu(run.font_size_pt) });
+        }
+    }
+    let fallback = block.runs.iter().map(|r| emu(r.font_size_pt)).fold(0.0, f64::max);
+    paragraphs.iter().map(|spans| {
+        let size = spans.iter().filter(|s| !s.text.is_empty()).map(|s| s.size).fold(0.0, f64::max);
+        let size = if size > 0.0 { size } else { fallback };
+        wrapped_lines(spans, width) as f64 * size * style.line_height.max(0.5) + emu(style.space_before_pt + style.space_after_pt)
+    }).sum()
 }
 
 fn plain_paragraphs(xml: &str) -> String {
@@ -1263,20 +1396,31 @@ fn run_look(chains: &[&Style], ctx: &Ctx) -> RunLook {
     }
 }
 
-/// A stored picture's average colour, as `#rrggbb` (sampled on a small copy).
+/// A stored picture's average colour, as `#rrggbb`, sampled as LibreOffice's draft fill colour
+/// does: every pixel on a grid of about 8 × 8 steps from the top-left corner.
 fn average_color(path: &Path) -> Option<String> {
-    let img = image::open(path).ok()?.thumbnail(32, 32).to_rgb8();
-    let n = (img.width() * img.height()).max(1) as u64;
-    let sum = img.pixels().fold([0u64; 3], |acc, p| [acc[0] + p[0] as u64, acc[1] + p[1] as u64, acc[2] + p[2] as u64]);
+    let img = image::open(path).ok()?.to_rgb8();
+    let (w, h) = img.dimensions();
+    let (sx, sy) = ((w / 8).max(1) as usize, (h / 8).max(1) as usize);
+    let (mut sum, mut n) = ([0u64; 3], 0u64);
+    for y in (0..h).step_by(sy) {
+        for x in (0..w).step_by(sx) {
+            let p = img.get_pixel(x, y);
+            (0..3).for_each(|i| sum[i] += p[i] as u64);
+            n += 1;
+        }
+    }
+    let n = n.max(1);
     Some(format!("#{:02x}{:02x}{:02x}", sum[0] / n, sum[1] / n, sum[2] / n))
 }
 
-/// Whether a colour (`#rrggbb[aa]`) is dark enough that automatic text on it is white
-/// (LibreOffice's threshold: luminance at most 62 of 255).
+/// Whether a colour (`#rrggbb[aa]`) is dark enough that automatic text on it is white, by
+/// LibreOffice's rule: luminance at most 156 of 255, or 62 on its default shape blue (#729fcf).
 fn is_dark(color: Option<&str>) -> bool {
     let Some(c) = color.and_then(|c| c.strip_prefix('#')).filter(|c| c.len() >= 6) else { return false };
-    let v = |i: usize| u8::from_str_radix(&c[i..i + 2], 16).map(f64::from).unwrap_or(255.0);
-    0.299 * v(0) + 0.587 * v(2) + 0.114 * v(4) <= 62.0
+    let v = |i: usize| u8::from_str_radix(&c[i..i + 2], 16).map(u32::from).unwrap_or(255);
+    let luminance = (v(4) * 29 + v(2) * 151 + v(0) * 76) >> 8;
+    luminance <= if c[..6].eq_ignore_ascii_case("729fcf") { 62 } else { 156 }
 }
 
 fn run_of(text: String, look: &RunLook, ctx: &Ctx) -> TextRun {
@@ -1422,8 +1566,11 @@ fn pptx_inherit_label(kind: &str, n: usize) -> String {
 fn text_block(body: &str, attrs: &str, rect: [f64; 4], rot: f64, ctx: &Ctx, centred: bool) -> Option<SlideElement> {
     let frame = {
         let mut c = ctx.shape_chain(attrs);
-        if attrs.contains("table:style-name") {
+        if attrs.contains("table:style-name") || attrs.contains("os:template-style") {
             c = ctx.styles.chain(ctx.scope, "table-cell", extract_attr(attrs, "table:style-name"));
+            if let Some(t) = extract_attr(attrs, "os:template-style") {
+                c.extend(ctx.styles.chain(ctx.scope, "table-cell", Some(t)));
+            }
         }
         c
     };
@@ -1582,24 +1729,44 @@ fn text_block(body: &str, attrs: &str, rect: [f64; 4], rot: f64, ctx: &Ctx, cent
     let (pl, pt, pr, pb) = (pad("fo:padding-left", 91_440.0), pad("fo:padding-top", 45_720.0), pad("fo:padding-right", 91_440.0), pad("fo:padding-bottom", 45_720.0));
     let [x, y, w, h] = rect;
     let inner = [x + pl, y + pt, (w - pl - pr).max(w * 0.2), (h - pt - pb).max(h * 0.2)];
-    Some(SlideElement::TextBlock {
-        id: new_id(),
-        transform: ctx.geo.transform(inner, rot),
-        block: TextBlock {
-            runs,
-            paragraph_style: TextParagraphStyle {
-                align,
-                line_height: (line_height * 100.0).round() / 100.0,
-                space_before_pt,
-                space_after_pt,
-                vertical_align: Some(vertical_align.to_string()),
-                hanging_indent: any_lead,
-                ..Default::default()
-            },
-            effects: ElementEffects::default(),
-            autofit: false,
+    let mut block = TextBlock {
+        runs,
+        paragraph_style: TextParagraphStyle {
+            align,
+            line_height: (line_height * 100.0).round() / 100.0,
+            space_before_pt,
+            space_after_pt,
+            vertical_align: Some(vertical_align.to_string()),
+            hanging_indent: any_lead,
+            ..Default::default()
         },
-    })
+        effects: ElementEffects::default(),
+        autofit: false,
+    };
+    // "Shrink on overflow": LibreOffice scales the text down until it fits the box (and stores no
+    // scale), so the largest scale the estimate says fits is baked into the sizes here -- only
+    // past the estimate's own margin of error, so text that fits isn't shrunk by mistake.
+    if prop(&fchain, "style:shrink-to-fit") == Some("true") || prop(&fchain, "draw:fit-to-size") == Some("shrink-to-fit") {
+        let height_at = |s: f64| {
+            let mut b = block.clone();
+            b.runs.iter_mut().for_each(|r| r.font_size_pt *= s);
+            b.paragraph_style.space_before_pt *= s;
+            b.paragraph_style.space_after_pt *= s;
+            estimated_height(&b, inner[2], ctx.font_scale)
+        };
+        let fits = |s: f64| height_at(s) <= inner[3];
+        if height_at(1.0) > inner[3] * 1.15 {
+            let (mut lo, mut hi) = (0.05, 1.0);
+            for _ in 0..12 {
+                let mid = (lo + hi) / 2.0;
+                if fits(mid) { lo = mid } else { hi = mid }
+            }
+            block.runs.iter_mut().for_each(|r| r.font_size_pt = (r.font_size_pt * lo * 10.0).round() / 10.0);
+            block.paragraph_style.space_before_pt = (block.paragraph_style.space_before_pt * lo * 10.0).round() / 10.0;
+            block.paragraph_style.space_after_pt = (block.paragraph_style.space_after_pt * lo * 10.0).round() / 10.0;
+        }
+    }
+    Some(SlideElement::TextBlock { id: new_id(), transform: ctx.geo.transform(inner, rot), block })
 }
 
 /// Plain text (paragraphs joined with "\n") from the notes block's own text frame

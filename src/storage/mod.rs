@@ -14,6 +14,7 @@ pub mod pptx_geom;
 pub mod pptx_import;
 pub mod pptx_inherit;
 pub mod wmf;
+pub mod text_metrics;
 pub mod xml_scan;
 pub mod odp_chart;
 pub mod odp_geom;

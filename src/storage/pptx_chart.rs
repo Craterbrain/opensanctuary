@@ -17,7 +17,15 @@ struct Series {
     name: String,
     values: Vec<Option<f64>>,
     color: Option<String>,
+    /// Single points' own colours (`<c:dPt>`), by index.
+    points: Vec<Option<String>>,
     labels: bool,
+}
+
+impl Series {
+    fn point_color(&self, i: usize) -> Option<String> {
+        self.points.get(i).cloned().flatten()
+    }
 }
 
 struct Group {
@@ -76,7 +84,17 @@ fn parse_groups(plot: &str, ctx: &Ctx) -> Vec<Group> {
             let color = children(sppr).into_iter().find(|(n, _, _)| matches!(*n, "a:solidFill" | "a:gradFill" | "a:pattFill")).and_then(|(n, _, i)| fill_color(n, i, ctx, None))
                 .or_else(|| next_tag(sppr, "a:ln").and_then(|(_, l, _)| next_tag(l, "a:solidFill")).and_then(|(_, f, _)| ctx.palette().first_color(f, None)));
             let labels = shows_values(s).or(chart_labels).unwrap_or(false);
-            Series { name, values, color, labels }
+            let mut points: Vec<Option<String>> = Vec::new();
+            for (_, _, dpt) in children(s).into_iter().filter(|(n, _, _)| *n == "c:dPt") {
+                let Some(i) = next_tag(dpt, "c:idx").and_then(|(a, _, _)| extract_attr(a, "val")?.parse::<usize>().ok()).filter(|i| *i < 10_000) else { continue };
+                let sppr = next_tag(dpt, "c:spPr").map(|(_, i, _)| i).unwrap_or("");
+                let fill = children(sppr).into_iter().find(|(n, _, _)| matches!(*n, "a:solidFill" | "a:gradFill" | "a:pattFill")).and_then(|(n, _, i)| fill_color(n, i, ctx, None));
+                if i >= points.len() {
+                    points.resize(i + 1, None);
+                }
+                points[i] = fill;
+            }
+            Series { name, values, color, points, labels }
         }).collect::<Vec<_>>();
         if series.is_empty() {
             continue;
@@ -251,7 +269,7 @@ pub(super) fn chart_group(chart_xml: &str, rect: [f64; 4], ctx: &Ctx) -> Option<
     let legend_pos = next_tag(chart, "c:legend").map(|(_, l, _)| next_tag(l, "c:legendPos").and_then(|(a, _, _)| extract_attr(a, "val").map(str::to_string)).unwrap_or_else(|| "r".into()));
     let pie = matches!(groups[0].kind, Kind::Pie { .. });
     let entries: Vec<(String, String)> = if pie || (groups[0].vary_colors && groups[0].series.len() == 1) {
-        (0..ncat).map(|i| (cats.get(i).cloned().unwrap_or_default(), d.color(i))).collect()
+        (0..ncat).map(|i| (cats.get(i).cloned().unwrap_or_default(), groups[0].series[0].point_color(i).unwrap_or_else(|| d.color(i)))).collect()
     } else {
         let mut k = 0;
         groups.iter().flat_map(|g| g.series.iter()).map(|s| { k += 1; (s.name.clone(), s.color.clone().unwrap_or_else(|| d.color(k - 1))) }).collect()
@@ -323,7 +341,7 @@ fn draw_pie(d: &mut Draw, g: &Group, [px, py, pw, ph]: [f64; 4], hole: f64) {
         let sweep = v / total * std::f64::consts::TAU;
         let a1 = a0 + sweep;
         let large = sweep > std::f64::consts::PI;
-        let color = d.color(i);
+        let color = s.point_color(i).unwrap_or_else(|| d.color(i));
         let mut p = PathData::default();
         if sweep >= std::f64::consts::TAU - 1e-9 {
             // One slice is the whole pie: two half arcs.
@@ -467,7 +485,7 @@ fn draw_axes_chart(d: &mut Draw, plot: &str, groups: &[Group], cats: &[String], 
                         let offset = (if horizontal { py + ph - (c as f64 + 1.0) * band } else { px + c as f64 * band }) + bw * g.gap / 2.0 + slot * bw;
                         let (a, b) = (vpos(start.clamp(lo, hi)), vpos(end.clamp(lo, hi)));
                         let r = if horizontal { [a.min(b), offset, (b - a).abs(), bw] } else { [offset, a.min(b), bw, (b - a).abs()] };
-                        let color = if g.vary_colors && n == 1 { d.color(c) } else { s.color.clone().unwrap_or_else(|| d.color(color_k + k)) };
+                        let color = s.point_color(c).unwrap_or_else(|| if g.vary_colors && n == 1 { d.color(c) } else { s.color.clone().unwrap_or_else(|| d.color(color_k + k)) });
                         d.rect(r, &color, None);
                         if s.labels {
                             let label = number(raw, fmt_percent && !percent_stacked);
