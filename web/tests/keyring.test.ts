@@ -137,10 +137,10 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
     });
 
     test('validates input and throws on empty service or account', async () => {
-      expect(client.setSecret('', 'user', 'sec')).rejects.toThrow('Keyring service must not be empty');
-      expect(client.setSecret('   ', 'user', 'sec')).rejects.toThrow('Keyring service must not be empty');
-      expect(client.setSecret('svc', '', 'sec')).rejects.toThrow('Keyring account must not be empty');
-      expect(client.setSecret('svc', '   ', 'sec')).rejects.toThrow('Keyring account must not be empty');
+      await expect(client.setSecret('', 'user', 'sec')).rejects.toThrow('Keyring service must not be empty');
+      await expect(client.setSecret('   ', 'user', 'sec')).rejects.toThrow('Keyring service must not be empty');
+      await expect(client.setSecret('svc', '', 'sec')).rejects.toThrow('Keyring account must not be empty');
+      await expect(client.setSecret('svc', '   ', 'sec')).rejects.toThrow('Keyring account must not be empty');
 
       // getSecret/hasSecret/deleteSecret return null/false for empty input
       expect(await client.getSecret('', 'user')).toBeNull();
@@ -212,11 +212,11 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
     });
 
     test('validates username requirement', async () => {
-      expect(
+      await expect(
         client.setUserCredentials(KEYRING_SERVICES.CCLI, { username: '' })
       ).rejects.toThrow('Username must not be empty');
 
-      expect(
+      await expect(
         client.setUserCredentials(KEYRING_SERVICES.CCLI, { username: '   ' })
       ).rejects.toThrow('Username must not be empty');
     });
@@ -280,7 +280,7 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
       expect(deleted).toBe(false);
 
       // setSecret should throw so the caller knows save failed
-      expect(failingClient.setSecret('service', 'account', 'pass')).rejects.toThrow(
+      await expect(failingClient.setSecret('service', 'account', 'pass')).rejects.toThrow(
         'Keyring daemon unreachable'
       );
     });
@@ -362,7 +362,7 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
   describe('Plugin vaults', () => {
     test('a plugin vault sends its plugin token on every call', async () => {
       expect(await client.acquirePluginToken('obs_stream')).toBe('token_for_obs_stream');
-      expect(client.acquirePluginToken('   ')).rejects.toThrow('Plugin name must not be empty');
+      await expect(client.acquirePluginToken('   ')).rejects.toThrow('Plugin name must not be empty');
 
       const vault = client.forPlugin('my_plugin');
       expect(await vault.setApiKey('mine')).toBe(true);
@@ -380,7 +380,7 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
       expect(await client.getSecret(b, 'api_key', asA)).toBeNull();
       expect(await client.hasSecret(b, 'api_key', asA)).toBe(false);
       expect(await client.deleteSecret(b, 'api_key', asA)).toBe(false);
-      expect(client.setSecret(b, 'api_key', 'overwrite', asA)).rejects.toThrow('cannot access namespace');
+      await expect(client.setSecret(b, 'api_key', 'overwrite', asA)).rejects.toThrow('cannot access namespace');
       expect(await client.getSecret(b, 'api_key', { 'X-Plugin-Token': 'forged' })).toBeNull();
       expect(await client.forPlugin('plugin_b').getApiKey()).toBe('secret_b');
     });

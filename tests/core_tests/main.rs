@@ -34,19 +34,21 @@ mod storage;
 
 /// Points every keyring call in this test binary at one throwaway file instead of the OS keyring
 /// of the machine running the tests, where the real app keeps entries of the same names (a plugin's
-/// API keys, the licensed-passage key, the TLS key). Idempotent; `base_app_state` calls it, and so
-/// must any test that reaches the keyring without one (src/storage/keyring.rs).
+/// API keys, the licensed-passage key, the TLS key). Set in-process, not through the environment
+/// (src/storage/keyring.rs, `use_test_keyring_file`); the file lives in cargo's `target/tmp`, one
+/// per run. Idempotent; `base_app_state`, `open_db` and `open_db_with_dirs` call it.
 fn isolate_keyring() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        let dir = tempfile::tempdir().unwrap().keep();
-        std::env::set_var(os_next::storage::keyring::TEST_KEYRING_FILE_ENV, dir.join("keyring.json"));
+        let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("core_tests_keyring_{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        os_next::storage::keyring::use_test_keyring_file(path);
     });
 }
 
-/// `Database::new` for this test binary: an on-disk library reads the licensed-passage key from the
-/// keyring as it opens, so it isolates the keyring first. Tests open on-disk libraries only through
-/// these (an in-memory one never touches the keyring).
+/// `Database::new` for this test binary. A library on disk reaches the keyring for its
+/// licensed-passage key (sealing, reading or purging a passage), so open one only through this
+/// (or `open_db_with_dirs`), which isolates the keyring first; an in-memory one never touches it.
 fn open_db(path: impl AsRef<std::path::Path>) -> rusqlite::Result<Database> {
     isolate_keyring();
     Database::new(path)

@@ -103,8 +103,7 @@ describe('Settings > About', () => {
       globalThis.fetch = (async (url: string) => jsonResponse(url.includes('/api/updates/status') ? { status: null, restart_needed: restartNeeded } : { version: '0.3.10', instance_id: 'x', data_dir: '/d' })) as any;
       await loadSettingsServerInfo();
     };
-    expect(settingRowVisible(restart)).toBe(false);
-    await load(false);
+    await load(false); // start from a known state: the module is shared with every other test file
     expect(settingRowVisible(restart)).toBe(false);
     await load(true);
     expect(settingRowVisible(restart)).toBe(true);
