@@ -15,6 +15,8 @@ pub mod pptx_import;
 pub mod pptx_inherit;
 pub mod wmf;
 pub mod xml_scan;
+pub mod odp_chart;
+pub mod odp_geom;
 pub mod odp_import;
 pub mod odp_export;
 pub mod rtf;

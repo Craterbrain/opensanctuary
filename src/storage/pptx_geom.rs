@@ -27,6 +27,13 @@ pub fn is_preset(name: &str) -> bool {
     presets().contains_key(name)
 }
 
+/// A preset's adjust values' names, in the order its definition lists them (the order other
+/// formats, such as ODF's `draw:modifiers`, give their values in).
+pub fn adjust_names(name: &str) -> Vec<&'static str> {
+    let Some(def) = presets().get(name) else { return Vec::new() };
+    kid(def, "avLst").map(|(_, av)| children(av).into_iter().filter_map(|(n, a, _)| (local(n) == "gd").then(|| extract_attr(a, "name")).flatten()).collect()).unwrap_or_default()
+}
+
 /// How a path is painted: DrawingML lets one shape shade some of its parts (a can's lid, a
 /// bevel's sides) darker or lighter than its fill, or leave them unfilled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

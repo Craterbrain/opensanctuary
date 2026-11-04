@@ -204,7 +204,7 @@ impl PptxImporter {
 
 /// The deck's own name for itself is often just the tool's default ("PowerPoint Presentation")
 /// or the first slide's ("Slide 1", "Folie 1"); the file name says more.
-fn is_generic_title(t: &str) -> bool {
+pub(crate) fn is_generic_title(t: &str) -> bool {
     let t = t.trim().to_lowercase();
     if matches!(t.as_str(), "powerpoint presentation" | "powerpoint-präsentation" | "presentation" | "présentation powerpoint" | "presentación de powerpoint") {
         return true;
@@ -215,19 +215,19 @@ fn is_generic_title(t: &str) -> bool {
 
 /// Where a deck's slides land on this app's 16:9 canvas, and how big its points are there.
 #[derive(Clone, Copy)]
-struct Geo {
-    canvas_w: f64,
-    canvas_h: f64,
-    x_off: f64,
-    y_off: f64,
+pub(crate) struct Geo {
+    pub(crate) canvas_w: f64,
+    pub(crate) canvas_h: f64,
+    pub(crate) x_off: f64,
+    pub(crate) y_off: f64,
     /// Multiplier from the deck's points to this app's: text is sized against a 1080-unit-tall
     /// canvas where 1pt is 4/3 of a unit (web/src/core/slide_render.ts), so 11.25 / the canvas
     /// height in inches -- 1.5 for a standard 7.5in-tall slide.
-    font_scale: f64,
+    pub(crate) font_scale: f64,
 }
 
 impl Geo {
-    fn new(slide_w: f64, slide_h: f64) -> Geo {
+    pub(crate) fn new(slide_w: f64, slide_h: f64) -> Geo {
         let (canvas_w, canvas_h) = if slide_w / slide_h < 16.0 / 9.0 { (slide_h * 16.0 / 9.0, slide_h) } else { (slide_w, slide_w * 9.0 / 16.0) };
         Geo { canvas_w, canvas_h, x_off: (canvas_w - slide_w) / 2.0, y_off: (canvas_h - slide_h) / 2.0, font_scale: 11.25 / (canvas_h / 914_400.0) }
     }
@@ -235,7 +235,7 @@ impl Geo {
     /// An EMU rectangle on the slide as a canvas-relative `ElementTransform`. Not clamped to the
     /// canvas: a rotated shape's unrotated box can legitimately start off the slide (a long thin
     /// rule turned on end), and clamping it would move the shape.
-    fn transform(&self, [x, y, cx, cy]: [f64; 4], rotation_deg: f64) -> crate::core::models::ElementTransform {
+    pub(crate) fn transform(&self, [x, y, cx, cy]: [f64; 4], rotation_deg: f64) -> crate::core::models::ElementTransform {
         crate::core::models::ElementTransform {
             x: (x + self.x_off) / self.canvas_w,
             y: (y + self.y_off) / self.canvas_h,
@@ -319,7 +319,7 @@ impl Ctx<'_> {
 /// A font name as a CSS stack: the metric-compatible free fonts for Microsoft's (what a Linux
 /// machine has instead), then a generic family so a missing font never falls back to the
 /// browser's default serif.
-fn css_font_stack(name: &str) -> String {
+pub(crate) fn css_font_stack(name: &str) -> String {
     let substitute = match name.to_ascii_lowercase().as_str() {
         "calibri" => Some("Carlito"),
         "cambria" => Some("Caladea"),
@@ -1240,6 +1240,26 @@ fn extract_line_element(inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) -> O
 /// A Windows Metafile picture as a group of ordinary elements (`wmf`): each path a `Shape` (or a
 /// `Line` when open), each string a `TextBlock`, each bitmap an `Image`, laid out over the
 /// picture's own rectangle. `None` when the metafile draws nothing this can read.
+/// A Windows or Enhanced Metafile picture drawn as elements (see `metafile_group`), for importers
+/// other than this one: `rect` in EMU on a slide mapped by `geo`, bitmaps stored through `media`.
+pub(crate) fn metafile_elements(bytes: &[u8], rect: [f64; 4], geo: Geo, media: &RefCell<HashMap<String, String>>, media_dir: &Path) -> Option<SlideElement> {
+    let (theme, inherited) = (Theme::default(), Inherited::default());
+    let ctx = Ctx { geo, theme: &theme, map: ClrMap::default(), inh: &inherited, media, media_dir, table_styles: "", bg_fill: None };
+    metafile_group(bytes, rect, 0.0, &ctx, None, None)
+}
+
+/// A DrawingML chart part drawn as elements (see `pptx_chart`), for importers other than this
+/// one: series without their own colour take LibreOffice's default chart colours in turn.
+pub(crate) fn chart_elements(chart_xml: &str, rect: [f64; 4], geo: Geo, media: &RefCell<HashMap<String, String>>, media_dir: &Path) -> Option<SlideElement> {
+    let mut theme = Theme::default();
+    for (i, c) in ["#004586", "#ff420e", "#ffd320", "#579d1c", "#7e0021", "#83caff"].iter().enumerate() {
+        theme.colors.insert(format!("accent{}", i + 1), c.to_string());
+    }
+    let inherited = Inherited::default();
+    let ctx = Ctx { geo, theme: &theme, map: ClrMap::default(), inh: &inherited, media, media_dir, table_styles: "", bg_fill: None };
+    chart::chart_group(chart_xml, rect, &ctx)
+}
+
 fn metafile_group(bytes: &[u8], rect: [f64; 4], rot: f64, ctx: &Ctx, crop: Option<[f64; 4]>, clear: Option<&str>) -> Option<SlideElement> {
     use crate::storage::wmf::WmfItem;
     let wmf = if crate::storage::emf::is_emf(bytes) { crate::storage::emf::parse(bytes)? } else { crate::storage::wmf::parse(bytes)? };
@@ -2027,7 +2047,7 @@ impl Recolor {
 }
 
 /// Encodes a drawn picture: JPEG when it's opaque (photos, textures), else PNG.
-fn encode_picture(img: image::RgbaImage) -> Option<Vec<u8>> {
+pub(crate) fn encode_picture(img: image::RgbaImage) -> Option<Vec<u8>> {
     let mut encoded = Cursor::new(Vec::new());
     if img.pixels().all(|p| p[3] == 255) {
         image::DynamicImage::ImageRgba8(img).to_rgb8().write_to(&mut encoded, image::ImageFormat::Jpeg).ok()?;
@@ -2065,7 +2085,7 @@ fn background_picture(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, 
 /// is the picture's own size (from its DPI, else 96 dpi) scaled by `sx`/`sy`; the first one is
 /// placed by `algn` within `area` (x, y, w, h in the box) and moved by `tx`/`ty` (EMU); every
 /// other one is mirrored as `flip` says. Drawn at `scale` pixels per EMU.
-fn tile_picture(src: &image::RgbaImage, dpi: Option<(f64, f64)>, tile: &str, size: [f64; 2], area: [f64; 4], scale: f64) -> image::RgbaImage {
+pub(crate) fn tile_picture(src: &image::RgbaImage, dpi: Option<(f64, f64)>, tile: &str, size: [f64; 2], area: [f64; 4], scale: f64) -> image::RgbaImage {
     let (dpi_x, dpi_y) = dpi.unwrap_or((96.0, 96.0));
     let num = |k: &str, d: f64| extract_attr(tile, k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(d);
     let (sx, sy) = (num("sx", 100_000.0).abs() / 100_000.0, num("sy", 100_000.0).abs() / 100_000.0);
@@ -2101,7 +2121,7 @@ fn tile_picture(src: &image::RgbaImage, dpi: Option<(f64, f64)>, tile: &str, siz
 }
 
 /// A PNG's (`pHYs`) or JPEG's (JFIF) stated resolution in dots per inch, when it states one.
-fn image_dpi(bytes: &[u8]) -> Option<(f64, f64)> {
+pub(crate) fn image_dpi(bytes: &[u8]) -> Option<(f64, f64)> {
     let be32 = |at: usize| Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?) as f64);
     let be16 = |at: usize| Some(u16::from_be_bytes(bytes.get(at..at + 2)?.try_into().ok()?) as f64);
     let sane = |x: f64, y: f64| (x >= 10.0 && y >= 10.0 && x <= 10_000.0 && y <= 10_000.0).then_some((x, y));
@@ -2130,7 +2150,7 @@ fn image_dpi(bytes: &[u8]) -> Option<(f64, f64)> {
 }
 
 /// A gradient background as CSS, for the legacy `background` string.
-fn gradient_css(kind: &str, stops: &[GradientStop], angle_deg: Option<f64>) -> String {
+pub(crate) fn gradient_css(kind: &str, stops: &[GradientStop], angle_deg: Option<f64>) -> String {
     let list = stops.iter().map(|s| format!("{} {}%", s.color, (s.offset * 100.0).round())).collect::<Vec<_>>().join(", ");
     if kind == "radial" {
         format!("radial-gradient(circle, {list})")
