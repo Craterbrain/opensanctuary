@@ -106,6 +106,12 @@ impl PptxImporter {
             }
             let tree = next_tag_content(&slide_xml, "p:spTree").map(|(c, _)| c).unwrap_or(&slide_xml);
             elements.extend(extract_shapes_in_scope(&mut archive, path, tree, &ctx, None, false)?);
+            // ActiveX controls (buttons, boxes) sit outside the shape tree; each keeps a picture of itself.
+            if let Some((_, controls, _)) = next_tag(&slide_xml, "p:controls") {
+                for (_, _, pic) in find_pics(controls) {
+                    elements.extend(extract_picture_element(&mut archive, path, pic, &ctx, None));
+                }
+            }
             for (z, el) in elements.iter_mut().enumerate() {
                 el.transform_mut().z_index = z as i32;
             }
@@ -775,7 +781,22 @@ fn text_block_element(txbody: &str, list: &inh::ListStyle, body: &inh::BodyProps
 fn extract_picture_element(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, pic_inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) -> Option<SlideElement> {
     let rid = next_tag(pic_inner, "a:blip").and_then(|(attrs, _, _)| extract_attr(attrs, "r:embed"))?.to_string();
     let (rect, rot) = shape_rect(pic_inner, ctx, remap)?;
-    picture_element(archive, part_path, &rid, rect, rot, pic_inner, ctx)
+    let mut el = picture_element(archive, part_path, &rid, rect, rot, pic_inner, ctx)?;
+    // "Crop to shape": the picture shows through its geometry (a circle, a rounded box...).
+    if let SlideElement::Image { mask_shape, .. } = &mut el {
+        *mask_shape = geometry_clip(pic_inner, ctx, rect);
+    }
+    Some(el)
+}
+
+/// A shape's or picture's outline as a clip polygon for a picture in its box; `None` for a rectangle.
+fn geometry_clip(shape_inner: &str, ctx: &Ctx, rect: [f64; 4]) -> Option<String> {
+    let flips = xfrm_flips(shape_inner);
+    match shape_geometry(shape_inner, ctx) {
+        GeomSource::Preset("rect", _) => None,
+        GeomSource::Preset(prst, av) => pptx_geom::preset(prst, av, rect[2], rect[3], flips).as_ref().and_then(pptx_geom::clip_polygon),
+        GeomSource::Custom(cust) => pptx_geom::clip_polygon(&pptx_geom::custom(cust, rect[2], rect[3], flips)),
+    }
 }
 
 /// The picture relationship `rid` of `part_path` drawn in `rect`, cropped as `pic_inner`'s
@@ -787,10 +808,11 @@ fn picture_element(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, rid
         [f("l"), f("t"), f("r"), f("b")]
     }).filter(|c| c.iter().any(|v| *v != 0.0));
     let clear = transparent_color(pic_inner, ctx);
+    let recolor = next_tag(pic_inner, "a:blip").and_then(|(_, b, _)| Recolor::of(b, ctx, None));
     let media_path = embedded_path(archive, part_path, rid)?;
-    let key = match &clear {
-        Some(c) => format!("{media_path}#clear{c}"),
-        None => media_path.clone(),
+    let key = match (&clear, &recolor) {
+        (None, None) => media_path.clone(),
+        (c, r) => format!("{media_path}#clear{}#{}", c.as_deref().unwrap_or(""), r.as_ref().map(Recolor::key).unwrap_or_default()),
     };
     let cached = ctx.media.borrow().get(&key).cloned();
     let file_path = match cached {
@@ -803,6 +825,11 @@ fn picture_element(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, rid
                 return metafile_group(&bytes, rect, rot, ctx, src, clear.as_deref());
             }
             let bytes = clear.as_deref().and_then(|c| without_color(&bytes, c)).unwrap_or(bytes);
+            let bytes = recolor.as_ref().and_then(|r| {
+                let mut img = image::load_from_memory(&bytes).ok()?.to_rgba8();
+                r.apply(&mut img);
+                encode_picture(img)
+            }).unwrap_or(bytes);
             store_media(key, &bytes, ctx)?
         }
     };
@@ -841,16 +868,61 @@ fn without_color(bytes: &[u8], color: &str) -> Option<Vec<u8>> {
     Some(out.into_inner())
 }
 
+/// A shape whose own fill is a picture (`<p:spPr><a:blipFill>`): the picture stretched over the
+/// shape's box and clipped to its outline (a polygon following the geometry; a shape that can't be
+/// one polygon, such as a donut, shows the whole box). Its outline and text are drawn as usual.
+fn picture_filled_shape(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, shape_inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) -> Option<SlideElement> {
+    let (_, sppr, _) = next_tag(shape_inner, "p:spPr")?;
+    let (_, _, fill) = children(sppr).into_iter().find(|(n, _, _)| *n == "a:blipFill")?;
+    let rid = next_tag(fill, "a:blip").and_then(|(a, _, _)| extract_attr(a, "r:embed"))?.to_string();
+    let (rect, rot) = shape_rect(shape_inner, ctx, remap)?;
+    let mut el = match next_tag(fill, "a:tile").map(|(a, _, _)| a) {
+        // A texture: tiled over the shape's box, at the canvas's resolution.
+        Some(tile) => {
+            let media_path = embedded_path(archive, part_path, &rid)?;
+            let key = format!("{media_path}#tile:{tile}#{}x{}", rect[2].round(), rect[3].round());
+            let cached = ctx.media.borrow().get(&key).cloned();
+            let file_path = match cached {
+                Some(done) => done,
+                None => {
+                    let bytes = read_zip_bytes(archive, &media_path).ok()?;
+                    let src = image::load_from_memory(&bytes).ok()?.to_rgba8();
+                    let out = tile_picture(&src, image_dpi(&bytes), tile, [rect[2], rect[3]], [0.0, 0.0, rect[2], rect[3]], 1920.0 / ctx.geo.canvas_w);
+                    store_media(key, &encode_picture(out)?, ctx)?
+                }
+            };
+            SlideElement::Image { id: new_id(), transform: ctx.geo.transform(rect, rot), file_path, crop: None, mask_shape: None, alt_text: None, fit: Some("stretch".into()) }
+        }
+        None => picture_element(archive, part_path, &rid, rect, rot, fill, ctx)?,
+    };
+    if let SlideElement::Image { mask_shape, .. } = &mut el {
+        *mask_shape = geometry_clip(shape_inner, ctx, rect);
+    }
+    Some(el)
+}
+
+/// Every `<p:pic>` in some markup, outermost first, in document order (bounded by the markup).
+fn find_pics(xml: &str) -> Vec<(&str, &str, &str)> {
+    let mut out = Vec::new();
+    let mut rest = xml;
+    while let Some((attrs, inner, after)) = next_tag(rest, "p:pic") {
+        out.push(("p:pic", attrs, inner));
+        rest = after;
+    }
+    out
+}
+
 /// An embedded object (`<p:oleObj>`: a chart from another program, an old slide, an equation) as
 /// the preview picture its file keeps for it: a `<p:pic>` inside the object (PowerPoint 2010 and
 /// later), else the picture its legacy VML drawing gives the shape `spid` names.
 fn ole_preview(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) -> Option<SlideElement> {
     let rect = frame_rect(inner, remap)?;
-    let (ole_attrs, ole_inner, _) = next_tag(inner, "p:oleObj")?;
-    if let Some((_, pic, _)) = next_tag(ole_inner, "p:pic") {
+    // The picture can sit in an <mc:Fallback> beside a VML-only <mc:Choice>: look through the frame.
+    if let Some((_, pic, _)) = next_tag(inner, "p:pic") {
         let rid = next_tag(pic, "a:blip").and_then(|(a, _, _)| extract_attr(a, "r:embed"))?.to_string();
         return picture_element(archive, part_path, &rid, rect, 0.0, pic, ctx);
     }
+    let (ole_attrs, _, _) = next_tag(inner, "p:oleObj")?;
     let spid = extract_attr(ole_attrs, "spid")?;
     let vml_path = rel_target_of_type(archive, part_path, "/vmlDrawing")?;
     let vml = String::from_utf8_lossy(&read_zip_bytes(archive, &vml_path).ok()?).into_owned();
@@ -1370,6 +1442,18 @@ fn style_part(part_inner: &str, ctx: &Ctx) -> CellLook {
     look
 }
 
+/// PowerPoint's built-in table styles (`pptx_table_styles.xml`), for a deck that names one by id
+/// without defining it.
+static BUILTIN_TABLE_STYLES: &str = include_str!("pptx_table_styles.xml");
+
+/// The contents of the `<a:tblStyle>` with this id in a `tableStyles.xml`.
+fn table_style<'a>(list: &'a str, id: &str) -> Option<&'a str> {
+    children(next_tag(list, "a:tblStyleLst").map(|(_, i, _)| i).unwrap_or(""))
+        .into_iter()
+        .find(|(n, a, _)| *n == "a:tblStyle" && extract_attr(a, "styleId") == Some(id))
+        .map(|(_, _, i)| i)
+}
+
 /// About how tall a text body wraps to at `width` EMU: each paragraph's characters at half an em
 /// each (a fair average for proportional fonts), in lines 1.2 of its size apart.
 fn estimated_text_height(txbody: &str, width: f64) -> f64 {
@@ -1410,12 +1494,9 @@ fn extract_table_element(gf_inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) 
     let (tbl_pr_attrs, tbl_pr) = child(tbl, "a:tblPr").map(|(_, a, i)| (a, i)).unwrap_or(("", ""));
     let on = |k: &str| extract_attr(tbl_pr_attrs, k) == Some("1");
     let style_id = child(tbl_pr, "a:tableStyleId").map(|(_, _, i)| i.trim().to_string());
-    let style_xml = style_id.as_deref().and_then(|id| {
-        children(next_tag(ctx.table_styles, "a:tblStyleLst").map(|(_, i, _)| i).unwrap_or(""))
-            .into_iter()
-            .find(|(n, a, _)| *n == "a:tblStyle" && extract_attr(a, "styleId") == Some(id))
-            .map(|(_, _, i)| i)
-    }).unwrap_or("");
+    // The deck's own definition, else PowerPoint's built-in one: decks refer to built-in styles by
+    // id without always writing them out.
+    let style_xml = style_id.as_deref().and_then(|id| table_style(ctx.table_styles, id).or_else(|| table_style(BUILTIN_TABLE_STYLES, id))).unwrap_or("");
     let part = |name: &str| child(style_xml, name).map(|(_, _, i)| style_part(i, ctx)).unwrap_or_default();
     let (whole, first_row, last_row, first_col, last_col, band1h, band1v) =
         (part("a:wholeTbl"), part("a:firstRow"), part("a:lastRow"), part("a:firstCol"), part("a:lastCol"), part("a:band1H"), part("a:band1V"));
@@ -1806,6 +1887,8 @@ fn extract_shapes_in_scope(
                     elements.extend(text.or_else(|| extract_line_element(inner, ctx, remap)));
                     continue;
                 }
+                // A shape filled with a picture: the picture, cut to the shape's outline, under the rest.
+                elements.extend(picture_filled_shape(archive, part_path, inner, ctx, remap));
                 // A filled or outlined box with text in it is two elements: the box, then its text.
                 let use_bg_fill = extract_attr(attrs, "useBgFill").is_some_and(|v| v == "1" || v == "true");
                 elements.extend(extract_autoshape_element(inner, ctx, remap, use_bg_fill));
@@ -1863,8 +1946,14 @@ fn background_from_fill(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str
         "a:pattFill" => child(inner, "a:fgClr").and_then(|(_, _, i)| pal.first_color(i, ph)).map(SlideBackground::Solid),
         "a:gradFill" => gradient_of(inner, ctx, ph),
         "a:blipFill" => {
-            let rid = next_tag(inner, "a:blip").and_then(|(a, _, _)| extract_attr(a, "r:embed"))?.to_string();
-            extract_embedded_image(archive, part_path, &rid, ctx).map(|file_path| SlideBackground::Image { file_path, opacity: 1.0 })
+            let (blip_attrs, blip_inner, _) = next_tag(inner, "a:blip")?;
+            let rid = extract_attr(blip_attrs, "r:embed")?.to_string();
+            // A see-through picture (`<a:alphaModFix amt>`, thousandths of a percent of opaque).
+            let opacity = next_tag(blip_inner, "a:alphaModFix").and_then(|(a, _, _)| extract_attr(a, "amt")?.parse::<f64>().ok()).map_or(1.0, |v| (v / 100_000.0).clamp(0.0, 1.0));
+            let recolor = Recolor::of(blip_inner, ctx, ph);
+            let tile = next_tag(inner, "a:tile").map(|(a, _, _)| a);
+            let drawn = if tile.is_some() || recolor.is_some() { background_picture(archive, part_path, &rid, tile, recolor.as_ref(), ctx) } else { None };
+            drawn.or_else(|| extract_embedded_image(archive, part_path, &rid, ctx)).map(|file_path| SlideBackground::Image { file_path, opacity })
         }
         _ => None,
     }
@@ -1893,6 +1982,151 @@ fn gradient_of(inner: &str, ctx: &Ctx, ph: Option<&str>) -> Option<SlideBackgrou
             }
         }
     }
+}
+
+/// A picture's recolouring (`<a:blip>`'s `<a:duotone>` or `<a:grayscl/>`), as PowerPoint's
+/// "Recolor" and theme background textures use: each pixel's brightness picks a colour between
+/// the two (or a grey).
+#[derive(Clone, Debug, PartialEq)]
+enum Recolor {
+    Duotone([f64; 3], [f64; 3]),
+    Grayscale,
+}
+
+impl Recolor {
+    /// `ph` stands in for `phClr` (a theme background style passes its colour in).
+    fn of(blip_inner: &str, ctx: &Ctx, ph: Option<&str>) -> Option<Recolor> {
+        if child(blip_inner, "a:grayscl").is_some() {
+            return Some(Recolor::Grayscale);
+        }
+        let (_, _, duo) = child(blip_inner, "a:duotone")?;
+        let pal = ctx.palette();
+        let colors: Vec<[f64; 3]> = children(duo).into_iter().filter_map(|(n, a, i)| pal.color(n, a, i, ph)).take(2).map(|c| {
+            let v = |k: usize| u8::from_str_radix(c.get(k..k + 2).unwrap_or("00"), 16).unwrap_or(0) as f64;
+            [v(1), v(3), v(5)]
+        }).collect();
+        (colors.len() == 2).then(|| Recolor::Duotone(colors[0], colors[1]))
+    }
+
+    fn key(&self) -> String {
+        format!("{self:?}")
+    }
+
+    fn apply(&self, img: &mut image::RgbaImage) {
+        for p in img.pixels_mut() {
+            let lum = (0.299 * p[0] as f64 + 0.587 * p[1] as f64 + 0.114 * p[2] as f64) / 255.0;
+            let c = match self {
+                Recolor::Grayscale => [lum * 255.0; 3],
+                Recolor::Duotone(a, b) => [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * lum),
+            };
+            for k in 0..3 {
+                p[k] = c[k].round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+}
+
+/// Encodes a drawn picture: JPEG when it's opaque (photos, textures), else PNG.
+fn encode_picture(img: image::RgbaImage) -> Option<Vec<u8>> {
+    let mut encoded = Cursor::new(Vec::new());
+    if img.pixels().all(|p| p[3] == 255) {
+        image::DynamicImage::ImageRgba8(img).to_rgb8().write_to(&mut encoded, image::ImageFormat::Jpeg).ok()?;
+    } else {
+        img.write_to(&mut encoded, image::ImageFormat::Png).ok()?;
+    }
+    Some(encoded.into_inner())
+}
+
+/// A background picture that needs drawing at import: recoloured, and/or tiled (`<a:tile>`)
+/// into a picture the size of this app's canvas -- what the slide shows, so it needs nothing new
+/// to render. As PowerPoint (and LibreOffice) tile: each tile is the picture's own size (from its
+/// DPI, else 96 dpi) scaled by `sx`/`sy`, the first one placed by `algn` on the slide and moved by
+/// `tx`/`ty` (EMU), every other one mirrored as `flip` says. `None` (show it as it is) for a picture
+/// that can't be decoded, such as a metafile.
+fn background_picture(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, rid: &str, tile: Option<&str>, recolor: Option<&Recolor>, ctx: &Ctx) -> Option<String> {
+    let media_path = embedded_path(archive, part_path, rid)?;
+    let key = format!("{media_path}#tile:{}#{}", tile.unwrap_or(""), recolor.map(Recolor::key).unwrap_or_default());
+    if let Some(done) = ctx.media.borrow().get(&key) {
+        return Some(done.clone());
+    }
+    let bytes = read_zip_bytes(archive, &media_path).ok()?;
+    let mut src = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    if let Some(r) = recolor {
+        r.apply(&mut src);
+    }
+    let Some(tile) = tile else { return store_media(key, &encode_picture(src)?, ctx) };
+    let geo = ctx.geo;
+    // The whole canvas, the first tile aligned on the slide (not the pillarbox).
+    let out = tile_picture(&src, image_dpi(&bytes), tile, [geo.canvas_w, geo.canvas_h], [geo.x_off, geo.y_off, geo.canvas_w - 2.0 * geo.x_off, geo.canvas_h - 2.0 * geo.y_off], 1920.0 / geo.canvas_w);
+    store_media(key, &encode_picture(out)?, ctx)
+}
+
+/// `src` tiled over a box `size` EMU big (`<a:tile>`, as PowerPoint and LibreOffice tile): each tile
+/// is the picture's own size (from its DPI, else 96 dpi) scaled by `sx`/`sy`; the first one is
+/// placed by `algn` within `area` (x, y, w, h in the box) and moved by `tx`/`ty` (EMU); every
+/// other one is mirrored as `flip` says. Drawn at `scale` pixels per EMU.
+fn tile_picture(src: &image::RgbaImage, dpi: Option<(f64, f64)>, tile: &str, size: [f64; 2], area: [f64; 4], scale: f64) -> image::RgbaImage {
+    let (dpi_x, dpi_y) = dpi.unwrap_or((96.0, 96.0));
+    let num = |k: &str, d: f64| extract_attr(tile, k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(d);
+    let (sx, sy) = (num("sx", 100_000.0).abs() / 100_000.0, num("sy", 100_000.0).abs() / 100_000.0);
+    // Bounded: a box is drawn at most 1920 x 1920 pixels.
+    let (out_w, out_h) = ((size[0] * scale).round().clamp(1.0, 1920.0) as u32, (size[1] * scale).round().clamp(1.0, 1920.0) as u32);
+    let tile_w = (src.width() as f64 / dpi_x * 914_400.0 * sx * scale).round().clamp(1.0, out_w as f64) as u32;
+    let tile_h = (src.height() as f64 / dpi_y * 914_400.0 * sy * scale).round().clamp(1.0, out_h as f64) as u32;
+    let tile_img = image::imageops::resize(src, tile_w, tile_h, image::imageops::FilterType::Triangle);
+    let (tw, th) = (tile_w as f64 / scale, tile_h as f64 / scale);
+    let algn = extract_attr(tile, "algn").unwrap_or("tl");
+    let [ax0, ay0, aw, ah] = area;
+    let ax = if algn.ends_with('r') { aw - tw } else if matches!(algn, "t" | "b" | "ctr") { (aw - tw) / 2.0 } else { 0.0 };
+    let ay = if algn.starts_with('b') { ah - th } else if matches!(algn, "l" | "r" | "ctr") { (ah - th) / 2.0 } else { 0.0 };
+    let ox = ((ax0 + ax + num("tx", 0.0)) * scale).round() as i64;
+    let oy = ((ay0 + ay + num("ty", 0.0)) * scale).round() as i64;
+    let flip = extract_attr(tile, "flip").unwrap_or("none");
+    let (flip_x, flip_y) = (flip == "x" || flip == "xy", flip == "y" || flip == "xy");
+    let (tw, th) = (tile_w as i64, tile_h as i64);
+    let mut out = image::RgbaImage::new(out_w, out_h);
+    for (x, y, px) in out.enumerate_pixels_mut() {
+        let (dx, dy) = (x as i64 - ox, y as i64 - oy);
+        let (cx, cy) = (dx.div_euclid(tw), dy.div_euclid(th));
+        let (mut u, mut v) = (dx.rem_euclid(tw), dy.rem_euclid(th));
+        if flip_x && cx.rem_euclid(2) == 1 {
+            u = tw - 1 - u;
+        }
+        if flip_y && cy.rem_euclid(2) == 1 {
+            v = th - 1 - v;
+        }
+        *px = *tile_img.get_pixel(u as u32, v as u32);
+    }
+    out
+}
+
+/// A PNG's (`pHYs`) or JPEG's (JFIF) stated resolution in dots per inch, when it states one.
+fn image_dpi(bytes: &[u8]) -> Option<(f64, f64)> {
+    let be32 = |at: usize| Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?) as f64);
+    let be16 = |at: usize| Some(u16::from_be_bytes(bytes.get(at..at + 2)?.try_into().ok()?) as f64);
+    let sane = |x: f64, y: f64| (x >= 10.0 && y >= 10.0 && x <= 10_000.0 && y <= 10_000.0).then_some((x, y));
+    if bytes.starts_with(b"\x89PNG") {
+        // Chunks after the 8-byte signature: length, type, data, CRC. pHYs comes before the image data.
+        let mut at = 8;
+        while at + 8 <= bytes.len() {
+            let len = be32(at)? as usize;
+            match bytes.get(at + 4..at + 8)? {
+                b"pHYs" if bytes.get(at + 16) == Some(&1) => return sane(be32(at + 8)? * 0.0254, be32(at + 12)? * 0.0254),
+                b"IDAT" | b"IEND" => return None,
+                _ => at = at.checked_add(12 + len)?,
+            }
+        }
+        return None;
+    }
+    if bytes.starts_with(&[0xFF, 0xD8]) && bytes.get(6..11) == Some(b"JFIF\0") {
+        let (unit, x, y) = (*bytes.get(13)?, be16(14)?, be16(16)?);
+        return match unit {
+            1 => sane(x, y),
+            2 => sane(x * 2.54, y * 2.54),
+            _ => None,
+        };
+    }
+    None
 }
 
 /// A gradient background as CSS, for the legacy `background` string.
