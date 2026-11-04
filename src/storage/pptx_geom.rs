@@ -43,6 +43,8 @@ pub enum FillMode {
 pub struct GeomPath {
     /// SVG path data in the shape's 0..100 box.
     pub d: String,
+    /// The same outline flattened to points (curves and arcs sampled), one list per subpath.
+    pub points: Vec<Vec<(f64, f64)>>,
     pub fill: FillMode,
     pub stroke: bool,
 }
@@ -176,11 +178,25 @@ fn path(g: &Guides, attrs: &str, inner: &str, w: f64, h: f64, flip: (bool, bool)
     let space = |k: &str| extract_attr(attrs, k).and_then(|v| v.parse::<f64>().ok()).filter(|v| *v > 0.0);
     let (sx, sy) = (space("w").map_or(1.0, |pw| w / pw), space("h").map_or(1.0, |ph| h / ph));
     let (bw, bh) = (if w > 0.0 { w } else { 1.0 }, if h > 0.0 { h } else { 1.0 });
-    let norm = |(x, y): (f64, f64)| {
+    let unit = |(x, y): (f64, f64)| {
         let (mut x, mut y) = (x / bw * 100.0, y / bh * 100.0);
         if flip.0 { x = 100.0 - x }
         if flip.1 { y = 100.0 - y }
+        (x, y)
+    };
+    let norm = |p: (f64, f64)| {
+        let (x, y) = unit(p);
         format!("{} {}", num(x), num(y))
+    };
+    let mut points: Vec<Vec<(f64, f64)>> = Vec::new();
+    // Every point a command reaches, flattened (bounded: a path is a few dozen commands).
+    let mut add = |p: (f64, f64), new: bool| {
+        if new || points.is_empty() {
+            points.push(Vec::new());
+        }
+        if let Some(last) = points.last_mut() {
+            last.push(unit(p));
+        }
     };
     let pt = |a: &str| -> Option<(f64, f64)> { Some((g.get(extract_attr(a, "x")?) * sx, g.get(extract_attr(a, "y")?) * sy)) };
     let pts = |i: &str| -> Vec<(f64, f64)> { children(i).into_iter().filter(|(n, _, _)| local(n) == "pt").filter_map(|(_, a, _)| pt(a)).collect() };
@@ -194,6 +210,25 @@ fn path(g: &Guides, attrs: &str, inner: &str, w: f64, h: f64, flip: (bool, bool)
                 let (letter, n) = match c { "moveTo" => ('M', 1), "lnTo" => ('L', 1), "cubicBezTo" => ('C', 3), _ => ('Q', 2) };
                 if p.len() < n {
                     continue;
+                }
+                match c {
+                    "moveTo" => add(p[0], true),
+                    "lnTo" => add(p[0], false),
+                    _ => {
+                        // Sampled along the curve (Bézier in Bernstein form; a quadratic has one control point).
+                        for k in 1..=8 {
+                            let t = k as f64 / 8.0;
+                            let u = 1.0 - t;
+                            let q = if n == 3 {
+                                let w = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
+                                (w[0] * cur.0 + w[1] * p[0].0 + w[2] * p[1].0 + w[3] * p[2].0, w[0] * cur.1 + w[1] * p[0].1 + w[2] * p[1].1 + w[3] * p[2].1)
+                            } else {
+                                let w = [u * u, 2.0 * u * t, t * t];
+                                (w[0] * cur.0 + w[1] * p[0].0 + w[2] * p[1].0, w[0] * cur.1 + w[1] * p[0].1 + w[2] * p[1].1)
+                            };
+                            add(q, false);
+                        }
+                    }
                 }
                 cur = p[n - 1];
                 d.push(format!("{letter} {}", p[..n].iter().map(|q| norm(*q)).collect::<Vec<_>>().join(" ")));
@@ -219,6 +254,10 @@ fn path(g: &Guides, attrs: &str, inner: &str, w: f64, h: f64, flip: (bool, bool)
                 let rx = num(wr / bw * 100.0);
                 let ry = num(hr / bh * 100.0);
                 let sweep = (sw > 0.0) != (flip.0 != flip.1);
+                for k in 1..=(steps * 12) {
+                    let e = on(st + sw * k as f64 / (steps * 12) as f64);
+                    add((c.0 + e.0, c.1 + e.1), false);
+                }
                 for k in 1..=steps {
                     let e = on(st + sw * k as f64 / steps as f64);
                     let end = (c.0 + e.0, c.1 + e.1);
@@ -242,7 +281,19 @@ fn path(g: &Guides, attrs: &str, inner: &str, w: f64, h: f64, flip: (bool, bool)
         _ => FillMode::Norm,
     };
     let stroke = !matches!(extract_attr(attrs, "stroke"), Some("0" | "false"));
-    Some(GeomPath { d: d.join(" "), fill, stroke })
+    Some(GeomPath { d: d.join(" "), points, fill, stroke })
+}
+
+/// The geometry's outline as a CSS `polygon(...)` in percent of its box, when it is one filled
+/// outline (a donut's hole, or several pieces, can't be one polygon).
+pub fn clip_polygon(g: &Geometry) -> Option<String> {
+    let mut filled = g.paths.iter().filter(|p| p.fill != FillMode::None);
+    let path = filled.next()?;
+    if filled.next().is_some() || path.points.len() != 1 || path.points[0].len() < 3 {
+        return None;
+    }
+    let pts: Vec<String> = path.points[0].iter().map(|(x, y)| format!("{}% {}%", num(*x), num(*y))).collect();
+    Some(format!("polygon({})", pts.join(", ")))
 }
 
 /// A `#rrggbb` (or `#rrggbbaa`) fill shaded the way a path's fill mode asks; a gradient is left as is.

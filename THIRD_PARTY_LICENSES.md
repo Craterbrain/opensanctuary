@@ -222,6 +222,15 @@ to an end user and is omitted.
 - **License**: the ECMA-376 standard is published by Ecma International free of charge for
   implementation; the file as taken from Apache POI is under Apache-2.0.
 
+### PowerPoint's built-in table styles (`src/storage/pptx_table_styles.xml`)
+
+- **Source**: the definitions PowerPoint itself writes into decks' `ppt/tableStyles.xml` (46 of
+  the 74, taken from decks in Apache POI's and LibreOffice's test corpora), the remaining ones
+  derived from a style of the same family by changing its accent colour. Style ids and families
+  as Microsoft publishes them.
+- **Use**: compiled into `os-next` (`src/storage/pptx_import.rs`) for decks that name a built-in
+  table style without defining it.
+
 ## Bundled or fetched external tools (not Rust/Cargo dependencies)
 
 These aren't linked into `os-next`'s own binary -- they're invoked as

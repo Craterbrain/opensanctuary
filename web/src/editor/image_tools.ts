@@ -85,6 +85,11 @@ export function renderImageDOM(containerEl: HTMLElement, props: ImageElementProp
 }
 
 export function applyMaskShape(el: HTMLElement, maskShape: string): void {
+  // An imported shape's outline, flattened to a polygon in percent of the box.
+  if (maskShape.startsWith('polygon(')) {
+    el.style.clipPath = maskShape;
+    return;
+  }
   switch (maskShape) {
     case 'circle':
     case 'ellipse':

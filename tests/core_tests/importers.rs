@@ -3049,3 +3049,103 @@ fn test_pptx_import_paints_shapes_and_spaces_paragraphs_as_the_deck_says() {
     // An empty <p:bg/> states nothing: the master's background shows.
     assert_eq!(pres.slides[1].background.as_deref(), Some("#203040"));
 }
+
+#[test]
+fn test_pptx_import_tiles_and_recolours_pictures_as_powerpoint_does() {
+    use os_next::core::models::{SlideBackground, SlideElement};
+    use std::io::{Cursor, Write};
+    use zip::write::FileOptions;
+    use zip::ZipWriter;
+
+    // A 2x1 picture, red then blue, stated as 96 dpi: 2 px is 19050 EMU wide.
+    let mut png = Cursor::new(Vec::new());
+    image::RgbaImage::from_fn(2, 1, |x, _| if x == 0 { image::Rgba([255, 0, 0, 255]) } else { image::Rgba([0, 0, 255, 255]) })
+        .write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let png = png.into_inner();
+    const NS: &str = r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+    // Tiled at 10000% (each tile 2 x 1 inches over the 13.33 x 7.5 inch slide), mirrored every
+    // other tile; a picture recoloured to a white..black duotone (red's brightness is 30%).
+    let slide = format!(r#"<p:sld {NS}><p:cSld><p:bg><p:bgPr><a:blipFill><a:blip r:embed="rId2"/><a:tile tx="0" ty="0" sx="10000000" sy="10000000" flip="x" algn="tl"/></a:blipFill></p:bgPr></p:bg><p:spTree>
+        <p:pic><p:nvPicPr><p:cNvPr id="2" name="P"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"><a:duotone><a:srgbClr val="FFFFFF"/><a:srgbClr val="000000"/></a:duotone></a:blip><a:stretch/></p:blipFill>
+          <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"/></p:spPr></p:pic>
+      </p:spTree></p:cSld></p:sld>"#);
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>"#;
+    let mut zw = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = FileOptions::<()>::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, content) in [("ppt/slides/slide1.xml", slide.as_bytes()), ("ppt/slides/_rels/slide1.xml.rels", rels.as_bytes()), ("ppt/media/image1.png", &png[..])] {
+        zw.start_file(name, options).unwrap();
+        zw.write_all(content).unwrap();
+    }
+    let bytes = zw.finish().unwrap().into_inner();
+
+    let media_dir = tempfile::tempdir().unwrap();
+    let pres = PptxImporter::import_pptx_bytes(&bytes, "stem", media_dir.path()).expect("should parse");
+    let slide = &pres.slides[0];
+    let file_of = |p: &str| media_dir.path().join(p.trim_start_matches("/media/images/"));
+
+    // The background is drawn tiled into one canvas-sized picture: tile 1 is red | blue, tile 2
+    // mirrored (blue | red), each tile 1920 * 2 / 13.33 = 288 px wide.
+    let Some(SlideBackground::Image { file_path, opacity }) = &slide.background_v2 else { panic!("{:?}", slide.background_v2) };
+    assert_eq!(*opacity, 1.0);
+    let bg = image::open(file_of(file_path)).unwrap().to_rgb8();
+    assert_eq!(bg.dimensions(), (1920, 1080));
+    let red = |x: u32| { let p = bg.get_pixel(x, 10); p[0] > 200 && p[2] < 60 };
+    let blue = |x: u32| { let p = bg.get_pixel(x, 10); p[2] > 200 && p[0] < 60 };
+    assert!(red(20) && blue(260), "first tile as is");
+    assert!(blue(310) && red(560), "second tile mirrored");
+
+    // The duotone runs from its first colour (dark pixels) to its second (light): white..black puts
+    // red (30% bright) 30% of the way to black, blue (11%) 11%.
+    let SlideElement::Image { file_path, .. } = &slide.elements[0] else { panic!("{:?}", slide.elements) };
+    let pic = image::open(file_of(file_path)).unwrap().to_rgb8();
+    let (r, b) = (pic.get_pixel(0, 0)[0] as i32, pic.get_pixel(1, 0)[0] as i32);
+    assert!((r - 179).abs() <= 3 && (b - 226).abs() <= 3, "{r} {b}");
+}
+
+#[test]
+fn test_pptx_import_draws_builtin_table_styles_controls_objects_and_shaped_pictures() {
+    use os_next::core::models::SlideElement;
+    use std::io::{Cursor, Write};
+    use zip::write::FileOptions;
+    use zip::ZipWriter;
+
+    let mut png = Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([10, 200, 10, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let png = png.into_inner();
+    const NS: &str = r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006""#;
+    let xfrm = |x: u32| format!(r#"<a:xfrm><a:off x="{x}" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm>"#);
+    let slide = format!(r#"<p:sld {NS}><p:cSld><p:spTree>
+        <p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="2" name="T"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="2000000"/><a:ext cx="2000000" cy="740000"/></p:xfrm>
+          <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr firstRow="1" bandRow="1"><a:tableStyleId>{{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}}</a:tableStyleId></a:tblPr>
+            <a:tblGrid><a:gridCol w="2000000"/></a:tblGrid><a:tr h="370000"><a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>Head</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc></a:tr><a:tr h="370000"><a:tc><a:txBody><a:bodyPr/><a:p/></a:txBody><a:tcPr/></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>
+        <p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="3" name="O"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="3000000" y="2000000"/><a:ext cx="1000000" cy="1000000"/></p:xfrm>
+          <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><mc:AlternateContent><mc:Choice Requires="v"><p:oleObj name="Sheet" r:id="rId9" progId="Excel.Sheet.12"><p:embed/></p:oleObj></mc:Choice>
+            <mc:Fallback><p:oleObj name="Sheet" r:id="rId9" progId="Excel.Sheet.12"><p:embed/><p:pic><p:nvPicPr><p:cNvPr id="0" name=""/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"/><a:stretch/></p:blipFill><p:spPr>{x3}</p:spPr></p:pic></p:oleObj></mc:Fallback></mc:AlternateContent></a:graphicData></a:graphic></p:graphicFrame>
+        <p:pic><p:nvPicPr><p:cNvPr id="4" name="Round"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"/><a:stretch/></p:blipFill><p:spPr>{x0}<a:prstGeom prst="ellipse"/></p:spPr></p:pic>
+        <p:sp><p:nvSpPr><p:cNvPr id="5" name="Filled"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>{x1}<a:prstGeom prst="triangle"/><a:blipFill><a:blip r:embed="rId2"/></a:blipFill></p:spPr></p:sp>
+      </p:spTree></p:cSld>
+      <p:controls><mc:AlternateContent><mc:Choice Requires="v"><p:control spid="1" name="Button" r:id="rId9"/></mc:Choice><mc:Fallback><p:control name="Button" r:id="rId9"><p:pic><p:nvPicPr><p:cNvPr id="6" name="Button"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"/><a:stretch/></p:blipFill><p:spPr>{x5}</p:spPr></p:pic></p:control></mc:Fallback></mc:AlternateContent></p:controls></p:sld>"#,
+        x0 = xfrm(0), x1 = xfrm(1_100_000), x3 = xfrm(3_000_000), x5 = xfrm(5_000_000));
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>"#;
+    let mut zw = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = FileOptions::<()>::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, content) in [("ppt/slides/slide1.xml", slide.as_bytes()), ("ppt/slides/_rels/slide1.xml.rels", rels.as_bytes()), ("ppt/media/image1.png", &png[..])] {
+        zw.start_file(name, options).unwrap();
+        zw.write_all(content).unwrap();
+    }
+    let media_dir = tempfile::tempdir().unwrap();
+    let pres = PptxImporter::import_pptx_bytes(&zw.finish().unwrap().into_inner(), "stem", media_dir.path()).expect("should parse");
+    let els = &pres.slides[0].elements;
+
+    // The deck names PowerPoint's default table style without defining it: the built-in one
+    // (Medium Style 2 - Accent 1) still applies -- its header row is bold. (This deck has no theme
+    // for its accent fills to resolve against.)
+    let SlideElement::Group { children, .. } = &els[0] else { panic!("{:?}", els[0]) };
+    assert!(children.iter().any(|c| matches!(c, SlideElement::TextBlock { block, .. } if block.runs.iter().any(|r| r.text == "Head" && r.bold))), "{children:?}");
+
+    let image_at = |x: f64| els.iter().find_map(|e| match e { SlideElement::Image { transform, mask_shape, .. } if (transform.x - x / 12_192_000.0).abs() < 1e-6 => Some(mask_shape.clone()), _ => None });
+    assert_eq!(image_at(3_000_000.0), Some(None), "the embedded object's preview from its fallback");
+    assert!(image_at(0.0).flatten().is_some_and(|m| m.starts_with("polygon(") && m.matches('%').count() > 60), "cropped to an ellipse");
+    assert!(image_at(1_100_000.0).flatten().is_some_and(|m| m == "polygon(0% 100%, 50% 0%, 100% 100%)"), "a triangle filled with the picture: {:?}", image_at(1_100_000.0));
+    assert_eq!(image_at(5_000_000.0), Some(None), "the ActiveX control's picture");
+}
