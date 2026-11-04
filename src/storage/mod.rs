@@ -17,6 +17,20 @@ pub mod rtf;
 pub mod transcode;
 pub mod keyring;
 
+/// Writes a file only its owner can read (0600 on Unix), for keys and secrets kept on disk.
+#[cfg(unix)]
+pub(crate) fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+    f.write_all(data)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, data)
+}
+
 pub use db::{CcliUsageRow, Database, InstalledBibleInfo, PairedDevice};
 pub use ewsx::EwsxManager;
 pub use freeshow_import::{find_book_meta, find_book_meta_exact, parse_scripture_reference, BibleBookMeta, FreeShowImporter, ParsedScriptureRef, BIBLE_BOOKS_META, KNOWN_BIBLE_VERSIONS};

@@ -74,19 +74,6 @@ fn random_key() -> Result<[u8; 32]> {
     Ok(k)
 }
 
-#[cfg(unix)]
-fn write_private(path: &Path, data: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
-    f.write_all(data.as_bytes())
-}
-
-#[cfg(not(unix))]
-fn write_private(path: &Path, data: &str) -> std::io::Result<()> {
-    std::fs::write(path, data)
-}
-
 /// Seals `plain` for row `id`: `os1 || nonce(12) || ciphertext || tag`. The id is authenticated, so a
 /// sealed blob can't be moved to another row.
 pub(super) fn seal(key: &[u8; 32], id: &str, plain: &[u8]) -> Result<Vec<u8>> {
@@ -177,7 +164,7 @@ impl Database {
             }
         }
         let k = random_key()?;
-        write_private(&path, &encode_key(&k)).map_err(|e| oops(format!("could not store the cache key: {e}")))?;
+        crate::storage::write_private(&path, encode_key(&k).as_bytes()).map_err(|e| oops(format!("could not store the cache key: {e}")))?;
         Ok(k)
     }
 

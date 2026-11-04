@@ -60,7 +60,7 @@ fn plugin_manifest_json(id: &str) -> String {
 async fn test_app_state_plugin_token_lifecycle() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_tokens.db");
-    let db = Database::new(&db_path).expect("Database::new");
+    let db = open_db(&db_path).expect("Database::new");
     let event_log = Arc::new(EventLog::new(100));
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _) = tokio::sync::broadcast::channel(16);
@@ -106,7 +106,7 @@ async fn test_app_state_plugin_token_lifecycle() {
 async fn test_plugin_token_requires_a_real_installed_plugin() {
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_plugin_token.db");
-    let db = os_next::storage::Database::new(db_path.to_str().unwrap()).unwrap();
+    let db = open_db(db_path.to_str().unwrap()).unwrap();
     let event_log = Arc::new(EventLog::with_initial_sequence(3000, 0));
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
@@ -128,10 +128,7 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
         ..base_app_state(db.clone())
     };
 
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
+    serve(listener, app_state);
 
     let client = reqwest::Client::new();
 
@@ -179,7 +176,7 @@ async fn test_plugin_token_requires_a_real_installed_plugin() {
 #[tokio::test]
 async fn test_plugin_grant_routes_and_web_plugin_serving() {
     let test_dir = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(test_dir.path().join("plugins.db").to_str().unwrap()).unwrap();
+    let db = open_db(test_dir.path().join("plugins.db").to_str().unwrap()).unwrap();
     let web_dir = test_dir.path().join("web");
     std::fs::create_dir_all(web_dir.join("plugins")).unwrap();
     std::fs::write(web_dir.join("plugins/demo_gate.js"), b"export default { init() {} };").unwrap();
@@ -209,10 +206,7 @@ async fn test_plugin_grant_routes_and_web_plugin_serving() {
         ..base_app_state(db.clone())
     };
     let app_for_plugin_token = app_state.clone();
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
+    serve(listener, app_state);
     let base = format!("http://{}", addr);
     let client = reqwest::Client::new();
     let host = "plugin_test_host_token";
@@ -301,7 +295,7 @@ async fn test_plugin_grant_routes_and_web_plugin_serving() {
 #[tokio::test]
 async fn test_scoped_plugin_tokens_for_commands_and_keyring() {
     let test_dir = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(test_dir.path().join("scoped.db").to_str().unwrap()).unwrap();
+    let db = open_db(test_dir.path().join("scoped.db").to_str().unwrap()).unwrap();
     let web_dir = test_dir.path().join("web");
     std::fs::create_dir_all(web_dir.join("plugins")).unwrap();
     std::fs::write(web_dir.join("plugins/scoped_demo.js"), b"export default {}").unwrap();
@@ -331,8 +325,7 @@ async fn test_scoped_plugin_tokens_for_commands_and_keyring() {
         server_port: addr.port(),
         ..base_app_state(db.clone())
     };
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{}", addr);
     let c = reqwest::Client::new();
     let host = "scoped_host";
@@ -412,7 +405,7 @@ async fn test_scoped_plugin_tokens_for_commands_and_keyring() {
 #[tokio::test]
 async fn test_sandboxed_plugin_frame_serving_and_csp() {
     let tmp = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(tmp.path().join("sbx.db").to_str().unwrap()).unwrap();
+    let db = open_db(tmp.path().join("sbx.db").to_str().unwrap()).unwrap();
     let web_dir = tmp.path().join("web");
     let pdir = web_dir.join("plugins/sbx_demo");
     std::fs::create_dir_all(pdir.join("ui")).unwrap();
@@ -443,8 +436,7 @@ async fn test_sandboxed_plugin_frame_serving_and_csp() {
         server_port: addr.port(),
         ..base_app_state(db.clone())
     };
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{}", addr);
     let c = reqwest::Client::new();
     let host = "sbx_host";
@@ -511,7 +503,7 @@ async fn test_rest_ws_and_plugin_commands_share_one_pipeline() {
     use futures_util::{SinkExt, StreamExt};
 
     let tmp = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(tmp.path().join("pipe.db").to_str().unwrap()).unwrap();
+    let db = open_db(tmp.path().join("pipe.db").to_str().unwrap()).unwrap();
     let event_log = Arc::new(EventLog::with_initial_sequence(5000, 0));
     let engine = Arc::new(ShowEngine::new(event_log));
     let (tx, _rx) = tokio::sync::broadcast::channel(16);
@@ -528,8 +520,7 @@ async fn test_rest_ws_and_plugin_commands_share_one_pipeline() {
         ..base_app_state(db.clone())
     };
     let app_for_direct = app_state.clone();
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{addr}");
     let c = reqwest::Client::new();
 
@@ -585,7 +576,7 @@ async fn test_rest_ws_and_plugin_commands_share_one_pipeline() {
 #[tokio::test]
 async fn test_plugin_host_fetch_and_add_song_for_the_genius_plugin() {
     let tmp = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(tmp.path().join("genius.db").to_str().unwrap()).unwrap();
+    let db = open_db(tmp.path().join("genius.db").to_str().unwrap()).unwrap();
     // Install the real bundled plugin into a throwaway web dir.
     let web_dir = tmp.path().join("web");
     let dest = web_dir.join("plugins/genius_lyrics");
@@ -609,8 +600,7 @@ async fn test_plugin_host_fetch_and_add_song_for_the_genius_plugin() {
         server_port: addr.port(),
         ..base_app_state(db.clone())
     };
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{addr}");
     let c = reqwest::Client::new();
     let host = "gen_host";
@@ -718,7 +708,7 @@ async fn test_plugin_host_fetch_and_add_song_for_the_genius_plugin() {
 #[tokio::test]
 async fn test_online_bibles_plugin_host_api_adds_chapters() {
     let tmp = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new_with_dirs(
+    let db = open_db_with_dirs(
         tmp.path().join("bibles_plugin.db").to_str().unwrap(),
         &tmp.path().join("bibles"),
         &tmp.path().join("songs"),
@@ -745,8 +735,7 @@ async fn test_online_bibles_plugin_host_api_adds_chapters() {
         server_port: addr.port(),
         ..base_app_state(db.clone())
     };
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{addr}");
     let c = reqwest::Client::new();
     let host = "bib_host";
@@ -832,7 +821,7 @@ async fn test_online_bibles_plugin_host_api_adds_chapters() {
 async fn test_ytdlp_plugin_runs_only_its_declared_command_and_adds_media() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(tmp.path().join("ytdlp.db").to_str().unwrap()).unwrap();
+    let db = open_db(tmp.path().join("ytdlp.db").to_str().unwrap()).unwrap();
     let web_dir = tmp.path().join("web");
     let dest = web_dir.join("plugins/ytdlp");
     std::fs::create_dir_all(&dest).unwrap();
@@ -889,8 +878,7 @@ echo "{\"id\":\"abc123\",\"title\":\"Fake Title\",\"duration\":12.5,\"thumbnail\
         server_port: addr.port(),
         ..base_app_state(db.clone())
     };
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{addr}");
     let c = reqwest::Client::new();
     let host = "yt_host";
@@ -1029,7 +1017,7 @@ echo "{\"id\":\"abc123\",\"title\":\"Fake Title\",\"duration\":12.5,\"thumbnail\
 #[tokio::test]
 async fn test_notification_bus_plugin_posts_and_console_reads() {
     let tmp = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(tmp.path().join("notify.db").to_str().unwrap()).unwrap();
+    let db = open_db(tmp.path().join("notify.db").to_str().unwrap()).unwrap();
     let web_dir = tmp.path().join("web");
     let dest = web_dir.join("plugins/ytdlp");
     std::fs::create_dir_all(&dest).unwrap();
@@ -1053,8 +1041,7 @@ async fn test_notification_bus_plugin_posts_and_console_reads() {
         ..base_app_state(db.clone())
     };
     let bus = app_state.notifications.clone();
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{addr}");
     let c = reqwest::Client::new();
     let host = "nt_host";
@@ -1134,7 +1121,7 @@ async fn test_notification_bus_plugin_posts_and_console_reads() {
 #[tokio::test]
 async fn test_stock_media_plugin_host_api_limits() {
     let tmp = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(tmp.path().join("stock.db").to_str().unwrap()).unwrap();
+    let db = open_db(tmp.path().join("stock.db").to_str().unwrap()).unwrap();
     let web_dir = tmp.path().join("web");
     let dest = web_dir.join("plugins/stock_media");
     std::fs::create_dir_all(&dest).unwrap();
@@ -1157,8 +1144,7 @@ async fn test_stock_media_plugin_host_api_limits() {
         server_port: addr.port(),
         ..base_app_state(db.clone())
     };
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{addr}");
     let c = reqwest::Client::new();
     let host = "st_host";
@@ -1239,7 +1225,7 @@ async fn test_stock_media_plugin_host_api_limits() {
 #[tokio::test]
 async fn test_advanced_permission_override() {
     let tmp = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(tmp.path().join("adv.db").to_str().unwrap()).unwrap();
+    let db = open_db(tmp.path().join("adv.db").to_str().unwrap()).unwrap();
     let web_dir = tmp.path().join("web");
     let dest = web_dir.join("plugins/stock_media");
     std::fs::create_dir_all(&dest).unwrap();
@@ -1253,8 +1239,7 @@ async fn test_advanced_permission_override() {
         host_session_token: "adv_host".to_string(), server_port: addr.port(),
         ..base_app_state(db.clone())
     };
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{addr}");
     let c = reqwest::Client::new();
     let host = "adv_host";
@@ -1343,7 +1328,7 @@ async fn test_advanced_permission_override() {
 #[tokio::test]
 async fn test_shared_keyring_namespaces_between_plugins() {
     let tmp = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(tmp.path().join("shared.db").to_str().unwrap()).unwrap();
+    let db = open_db(tmp.path().join("shared.db").to_str().unwrap()).unwrap();
     let web_dir = tmp.path().join("web");
     const S: &str = "OpenSanctuary:Shared:kp-test-pexels";
     let write_plugin = |id: &str, perms: serde_json::Value| {
@@ -1371,8 +1356,7 @@ async fn test_shared_keyring_namespaces_between_plugins() {
         web_dir: web_dir.clone(), media_dir: tmp.path().join("media"), data_dir: tmp.path().to_path_buf(),
         host_session_token: "kp_host".to_string(), server_port: addr.port(), ..base_app_state(db.clone())
     };
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{addr}");
     let c = reqwest::Client::new();
     let host = "kp_host";
@@ -1490,7 +1474,7 @@ async fn test_shared_keyring_namespaces_between_plugins() {
 #[tokio::test]
 async fn test_plugin_install_and_uninstall() {
     let tmp = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(tmp.path().join("inst.db").to_str().unwrap()).unwrap();
+    let db = open_db(tmp.path().join("inst.db").to_str().unwrap()).unwrap();
     let web_dir = tmp.path().join("web");
     std::fs::create_dir_all(web_dir.join("plugins/builtin_one")).unwrap();
     std::fs::write(web_dir.join("plugins/builtin_one/plugin.json"), plugin_manifest_json("builtin_one")).unwrap();
@@ -1504,8 +1488,7 @@ async fn test_plugin_install_and_uninstall() {
         host_session_token: "inst_host".to_string(), server_port: addr.port(),
         ..base_app_state(db.clone())
     };
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{addr}");
     let c = reqwest::Client::new();
     let post = |query: &'static str, body: Vec<u8>| {
@@ -1653,7 +1636,7 @@ fn test_plugin_author_workflow_hash_sign_check() {
 #[tokio::test]
 async fn test_publisher_trust_levels_and_revocation() {
     let tmp = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(tmp.path().join("trust.db").to_str().unwrap()).unwrap();
+    let db = open_db(tmp.path().join("trust.db").to_str().unwrap()).unwrap();
     let web_dir = tmp.path().join("web");
     std::fs::create_dir_all(web_dir.join("plugins/builtin_one")).unwrap();
     std::fs::write(web_dir.join("plugins/builtin_one/plugin.json"), plugin_manifest_json("builtin_one")).unwrap();
@@ -1667,8 +1650,7 @@ async fn test_publisher_trust_levels_and_revocation() {
         host_session_token: "trust_host".to_string(), server_port: addr.port(),
         ..base_app_state(db.clone())
     };
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{addr}");
     let c = reqwest::Client::new();
     let h = "trust_host";
@@ -1769,7 +1751,7 @@ async fn test_plugin_signature_policy_and_version_floor() {
     let critical = || serde_json::json!([{ "id": "keyring.service", "services": ["OpenSanctuary:Shared:policy-test"], "reason": "x" }]);
 
     let tmp = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(tmp.path().join("policy.db").to_str().unwrap()).unwrap();
+    let db = open_db(tmp.path().join("policy.db").to_str().unwrap()).unwrap();
     let web_dir = tmp.path().join("web");
     // An unsigned built-in: `require` must never touch it.
     std::fs::create_dir_all(web_dir.join("plugins/builtin_u")).unwrap();
@@ -1784,8 +1766,7 @@ async fn test_plugin_signature_policy_and_version_floor() {
         host_session_token: "policy_host".to_string(), server_port: addr.port(),
         ..base_app_state(db.clone())
     };
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{addr}");
     let c = reqwest::Client::new();
     let h = "policy_host";
@@ -1879,7 +1860,7 @@ async fn test_plugin_signature_policy_and_version_floor() {
 impl Harness {
     async fn start(release: &TestKey) -> Harness {
         let tmp = tempfile::tempdir().unwrap();
-        let db = os_next::storage::Database::new(tmp.path().join("sig3.db").to_str().unwrap()).unwrap();
+        let db = open_db(tmp.path().join("sig3.db").to_str().unwrap()).unwrap();
         let web_dir = tmp.path().join("web");
         let data_dir = tmp.path().join("data");
         std::fs::create_dir_all(web_dir.join("plugins")).unwrap();
@@ -1891,8 +1872,7 @@ impl Harness {
             host_session_token: H.to_string(), server_port: addr.port(), plugin_release_key: release.b64.clone(),
             ..base_app_state(db.clone())
         };
-        let router = os_next::api::create_router(app_state);
-        tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+        serve(listener, app_state);
         Harness { base: format!("http://{addr}"), c: reqwest::Client::new(), web_dir, data_dir, db, _tmp: tmp }
     }
     async fn install(&self, pkg: Vec<u8>, replace: bool) -> reqwest::Response {
@@ -2077,7 +2057,7 @@ async fn test_key_rotation_needs_the_old_keys_signature() {
 #[tokio::test]
 async fn test_add_media_from_a_process_job_is_checked_against_its_actual_bytes_not_just_its_extension() {
     let tmp = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(tmp.path().join("media_sniff.db").to_str().unwrap()).unwrap();
+    let db = open_db(tmp.path().join("media_sniff.db").to_str().unwrap()).unwrap();
     let web_dir = tmp.path().join("web");
     let data_dir = tmp.path().join("data");
     let plugin_id = "fake_tool_plugin";
@@ -2109,8 +2089,7 @@ async fn test_add_media_from_a_process_job_is_checked_against_its_actual_bytes_n
         host_session_token: "sniff_host".to_string(), server_port: addr.port(),
         ..base_app_state(db.clone())
     };
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{addr}");
     let c = reqwest::Client::new();
     let h = "sniff_host";

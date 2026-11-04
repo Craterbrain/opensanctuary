@@ -1341,7 +1341,7 @@ async fn test_freeshow_import_http_route() {
 
     let test_dir = tempfile::tempdir().unwrap();
     let db_path = test_dir.path().join("test_http.db");
-    let db = Database::new(&db_path).expect("Database::new");
+    let db = open_db(&db_path).expect("Database::new");
     let web_dir = test_dir.path().join("web");
     std::fs::create_dir_all(web_dir.join("media").join("images")).unwrap();
 
@@ -1359,13 +1359,9 @@ async fn test_freeshow_import_http_route() {
         ..base_app_state(db.clone())
     };
 
-    let router = os_next::api::create_router(app_state);
-
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
+    serve(listener, app_state);
 
     let raw_show = r#"[
   "http_show_1",
@@ -1998,7 +1994,7 @@ fn test_odp_export_is_a_real_file_real_libreoffice_accepts() {
 #[tokio::test]
 async fn test_export_odp_route_is_console_only_and_downloads_a_real_file() {
     let tmp = tempfile::tempdir().unwrap();
-    let db = os_next::storage::Database::new(tmp.path().join("export.db").to_str().unwrap()).unwrap();
+    let db = open_db(tmp.path().join("export.db").to_str().unwrap()).unwrap();
     let media_dir = tmp.path().join("media");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -2006,8 +2002,7 @@ async fn test_export_odp_route_is_console_only_and_downloads_a_real_file() {
         media_dir: media_dir.clone(), host_session_token: "export_host".to_string(), server_port: addr.port(),
         ..base_app_state(db.clone())
     };
-    let router = os_next::api::create_router(app_state);
-    tokio::spawn(async move { let _ = axum::serve(listener, router).await; });
+    serve(listener, app_state);
     let base = format!("http://{addr}");
     let c = reqwest::Client::new();
     let h = "export_host";

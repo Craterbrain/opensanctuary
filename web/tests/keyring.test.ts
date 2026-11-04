@@ -137,10 +137,10 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
     });
 
     test('validates input and throws on empty service or account', async () => {
-      expect(client.setSecret('', 'user', 'sec')).rejects.toThrow('Keyring service must not be empty');
-      expect(client.setSecret('   ', 'user', 'sec')).rejects.toThrow('Keyring service must not be empty');
-      expect(client.setSecret('svc', '', 'sec')).rejects.toThrow('Keyring account must not be empty');
-      expect(client.setSecret('svc', '   ', 'sec')).rejects.toThrow('Keyring account must not be empty');
+      await expect(client.setSecret('', 'user', 'sec')).rejects.toThrow('Keyring service must not be empty');
+      await expect(client.setSecret('   ', 'user', 'sec')).rejects.toThrow('Keyring service must not be empty');
+      await expect(client.setSecret('svc', '', 'sec')).rejects.toThrow('Keyring account must not be empty');
+      await expect(client.setSecret('svc', '   ', 'sec')).rejects.toThrow('Keyring account must not be empty');
 
       // getSecret/hasSecret/deleteSecret return null/false for empty input
       expect(await client.getSecret('', 'user')).toBeNull();
@@ -212,11 +212,11 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
     });
 
     test('validates username requirement', async () => {
-      expect(
+      await expect(
         client.setUserCredentials(KEYRING_SERVICES.CCLI, { username: '' })
       ).rejects.toThrow('Username must not be empty');
 
-      expect(
+      await expect(
         client.setUserCredentials(KEYRING_SERVICES.CCLI, { username: '   ' })
       ).rejects.toThrow('Username must not be empty');
     });
@@ -280,7 +280,7 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
       expect(deleted).toBe(false);
 
       // setSecret should throw so the caller knows save failed
-      expect(failingClient.setSecret('service', 'account', 'pass')).rejects.toThrow(
+      await expect(failingClient.setSecret('service', 'account', 'pass')).rejects.toThrow(
         'Keyring daemon unreachable'
       );
     });
@@ -356,175 +356,33 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
     });
   });
 
-  describe('Plugin Ownership & Credential Isolation Boundary', () => {
-    test('acquires plugin capability tokens via acquirePluginToken', async () => {
-      const token = await client.acquirePluginToken('obs_stream');
-      expect(token).toBe('token_for_obs_stream');
+  // Who may read, write or delete what is decided by the server (tests/core_tests/plugins.rs,
+  // e2e_shared_keyring, e2e_cross_plugin_escalation). The client's part: a plugin vault always
+  // sends that plugin's token, and a refusal reads as "nothing there" instead of an exception.
+  describe('Plugin vaults', () => {
+    test('a plugin vault sends its plugin token on every call', async () => {
+      expect(await client.acquirePluginToken('obs_stream')).toBe('token_for_obs_stream');
+      await expect(client.acquirePluginToken('   ')).rejects.toThrow('Plugin name must not be empty');
 
-      expect(client.acquirePluginToken('')).rejects.toThrow('Plugin name must not be empty');
-      expect(client.acquirePluginToken('   ')).rejects.toThrow('Plugin name must not be empty');
+      const vault = client.forPlugin('my_plugin');
+      expect(await vault.setApiKey('mine')).toBe(true);
+      expect(await vault.getApiKey()).toBe('mine');
+      expect(await vault.hasApiKey()).toBe(true);
+      expect(await vault.deleteApiKey()).toBe(true);
+      expect(await vault.getApiKey()).toBeNull();
     });
 
-    test('plugin can create, view, check existence, and delete its own secrets', async () => {
-      const pluginVault = client.forPlugin('my_plugin');
+    test('a refused read, check or delete is null/false; a refused write throws', async () => {
+      await client.forPlugin('plugin_b').setApiKey('secret_b');
+      const asA = { 'X-Plugin-Token': await client.acquirePluginToken('plugin_a') };
+      const b = 'OpenSanctuary:Plugin:plugin_b';
 
-      // 1. Create own secret
-      const saved = await pluginVault.setApiKey('my_secret_token_123');
-      expect(saved).toBe(true);
-
-      // 2. View own secret
-      const retrieved = await pluginVault.getApiKey();
-      expect(retrieved).toBe('my_secret_token_123');
-
-      // 3. Check existence of own secret
-      const exists = await pluginVault.hasApiKey();
-      expect(exists).toBe(true);
-
-      // 4. Delete own secret
-      const deleted = await pluginVault.deleteApiKey();
-      expect(deleted).toBe(true);
-
-      // 5. Verify post-deletion state
-      expect(await pluginVault.hasApiKey()).toBe(false);
-      expect(await pluginVault.getApiKey()).toBeNull();
-    });
-
-    test('plugin A cannot view secrets created by plugin B', async () => {
-      const vaultB = client.forPlugin('plugin_b');
-      await vaultB.setApiKey('secret_of_plugin_b');
-
-      // Verify plugin B can read it
-      expect(await vaultB.getApiKey()).toBe('secret_of_plugin_b');
-
-      // Plugin A acquires its token
-      const tokenA = await client.acquirePluginToken('plugin_a');
-
-      // Plugin A attempts to view Plugin B's secret
-      const forbiddenView = await client.getSecret(
-        'OpenSanctuary:Plugin:plugin_b',
-        'api_key',
-        { 'X-Plugin-Token': tokenA }
-      );
-      expect(forbiddenView).toBeNull();
-
-      // Plugin A checks existence of Plugin B's secret (should report false to prevent secret probing)
-      const forbiddenExists = await client.hasSecret(
-        'OpenSanctuary:Plugin:plugin_b',
-        'api_key',
-        { 'X-Plugin-Token': tokenA }
-      );
-      expect(forbiddenExists).toBe(false);
-    });
-
-    test('plugin A cannot delete secrets created by plugin B', async () => {
-      const vaultB = client.forPlugin('plugin_b');
-      await vaultB.setApiKey('vital_secret_b');
-
-      const tokenA = await client.acquirePluginToken('plugin_a');
-
-      // Plugin A attempts to delete Plugin B's secret
-      const deleteAttempt = await client.deleteSecret(
-        'OpenSanctuary:Plugin:plugin_b',
-        'api_key',
-        { 'X-Plugin-Token': tokenA }
-      );
-      expect(deleteAttempt).toBe(false);
-
-      // Verify Plugin B's secret remains intact and undamaged
-      expect(await vaultB.getApiKey()).toBe('vital_secret_b');
-    });
-
-    test('plugin A cannot overwrite or create secrets inside plugin B namespace', async () => {
-      const vaultB = client.forPlugin('plugin_b');
-      await vaultB.setApiKey('original_b');
-
-      const tokenA = await client.acquirePluginToken('plugin_a');
-
-      // Attempt to tamper with plugin B's secret
-      expect(
-        client.setSecret(
-          'OpenSanctuary:Plugin:plugin_b',
-          'api_key',
-          'malicious_overwrite',
-          { 'X-Plugin-Token': tokenA }
-        )
-      ).rejects.toThrow('cannot access namespace');
-
-      // Verify original value unchanged
-      expect(await vaultB.getApiKey()).toBe('original_b');
-    });
-
-    test('plugin cannot view host secrets (e.g. Pexels API Key or Admin credentials)', async () => {
-      // Host saves host-level credential
-      await client.setApiKey(KEYRING_SERVICES.GENERAL, 'official_pexels_host_key_999');
-
-      const tokenPlugin = await client.acquirePluginToken('untrusted_plugin');
-
-      // Plugin attempts to read host Pexels key
-      const attempt = await client.getSecret(
-        KEYRING_SERVICES.GENERAL,
-        'api_key',
-        { 'X-Plugin-Token': tokenPlugin }
-      );
-      expect(attempt).toBeNull();
-
-      const existsCheck = await client.hasSecret(
-        KEYRING_SERVICES.GENERAL,
-        'api_key',
-        { 'X-Plugin-Token': tokenPlugin }
-      );
-      expect(existsCheck).toBe(false);
-    });
-
-    test('plugin cannot delete host secrets', async () => {
-      // Host stores CCLI credentials
-      await client.setUserCredentials(KEYRING_SERVICES.CCLI, {
-        username: 'senior_pastor',
-        password: 'ChurchKey_2026!',
-      });
-
-      const tokenPlugin = await client.acquirePluginToken('rogue_plugin');
-
-      // Plugin attempts to delete host credentials
-      const deleteResult = await client.deleteSecret(
-        KEYRING_SERVICES.CCLI,
-        'credentials',
-        { 'X-Plugin-Token': tokenPlugin }
-      );
-      expect(deleteResult).toBe(false);
-
-      // Verify host credentials remain untouched
-      const hostCreds = await client.getUserCredentials(KEYRING_SERVICES.CCLI);
-      expect(hostCreds?.username).toBe('senior_pastor');
-      expect(hostCreds?.password).toBe('ChurchKey_2026!');
-    });
-
-    test('plugin cannot overwrite host secrets', async () => {
-      await client.setApiKey(KEYRING_SERVICES.CLOUD_SYNC, 'valid_host_pixabay_key');
-
-      const tokenPlugin = await client.acquirePluginToken('rogue_plugin');
-
-      expect(
-        client.setSecret(
-          KEYRING_SERVICES.CLOUD_SYNC,
-          'api_key',
-          'overwritten_by_plugin',
-          { 'X-Plugin-Token': tokenPlugin }
-        )
-      ).rejects.toThrow('cannot access namespace');
-
-      expect(await client.getApiKey(KEYRING_SERVICES.CLOUD_SYNC)).toBe('valid_host_pixabay_key');
-    });
-
-    test('rejects invalid or forged plugin tokens with 401 Unauthorized', async () => {
-      expect(
-        client.setSecret(
-          'OpenSanctuary:Plugin:legit_plugin',
-          'api_key',
-          'secret',
-          { 'X-Plugin-Token': 'forged_garbage_token' }
-        )
-      ).rejects.toThrow('Invalid plugin token');
+      expect(await client.getSecret(b, 'api_key', asA)).toBeNull();
+      expect(await client.hasSecret(b, 'api_key', asA)).toBe(false);
+      expect(await client.deleteSecret(b, 'api_key', asA)).toBe(false);
+      await expect(client.setSecret(b, 'api_key', 'overwrite', asA)).rejects.toThrow('cannot access namespace');
+      expect(await client.getSecret(b, 'api_key', { 'X-Plugin-Token': 'forged' })).toBeNull();
+      expect(await client.forPlugin('plugin_b').getApiKey()).toBe('secret_b');
     });
   });
 });

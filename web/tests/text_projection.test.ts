@@ -1,8 +1,8 @@
 import { describe, test, expect } from 'bun:test';
 import { projectTextFromElements } from '../src/editor/slide_editor';
-import { SlideElement, defaultTransform, EditorSlide } from '../src/editor/types';
+import { SlideElement, defaultTransform } from '../src/editor/types';
 
-describe('Speaker Notes, CCLI Metadata, and Text Projection Engine', () => {
+describe('Slide text projection', () => {
   test('projects text from single and multiple TextBlocks cleanly', () => {
     const elements: SlideElement[] = [
       {
@@ -105,25 +105,5 @@ describe('Speaker Notes, CCLI Metadata, and Text Projection Engine', () => {
 
     const projected = projectTextFromElements(elements);
     expect(projected).toBe('Pure text content');
-  });
-
-  test('speaker notes and ccli metadata persist on EditorSlide', () => {
-    const slide: EditorSlide = {
-      id: 'slide-10',
-      text: '',
-      elements: [],
-      speaker_notes: 'Stage cue: bring down lights at chorus',
-      notes: 'Stage cue: bring down lights at chorus',
-      ccli_metadata: {
-        title: 'Build My Life',
-        author: 'Matt Redman / Brett Younker',
-        copyright: '2016 Said And Done Music',
-        ccli_number: '7070345'
-      }
-    };
-
-    expect(slide.speaker_notes).toBe('Stage cue: bring down lights at chorus');
-    expect(slide.ccli_metadata?.ccli_number).toBe('7070345');
-    expect(slide.ccli_metadata?.title).toBe('Build My Life');
   });
 });

@@ -1,5 +1,4 @@
 import { describe, test, expect, beforeAll } from 'bun:test';
-import { EditorSlide, SlideElement, defaultTransform } from '../src/editor/types';
 import { FilmstripSidebar, applyTagBtnStyle, applyTimerBtnStyle } from '../src/editor/thumbnail';
 
 function createMockEl(tag: string = 'div') {
@@ -54,118 +53,7 @@ beforeAll(() => {
   (globalThis as any).document = doc;
 });
 
-describe('Filmstrip Thumbnail Consistency & Slide Management', () => {
-  function createSampleSlides(): EditorSlide[] {
-    return [
-      {
-        id: 's-1',
-        text: 'Verse 1: Amazing Grace',
-        elements: [
-          {
-            type: 'TextBlock',
-            id: 'tb-1',
-            transform: defaultTransform(),
-            block: { runs: [{ text: 'Verse 1: Amazing Grace' }], autofit: true }
-          }
-        ]
-      },
-      {
-        id: 's-2',
-        text: 'Chorus: How sweet the sound',
-        elements: [
-          {
-            type: 'TextBlock',
-            id: 'tb-2',
-            transform: defaultTransform(),
-            block: { runs: [{ text: 'Chorus: How sweet the sound' }], autofit: true }
-          }
-        ]
-      },
-      {
-        id: 's-3',
-        text: 'Verse 2: Twas grace that taught',
-        elements: [
-          {
-            type: 'TextBlock',
-            id: 'tb-3',
-            transform: defaultTransform(),
-            block: { runs: [{ text: 'Verse 2: Twas grace that taught' }], autofit: true }
-          }
-        ]
-      }
-    ];
-  }
-
-  test('extracts thumbnail preview text correctly from text or text blocks', () => {
-    const slides = createSampleSlides();
-
-    // From slide.text
-    expect(slides[0].text).toContain('Verse 1');
-
-    // From element text block when slide.text is empty
-    const slideWithEmptyText: EditorSlide = {
-      id: 's-4',
-      text: '',
-      elements: [
-        {
-          type: 'TextBlock',
-          id: 'tb-4',
-          transform: defaultTransform(),
-          block: { runs: [{ text: 'Extracted from block run' }] }
-        }
-      ]
-    };
-    const textEl = slideWithEmptyText.elements[0] as any;
-    const extracted = textEl.block.runs.map((r: any) => r.text).join(' ');
-    expect(extracted).toBe('Extracted from block run');
-  });
-
-  test('slide reordering permutes slides array correctly without mutating elements', () => {
-    const slides = createSampleSlides();
-
-    // Move slide 0 ('s-1') to index 2
-    const [moved] = slides.splice(0, 1);
-    slides.splice(2, 0, moved);
-
-    expect(slides.length).toBe(3);
-    expect(slides[0].id).toBe('s-2');
-    expect(slides[1].id).toBe('s-3');
-    expect(slides[2].id).toBe('s-1');
-  });
-
-  test('slide duplication deep-clones content and creates unique ID', () => {
-    const slides = createSampleSlides();
-    const target = slides[1]; // Chorus
-
-    const copy: EditorSlide = JSON.parse(JSON.stringify(target));
-    copy.id = `slide-${Date.now()}-dup`;
-    slides.splice(2, 0, copy);
-
-    expect(slides.length).toBe(4);
-    expect(slides[2].id).not.toBe(target.id);
-    expect(slides[2].text).toBe(target.text);
-
-    // Mutating copy should not affect target
-    slides[2].text = 'Chorus Modified';
-    expect(target.text).toBe('Chorus: How sweet the sound');
-  });
-
-  test('slide deletion removes targeted slide while preserving others', () => {
-    const slides = createSampleSlides();
-
-    // Delete index 1 ('s-2')
-    slides.splice(1, 1);
-    expect(slides.length).toBe(2);
-    expect(slides[0].id).toBe('s-1');
-    expect(slides[1].id).toBe('s-3');
-
-    // Clamp activeIndex when last slide is deleted
-    let activeIndex = 1;
-    slides.splice(1, 1); // delete index 1
-    activeIndex = Math.min(activeIndex, slides.length - 1);
-    expect(activeIndex).toBe(0);
-  });
-
+describe('Filmstrip buttons and cards', () => {
   test('applyTagBtnStyle and applyTimerBtnStyle map classes accurately', () => {
     const mockEl = {
       classList: new Set<string>(),

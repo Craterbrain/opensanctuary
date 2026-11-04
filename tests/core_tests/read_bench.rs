@@ -2,7 +2,7 @@
 //! and real Bibles from ../opensanctuary-bibles. Ignored by default:
 //! `cargo test --release --test core_tests read_bench -- --ignored --nocapture`
 use os_next::core::models::{ScriptureItem, ScriptureVerse};
-use os_next::storage::db::Database;
+use crate::open_db_with_dirs;
 use std::path::Path;
 use std::time::Instant;
 
@@ -23,7 +23,7 @@ fn read_bench() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("songs")).unwrap();
     std::fs::copy(repo.join("songs/public_domain.db"), dir.join("songs/public_domain.db")).unwrap();
-    let db = Database::new_with_dirs(dir.join("library.db"), dir.join("bibles"), dir.join("songs")).unwrap();
+    let db = open_db_with_dirs(dir.join("library.db"), dir.join("bibles"), dir.join("songs")).unwrap();
     let bibles = ["eng-kjv", "eng-web"];
     for b in &bibles {
         // The opensanctuary-bibles format: {"Book": {"1": {"1": "text", ...}, ...}, ...}

@@ -34,9 +34,16 @@ describe("safeHttpUrl", () => {
     });
 });
 
-describe("escapeHtml in attribute context", () => {
-    test("color value breakout payload is neutralized", () => {
-        const out = escapeHtml(`#fff" autofocus onfocus="alert(1)`);
-        expect(out).not.toContain('"');
+describe("escapeHtml", () => {
+    test("escapes all five characters, so the text is safe in element content and in either kind of quoted attribute", () => {
+        expect(escapeHtml(`<script>alert("xss & fun")</script>`)).toBe("&lt;script&gt;alert(&quot;xss &amp; fun&quot;)&lt;/script&gt;");
+        expect(escapeHtml(`O'Brien's <verse>`)).toBe("O&#39;Brien&#39;s &lt;verse&gt;");
+        for (const payload of [`"><img src=x onerror=alert(1)>`, `#fff" autofocus onfocus="alert(1)`, `x' onmouseover='alert(1)`]) {
+            expect(escapeHtml(payload)).not.toMatch(/[<>"']/);
+        }
+    });
+    test("null and undefined become empty text", () => {
+        expect(escapeHtml(null)).toBe("");
+        expect(escapeHtml(undefined)).toBe("");
     });
 });

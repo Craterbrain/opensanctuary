@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
     parseScriptureReference,
     matchLiturgicalSectionKey,
-    escapeHtml
 } from "../src/core/presentation_helpers.ts";
 
 describe("Scripture Reference Parsing", () => {
@@ -72,22 +71,3 @@ describe("Liturgical Song Section Key Navigation", () => {
     });
 });
 
-describe("HTML Sanitization (XSS Prevention)", () => {
-    test("escapes HTML entities safely", () => {
-        const raw = `<script>alert("xss & fun")</script>`;
-        const safe = escapeHtml(raw);
-        expect(safe).toBe('&lt;script&gt;alert(&quot;xss &amp; fun&quot;)&lt;/script&gt;');
-    });
-
-    test("handles null and undefined without throwing", () => {
-        expect(escapeHtml(null)).toBe('');
-        expect(escapeHtml(undefined)).toBe('');
-    });
-
-    test("escapes apostrophes, so escaped text is safe inside a single-quoted attribute too", () => {
-        const raw = `O'Brien's "favorite" <verse>`;
-        const safe = escapeHtml(raw);
-        expect(safe).not.toContain("'");
-        expect(safe).toBe('O&#39;Brien&#39;s &quot;favorite&quot; &lt;verse&gt;');
-    });
-});
