@@ -109,6 +109,10 @@ pub struct TextParagraphStyle {
     pub bullet_kind: String, // "none", "disc", "decimal", "liturgical"
     #[serde(default)]
     pub indent_level: u32,
+    /// Where the text sits in its box: "top", "middle" or "bottom". `None` is the app's own
+    /// default (middle); imported slides set it to keep the authored anchoring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_align: Option<String>,
 }
 
 fn default_line_height_num() -> f64 { 1.25 }
@@ -123,6 +127,7 @@ impl Default for TextParagraphStyle {
             space_after_pt: 0.0,
             bullet_kind: "none".to_string(),
             indent_level: 0,
+            vertical_align: None,
         }
     }
 }
@@ -234,6 +239,11 @@ pub enum SlideElement {
         stroke_color: Option<String>,
         #[serde(default)]
         stroke_width: f64,
+        /// A drawn outline instead of `shape_kind`'s preset: SVG path data in the element's own
+        /// 0..100 box (an imported freeform or metafile drawing). With a path, `stroke_width` is
+        /// in canvas units (1080 to the canvas height) and doesn't stretch with the box.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
     },
     Line {
         id: String,
@@ -245,6 +255,11 @@ pub enum SlideElement {
         start_arrow: bool,
         #[serde(default)]
         end_arrow: bool,
+        /// The line's course as SVG path data in its own 0..100 box (a connector's diagonal or
+        /// elbow, a freeform curve); `None` is `line_kind`'s stock drawing. With a path,
+        /// `stroke_width` is in canvas units, as for `Shape`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
     },
     Table {
         id: String,
@@ -252,6 +267,14 @@ pub enum SlideElement {
         rows: usize,
         cols: usize,
         cells: Vec<Vec<String>>,
+        /// Cell text and border colours and text size. `None` is the app's own look (white on a
+        /// dark slide); an imported table sets them so it stays readable on its own background.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_color: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        border_color: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_size_pt: Option<f64>,
     },
     Group {
         id: String,

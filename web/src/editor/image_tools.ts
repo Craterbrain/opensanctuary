@@ -47,7 +47,9 @@ export function renderImageDOM(containerEl: HTMLElement, props: ImageElementProp
   // the caller already sizes it absolutely in px.
   containerEl.innerHTML = '';
   containerEl.style.overflow = 'hidden';
-  containerEl.style.position = 'relative';
+  // Only if the caller hasn't placed it: slide renderers position elements absolutely, and that
+  // already contains the absolutely positioned picture inside (overriding it stacked them).
+  if (!containerEl.style.position) containerEl.style.position = 'relative';
 
   // Rendered as a background-image (not <img> + object-fit/clip-path): a crop
   // rect is authored as a fraction of the image's own natural size, and

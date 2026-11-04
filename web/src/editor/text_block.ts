@@ -63,16 +63,8 @@ export function renderTextBlockDOM(
   containerEl.style.lineHeight = `${pStyle.line_height || 1.25}`;
   const indentPx = (pStyle.indent_level || 0) * 24 * scale;
   containerEl.style.paddingLeft = indentPx > 0 ? `${indentPx}px` : '';
-  if (pStyle.align === 'center') {
-    containerEl.style.alignItems = 'center';
-    containerEl.style.justifyContent = 'center';
-  } else if (pStyle.align === 'right') {
-    containerEl.style.alignItems = 'flex-end';
-    containerEl.style.justifyContent = 'center';
-  } else {
-    containerEl.style.alignItems = 'flex-start';
-    containerEl.style.justifyContent = 'center';
-  }
+  containerEl.style.alignItems = pStyle.align === 'center' ? 'center' : pStyle.align === 'right' ? 'flex-end' : 'flex-start';
+  containerEl.style.justifyContent = pStyle.vertical_align === 'top' ? 'flex-start' : pStyle.vertical_align === 'bottom' ? 'flex-end' : 'center';
 
   // Apply Effects to container
   applyEffectsToElement(containerEl, block.effects);

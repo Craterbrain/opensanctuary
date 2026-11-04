@@ -7,6 +7,7 @@ import { renderVideoDOM } from './video_tools';
 import { renderShapeDOM } from './shape_library';
 import { renderLineDOM } from './line_tool';
 import { renderTableDOM } from './table';
+import { placeInGroup } from './group_layout';
 import { snapElement, renderGuidesOverlay } from './guides';
 import { applyResolvedBackground, isVideoBackground } from '../core/presentation_helpers';
 import { autoFitLyrics } from '../core/autofit';
@@ -353,7 +354,8 @@ export class EditorCanvas {
           fill_color: el.fill_color,
           stroke_color: el.stroke_color,
           stroke_width: el.stroke_width,
-          opacity: el.transform.opacity
+          opacity: el.transform.opacity,
+          path: el.path
         });
         break;
       case 'Line':
@@ -363,7 +365,8 @@ export class EditorCanvas {
           stroke_width: el.stroke_width,
           start_arrow: el.start_arrow,
           end_arrow: el.end_arrow,
-          opacity: el.transform.opacity
+          opacity: el.transform.opacity,
+          path: el.path
         });
         break;
       case 'Table':
@@ -371,15 +374,19 @@ export class EditorCanvas {
           rows: el.rows,
           cols: el.cols,
           cells: el.cells,
-          opacity: el.transform.opacity
+          opacity: el.transform.opacity,
+          text_color: el.text_color,
+          border_color: el.border_color,
+          font_size_pt: el.font_size_pt
         }, isEditingThis, (updatedCells) => {
           el.cells = updatedCells;
           this.notifyChange();
         });
         break;
       case 'Group':
+        // Children are placed in slide coordinates, but drawn inside the group's own box.
         for (const child of el.children) {
-          node.appendChild(this.createElementNode(child));
+          node.appendChild(placeInGroup(this.createElementNode(child), rect));
         }
         break;
     }

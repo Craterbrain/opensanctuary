@@ -10,6 +10,8 @@ pub mod paths;
 pub mod pattern_cache;
 pub mod pd_songs;
 pub mod pptx_import;
+pub mod pptx_inherit;
+pub mod wmf;
 pub mod xml_scan;
 pub mod odp_import;
 pub mod odp_export;

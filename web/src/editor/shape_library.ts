@@ -1,4 +1,5 @@
 import { ElementTransform, SlideElement } from './types';
+import { renderPathDOM } from './svg_path';
 
 export interface ShapeElementProps {
   shape_kind: string;
@@ -6,6 +7,9 @@ export interface ShapeElementProps {
   stroke_color?: string;
   stroke_width?: number;
   opacity?: number;
+  path?: string;
+  /** Canvas pixels per canvas unit, for a path's stroke width. */
+  scale?: number;
 }
 
 export function createDefaultShape(
@@ -31,6 +35,10 @@ export function renderShapeDOM(containerEl: HTMLElement, props: ShapeElementProp
   // (canvas.ts / slide_render.ts) already positions and sizes this element
   // absolutely in px; a CSS width/height of '100%' here would resolve against
   // the nearest positioned ANCESTOR instead of preserving that size.
+  if (props.path) {
+    renderPathDOM(containerEl, { d: props.path, fill: props.fill_color, stroke: props.stroke_color, stroke_width: props.stroke_width, opacity: props.opacity, scale: props.scale });
+    return;
+  }
   containerEl.innerHTML = '';
   containerEl.style.opacity = `${props.opacity ?? 1.0}`;
 

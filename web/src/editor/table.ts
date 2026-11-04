@@ -5,6 +5,11 @@ export interface TableElementProps {
   cols: number;
   cells: string[][];
   opacity?: number;
+  text_color?: string;
+  border_color?: string;
+  font_size_pt?: number;
+  /** The canvas scale, for `font_size_pt` (sized against a 1080-unit-tall canvas, like text blocks). */
+  scale?: number;
 }
 
 export function createDefaultTable(
@@ -55,10 +60,11 @@ export function renderTableDOM(
     const tr = document.createElement('tr');
     for (let c = 0; c < props.cols; c++) {
       const td = document.createElement('td');
-      td.style.border = '1px solid rgba(255, 255, 255, 0.4)';
+      td.style.border = props.border_color ? `1px solid ${props.border_color}` : '1px solid rgba(255, 255, 255, 0.4)';
       td.style.padding = '4px 8px';
-      td.style.color = '#ffffff';
-      td.style.fontSize = '14px';
+      td.style.color = props.text_color || '#ffffff';
+      td.style.fontSize = props.font_size_pt ? `${props.font_size_pt * (props.scale ?? 1)}pt` : '14px';
+      td.style.whiteSpace = 'pre-line';
       td.style.textAlign = 'center';
       td.style.verticalAlign = 'middle';
 

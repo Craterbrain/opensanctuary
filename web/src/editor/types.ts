@@ -67,6 +67,8 @@ export interface TextParagraphStyle {
   space_after_pt?: number;
   bullet_kind?: 'none' | 'disc' | 'decimal' | 'liturgical';
   indent_level?: number;
+  /** Where the text sits in its box; unset is middle (imported slides keep their authored anchoring). */
+  vertical_align?: 'top' | 'middle' | 'bottom';
 }
 
 export interface TextOutline {
@@ -148,6 +150,9 @@ export type SlideElement =
       fill_color: string;
       stroke_color?: string;
       stroke_width?: number;
+      /** A drawn outline (imported freeform or metafile): SVG path data in the 0..100 box. With a
+       *  path, stroke_width is in canvas units (1080 to the canvas height). */
+      path?: string;
     }
   | {
       type: 'Line';
@@ -158,6 +163,8 @@ export type SlideElement =
       stroke_width?: number;
       start_arrow?: boolean;
       end_arrow?: boolean;
+      /** The line's course as SVG path data in the 0..100 box (a connector, a freeform curve). */
+      path?: string;
     }
   | {
       type: 'Table';
@@ -166,6 +173,10 @@ export type SlideElement =
       rows: number;
       cols: number;
       cells: string[][];
+      /** Unset: the app's own look (white text, light borders). Imported tables set them. */
+      text_color?: string;
+      border_color?: string;
+      font_size_pt?: number;
     }
   | {
       type: 'Group';

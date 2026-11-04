@@ -1,4 +1,5 @@
 import { ElementTransform, SlideElement } from './types';
+import { renderPathDOM } from './svg_path';
 
 export interface LineElementProps {
   line_kind: string; // "straight", "arrow", "elbow", "curved"
@@ -7,6 +8,9 @@ export interface LineElementProps {
   start_arrow?: boolean;
   end_arrow?: boolean;
   opacity?: number;
+  path?: string;
+  /** Canvas pixels per canvas unit, for a path's stroke width. */
+  scale?: number;
 }
 
 export function createDefaultLine(
@@ -32,6 +36,10 @@ export function createDefaultLine(
 export function renderLineDOM(containerEl: HTMLElement, props: LineElementProps): void {
   // See note in shape_library.ts: don't touch containerEl's width/height here,
   // the caller already sizes it absolutely in px.
+  if (props.path) {
+    renderPathDOM(containerEl, { d: props.path, fill: 'none', stroke: props.color, stroke_width: props.stroke_width, start_arrow: props.start_arrow, end_arrow: props.end_arrow || props.line_kind === 'arrow', opacity: props.opacity, scale: props.scale });
+    return;
+  }
   containerEl.innerHTML = '';
   containerEl.style.opacity = `${props.opacity ?? 1.0}`;
 

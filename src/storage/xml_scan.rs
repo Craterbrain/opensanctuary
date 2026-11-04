@@ -128,19 +128,66 @@ pub fn extract_balanced_tag<'a>(xml: &'a str, tag: &str) -> Option<(&'a str, &'a
 
 pub fn extract_attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
     let needle = format!("{}=\"", name);
-    let start = attrs.find(&needle)? + needle.len();
+    // Only a whole attribute name: `i="` must not match the end of `kumimoji="`.
+    let mut from = 0;
+    let start = loop {
+        let at = from + attrs[from..].find(&needle)?;
+        if at == 0 || attrs.as_bytes()[at - 1].is_ascii_whitespace() {
+            break at + needle.len();
+        }
+        from = at + 1;
+    };
     let end = start + attrs[start..].find('"')?;
     Some(&attrs[start..end])
 }
 
-/// Decodes the 5 standard XML entities. `&amp;` must be decoded last, otherwise a
-/// literal `&amp;lt;` in the source would incorrectly decode to `<` instead of `&lt;`.
+/// Decodes the 5 standard XML entities and numeric character references (`&#8226;`, `&#x2022;`),
+/// in one pass so `&amp;lt;` stays `&lt;`. Anything unrecognised is left as written.
 pub fn decode_xml_entities(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
+    if !s.contains('&') {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        let decoded = rest.find(';').filter(|&semi| semi <= 10).and_then(|semi| {
+            let ch = match &rest[1..semi] {
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "amp" => Some('&'),
+                e => e.strip_prefix("#x").or_else(|| e.strip_prefix("#X")).map(|h| u32::from_str_radix(h, 16))
+                    .or_else(|| e.strip_prefix('#').map(|d| d.parse::<u32>()))
+                    .and_then(|n| n.ok())
+                    .and_then(char::from_u32),
+            }?;
+            Some((ch, semi))
+        });
+        match decoded {
+            Some((ch, semi)) => {
+                out.push(ch);
+                rest = &rest[semi + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod entity_tests {
+    #[test]
+    fn named_and_numeric_references_decode_once() {
+        assert_eq!(super::decode_xml_entities("a &amp;lt; b &lt; &#8226; &#x2013; &#X41;"), "a &lt; b < \u{2022} \u{2013} A");
+        assert_eq!(super::decode_xml_entities("AT&T &bogus; &#xZZ; &"), "AT&T &bogus; &#xZZ; &");
+    }
 }
 
 /// The inverse of `decode_xml_entities`, for writers: escapes the characters that are never

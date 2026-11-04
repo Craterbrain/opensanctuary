@@ -53,6 +53,7 @@ fn sample_presentation_for_export(media_root: &std::path::Path, image_bytes: &[u
         fill_color: "#aabbcc".to_string(),
         stroke_color: Some("#112233".to_string()),
         stroke_width: 4.0,
+        path: None,
     };
     let shape_triangle = SlideElement::Shape {
         id: "el_6".to_string(),
@@ -61,6 +62,7 @@ fn sample_presentation_for_export(media_root: &std::path::Path, image_bytes: &[u
         fill_color: "#00ff00".to_string(),
         stroke_color: None,
         stroke_width: 0.0,
+        path: None,
     };
     let line_arrow = SlideElement::Line {
         id: "el_7".to_string(),
@@ -70,6 +72,7 @@ fn sample_presentation_for_export(media_root: &std::path::Path, image_bytes: &[u
         stroke_width: 2.0,
         start_arrow: false,
         end_arrow: true,
+        path: None,
     };
     let line_elbow = SlideElement::Line {
         id: "el_8".to_string(),
@@ -79,6 +82,7 @@ fn sample_presentation_for_export(media_root: &std::path::Path, image_bytes: &[u
         stroke_width: 1.5,
         start_arrow: false,
         end_arrow: false,
+        path: None,
     };
     let table = SlideElement::Table {
         id: "el_9".to_string(),
@@ -86,6 +90,9 @@ fn sample_presentation_for_export(media_root: &std::path::Path, image_bytes: &[u
         rows: 2,
         cols: 2,
         cells: vec![vec!["R0C0".to_string(), "R0C1".to_string()], vec!["R1C0".to_string(), "R1C1".to_string()]],
+        text_color: None,
+        border_color: None,
+        font_size_pt: None,
     };
     let grouped_a = SlideElement::Shape {
         id: "el_10a".to_string(),
@@ -94,6 +101,7 @@ fn sample_presentation_for_export(media_root: &std::path::Path, image_bytes: &[u
         fill_color: "#ff00ff".to_string(),
         stroke_color: None,
         stroke_width: 0.0,
+        path: None,
     };
     let grouped_b = SlideElement::Shape {
         id: "el_10b".to_string(),
@@ -102,6 +110,7 @@ fn sample_presentation_for_export(media_root: &std::path::Path, image_bytes: &[u
         fill_color: "#ffff00".to_string(),
         stroke_color: None,
         stroke_width: 0.0,
+        path: None,
     };
     let group = SlideElement::Group {
         id: "el_10".to_string(),
@@ -592,8 +601,9 @@ fn test_pptx_import_extracts_run_formatting_and_alignment() {
     assert!(fancy.underline);
     assert!(fancy.strike);
     assert_eq!(fancy.color, "#ff0000");
-    assert_eq!(fancy.font_family, "Georgia");
-    assert_eq!(fancy.font_size_pt, 48.0);
+    assert_eq!(fancy.font_family, "Georgia, serif", "a CSS stack, so a missing font never falls back to the browser's default");
+    // 48pt on a 7.5in-tall slide is 72 of this app's points (sized against a 1080-unit canvas).
+    assert_eq!(fancy.font_size_pt, 72.0);
 
     let plain = &block.runs[1];
     assert_eq!(plain.text, " plain");
@@ -681,7 +691,7 @@ fn test_pptx_import_emits_one_positioned_textblock_per_shape() {
   <p:cSld><p:spTree>
     <p:sp>
       <p:spPr><a:xfrm><a:off x="1219200" y="685800"/><a:ext cx="3048000" cy="1371600"/></a:xfrm></p:spPr>
-      <p:txBody><a:p><a:r><a:t>Left column</a:t></a:r></a:p></p:txBody>
+      <p:txBody><a:bodyPr lIns="0" tIns="0" rIns="0" bIns="0"/><a:p><a:r><a:t>Left column</a:t></a:r></a:p></p:txBody>
     </p:sp>
     <p:sp>
       <p:spPr><a:xfrm><a:off x="6096000" y="3429000"/><a:ext cx="3048000" cy="1371600"/></a:xfrm></p:spPr>
@@ -713,8 +723,9 @@ fn test_pptx_import_emits_one_positioned_textblock_per_shape() {
 
     let (t1, b1) = text_blocks[1];
     assert_eq!(b1.runs[0].text, "Right column");
-    assert!((t1.x - 0.5).abs() < 1e-9, "x was {}", t1.x);
-    assert!((t1.y - 0.5).abs() < 1e-9, "y was {}", t1.y);
+    // No <a:bodyPr> insets: PowerPoint's defaults (0.1in sides, 0.05in top/bottom) move the text in.
+    assert!((t1.x - (6096000.0 + 91440.0) / 12192000.0).abs() < 1e-9, "x was {}", t1.x);
+    assert!((t1.y - (3429000.0 + 45720.0) / 6858000.0).abs() < 1e-9, "y was {}", t1.y);
     assert_eq!(t1.z_index, 1);
 
     // Distinct positions -- not both defaulted to the same full-bleed box.
@@ -2203,6 +2214,7 @@ fn test_every_known_shape_kind_round_trips_and_is_accepted_by_real_libreoffice()
             fill_color: "#2a7a2a".to_string(),
             stroke_color: None,
             stroke_width: 0.0,
+            path: None,
         });
     }
     let pres = Presentation {
@@ -2273,6 +2285,7 @@ fn test_ring_shape_exports_as_unfilled_not_a_solid_blob() {
                 fill_color: "#cc2222".to_string(),
                 stroke_color: None,
                 stroke_width: 0.0,
+                path: None,
             }],
             slide_document_version: 1,
             ..Default::default()
@@ -2306,22 +2319,19 @@ fn test_pptx_import_against_a_real_libreoffice_fixture() {
     let pres = PptxImporter::import_pptx_bytes(&bytes, "stem", media_dir.path()).expect("real LibreOffice output must import");
 
     let els = &pres.slides[0].elements;
-    assert_eq!(els.len(), 4, "{:?}", els.iter().map(|e| e.id()).collect::<Vec<_>>());
+    // The empty title/subtitle placeholders draw nothing (no text, no fill, no outline), so they
+    // aren't elements; the table and the group are.
+    assert_eq!(els.len(), 2, "{:?}", els.iter().map(|e| e.id()).collect::<Vec<_>>());
 
     use os_next::core::models::SlideElement;
-    // The two title/subtitle placeholder boxes come through as plain, unfilled rects
-    // (no text of their own in this fixture, but a real <a:prstGeom prst="rect">).
-    assert!(matches!(&els[0], SlideElement::Shape { shape_kind, .. } if shape_kind == "rect"));
-    assert!(matches!(&els[1], SlideElement::Shape { shape_kind, .. } if shape_kind == "rect"));
-
-    let SlideElement::Table { rows, cols, cells, transform, .. } = &els[2] else { panic!("expected the table: {:?}", els[2]) };
+    let SlideElement::Table { rows, cols, cells, transform, .. } = &els[0] else { panic!("expected the table: {:?}", els[0]) };
     assert_eq!(*rows, 2);
     assert_eq!(*cols, 2);
     assert_eq!(cells[0], vec!["R0C0".to_string(), "R0C1".to_string()]);
     assert_eq!(cells[1], vec!["R1C0".to_string(), "R1C1".to_string()]);
     assert!(transform.x > 0.0 && transform.x < 1.0, "{}", transform.x);
 
-    let SlideElement::Group { children, .. } = &els[3] else { panic!("expected the group: {:?}", els[3]) };
+    let SlideElement::Group { children, .. } = &els[1] else { panic!("expected the group: {:?}", els[1]) };
     assert_eq!(children.len(), 2, "both rectangles in the group must come through");
     for child in children {
         assert!(matches!(child, SlideElement::Shape { shape_kind, .. } if shape_kind == "rect"));
@@ -2459,37 +2469,187 @@ fn test_pptx_import_reconstructs_shapes_lines_connectors_and_nested_groups() {
     assert!((star_t.h - 0.029_163_021).abs() < 1e-6, "{}", star_t.h);
 }
 
-/// A theme-colored shape (`<p:style><a:fillRef idx="2"><a:schemeClr val="accent1"/>`,
-/// no explicit `<a:solidFill>` at all in `<p:spPr>` itself) -- the single most common
-/// real-world gap this importer has, per its own module doc: a shape inserted via
-/// the authoring tool's UI without manually overriding its fill very often looks
-/// exactly like this. Must not crash, and must come through with this app's own
-/// "nothing resolved" fallback (`"none"`), not a guessed color.
+/// A small but complete package -- a 4:3 deck with a theme, a master and a layout -- where the
+/// slides state almost nothing themselves, the way real PowerPoint decks do. Everything visible
+/// must come from the chain: the title's position from the layout, the body's from the master;
+/// text colour, font, size, alignment and bullets from the master's text styles and the theme;
+/// the background from the master; the master's own decoration painted behind; a theme-styled
+/// shape's fill from its `fillRef`. And a 4:3 slide is pillarboxed on the 16:9 canvas.
+fn build_inheriting_pptx() -> Vec<u8> {
+    use std::io::{Cursor, Write};
+    use zip::write::FileOptions;
+    use zip::ZipWriter;
+
+    const NS: &str = r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+    let rel = |pairs: &[(&str, &str, &str)]| {
+        let rows: String = pairs.iter().map(|(id, ty, target)| format!(r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{ty}" Target="{target}"/>"#)).collect();
+        format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rows}</Relationships>"#)
+    };
+    let parts: Vec<(&str, String)> = vec![
+        ("ppt/presentation.xml", format!(r#"<p:presentation {NS}><p:sldIdLst><p:sldId id="256" r:id="rId2"/><p:sldId id="257" r:id="rId3"/></p:sldIdLst><p:sldSz cx="9144000" cy="6858000"/></p:presentation>"#)),
+        ("ppt/_rels/presentation.xml.rels", rel(&[("rId2", "slide", "slides/slide1.xml"), ("rId3", "slide", "slides/slide2.xml")])),
+        ("ppt/theme/theme1.xml", format!(r#"<a:theme {NS} name="T"><a:themeElements>
+            <a:clrScheme name="T"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>
+              <a:dk2><a:srgbClr val="1F497D"/></a:dk2><a:lt2><a:srgbClr val="EEECE1"/></a:lt2><a:accent1><a:srgbClr val="4F81BD"/></a:accent1><a:accent2><a:srgbClr val="C0504D"/></a:accent2></a:clrScheme>
+            <a:fontScheme name="T"><a:majorFont><a:latin typeface="Cambria"/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/></a:minorFont></a:fontScheme>
+            </a:themeElements></a:theme>"#)),
+        ("ppt/slideMasters/slideMaster1.xml", format!(r#"<p:sldMaster {NS}><p:cSld>
+            <p:bg><p:bgPr><a:solidFill><a:schemeClr val="accent2"/></a:solidFill></p:bgPr></p:bg>
+            <p:spTree>
+              <p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm></p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:p><a:r><a:t>Click to edit</a:t></a:r></a:p></p:txBody></p:sp>
+              <p:sp><p:nvSpPr><p:cNvPr id="3" name="Body"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="457200" y="1600200"/><a:ext cx="8229600" cy="4525963"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:t>Click to edit</a:t></a:r></a:p></p:txBody></p:sp>
+              <p:sp><p:nvSpPr><p:cNvPr id="4" name="Band"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="6400800"/><a:ext cx="9144000" cy="457200"/></a:xfrm><a:prstGeom prst="rect"/><a:solidFill><a:srgbClr val="112233"/></a:solidFill></p:spPr></p:sp>
+            </p:spTree></p:cSld>
+            <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" hlink="hlink" folHlink="folHlink"/>
+            <p:txStyles>
+              <p:titleStyle><a:lvl1pPr algn="ctr"><a:defRPr sz="4400"><a:solidFill><a:schemeClr val="tx2"/></a:solidFill><a:latin typeface="+mj-lt"/></a:defRPr></a:lvl1pPr></p:titleStyle>
+              <p:bodyStyle><a:lvl1pPr marL="342900" indent="-342900"><a:buFont typeface="Arial"/><a:buChar char="&#8226;"/><a:defRPr sz="3200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/></a:defRPr></a:lvl1pPr>
+                <a:lvl2pPr marL="742950"><a:buChar char="&#8211;"/><a:defRPr sz="2800"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill></a:defRPr></a:lvl2pPr></p:bodyStyle>
+              <p:otherStyle><a:lvl1pPr><a:defRPr sz="1800"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill></a:defRPr></a:lvl1pPr></p:otherStyle>
+            </p:txStyles></p:sldMaster>"#)),
+        ("ppt/slideMasters/_rels/slideMaster1.xml.rels", rel(&[("rId1", "theme", "../theme/theme1.xml")])),
+        ("ppt/slideLayouts/slideLayout1.xml", format!(r#"<p:sldLayout {NS}><p:cSld><p:spTree>
+              <p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="457200" y="274638"/><a:ext cx="8229600" cy="1143000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:p/></p:txBody></p:sp>
+              <p:sp><p:nvSpPr><p:cNvPr id="3" name="Content"/><p:cNvSpPr/><p:nvPr><p:ph idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p/></p:txBody></p:sp>
+            </p:spTree></p:cSld></p:sldLayout>"#)),
+        ("ppt/slideLayouts/_rels/slideLayout1.xml.rels", rel(&[("rId1", "slideMaster", "../slideMasters/slideMaster1.xml")])),
+        ("ppt/slides/slide1.xml", format!(r#"<p:sld {NS}><p:cSld><p:spTree>
+              <p:sp><p:nvSpPr><p:cNvPr id="2" name="Title 1"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:rPr lang="en-US"/><a:t>Welcome</a:t></a:r></a:p></p:txBody></p:sp>
+              <p:sp><p:nvSpPr><p:cNvPr id="3" name="Content 2"/><p:cNvSpPr/><p:nvPr><p:ph idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr><a:normAutofit fontScale="50000"/></a:bodyPr><a:p><a:r><a:t>Point one</a:t></a:r></a:p><a:p><a:pPr lvl="1"/><a:r><a:t>Sub point</a:t></a:r></a:p></p:txBody></p:sp>
+              <p:sp><p:nvSpPr><p:cNvPr id="4" name="Hex"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="100000" y="100000"/><a:ext cx="500000" cy="400000"/></a:xfrm><a:prstGeom prst="hexagon"/></p:spPr>
+                <p:style><a:lnRef idx="0"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="1"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></p:style>
+                <p:txBody><a:bodyPr/><a:p><a:r><a:t>Line A</a:t></a:r><a:br/><a:r><a:t>Line B</a:t></a:r></a:p></p:txBody></p:sp>
+            </p:spTree></p:cSld></p:sld>"#)),
+        ("ppt/slides/_rels/slide1.xml.rels", rel(&[("rId1", "slideLayout", "../slideLayouts/slideLayout1.xml")])),
+        ("ppt/slides/slide2.xml", format!(r#"<p:sld {NS} showMasterSp="0"><p:cSld>
+              <p:bg><p:bgPr><a:gradFill><a:gsLst><a:gs pos="0"><a:schemeClr val="accent1"/></a:gs><a:gs pos="100000"><a:schemeClr val="bg1"><a:lumMod val="50000"/></a:schemeClr></a:gs></a:gsLst><a:lin ang="5400000"/></a:gradFill></p:bgPr></p:bg>
+              <p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Title 1"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>Second</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#)),
+        ("ppt/slides/_rels/slide2.xml.rels", rel(&[("rId1", "slideLayout", "../slideLayouts/slideLayout1.xml")])),
+    ];
+    let mut zw = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = FileOptions::<()>::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, content) in parts {
+        zw.start_file(name, options).unwrap();
+        zw.write_all(content.as_bytes()).unwrap();
+    }
+    zw.finish().unwrap().into_inner()
+}
+
 #[test]
-fn test_pptx_import_theme_colored_shape_has_no_crash_and_no_guessed_color() {
+fn test_pptx_import_resolves_what_slides_inherit_from_layout_master_and_theme() {
+    use os_next::core::models::{SlideBackground, SlideElement, TextBlock};
+    let media_dir = tempfile::tempdir().unwrap();
+    let pres = PptxImporter::import_pptx_bytes(&build_inheriting_pptx(), "stem", media_dir.path()).expect("should parse");
+    let slide = &pres.slides[0];
+    let texts: Vec<(&os_next::core::models::ElementTransform, &TextBlock)> =
+        slide.elements.iter().filter_map(|e| match e { SlideElement::TextBlock { transform, block, .. } => Some((transform, block)), _ => None }).collect();
+    let text_of = |b: &TextBlock| b.runs.iter().map(|r| r.text.as_str()).collect::<String>();
+
+    // The master's background and its decoration, painted first (behind everything).
+    assert_eq!(slide.background.as_deref(), Some("#c0504d"));
+    assert!(matches!(&slide.elements[0], SlideElement::Shape { fill_color, .. } if fill_color == "#112233"), "{:?}", slide.elements[0]);
+
+    // 4:3 on a 16:9 canvas: pillarboxed, so the left 1/8 of the canvas is empty.
+    let canvas_w = 6858000.0 * 16.0 / 9.0;
+    let offset = (canvas_w - 9144000.0) / 2.0;
+    assert!(slide.elements.iter().all(|e| e.transform().x >= offset / canvas_w - 1e-9), "nothing in the pillarbox");
+
+    // Title: the layout's position (inside the default insets), the master's title style.
+    let (t, title) = texts.iter().find(|(_, b)| text_of(b) == "Welcome").expect("title");
+    assert!((t.x - (457200.0 + 91440.0 + offset) / canvas_w).abs() < 1e-9, "x {}", t.x);
+    assert!((t.y - (274638.0 + 45720.0) / 6858000.0).abs() < 1e-9, "y {}", t.y);
+    let r = &title.runs[0];
+    assert_eq!((r.color.as_str(), r.font_family.as_str(), r.font_size_pt), ("#1f497d", "Cambria, Caladea, serif", 66.0));
+    assert_eq!(title.paragraph_style.align, "center");
+    assert_eq!(title.paragraph_style.vertical_align.as_deref(), Some("middle"), "the master's anchor=ctr");
+
+    // Body: the master's position (the layout leaves it out), bullets per level, fontScale 50%.
+    let (b, body) = texts.iter().find(|(_, b)| text_of(b).contains("Point one")).expect("body");
+    assert!((b.y - (1600200.0 + 45720.0) / 6858000.0).abs() < 1e-9, "y {}", b.y);
+    // Level 2 sits 742950 - 342900 EMU (31.5pt) further in; at the shrunk 14pt an en space is 7pt: 4.5 -> 5.
+    assert_eq!(text_of(body), format!("• Point one\n{}– Sub point", "\u{2002}".repeat(5)));
+    let size_of = |s: &str| body.runs.iter().find(|r| r.text == s).unwrap().font_size_pt;
+    assert_eq!((size_of("Point one"), size_of("Sub point")), (24.0, 21.0));
+    assert_eq!(body.runs.iter().find(|r| r.text == "Point one").unwrap().color, "#000000");
+    assert_eq!(body.paragraph_style.align, "left");
+    assert_eq!(body.paragraph_style.vertical_align.as_deref(), Some("top"));
+
+    // A theme-styled shape: filled from its fillRef, its text white from its fontRef, the line break kept.
+    assert!(slide.elements.iter().any(|e| matches!(e, SlideElement::Shape { shape_kind, fill_color, stroke_color, .. } if shape_kind == "hexagon" && fill_color == "#4f81bd" && stroke_color.is_none())));
+    let (_, hex_text) = texts.iter().find(|(_, b)| text_of(b).contains("Line A")).expect("shape text");
+    assert_eq!(text_of(hex_text), "Line A\nLine B");
+    assert_eq!(hex_text.runs[0].color, "#ffffff");
+
+    // Slide 2 hides the master's shapes and has its own gradient (90deg in OOXML is top to bottom).
+    let slide2 = &pres.slides[1];
+    assert!(!slide2.elements.iter().any(|e| matches!(e, SlideElement::Shape { .. })), "showMasterSp=0");
+    match &slide2.background_v2 {
+        Some(SlideBackground::Gradient { kind, stops, angle_deg }) => {
+            assert_eq!(kind, "linear");
+            assert_eq!(*angle_deg, Some(180.0));
+            assert_eq!((stops[0].color.as_str(), stops[1].color.as_str()), ("#4f81bd", "#808080"));
+        }
+        other => panic!("expected a gradient, got {other:?}"),
+    }
+    assert_eq!(slide2.background.as_deref(), Some("linear-gradient(180deg, #4f81bd 0%, #808080 100%)"));
+}
+
+/// Freeforms and connectors draw their actual course: a closed freeform is a path `Shape`, an
+/// open one (a hand-drawn arrow) a path `Line` with its arrowheads, and a connector runs corner to
+/// corner of its box the way its flips say -- not a horizontal line across the middle.
+#[test]
+fn test_pptx_import_draws_freeforms_and_connectors_along_their_paths() {
     use os_next::core::models::SlideElement;
     let slide_xml = r##"<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:cSld><p:spTree>
-    <p:sp>
-      <p:spPr><a:xfrm><a:off x="100000" y="100000"/><a:ext cx="500000" cy="400000"/></a:xfrm>
-        <a:prstGeom prst="hexagon"><a:avLst/></a:prstGeom>
-      </p:spPr>
-      <p:style>
-        <a:lnRef idx="1"><a:schemeClr val="accent1"/></a:lnRef>
-        <a:fillRef idx="2"><a:schemeClr val="accent1"/></a:fillRef>
-        <a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef>
-        <a:fontRef idx="minor"><a:schemeClr val="tx1"/></a:fontRef>
-      </p:style>
-    </p:sp>
+    <p:sp><p:nvSpPr><p:cNvPr id="2" name="Blob"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm>
+        <a:custGeom><a:pathLst><a:path w="200" h="100"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="200" y="0"/></a:lnTo><a:lnTo><a:pt x="100" y="100"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom>
+        <a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></p:spPr></p:sp>
+    <p:sp><p:nvSpPr><p:cNvPr id="3" name="Hand arrow"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm flipH="1"><a:off x="0" y="0"/><a:ext cx="1000000" cy="500000"/></a:xfrm>
+        <a:custGeom><a:pathLst><a:path w="100" h="100" fill="none"><a:moveTo><a:pt x="0" y="100"/></a:moveTo><a:cubicBezTo><a:pt x="0" y="0"/><a:pt x="100" y="0"/><a:pt x="100" y="100"/></a:cubicBezTo></a:path></a:pathLst></a:custGeom>
+        <a:noFill/><a:ln w="25400"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill><a:tailEnd type="triangle"/></a:ln></p:spPr></p:sp>
+    <p:cxnSp><p:nvCxnSpPr><p:cNvPr id="4" name="Up-right arrow"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>
+      <p:spPr><a:xfrm flipV="1"><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm><a:prstGeom prst="straightConnector1"><a:avLst/></a:prstGeom>
+        <a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:headEnd type="arrow"/></a:ln></p:spPr></p:cxnSp>
+    <p:cxnSp><p:nvCxnSpPr><p:cNvPr id="5" name="Elbow"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm><a:prstGeom prst="bentConnector3"><a:avLst><a:gd name="adj1" fmla="val 25000"/></a:avLst></a:prstGeom>
+        <a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></p:spPr></p:cxnSp>
   </p:spTree></p:cSld>
 </p:sld>"##;
-    let bytes = build_single_slide_pptx(slide_xml);
     let media_dir = tempfile::tempdir().unwrap();
-    let pres = PptxImporter::import_pptx_bytes(&bytes, "stem", media_dir.path()).expect("should parse, not crash");
-    let SlideElement::Shape { shape_kind, fill_color, stroke_color, .. } = &pres.slides[0].elements[0] else { panic!() };
-    assert_eq!(shape_kind, "hexagon");
-    assert_eq!(fill_color, "none", "a theme-only fill must not be guessed at");
-    assert!(stroke_color.is_none());
+    let pres = PptxImporter::import_pptx_bytes(&build_single_slide_pptx(slide_xml), "stem", media_dir.path()).expect("should parse");
+    let els = &pres.slides[0].elements;
+    assert!(matches!(&els[0], SlideElement::Shape { shape_kind, fill_color, path: Some(d), .. }
+        if shape_kind == "path" && fill_color == "#ff0000" && d == "M 0 0 L 100 0 L 50 100 Z"), "{:?}", els[0]);
+    // Mirrored by flipH; the open path is a line that keeps its arrowhead; 2pt is 2/540 of a 7.5in canvas.
+    assert!(matches!(&els[1], SlideElement::Line { color, end_arrow: true, start_arrow: false, path: Some(d), stroke_width, .. }
+        if color == "#0000ff" && d == "M 100 100 C 100 0 0 0 0 100" && (*stroke_width - 4.0).abs() < 0.01), "{:?}", els[1]);
+    // flipV: from the bottom-left corner up to the top-right, arrowhead at its start.
+    assert!(matches!(&els[2], SlideElement::Line { start_arrow: true, path: Some(d), .. } if d == "M 0 100 L 100 0"), "{:?}", els[2]);
+    // The elbow turns where adj1 says (25% across).
+    assert!(matches!(&els[3], SlideElement::Line { line_kind, path: Some(d), .. } if line_kind == "elbow" && d == "M 0 0 L 25 0 25 100 100 100"), "{:?}", els[3]);
+}
+
+/// The deck's title from docProps when it's a real one; the file name when it's a tool default.
+#[test]
+fn test_pptx_import_ignores_generic_deck_titles() {
+    let with_title = |title: &str| {
+        use std::io::{Cursor, Write};
+        let mut zw = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let o = zip::write::FileOptions::<()>::default();
+        zw.start_file("docProps/core.xml", o).unwrap();
+        zw.write_all(format!(r#"<cp:coreProperties xmlns:cp="x" xmlns:dc="y"><dc:title>{title}</dc:title></cp:coreProperties>"#).as_bytes()).unwrap();
+        zw.start_file("ppt/slides/slide1.xml", o).unwrap();
+        zw.write_all(br#"<p:sld><p:cSld><p:spTree/></p:cSld></p:sld>"#).unwrap();
+        let bytes = zw.finish().unwrap().into_inner();
+        PptxImporter::import_pptx_bytes(&bytes, "Sunday Announcements", tempfile::tempdir().unwrap().path()).unwrap().title
+    };
+    assert_eq!(with_title("Easter Service"), "Easter Service");
+    for generic in ["PowerPoint Presentation", "Slide 1", "Folie 1"] {
+        assert_eq!(with_title(generic), "Sunday Announcements", "{generic}");
+    }
 }
 
 /// A `<p:sp>` with `prst="line"` that *also* carries real text -- legal OOXML
@@ -2650,4 +2810,103 @@ fn test_ews_import_of_a_real_easyworship_5_schedule() {
     assert_eq!(song.slides[0].text.lines().count(), 8);
     let copyright = song.slides[0].ccli_metadata.as_ref().and_then(|m| m.copyright.as_deref());
     assert_eq!(copyright, Some("Den Danske"), "the record's copyright field rides along for CCLI reporting");
+}
+
+/// Real decks from the web (Apache POI's test corpus, kept in `$OS_TEST_DOCS/poi-pptx/`, see
+/// docs/workflow.md) -- the files that showed the importer reading only what a slide states
+/// outright: most of their text came through white on white, positioned and sized wrongly. Checked
+/// against OnlyOffice's rendering of the same files. Skips the files that aren't on this machine.
+#[test]
+fn test_pptx_import_of_real_world_decks() {
+    use os_next::core::models::SlideElement;
+    let decks: [(&str, usize); 7] = [
+        ("aascu.org_hbcu_leadershipsummit_cooper_.pptx", 16),
+        ("aascu.org_workarea_downloadasset.aspx_id=5864.pptx", 34),
+        ("ae.ac.uaeu.faculty_nafaachbili_GeomLec1.pptx", 14),
+        ("at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx", 34),
+        ("au.asn.aes.www_conferences_2011_presentations_Fri_20Room4Level4_20930_20Maloney.pptx", 28),
+        ("ca.ubc.cs.people_~emhill_presentations_HowWeRefactor.pptx", 28),
+        ("ececapstonespring2012.pptx", 24),
+    ];
+    fn runs(els: &[SlideElement], out: &mut Vec<(String, String)>) {
+        for e in els {
+            match e {
+                SlideElement::TextBlock { block, .. } => out.extend(block.runs.iter().filter(|r| !r.text.trim().is_empty()).map(|r| (r.text.clone(), r.color.clone()))),
+                SlideElement::Group { children, .. } => runs(children, out),
+                _ => {}
+            }
+        }
+    }
+    /// Text straight on the slide's background: not over a filled shape or a picture.
+    fn bare_runs(els: &[SlideElement]) -> Vec<(String, String)> {
+        let mut covers = Vec::new();
+        fn collect<'a>(els: &'a [SlideElement], covers: &mut Vec<&'a os_next::core::models::ElementTransform>, texts: &mut Vec<&'a SlideElement>) {
+            for e in els {
+                match e {
+                    SlideElement::Shape { fill_color, transform, .. } if fill_color != "none" => covers.push(transform),
+                    SlideElement::Image { transform, .. } | SlideElement::Table { transform, .. } => covers.push(transform),
+                    SlideElement::TextBlock { .. } => texts.push(e),
+                    SlideElement::Group { children, .. } => collect(children, covers, texts),
+                    _ => {}
+                }
+            }
+        }
+        let mut texts = Vec::new();
+        collect(els, &mut covers, &mut texts);
+        let mut out = Vec::new();
+        for t in texts {
+            let r = t.transform();
+            let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+            if !covers.iter().any(|c| cx >= c.x && cx <= c.x + c.w && cy >= c.y && cy <= c.y + c.h) {
+                runs(std::slice::from_ref(t), &mut out);
+            }
+        }
+        out
+    }
+    let media_dir = tempfile::tempdir().unwrap();
+    for (name, slide_count) in decks {
+        let Some(path) = test_doc(&format!("poi-pptx/{name}")) else { continue };
+        let pres = PptxImporter::import_pptx_bytes(&std::fs::read(&path).unwrap(), "stem", media_dir.path()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(pres.slides.len(), slide_count, "{name}");
+        for (i, slide) in pres.slides.iter().enumerate() {
+            // Every slide has a background, and no text is the colour of a solid one (invisible).
+            assert!(slide.background_v2.is_some(), "{name} slide {}: no background", i + 1);
+            if let Some(os_next::core::models::SlideBackground::Solid(bg)) = &slide.background_v2 {
+                for (text, color) in &bare_runs(&slide.elements) {
+                    assert_ne!(color, bg, "{name} slide {}: {text:?} is invisible", i + 1);
+                }
+            }
+        }
+    }
+
+    // Specifics OnlyOffice shows: the master's olive heading colour, and its bullets; the dark theme's white text.
+    if let Some(path) = test_doc("poi-pptx/au.asn.aes.www_conferences_2011_presentations_Fri_20Room4Level4_20930_20Maloney.pptx") {
+        let pres = PptxImporter::import_pptx_bytes(&std::fs::read(path).unwrap(), "stem", media_dir.path()).unwrap();
+        let mut found = Vec::new();
+        runs(&pres.slides[3].elements, &mut found);
+        assert!(found.iter().any(|(t, c)| t == "Why marketing?" && c == "#a69500"), "{found:?}");
+        assert!(found.iter().any(|(t, _)| t.trim() == "•"), "{found:?}");
+        assert_eq!(pres.title, "stem", "its own title is the tool default, \"PowerPoint Presentation\"");
+    }
+    // Clip art and a drawn figure stored as Windows Metafiles come through as drawings.
+    let group_of = |name: &str, slide: usize| test_doc(&format!("poi-pptx/{name}")).map(|path| {
+        let pres = PptxImporter::import_pptx_bytes(&std::fs::read(path).unwrap(), "stem", media_dir.path()).unwrap();
+        pres.slides[slide - 1].elements.iter().filter_map(|e| match e { SlideElement::Group { children, .. } => Some(children.clone()), _ => None }).flatten().collect::<Vec<_>>()
+    });
+    if let Some(children) = group_of("aascu.org_hbcu_leadershipsummit_cooper_.pptx", 11) {
+        assert!(children.iter().filter(|c| matches!(c, SlideElement::Shape { path: Some(_), .. })).count() > 100, "the student clip art");
+    }
+    if let Some(children) = group_of("ae.ac.uaeu.faculty_nafaachbili_GeomLec1.pptx", 10) {
+        let mut labels = Vec::new();
+        runs(&children, &mut labels);
+        assert!(labels.iter().any(|(t, _)| t == "Parallel Lines"), "{labels:?}");
+        assert!(children.iter().any(|c| matches!(c, SlideElement::Line { path: Some(d), .. } if d.contains(" A "))), "the angle arcs");
+    }
+    if let Some(path) = test_doc("poi-pptx/ca.ubc.cs.people_~emhill_presentations_HowWeRefactor.pptx") {
+        let pres = PptxImporter::import_pptx_bytes(&std::fs::read(path).unwrap(), "stem", media_dir.path()).unwrap();
+        assert_eq!(pres.slides[0].background.as_deref(), Some("#000000"));
+        let mut found = Vec::new();
+        runs(&pres.slides[0].elements, &mut found);
+        assert!(found.iter().any(|(t, c)| t.contains("Refactor, and") && c == "#ffffff"), "{found:?}");
+    }
 }
