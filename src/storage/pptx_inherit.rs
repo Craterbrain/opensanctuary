@@ -235,6 +235,11 @@ impl Palette<'_> {
     /// A colour element (`<a:schemeClr>`, `<a:srgbClr>`, ...) with its modifiers applied.
     /// `ph` stands in for `phClr` (the colour a style reference passes into a theme fill).
     pub fn color(&self, name: &str, attrs: &str, inner: &str, ph: Option<&str>) -> Option<String> {
+        self.color_alpha(name, attrs, inner, ph).map(|(c, _)| c)
+    }
+
+    /// Like `color`, with its opacity (0..1) from `alpha`/`alphaMod`/`alphaOff`.
+    pub fn color_alpha(&self, name: &str, attrs: &str, inner: &str, ph: Option<&str>) -> Option<(String, f64)> {
         let base = if name == "a:schemeClr" {
             let val = extract_attr(attrs, "val")?;
             if val == "phClr" {
@@ -246,13 +251,39 @@ impl Palette<'_> {
         } else {
             plain_color(name, attrs, inner)?
         };
-        Some(apply_modifiers(&base, inner))
+        // A phClr stand-in may already carry an opacity: keep it under this colour's own.
+        let (base, base_alpha) = split_alpha(&base);
+        let (c, a) = apply_modifiers(base, inner);
+        Some((c, a * base_alpha))
     }
 
     /// The colour inside a fill-ish element's content (`<a:solidFill>`, `<a:buClr>`, a style
     /// reference): its first colour child.
     pub fn first_color(&self, inner: &str, ph: Option<&str>) -> Option<String> {
         children(inner).into_iter().find_map(|(n, a, i)| self.color(n, a, i, ph))
+    }
+
+    /// `first_color` as `#rrggbbaa` when it isn't opaque -- for fills, which can be see-through.
+    pub fn first_color_with_alpha(&self, inner: &str, ph: Option<&str>) -> Option<String> {
+        children(inner).into_iter().find_map(|(n, a, i)| self.color_alpha(n, a, i, ph)).map(|(c, a)| with_alpha(&c, a))
+    }
+}
+
+/// `#rrggbb` plus an opacity as `#rrggbbaa` (unchanged when opaque).
+pub fn with_alpha(c: &str, a: f64) -> String {
+    if a >= 0.999 || c.len() != 7 {
+        return c.to_string();
+    }
+    format!("{c}{:02x}", (a.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+/// `#rrggbbaa` -> (`#rrggbb`, opacity); anything else is opaque.
+pub fn split_alpha(c: &str) -> (&str, f64) {
+    if c.len() == 9 && c.starts_with('#') {
+        let a = u8::from_str_radix(&c[7..9], 16).map(|v| v as f64 / 255.0).unwrap_or(1.0);
+        (&c[..7], a)
+    } else {
+        (c, 1.0)
     }
 }
 
@@ -293,18 +324,31 @@ fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (f64, f64, f64) {
     (f(h + 1.0 / 3.0), f(h), f(h - 1.0 / 3.0))
 }
 
-/// The modifiers real decks use on a theme colour: lumMod/lumOff (PowerPoint's "Lighter 40%"
-/// etc.), tint (towards white), shade (towards black). Others (alpha, satMod, hue...) are ignored.
-fn apply_modifiers(base: &str, inner: &str) -> String {
+/// The modifiers real decks use on a colour, in order: lumMod/lumOff (PowerPoint's "Lighter 40%"
+/// etc.), tint (towards white), shade (towards black), the saturation and hue ones theme
+/// gradients use, and alpha. Returns the colour and its opacity.
+fn apply_modifiers(base: &str, inner: &str) -> (String, f64) {
     let (mut r, mut g, mut b) = hex_rgb(base);
+    let mut alpha = 1.0;
     for (name, attrs, _) in children(inner) {
         let v = num(attrs, "val").unwrap_or(100_000.0) / 100_000.0;
         match name {
-            "a:lumMod" | "a:lumOff" => {
+            "a:lumMod" | "a:lumOff" | "a:satMod" | "a:satOff" | "a:hueOff" | "a:hueMod" => {
                 let (h, s, l) = rgb_to_hsl(r, g, b);
-                let l = if name == "a:lumMod" { l * v } else { l + v };
-                (r, g, b) = hsl_to_rgb(h, s, l.clamp(0.0, 1.0));
+                let (h, s, l) = match name {
+                    "a:lumMod" => (h, s, l * v),
+                    "a:lumOff" => (h, s, l + v),
+                    "a:satMod" => (h, s * v, l),
+                    "a:satOff" => (h, s + v, l),
+                    // hueOff's val is an angle (60,000ths of a degree), not a percentage like the rest.
+                    "a:hueOff" => ((h + v * 100_000.0 / 60_000.0 / 360.0).rem_euclid(1.0), s, l),
+                    _ => ((h * v).rem_euclid(1.0), s, l),
+                };
+                (r, g, b) = hsl_to_rgb(h, s.clamp(0.0, 1.0), l.clamp(0.0, 1.0));
             }
+            "a:alpha" => alpha = v,
+            "a:alphaMod" => alpha *= v,
+            "a:alphaOff" => alpha += v,
             // Tint and shade work in linear light (as Office and LibreOffice do), so a tinted navy
             // washes out to a near-neutral grey rather than staying visibly blue.
             "a:tint" => (r, g, b) = linear_map((r, g, b), |c| c + (1.0 - c) * (1.0 - v)),
@@ -312,7 +356,7 @@ fn apply_modifiers(base: &str, inner: &str) -> String {
             _ => {}
         }
     }
-    rgb_hex(r, g, b)
+    (rgb_hex(r, g, b), alpha.clamp(0.0, 1.0))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -386,9 +430,36 @@ pub struct Level {
     pub bullet: Option<Bullet>,
     pub bullet_font: Option<String>,
     pub bullet_color: Option<ColorXml>,
-    /// Line spacing as a fraction of single spacing (`<a:lnSpc><a:spcPct>`).
-    pub line_spacing: Option<f64>,
+    /// Line spacing (`<a:lnSpc>`): a share of single spacing, or exact points.
+    pub line_spacing: Option<Spacing>,
+    /// Space before / after the paragraph (`<a:spcBef>` / `<a:spcAft>`).
+    pub space_before: Option<Spacing>,
+    pub space_after: Option<Spacing>,
     pub run: RunProps,
+}
+
+/// A paragraph gap: in points (`<a:spcPts>`), or a share of the font size (`<a:spcPct>`, 1.0 = 100%).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Spacing {
+    Points(f64),
+    OfFont(f64),
+}
+
+impl Spacing {
+    fn parse(inner: &str) -> Option<Spacing> {
+        if let Some((_, a, _)) = child(inner, "a:spcPts") {
+            return num(a, "val").map(|v| Spacing::Points(v / 100.0));
+        }
+        child(inner, "a:spcPct").and_then(|(_, a, _)| num(a, "val")).map(|v| Spacing::OfFont(v / 100_000.0))
+    }
+
+    /// In the deck's points, for text of `font_pt`.
+    pub fn points(&self, font_pt: f64) -> f64 {
+        match *self {
+            Spacing::Points(p) => p,
+            Spacing::OfFont(k) => k * font_pt,
+        }
+    }
 }
 
 impl Level {
@@ -401,7 +472,9 @@ impl Level {
                 "a:buAutoNum" => l.bullet = Some(Bullet::AutoNum(extract_attr(a, "type").unwrap_or("arabicPeriod").to_string())),
                 "a:buFont" => l.bullet_font = extract_attr(a, "typeface").map(str::to_string),
                 "a:buClr" => l.bullet_color = Some(i.to_string()),
-                "a:lnSpc" => l.line_spacing = child(i, "a:spcPct").and_then(|(_, a, _)| num(a, "val")).map(|v| v / 100_000.0),
+                "a:lnSpc" => l.line_spacing = Spacing::parse(i),
+                "a:spcBef" => l.space_before = Spacing::parse(i),
+                "a:spcAft" => l.space_after = Spacing::parse(i),
                 "a:defRPr" => l.run = RunProps::parse(a, i),
                 _ => {}
             }
@@ -417,6 +490,8 @@ impl Level {
             bullet_font: self.bullet_font.clone().or_else(|| base.bullet_font.clone()),
             bullet_color: self.bullet_color.clone().or_else(|| base.bullet_color.clone()),
             line_spacing: self.line_spacing.or(base.line_spacing),
+            space_before: self.space_before.or(base.space_before),
+            space_after: self.space_after.or(base.space_after),
             run: self.run.over(&base.run),
         }
     }
@@ -535,6 +610,10 @@ pub struct PartPh {
     pub xfrm: Option<[f64; 4]>,
     pub list: ListStyle,
     pub body: BodyProps,
+    /// Its `<p:spPr>` and `<p:style>` contents: a slide placeholder's fill, outline and geometry
+    /// fall back to these when it states none of its own.
+    pub sp_pr: String,
+    pub style: String,
 }
 
 pub fn shape_xfrm(shape_inner: &str) -> Option<[f64; 4]> {
@@ -561,7 +640,8 @@ pub fn part_placeholders(part_xml: &str) -> Vec<PartPh> {
         .filter_map(|(_, _, inner)| {
             let ph = Ph::of_shape(inner)?;
             let (list, body) = shape_text_styles(inner);
-            Some(PartPh { ph, xfrm: shape_xfrm(inner), list, body })
+            let part = |tag: &str| next_tag(inner, tag).map(|(_, c, _)| c.to_string()).unwrap_or_default();
+            Some(PartPh { ph, xfrm: shape_xfrm(inner), list, body, sp_pr: part("p:spPr"), style: part("p:style") })
         })
         .collect()
 }
@@ -587,6 +667,13 @@ impl Inherited {
 
     fn master_ph(&self, ph: &Ph) -> Option<&PartPh> {
         self.master_phs.iter().find(|p| p.ph.family() == ph.family())
+    }
+
+    /// The `(spPr, style)` contents a placeholder inherits its shape properties from, nearest
+    /// first (layout, then master); empty for a shape that isn't a placeholder.
+    pub fn shape_parts(&self, ph: Option<&Ph>) -> Vec<(&str, &str)> {
+        let Some(ph) = ph else { return Vec::new() };
+        [self.layout_ph(ph), self.master_ph(ph)].into_iter().flatten().map(|p| (p.sp_pr.as_str(), p.style.as_str())).collect()
     }
 
     /// The position, paragraph levels and body properties a shape inherits, before its own.

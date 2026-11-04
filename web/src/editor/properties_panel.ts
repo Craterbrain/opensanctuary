@@ -662,11 +662,12 @@ export class PropertiesPanel {
     } else if (el.type === 'Shape') {
       const shapeSection = document.createElement('div');
       shapeSection.className = 'prop-section';
+      // An imported fill can be see-through (#rrggbbaa) or a gradient: the picker shows its first colour.
       shapeSection.innerHTML = `
         <div class="prop-section-title">Shape Attributes</div>
         <div class="prop-field">
           <label class="prop-label">Fill Color</label>
-          <input type="color" id="prop-shape-fill" value="${escapeHtml(el.fill_color)}">
+          <input type="color" id="prop-shape-fill" value="${escapeHtml((/#[0-9a-f]{6}/i.exec(el.fill_color) ?? ['#000000'])[0])}">
         </div>
       `;
       content.appendChild(shapeSection);

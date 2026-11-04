@@ -1,5 +1,5 @@
 import { ElementTransform, SlideElement } from './types';
-import { renderPathDOM } from './svg_path';
+import { renderPathDOM, svgPaint } from './svg_path';
 
 export interface ShapeElementProps {
   shape_kind: string;
@@ -256,7 +256,7 @@ export function renderShapeDOM(containerEl: HTMLElement, props: ShapeElementProp
     }
   }
 
-  shapeNode.setAttribute('fill', fill);
+  shapeNode.setAttribute('fill', svgPaint(svg, fill));
   shapeNode.setAttribute('stroke', stroke);
   shapeNode.setAttribute('stroke-width', `${strokeW}`);
   svg.appendChild(shapeNode);

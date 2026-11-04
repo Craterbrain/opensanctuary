@@ -334,6 +334,7 @@ export class EditorCanvas {
           crop: el.crop,
           mask_shape: el.mask_shape,
           alt_text: el.alt_text,
+          fit: el.fit,
           opacity: el.transform.opacity
         });
         break;

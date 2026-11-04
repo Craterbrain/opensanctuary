@@ -759,6 +759,8 @@ fn extract_image_element(
         crop: None::<CropRect>,
         mask_shape: None,
         alt_text: None,
+        // Impress stretches a picture to its frame.
+        fit: Some("stretch".into()),
     })
 }
 

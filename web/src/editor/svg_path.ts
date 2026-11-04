@@ -51,6 +51,49 @@ export interface PathDrawing {
 }
 
 let markerSeq = 0;
+let gradientSeq = 0;
+
+/**
+ * A fill as SVG paint. A colour is used as is; a CSS `linear-gradient(...)` or
+ * `radial-gradient(...)` (an imported shape's fill can be one) becomes a gradient defined in
+ * `svg` over the shape's bounding box, referenced by url.
+ */
+export function svgPaint(svg: SVGSVGElement, fill: string | undefined): string {
+  const m = /^(linear|radial)-gradient\((.*)\)$/i.exec((fill || '').trim());
+  if (!m) return fill || 'none';
+  const kind = (m[1] ?? '').toLowerCase();
+  const parts = (m[2] ?? '').split(/,(?![^(]*\))/).map((s) => s.trim()).filter(Boolean);
+  let angle = 180;
+  if (kind === 'linear' && /deg$/i.test(parts[0] ?? '')) angle = parseFloat(parts.shift()!);
+  else if (kind === 'radial' && parts.length && !/^(#|rgb|hsl)/i.test(parts[0] ?? '')) parts.shift();
+  const id = `os-grad-${++gradientSeq}`;
+  const grad = document.createElementNS(SVG_NS, kind === 'linear' ? 'linearGradient' : 'radialGradient');
+  grad.setAttribute('id', id);
+  if (kind === 'linear') {
+    // CSS angles: 0deg points up, 90deg right.
+    const rad = (angle * Math.PI) / 180;
+    const dx = Math.sin(rad) / 2;
+    const dy = -Math.cos(rad) / 2;
+    grad.setAttribute('x1', `${0.5 - dx}`);
+    grad.setAttribute('y1', `${0.5 - dy}`);
+    grad.setAttribute('x2', `${0.5 + dx}`);
+    grad.setAttribute('y2', `${0.5 + dy}`);
+  }
+  for (const part of parts) {
+    const [color, offset] = part.split(/\s+/);
+    const stop = document.createElementNS(SVG_NS, 'stop');
+    stop.setAttribute('offset', offset ?? '0%');
+    stop.setAttribute('stop-color', color ?? 'none');
+    grad.appendChild(stop);
+  }
+  let defs = svg.querySelector('defs');
+  if (!defs) {
+    defs = document.createElementNS(SVG_NS, 'defs');
+    svg.insertBefore(defs, svg.firstChild);
+  }
+  defs.appendChild(grad);
+  return `url(#${id})`;
+}
 
 export function renderPathDOM(containerEl: HTMLElement, p: PathDrawing): void {
   containerEl.innerHTML = '';
@@ -70,7 +113,7 @@ export function renderPathDOM(containerEl: HTMLElement, p: PathDrawing): void {
   const strokePx = Math.max((p.stroke_width || 0) * (p.scale ?? 1), stroke === 'none' ? 0 : 0.75);
   const path = document.createElementNS(SVG_NS, 'path');
   path.setAttribute('d', scalePath(p.d, w, h));
-  path.setAttribute('fill', p.fill || 'none');
+  path.setAttribute('fill', svgPaint(svg, p.fill));
   path.setAttribute('fill-rule', 'evenodd');
   path.setAttribute('stroke', stroke);
   path.setAttribute('stroke-width', `${strokePx}`);

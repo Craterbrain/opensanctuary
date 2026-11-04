@@ -4,8 +4,8 @@
 //!
 //! Covers the records real clip art and figures use (MS-WMF): window origin/extent, pens, brushes,
 //! fonts, object selection and deletion, saved device contexts, lines, polylines, polygons,
-//! poly-polygons, rectangles, rounded rectangles, ellipses, arcs, pies, chords, `TextOut`,
-//! `ExtTextOut`, and device-independent bitmaps (`StretchDIB`, `DIBStretchBlt`). Anything else
+//! poly-polygons, rectangles, rounded rectangles, ellipses, arcs, pies, chords, `PatBlt`,
+//! `TextOut`, `ExtTextOut`, and device-independent bitmaps (`StretchDIB`, `DIBStretchBlt`). Anything else
 //! (clipping, raster operations, escapes) is skipped.
 
 /// One drawn thing, in the metafile's own logical coordinates.
@@ -244,6 +244,20 @@ pub fn parse(bytes: &[u8]) -> Option<Wmf> {
                 let text = cp1252(p.get(start..start + n).unwrap_or(&[]));
                 push_text(&mut items, &dc, x, y, text);
             }
+            0x061D => {
+                // PatBlt: raster op (4 bytes), height, width, y, x -- a rectangle painted with the
+                // brush (PATCOPY), black or white; other operations combine with what's there.
+                let rop = u32le(p, 0).unwrap_or(0);
+                let fill = match rop {
+                    0x00F0_0021 => dc.brush.clone(),
+                    0x0000_0042 => Some("#000000".into()),
+                    0x00FF_0062 => Some("#ffffff".into()),
+                    _ => None,
+                };
+                if let (Some(fill), Some(h), Some(w), Some(y), Some(x)) = (fill, i(2), i(3), i(4), i(5)) {
+                    items.push(WmfItem::Path { subpaths: vec![vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h)]], closed: true, fill: Some(fill), stroke: None });
+                }
+            }
             0x0B41 | 0x0F43 => {
                 // DIBStretchBlt: rop(4), srcH, srcW, ySrc, xSrc, destH, destW, yDest, xDest, DIB.
                 // StretchDIB: rop(4), colorUsage, then the same.
@@ -315,7 +329,7 @@ fn push_text(items: &mut Vec<WmfItem>, dc: &Dc, x: f64, y: f64, text: String) {
 }
 
 /// A packed DIB (BITMAPINFOHEADER, palette, pixels) as a BMP file.
-fn dib_to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn dib_to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
     let header = u32le(dib, 0)? as usize;
     if !(12..=124).contains(&header) || dib.len() <= header {
         return None;

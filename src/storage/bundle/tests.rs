@@ -120,6 +120,7 @@ fn a_song_with_pictures_survives_a_round_trip_into_another_library() {
         crop: None,
         mask_shape: None,
         alt_text: None,
+        fit: None,
     });
     s.slides[1].background_v2 = Some(SlideBackground::Image { file_path: "/media/images/Easter Sunrise.png".into(), opacity: 1.0 });
     db_a.insert_song(&s).unwrap();

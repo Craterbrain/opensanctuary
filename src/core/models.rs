@@ -113,6 +113,10 @@ pub struct TextParagraphStyle {
     /// default (middle); imported slides set it to keep the authored anchoring.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vertical_align: Option<String>,
+    /// Each paragraph's first run is its lead (an indent and a bullet or number, as imported decks
+    /// write them): wrapped lines line up after it, not under it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hanging_indent: bool,
 }
 
 fn default_line_height_num() -> f64 { 1.25 }
@@ -128,6 +132,7 @@ impl Default for TextParagraphStyle {
             bullet_kind: "none".to_string(),
             indent_level: 0,
             vertical_align: None,
+            hanging_indent: false,
         }
     }
 }
@@ -214,6 +219,11 @@ pub enum SlideElement {
         mask_shape: Option<String>,
         #[serde(default)]
         alt_text: Option<String>,
+        /// How the picture fills its box when it isn't cropped: `None` covers it (the app's own
+        /// pictures keep their proportions); `"stretch"` fills it exactly, as PowerPoint draws
+        /// every picture (imported decks set it).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fit: Option<String>,
     },
     Video {
         id: String,

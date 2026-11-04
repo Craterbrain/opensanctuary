@@ -5,6 +5,8 @@ export interface ImageElementProps {
   crop?: CropRect;
   mask_shape?: string;
   alt_text?: string;
+  /** Uncropped, the picture covers its box; 'stretch' fills it exactly, as PowerPoint draws pictures. */
+  fit?: 'stretch';
   opacity?: number;
 }
 
@@ -71,7 +73,7 @@ export function renderImageDOM(containerEl: HTMLElement, props: ImageElementProp
     inner.style.backgroundSize = size;
     inner.style.backgroundPosition = position;
   } else {
-    inner.style.backgroundSize = 'cover';
+    inner.style.backgroundSize = props.fit === 'stretch' ? '100% 100%' : 'cover';
     inner.style.backgroundPosition = 'center';
   }
 

@@ -1,6 +1,6 @@
 # Third-Party Licenses & Attribution
 
-_Last edited: 2026-10-15_
+_Last edited: 2026-11-04_
 
 OpenSanctuary (`os-next`) is MIT-licensed (see `LICENSE`). It builds on a
 large number of open-source libraries, and a couple of external tools it
@@ -209,6 +209,18 @@ to an end user and is omitted.
 | AndroidX Media3 (ExoPlayer) | Apache-2.0 |
 | [ZXing](https://github.com/zxing/zxing) ("core") | Apache-2.0 |
 | [OkHttp](https://square.github.io/okhttp/) | Apache-2.0 |
+
+## Bundled data
+
+### DrawingML preset shape definitions (`src/storage/pptx_presets.xml`)
+
+- **Source**: `presetShapeDefinitions.xml` from ECMA-376 (Office Open XML), Part 1, as
+  distributed with [Apache POI](https://github.com/apache/poi) (Apache-2.0); compacted here
+  (whitespace, handles and connection sites removed), the geometry itself unchanged.
+- **Use**: compiled into `os-next` (`src/storage/pptx_geom.rs`) to draw PowerPoint's preset
+  shapes exactly when importing a `.pptx`.
+- **License**: the ECMA-376 standard is published by Ecma International free of charge for
+  implementation; the file as taken from Apache POI is under Apache-2.0.
 
 ## Bundled or fetched external tools (not Rust/Cargo dependencies)
 

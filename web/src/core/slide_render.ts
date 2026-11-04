@@ -28,6 +28,7 @@ export interface RenderableElement {
   crop?: any;
   mask_shape?: string;
   alt_text?: string;
+  fit?: 'stretch';
   in_point_s?: number;
   out_point_s?: number;
   loop_playback?: boolean;
@@ -80,6 +81,7 @@ function createElementNode(el: RenderableElement, projection: CanvasProjection):
         crop: el.crop,
         mask_shape: el.mask_shape,
         alt_text: el.alt_text,
+        fit: el.fit,
         opacity: el.transform.opacity
       });
       break;

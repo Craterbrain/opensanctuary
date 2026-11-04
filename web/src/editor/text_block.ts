@@ -142,9 +142,44 @@ export function renderTextBlockDOM(
     const basePt = (block.runs[0]?.font_size_pt || 36) * scale;
     textInner.style.fontSize = block.autofit ? '48px' : `${basePt}pt`;
 
-    for (const run of block.runs) {
-      const span = createRunSpan(run, block.autofit, scale);
-      textInner.appendChild(span);
+    // Paragraph spacing and hanging indents (imported decks have them): each paragraph gets its
+    // own box, the gaps as padding, so space after one and before the next add up as they do in
+    // PowerPoint. Without them -- or once an edit has merged the runs -- the runs flow as one, as
+    // they always have.
+    const before = (pStyle.space_before_pt || 0) * scale;
+    const after = (pStyle.space_after_pt || 0) * scale;
+    const hanging = !!pStyle.hanging_indent;
+    const paragraphs = before > 0 || after > 0 || hanging ? splitParagraphs(block.runs) : [];
+    if (paragraphs.length > 1 || (hanging && paragraphs.length === 1)) {
+      paragraphs.forEach(({ runs, lineStyle }, i) => {
+        const para = document.createElement('div');
+        if (i > 0 && before > 0) para.style.paddingTop = `${before}pt`;
+        if (i < paragraphs.length - 1 && after > 0) para.style.paddingBottom = `${after}pt`;
+        // An empty paragraph still takes a line of its own size.
+        const shown = runs.some((r) => r.text.length > 0) ? runs : lineStyle ? [{ ...lineStyle, text: '\u200b' }] : [];
+        if (hanging && shown.length > 1) {
+          // The lead (indent and bullet) hangs: the rest of the paragraph is a box beside it, so
+          // its wrapped lines start where its text does. Laid out by CSS, no measuring needed.
+          para.style.display = 'flex';
+          para.style.alignItems = 'baseline';
+          const lead = createRunSpan(shown[0]!, block.autofit, scale);
+          lead.style.flex = 'none';
+          lead.style.whiteSpace = 'pre';
+          const rest = document.createElement('span');
+          rest.style.flex = '1 1 auto';
+          rest.style.minWidth = '0';
+          for (const run of shown.slice(1)) rest.appendChild(createRunSpan(run, block.autofit, scale));
+          para.append(lead, rest);
+        } else {
+          for (const run of shown) para.appendChild(createRunSpan(run, block.autofit, scale));
+        }
+        textInner.appendChild(para);
+      });
+    } else {
+      for (const run of block.runs) {
+        const span = createRunSpan(run, block.autofit, scale);
+        textInner.appendChild(span);
+      }
     }
     containerEl.appendChild(textInner);
 
@@ -155,6 +190,20 @@ export function renderTextBlockDOM(
       });
     }
   }
+}
+
+/**
+ * A text block's runs as paragraphs: a run that is exactly "\n" separates two (a line break
+ * inside a paragraph is part of a run's own text). `lineStyle` is the separator before the
+ * paragraph, which sizes it when it's empty.
+ */
+export function splitParagraphs(runs: TextRun[]): { runs: TextRun[]; lineStyle?: TextRun }[] {
+  const out: { runs: TextRun[]; lineStyle?: TextRun }[] = [{ runs: [] }];
+  for (const run of runs) {
+    if (run.text === '\n') out.push({ runs: [], lineStyle: run });
+    else out[out.length - 1]!.runs.push(run);
+  }
+  return out;
 }
 
 function createRunSpan(run: TextRun, inheritFontSize: boolean = false, scale: number = 1): HTMLElement {
