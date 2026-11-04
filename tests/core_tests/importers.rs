@@ -1559,18 +1559,21 @@ fn test_odp_import_against_a_real_libreoffice_fixture() {
     assert_eq!(styled.text, "World plain");
     assert!(styled.bold && styled.italic, "{:?}", styled);
     assert_eq!(styled.color.to_lowercase(), "#ff0000");
-    assert_eq!(styled.font_family, "Liberation Sans");
-    assert!((styled.font_size_pt - 28.0).abs() < 0.01);
+    assert!(styled.font_family.starts_with("\"Liberation Sans\""), "{}", styled.font_family);
+    // 28pt on the fixture's 15.75cm-tall page, onto this app's 11.25in canvas.
+    assert!((styled.font_size_pt - 28.0 * 11.25 / (15.75 / 2.54)).abs() < 0.06, "{}", styled.font_size_pt);
     assert_eq!(block.runs[2].text, "\n");
     let styled2 = &block.runs[3];
     assert_eq!(styled2.text, "Second paragraph left");
     assert!(styled2.bold && styled2.italic && styled2.color.eq_ignore_ascii_case("#ff0000"));
-    assert_eq!(block.paragraph_style.align, "right", "the first paragraph (text-align=right) sets the shape's alignment");
-    // Position: svg:x=2cm y=1.5cm w=16cm h=3cm on a 28cm x 15.75cm page.
-    assert!((transform.x - 2.0 / 28.0).abs() < 0.001, "{}", transform.x);
-    assert!((transform.y - 1.5 / 15.75).abs() < 0.001, "{}", transform.y);
-    assert!((transform.w - 16.0 / 28.0).abs() < 0.001, "{}", transform.w);
-    assert!((transform.h - 3.0 / 15.75).abs() < 0.001, "{}", transform.h);
+    // One alignment per text box: the one most of the text uses ("Second paragraph left" is longer).
+    assert_eq!(block.paragraph_style.align, "left");
+    // Position: svg:x=2cm y=1.5cm w=16cm h=3cm on a 28cm x 15.75cm page, the text inside the
+    // frame's padding (0.25cm left/right, 0.125cm top/bottom).
+    assert!((transform.x - 2.25 / 28.0).abs() < 0.001, "{}", transform.x);
+    assert!((transform.y - 1.625 / 15.75).abs() < 0.001, "{}", transform.y);
+    assert!((transform.w - 15.5 / 28.0).abs() < 0.001, "{}", transform.w);
+    assert!((transform.h - 2.75 / 15.75).abs() < 0.001, "{}", transform.h);
     assert_eq!(transform.z_index, 0);
     assert!(s1.text.contains("Hello World plain"), "{}", s1.text);
 
@@ -1661,7 +1664,7 @@ fn test_odp_import_backgrounds_notes_bare_text_and_error_cases() {
     let os_next::core::models::SlideElement::TextBlock { block, .. } = &s1.elements[0] else { panic!() };
     assert_eq!(block.runs.len(), 1);
     assert_eq!(block.runs[0].text, "Bare paragraph, no span");
-    assert_eq!(block.runs[0].color, "#ffffff", "no style at all: the model's own default, not something this importer invented");
+    assert_eq!(block.runs[0].color, "#000000", "no style at all: black, as LibreOffice shows unstyled text");
 
     let s2 = &pres.slides[1];
     match s2.background_v2.as_ref().unwrap() {
@@ -1741,8 +1744,9 @@ fn test_odp_import_reconstructs_shapes_lines_tables_and_groups() {
     assert_eq!(shape_kind, "ellipse");
     assert_eq!(fill_color.to_lowercase(), "#ff0000");
 
-    let SlideElement::Shape { shape_kind, fill_color, .. } = &els[1] else { panic!("expected a custom shape (triangle): {:?}", els[1]) };
-    assert_eq!(shape_kind, "triangle", "ODF's 'isosceles-triangle' preset name maps to this app's 'triangle'");
+    // Other shapes are drawn from their exact geometry, as paths in their own box.
+    let SlideElement::Shape { shape_kind, fill_color, path, .. } = &els[1] else { panic!("expected a custom shape (triangle): {:?}", els[1]) };
+    assert_eq!((shape_kind.as_str(), path.as_deref()), ("path", Some("M 50 0 L 100 100 L 0 100 Z")), "a path-less 'isosceles-triangle' is the DrawingML triangle");
     assert_eq!(fill_color.to_lowercase(), "#00ff00");
 
     let SlideElement::Line { line_kind: _, color, end_arrow, start_arrow, .. } = &els[2] else { panic!("expected a straight line: {:?}", els[2]) };
@@ -1750,8 +1754,8 @@ fn test_odp_import_reconstructs_shapes_lines_tables_and_groups() {
     assert!(*end_arrow, "draw:marker-end means an arrowhead regardless of line_kind");
     assert!(!*start_arrow);
 
-    let SlideElement::Line { line_kind, color, .. } = &els[3] else { panic!("expected an elbow polyline: {:?}", els[3]) };
-    assert_eq!(line_kind, "elbow", "4 points -> elbow, not straight");
+    let SlideElement::Line { path, color, .. } = &els[3] else { panic!("expected a polyline: {:?}", els[3]) };
+    assert_eq!(path.as_deref().map(|d| d.matches(" L ").count()), Some(3), "its 4 points, as drawn: {path:?}");
     assert_eq!(color.to_lowercase(), "#123456");
 
     let SlideElement::Line { line_kind, color, .. } = &els[4] else { panic!("expected a curved path: {:?}", els[4]) };
@@ -1823,23 +1827,20 @@ fn test_odp_import_reconstructs_spec_elements_pptx_gallery_doesnt_produce() {
     assert_eq!(els.len(), 5, "{:?}", els.iter().map(|e| e.id()).collect::<Vec<_>>());
 
     use os_next::core::models::SlideElement;
-    let SlideElement::Shape { shape_kind, fill_color, .. } = &els[0] else { panic!("expected the free-form polygon: {:?}", els[0]) };
-    assert_eq!(shape_kind, "rect", "no point-list field on Shape to preserve the exact outline, so it falls back to a plain rect -- position/color still preserved, not dropped");
-    assert_eq!(fill_color.to_lowercase(), "#223344");
+    // Each drawn from its own outline: the polygon's points, the regular polygons' corners, the
+    // caption's box; the hyperlinked rectangle unwrapped in place.
+    let path_of = |el: &SlideElement| match el { SlideElement::Shape { shape_kind, fill_color, path, .. } => (shape_kind.clone(), fill_color.to_lowercase(), path.clone().unwrap_or_default()), other => panic!("{other:?}") };
+    let (kind, fill, d) = path_of(&els[0]);
+    assert_eq!((kind.as_str(), fill.as_str()), ("path", "#223344"));
+    assert!(d.starts_with('M') && d.ends_with('Z'), "the free-form polygon's own outline: {d}");
     assert!((els[0].transform().x - 1.0 / 28.0).abs() < 0.001, "{}", els[0].transform().x);
-
-    let SlideElement::Shape { shape_kind, fill_color, .. } = &els[1] else { panic!("expected the regular hexagon: {:?}", els[1]) };
-    assert_eq!(shape_kind, "hexagon", "draw:corners=\"6\" maps to this app's hexagon glyph");
-    assert_eq!(fill_color.to_lowercase(), "#556677");
-
-    let SlideElement::Shape { shape_kind, fill_color, .. } = &els[2] else { panic!("expected the concave (star-like) regular polygon: {:?}", els[2]) };
-    assert_eq!(shape_kind, "star", "draw:concave=\"true\" always maps to this app's one star glyph, regardless of corner count");
-    assert_eq!(fill_color.to_lowercase(), "#887766");
-
-    let SlideElement::Shape { shape_kind, fill_color, .. } = &els[3] else { panic!("expected the caption: {:?}", els[3]) };
-    assert_eq!(shape_kind, "callout", "draw:caption reuses this app's existing callout glyph");
-    assert_eq!(fill_color.to_lowercase(), "#aabbcc");
-
+    let (kind, fill, d) = path_of(&els[1]);
+    assert_eq!((kind.as_str(), fill.as_str(), d.matches(" L ").count()), ("path", "#556677", 5), "six corners: {d}");
+    let (kind, fill, d) = path_of(&els[2]);
+    assert_eq!((kind.as_str(), fill.as_str()), ("path", "#887766"));
+    assert!(d.matches(" L ").count() >= 7, "a concave (star) polygon has inner corners too: {d}");
+    let (kind, fill, _) = path_of(&els[3]);
+    assert_eq!((kind.as_str(), fill.as_str()), ("path", "#aabbcc"));
     let SlideElement::Shape { shape_kind, fill_color, .. } = &els[4] else { panic!("expected the hyperlink-wrapped rect, unwrapped in place: {:?}", els[4]) };
     assert_eq!(shape_kind, "rect");
     assert_eq!(fill_color.to_lowercase(), "#112233");
@@ -1879,11 +1880,13 @@ fn test_odp_import_reconstructs_a_table_with_a_merged_cell_padded_out() {
         ("content.xml", content_xml.as_bytes()),
     ]);
     let pres = os_next::storage::OdpImporter::import_odp_bytes(&zip_bytes, "Stem", &media_dir).unwrap();
-    let os_next::core::models::SlideElement::Table { rows, cols, cells, .. } = &pres.slides[0].elements[0] else { panic!() };
-    assert_eq!(*rows, 2);
-    assert_eq!(*cols, 2);
-    assert_eq!(cells[0], vec!["Spans both".to_string(), String::new()], "the covered cell is padded back in as empty, not left short");
-    assert_eq!(cells[1], vec!["A".to_string(), "B".to_string()]);
+    // Drawn as its cells: the merged one spans both columns, the covered cell takes no space.
+    use os_next::core::models::SlideElement;
+    let SlideElement::Group { children, .. } = &pres.slides[0].elements[0] else { panic!("{:?}", pres.slides[0].elements[0]) };
+    let text_at = |t: &str| children.iter().find_map(|c| match c { SlideElement::TextBlock { transform, block, .. } if block.runs.iter().any(|r| r.text == t) => Some(transform.clone()), _ => None }).unwrap_or_else(|| panic!("no cell with {t}: {children:?}"));
+    let (span, a, b) = (text_at("Spans both"), text_at("A"), text_at("B"));
+    assert!(span.w > a.w + b.w * 0.5, "the merged cell is about as wide as both: {span:?} {a:?} {b:?}");
+    assert!(a.y > span.y && (a.y - b.y).abs() < 1e-9 && b.x > a.x);
 }
 
 #[test]
@@ -2133,19 +2136,23 @@ fn test_odp_import_against_a_real_world_shape_gallery_file() {
     assert_eq!(els.len(), 9, "all 9 gallery shapes must survive, and the dr3d:scene cube must not be mistaken for one: {:?}", els.iter().map(|e| e.id()).collect::<Vec<_>>());
 
     use os_next::core::models::SlideElement;
+    // Each drawn from the geometry LibreOffice wrote for it (enhanced paths, equations included).
     let expected_kinds = ["callout", "diamond", "mso-spt100", "trapezoid", "heart", "brace-pair", "left-right-arrow", "star", "bang"];
     for (el, expected_kind) in els.iter().zip(expected_kinds) {
-        let SlideElement::Shape { shape_kind, fill_color, .. } = el else { panic!("expected a Shape: {el:?}") };
-        assert_eq!(shape_kind, expected_kind);
+        // An outline-only shape is a line; one with shaded parts a group of them.
+        let el = match el { SlideElement::Group { children, .. } => &children[0], el => el };
+        if expected_kind == "brace-pair" {
+            assert!(matches!(el, SlideElement::Line { path: Some(_), .. }), "the brace pair's own explicit draw:fill=\"none\" must stop inheritance, not fall through to the parent's fill: {el:?}");
+            continue;
+        }
+        let SlideElement::Shape { shape_kind, fill_color, path, .. } = el else { panic!("expected a Shape: {el:?}") };
+        assert_eq!(shape_kind, "path", "{expected_kind}");
+        assert!(path.as_deref().is_some_and(|d| d.starts_with('M')), "{expected_kind}: {path:?}");
         // Every shape here leaves fill unset on its own style and inherits from a shared parent
         // ("standard", #18a303) -- except the brace pair, which really is an explicit outline-only
         // shape (its own style sets draw:fill="none" directly, which must win over the parent's
         // fill rather than being treated as "unset" and inherited through).
-        if expected_kind == "brace-pair" {
-            assert_eq!(fill_color, "none", "the brace pair's own explicit draw:fill=\"none\" must stop inheritance, not fall through to the parent's fill");
-        } else {
-            assert_eq!(fill_color.to_lowercase(), "#18a303", "{shape_kind} must inherit the parent style's fill, not come up empty");
-        }
+        assert_eq!(fill_color.to_lowercase(), "#18a303", "{expected_kind} must inherit the parent style's fill, not come up empty");
     }
 }
 

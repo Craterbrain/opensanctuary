@@ -39,6 +39,9 @@ pub struct OdpExporter;
 /// 28cm x 15.75cm in the 1/100mm-free "cm" unit this module writes lengths in.
 const PAGE_W_CM: f64 = 28.0;
 const PAGE_H_CM: f64 = 15.75;
+/// This app's points per real point on a `PAGE_H_CM`-tall page: its text is sized against a
+/// 1080-unit canvas where 1pt is 4/3 of a unit, 11.25in tall (`pptx_import::Geo`).
+const ODF_FONT_SCALE: f64 = 11.25 / (PAGE_H_CM / 2.54);
 
 impl OdpExporter {
     /// `media_root` is the app's media directory (the parent of `images/`/`videos/`/...) -- the
@@ -99,7 +102,7 @@ impl OdpExporter {
         let meta_xml = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <office:document-meta xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" office:version="1.2">
-<office:meta><dc:title>{title}</dc:title><dc:creator>{author}</dc:creator><meta:generator>OpenSanctuary</meta:generator></office:meta>
+<office:meta><dc:title>{title}</dc:title><dc:creator>{author}</dc:creator><meta:generator>OpenSanctuary/2</meta:generator></office:meta>
 </office:document-meta>"#,
             title = encode_xml_text(&pres.title),
             author = encode_xml_text(&pres.author),
@@ -453,7 +456,8 @@ fn run_span(run: &TextRun, text_styles: &mut String, fresh_id: &mut impl FnMut()
         style = if run.italic { "italic" } else { "normal" },
         underline = if run.underline { "solid" } else { "none" },
         strike = if run.strike { "solid" } else { "none" },
-        size = run.font_size_pt,
+        // This app's points are on its 1080-unit canvas; ODF's are real points on the page.
+        size = ((run.font_size_pt / ODF_FONT_SCALE) * 100.0).round() / 100.0,
     ));
     format!(r#"<text:span text:style-name="{name}">{text}</text:span>"#, text = encode_xml_text(&run.text))
 }

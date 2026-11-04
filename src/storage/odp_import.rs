@@ -1,142 +1,317 @@
-//! Imports an OpenDocument Presentation (`.odp`, ISO/IEC 26300) into a `Presentation`,
-//! following the same "one positioned element per shape" fidelity rule `pptx_import.rs`
-//! uses (docs/IMPORT_EXPORT_NOTES.md). Unlike PPTX, a shape's position inside a group IS
-//! reconstructed here (see `Group` below) -- a real, not-yet-fixed gap PPTX still has, not
-//! parity worth preserving.
+//! Imports an OpenDocument Presentation (`.odp`, ISO/IEC 26300) into a `Presentation`, one
+//! positioned element per shape, the way `pptx_import.rs` does for PowerPoint
+//! (docs/IMPORT_EXPORT_NOTES.md).
 //!
-//! Unlike PPTX (one file per slide), ODP keeps every slide's content in one `content.xml`, as
-//! `<draw:page>` siblings of `<office:presentation>`. Style lookup is two-level: a run or
-//! paragraph names a `style:name` (`text:style-name="T1"`), which is defined once, either in
-//! `content.xml`'s `<office:automatic-styles>` (where authoring tools put per-element direct
-//! formatting -- the common case) or in `styles.xml`'s `<office:styles>`/`<office:automatic-styles>`
-//! (named/common styles, and page layouts). Both are scanned into one lookup before any page is
-//! read. Real producer output was used to build this against (`testdata/odp/fixture.odp`, built
-//! by actual LibreOffice, not hand-authored XML), not just what the spec says is legal.
+//! ODP keeps every slide in one `content.xml` (`<draw:page>` siblings), its styles there and in
+//! `styles.xml`, and the master pages (their backgrounds, decorations and text styles) in
+//! `styles.xml`. Everything a slide inherits is resolved:
 //!
-//! Basic shapes/lines/tables/groups ARE reconstructed -- this app's own `SlideElement` model
-//! supports them (`Shape`, `Line`, `Table`, `Group`), so dropping one on import would make a
-//! round trip silently lossy for something this app can otherwise render and re-export fine.
-//! `draw:rect`/`draw:ellipse` map directly to `Shape`; other preset/custom shapes (`draw:custom-
-//! shape`'s `draw:enhanced-geometry draw:type="..."`) carry that type name through as `shape_kind`
-//! (translated to this app's own vocabulary -- see `map_custom_shape_type` -- for the handful of
-//! ODF preset names that mean the same thing under a different spelling), independent of whatever
-//! exact glyph `draw:enhanced-path` describes: this importer does not evaluate that path, so an
-//! exotic preset this app can't render natively (anything `shape_library.ts`'s own switch doesn't
-//! recognize) still keeps its position/size/color, falling back to that renderer's default (plain
-//! rect) glyph rather than disappearing. `draw:line`/`draw:polyline`/`draw:path` map to `Line`;
-//! `draw:g` maps to `Group` (recurses into this same element-scanning logic, any depth, via
-//! `xml_scan::extract_balanced_tag` since `draw:g` can nest inside itself); a `<table:table>`
-//! inside a `draw:frame` maps to `Table` (a cell's own run formatting isn't kept -- `Table`'s cells
-//! are plain strings -- and a merged/covered cell, `table:covered-table-cell`, is simply not counted
-//! as a cell, same "skip rather than mis-parse" rule as everything else undocumented here).
+//! - **Styles** are property bags with parents (`style:parent-style-name`), ending at the
+//!   family's default style. A run's look is its span's style, then its paragraph's, then (in an
+//!   outline) the master's style for that outline level, then its frame's presentation or graphic
+//!   style, then the defaults -- percentages (`fo:font-size="80%"`) apply to what lies beneath.
+//! - **Lists**: bullets and numbers from the list style (`text:list`, or the one a presentation
+//!   style carries), by nesting level, indented by its spacing; wrapped lines hang after them.
+//! - **Geometry**: the page is mapped onto this app's 16:9 canvas (pillarboxed or letterboxed),
+//!   point sizes scaled to it (`pptx_import::Geo`); `draw:transform` (rotate, translate, scale)
+//!   is applied; custom shapes are evaluated from their enhanced geometry (`odp_geom`), PowerPoint
+//!   presets LibreOffice carried over drawn exactly; paths, polygons, polylines, regular
+//!   polygons, connectors and measure lines from their own points.
+//! - **Paint**: solid, gradient (linear, axial, radial...), bitmap (stretched or tiled) and
+//!   hatched fills with their opacity; outlines with arrowheads; pictures (metafiles drawn as
+//!   elements, crops from `fo:clip`).
+//! - **Pages**: the background (the page's, else its master's), the master's own shapes (unless
+//!   the page hides them), its footer and page number when the page shows them, tables with their
+//!   cell styles, speaker notes.
 //!
-//! The full ODF 1.3 drawing-shape vocabulary (not just what LibreOffice Impress's own gallery
-//! happens to produce) is covered too: `draw:polygon` (a closed point list, distinct from a
-//! custom-shape preset -- no point-list field on `Shape` to preserve the exact outline, so it
-//! falls back to a plain rect, same honest degrade as an unrecognized preset, rather than being
-//! silently dropped as it was before this was added to the dispatcher at all), `draw:regular-
-//! polygon` (a true N-sided polygon, mapped by corner count -- see `regular_polygon_kind`), and
-//! `draw:caption` (a pointer-line callout, distinct from the `*-callout` custom-shape presets --
-//! reuses that same `"callout"` glyph). A shape wrapped in a hyperlink (`<draw:a href="...">`) is
-//! unwrapped in place rather than missed for sitting one tag deeper than every other page-level
-//! shape; the link itself has no equivalent in this app's model (same gap PPTX's own importer has).
-//!
-//! Out of scope: rotated shapes (`draw:transform`'s `rotate()` replaces `svg:x`/`svg:y` entirely
-//! per spec -- treated as unrotated/un-positioned rather than guessed; unlike PPTX, which carries
-//! an `a:xfrm`'s `rot` straight into `ElementTransform::rotation_deg`, this is a real gap here, not
-//! parity), `draw:connector` (an anchored connector between two other shapes by ID, which this
-//! app's `Line` has no equivalent for), `draw:measure` (a dimension/measurement line) and
-//! `draw:control` (an embedded form control), both genuinely rare in a presentation and with no
-//! sensible equivalent in this model, `draw:object`/`draw:object-ole`/`draw:applet`/`draw:plugin`/
-//! `draw:floating-frame` (embedded sub-documents/OLE/Java-applet/plugin content -- legacy, and
-//! this app has nowhere to put an embedded document anyway), `draw:layer-set` (Draw-app-style
-//! named layers, not a per-shape concept), image-maps/contours, animations/transitions/sound/
-//! click-actions (`anim:*`, `presentation:animations`/`-sound`/`-event-listener` -- this app's
-//! model has no concept of any of these at all, a product decision, not a parser gap), gradient/
-//! bitmap slide backgrounds (solid only), and master-page-inherited content other than page size.
+//! A file this app exported itself (`meta:generator` "OpenSanctuary") is read back as written:
+//! its custom shapes carry this app's own `shape_kind` names and its tables are `Table`s.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
 use zip::ZipArchive;
 
 use crate::core::models::{
-    CropRect, ElementEffects, ElementTransform, Presentation, Slide, SlideBackground, SlideElement, TextBlock, TextParagraphStyle, TextRun,
+    CropRect, ElementEffects, ElementTransform, GradientStop, Presentation, Slide, SlideBackground, SlideElement, TextBlock, TextParagraphStyle, TextRun,
 };
-use crate::storage::xml_scan::{decode_xml_entities, extract_attr, extract_balanced_tag, find_all_tag_attrs, find_tag_open_pos, next_tag, next_tag_content};
+use crate::storage::odp_geom;
+use crate::storage::pptx_geom::{self, FillMode, Geometry};
+use crate::storage::pptx_import::{self as pptx, Geo};
+use crate::storage::pptx_inherit::children;
+use crate::storage::xml_scan::{decode_xml_entities, extract_attr, next_tag, next_tag_content};
 
 pub struct OdpImporter;
 
-#[derive(Default, Clone)]
-struct TextStyle {
-    bold: Option<bool>,
-    italic: Option<bool>,
-    underline: Option<bool>,
-    strike: Option<bool>,
-    color: Option<String>,
-    font: Option<String>,
-    size_pt: Option<f64>,
-}
-
-#[derive(Default, Clone)]
-struct ParaStyle {
-    align: Option<String>,
-}
-
-#[derive(Default, Clone)]
-struct PageStyle {
-    fill_color: Option<String>,
-    fill_image_name: Option<String>,
-}
-
-/// A `style:family="graphic"` style's own (not inherited) drawing fill/stroke, for
-/// `Shape`/`Line`/`draw:custom-shape`. A real producer's shape gallery (confirmed against an
-/// actual user-authored file, see `testdata/odp/README.md`) routinely leaves fill/stroke
-/// completely unset on the shape's own `draw:style-name` and relies on `style:parent-style-name`
-/// (almost always `"standard"`) for the actual color -- `resolve_graphic_style` walks that chain;
-/// this struct only holds what one single named style itself says.
-#[derive(Default, Clone)]
-struct GraphicStyle {
-    /// `Some` when this style has an explicit `draw:fill-color` and `draw:fill` isn't `"none"`
-    /// (a `draw:fill-color` with no `draw:fill` attribute at all -- the common real-producer case
-    /// -- is still treated as solid-filled with that color, same as every ODF-compliant reader).
-    fill_color: Option<String>,
-    /// `draw:fill="none"` was explicit at this level -- stops inheritance from the parent, unlike
-    /// `fill_color: None`, which just means this level didn't say anything either way.
-    fill_none: bool,
-    stroke_color: Option<String>,
-    stroke_width_cm: Option<f64>,
-    /// `draw:stroke="none"` was explicit at this level -- same role as `fill_none`.
-    stroke_none: bool,
-    marker_start: bool,
-    marker_end: bool,
-    /// `style:parent-style-name`, if any -- the next link `resolve_graphic_style` follows.
+/// One style: its properties (every `style:*-properties` child's attributes, merged), its parent,
+/// and a list style it carries or names.
+#[derive(Default, Clone, Debug)]
+struct Style {
     parent: Option<String>,
+    props: HashMap<String, String>,
+    /// `style:list-style-name`, or the name a `<text:list-style>` inside it was stored under.
+    list: Option<String>,
 }
 
-/// A `GraphicStyle` already resolved up its full `style:parent-style-name` chain -- what callers
-/// actually want (see `resolve_graphic_style`).
-#[derive(Default)]
-struct ResolvedGraphicStyle {
-    fill_color: Option<String>,
-    stroke_color: Option<String>,
-    stroke_width_cm: Option<f64>,
-    marker_start: bool,
-    marker_end: bool,
+#[derive(Clone, Copy, PartialEq)]
+enum Scope {
+    Content,
+    Master,
 }
 
 #[derive(Default)]
 struct Styles {
-    text: HashMap<String, TextStyle>,
-    para: HashMap<String, ParaStyle>,
-    page: HashMap<String, PageStyle>,
-    graphic: HashMap<String, GraphicStyle>,
-    /// `draw:fill-image` definitions: name -> the `Pictures/...` path in `xlink:href`.
+    /// `office:styles` (common styles), keyed "family:name".
+    common: HashMap<String, Style>,
+    /// `office:automatic-styles` of content.xml (pages) and styles.xml (master pages).
+    content_auto: HashMap<String, Style>,
+    master_auto: HashMap<String, Style>,
+    /// `style:default-style` by family.
+    defaults: HashMap<String, Style>,
+    /// List styles' contents by name.
+    lists: HashMap<String, String>,
+    /// Font face name -> family.
+    fonts: HashMap<String, String>,
+    gradients: HashMap<String, String>,
     fill_images: HashMap<String, String>,
-    /// `style:page-layout` name -> (width_cm, height_cm).
+    hatches: HashMap<String, String>,
+    /// Page layout name -> (width, height) in EMU.
     page_layouts: HashMap<String, (f64, f64)>,
-    /// `style:master-page` name -> its page-layout name.
-    master_pages: HashMap<String, String>,
+    /// Master page name -> (page layout, drawing-page style, its content).
+    masters: HashMap<String, (String, Option<String>, String)>,
+    /// Footer / date-time declarations by name (`presentation:footer-decl`).
+    footers: HashMap<String, String>,
+}
+
+const EMU_PER_CM: f64 = 360_000.0;
+
+impl Styles {
+    fn collect_section(xml: &str, tag: &str, into: &mut HashMap<String, Style>, lists: &mut HashMap<String, String>, defaults: Option<&mut HashMap<String, Style>>) {
+        let Some((_, section, _)) = next_tag(xml, tag) else { return };
+        let mut defaults = defaults;
+        for (name, attrs, inner) in children(section) {
+            match name {
+                "style:style" | "style:default-style" => {
+                    let family = extract_attr(attrs, "style:family").unwrap_or("");
+                    let mut st = Style { parent: extract_attr(attrs, "style:parent-style-name").map(str::to_string), list: extract_attr(attrs, "style:list-style-name").map(str::to_string), ..Default::default() };
+                    for (pn, pa, pi) in children(inner) {
+                        if pn.ends_with("-properties") {
+                            for (k, v) in attr_pairs(pa) {
+                                st.props.entry(k).or_insert(v);
+                            }
+                            // A presentation style can carry its own list style.
+                            if let Some((_, list_inner, _)) = next_tag(pi, "text:list-style") {
+                                let key = format!("@{}:{}", family, extract_attr(attrs, "style:name").unwrap_or(""));
+                                lists.insert(key.clone(), list_inner.to_string());
+                                st.list.get_or_insert(key);
+                            }
+                        }
+                    }
+                    if name == "style:default-style" {
+                        if let Some(d) = defaults.as_deref_mut() {
+                            d.entry(family.to_string()).or_insert(st);
+                        }
+                    } else if let Some(n) = extract_attr(attrs, "style:name") {
+                        into.entry(format!("{family}:{n}")).or_insert(st);
+                    }
+                }
+                "text:list-style" => {
+                    if let Some(n) = extract_attr(attrs, "style:name") {
+                        lists.entry(n.to_string()).or_insert_with(|| inner.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn parse(content: &str, styles: &str) -> Styles {
+        let mut s = Styles::default();
+        Self::collect_section(styles, "office:styles", &mut s.common, &mut s.lists, Some(&mut s.defaults));
+        Self::collect_section(content, "office:styles", &mut s.common, &mut s.lists, Some(&mut s.defaults));
+        Self::collect_section(content, "office:automatic-styles", &mut s.content_auto, &mut s.lists, None);
+        Self::collect_section(styles, "office:automatic-styles", &mut s.master_auto, &mut s.lists, None);
+        for doc in [content, styles] {
+            if let Some((_, decls, _)) = next_tag(doc, "office:font-face-decls") {
+                for (_, a, _) in children(decls) {
+                    if let (Some(n), Some(f)) = (extract_attr(a, "style:name"), extract_attr(a, "svg:font-family")) {
+                        s.fonts.entry(n.to_string()).or_insert_with(|| decode_xml_entities(f).trim_matches(|c| c == '\'' || c == '"').to_string());
+                    }
+                }
+            }
+            for st in ["office:styles", "office:automatic-styles"].iter().filter_map(|t| next_tag(doc, t).map(|(_, i, _)| i)) {
+                for (n, a, _) in children(st) {
+                    let Some(name) = extract_attr(a, "draw:name") else { continue };
+                    match n {
+                        "draw:gradient" => { s.gradients.entry(name.to_string()).or_insert_with(|| a.to_string()); }
+                        "draw:fill-image" => { if let Some(h) = extract_attr(a, "xlink:href") { s.fill_images.entry(name.to_string()).or_insert_with(|| h.to_string()); } }
+                        "draw:hatch" => { if let Some(c) = extract_attr(a, "draw:color") { s.hatches.entry(name.to_string()).or_insert_with(|| c.to_lowercase()); } }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // Page layouts and master pages sit outside the style sections.
+        for (_, a, i) in all_tags(styles, "style:page-layout") {
+            let Some(name) = extract_attr(a, "style:name") else { continue };
+            if let Some((p, _, _)) = next_tag(i, "style:page-layout-properties") {
+                if let (Some(w), Some(h)) = (extract_attr(p, "fo:page-width").and_then(length_emu), extract_attr(p, "fo:page-height").and_then(length_emu)) {
+                    s.page_layouts.entry(name.to_string()).or_insert((w, h));
+                }
+            }
+        }
+        if let Some((_, ms, _)) = next_tag(styles, "office:master-styles") {
+            for (n, a, i) in children(ms) {
+                if n == "style:master-page" {
+                    if let Some(name) = extract_attr(a, "style:name") {
+                        s.masters.entry(name.to_string()).or_insert((extract_attr(a, "style:page-layout-name").unwrap_or("").to_string(), extract_attr(a, "draw:style-name").map(str::to_string), i.to_string()));
+                    }
+                }
+            }
+        }
+        if let Some((_, pres, _)) = next_tag(content, "office:presentation") {
+            for (n, a, i) in children(pres) {
+                if n == "presentation:footer-decl" {
+                    if let Some(name) = extract_attr(a, "presentation:name") {
+                        s.footers.insert(name.to_string(), decode_xml_entities(i));
+                    }
+                }
+            }
+        }
+        s
+    }
+
+    fn get(&self, scope: Scope, family: &str, name: &str) -> Option<&Style> {
+        let key = format!("{family}:{name}");
+        let auto = if scope == Scope::Master { &self.master_auto } else { &self.content_auto };
+        auto.get(&key).or_else(|| self.common.get(&key))
+    }
+
+    /// A style and its ancestors, nearest first (bounded, so a loop of parents can't hang).
+    fn chain(&self, scope: Scope, family: &str, name: Option<&str>) -> Vec<&Style> {
+        let mut out = Vec::new();
+        let mut next = name.map(str::to_string);
+        while let Some(n) = next {
+            if out.len() >= 16 {
+                break;
+            }
+            let Some(st) = self.get(scope, family, &n) else { break };
+            out.push(st);
+            next = st.parent.clone();
+        }
+        out
+    }
+}
+
+/// An element's attributes as owned pairs.
+fn attr_pairs(attrs: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = attrs;
+    while let Some(eq) = rest.find('=') {
+        let key = rest[..eq].trim().to_string();
+        let after = &rest[eq + 1..];
+        let Some(q) = after.chars().next().filter(|c| *c == '"' || *c == '\'') else { break };
+        let Some(end) = after[1..].find(q) else { break };
+        out.push((key, decode_xml_entities(&after[1..1 + end])));
+        rest = &after[end + 2..];
+    }
+    out
+}
+
+/// Every element named `tag` anywhere in `xml`, outermost first.
+fn all_tags<'a>(xml: &'a str, tag: &'a str) -> Vec<(&'a str, &'a str, &'a str)> {
+    let mut out = Vec::new();
+    let mut rest = xml;
+    while let Some((a, i, after)) = next_tag(rest, tag) {
+        out.push((tag, a, i));
+        rest = after;
+    }
+    out
+}
+
+/// A length (`2.5cm`, `12pt`, `0.1in`...) in EMU.
+fn length_emu(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let split = s.find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-' && c != '+' && c != 'e')?;
+    let (n, unit) = s.split_at(split);
+    let v: f64 = n.parse().ok()?;
+    let per_cm = match unit.trim() {
+        "cm" => 1.0,
+        "mm" => 0.1,
+        "in" | "inch" => 2.54,
+        "pt" => 2.54 / 72.0,
+        "pc" => 2.54 / 6.0,
+        "px" => 2.54 / 96.0,
+        _ => return None,
+    };
+    Some(v * per_cm * EMU_PER_CM)
+}
+
+fn length_pt(s: &str) -> Option<f64> {
+    length_emu(s).map(|e| e / 12_700.0)
+}
+
+fn read_zip_text(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let mut file = archive.by_name(name)?;
+    Ok(crate::storage::media_sniff::read_capped_string(&mut file, crate::storage::media_sniff::MAX_ZIP_TEXT_BYTES)?)
+}
+
+fn read_zip_bytes(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut file = archive.by_name(name)?;
+    Ok(crate::storage::media_sniff::read_capped_bytes(&mut file, crate::storage::media_sniff::MAX_ZIP_MEDIA_BYTES)?)
+}
+
+/// Everything shape extraction needs for one page.
+struct Ctx<'a> {
+    geo: Geo,
+    styles: &'a Styles,
+    scope: Scope,
+    media: &'a RefCell<HashMap<String, String>>,
+    media_dir: &'a Path,
+    own_file: bool,
+    /// Point sizes onto this app's canvas: the page's scale, or 1 for a file an earlier version of
+    /// this app exported (it wrote this app's own sizes unscaled).
+    font_scale: f64,
+    /// The master's name (presentation styles are named after it: "<master>-outline2").
+    master: String,
+    page_number: usize,
+    footer: Option<String>,
+    /// The page's background colour, behind text with "automatic" colour.
+    backdrop: Option<String>,
+}
+
+impl<'a> Ctx<'a> {
+    /// The same page, with `fill` behind its text (a filled shape's), when it has one.
+    fn over(&self, fill: Option<&str>) -> Ctx<'a> {
+        Ctx { master: self.master.clone(), footer: self.footer.clone(), backdrop: fill.filter(|f| f.starts_with('#')).map(str::to_string).or_else(|| self.backdrop.clone()), ..*self }
+    }
+
+    /// A graphic or presentation style chain for a shape's attributes.
+    fn shape_chain(&self, attrs: &str) -> Vec<&Style> {
+        let mut c = self.styles.chain(self.scope, "presentation", extract_attr(attrs, "presentation:style-name"));
+        c.extend(self.styles.chain(self.scope, "graphic", extract_attr(attrs, "draw:style-name")));
+        c
+    }
+
+    fn defaults(&self, family: &str) -> Option<&Style> {
+        self.styles.defaults.get(family)
+    }
+
+    fn store(&self, key: String, bytes: &[u8]) -> Option<String> {
+        if let Some(done) = self.media.borrow().get(&key) {
+            return Some(done.clone());
+        }
+        let name = crate::storage::media_sniff::write_sniffed_media(self.media_dir, "odp", bytes)?;
+        let served = format!("/media/images/{name}");
+        self.media.borrow_mut().insert(key, served.clone());
+        Some(served)
+    }
+}
+
+/// The first value of `key` along `chains` (in order), then the given families' defaults.
+fn prop<'s>(chains: &[&'s Style], key: &str) -> Option<&'s str> {
+    chains.iter().find_map(|s| s.props.get(key).map(String::as_str))
 }
 
 impl OdpImporter {
@@ -150,431 +325,560 @@ impl OdpImporter {
         if !mimetype.trim().starts_with("application/vnd.oasis.opendocument.presentation") {
             return Err(format!("not an OpenDocument Presentation (mimetype: '{}')", mimetype.trim()).into());
         }
-
         let content_xml = read_zip_text(&mut archive, "content.xml").map_err(|e| format!("Could not read content.xml: {}", e))?;
         let styles_xml = read_zip_text(&mut archive, "styles.xml").unwrap_or_default();
         let meta_xml = read_zip_text(&mut archive, "meta.xml").unwrap_or_default();
+        let styles = Styles::parse(&content_xml, &styles_xml);
+        let generator = next_tag_content(&meta_xml, "meta:generator").map(|(g, _)| g.trim().to_string()).unwrap_or_default();
+        let own_file = generator.starts_with("OpenSanctuary");
+        // Before "OpenSanctuary/2" this app wrote its own point sizes unscaled.
+        let legacy_sizes = generator == "OpenSanctuary";
 
-        let mut styles = Styles::default();
-        for doc in [&content_xml, &styles_xml] {
-            collect_styles(doc, &mut styles);
-        }
+        let text_of = |tag: &str| next_tag_content(&meta_xml, tag).map(|(c, _)| decode_xml_entities(c));
+        let title = text_of("dc:title").filter(|t| !t.trim().is_empty() && !pptx::is_generic_title(t)).unwrap_or_else(|| file_stem.to_string());
+        let author = text_of("meta:initial-creator").or_else(|| text_of("dc:creator")).unwrap_or_default();
 
-        let title = extract_xml_tag_text(&meta_xml, "dc:title")
-            .filter(|t| !t.trim().is_empty())
-            .unwrap_or_else(|| file_stem.to_string());
-        let author = extract_xml_tag_text(&meta_xml, "meta:initial-creator")
-            .or_else(|| extract_xml_tag_text(&meta_xml, "dc:creator"))
-            .unwrap_or_default();
-
-        let (_, presentation_inner, _) =
-            next_tag(&content_xml, "office:presentation").ok_or("no <office:presentation> in content.xml (not a presentation document?)")?;
-
+        let (_, presentation_inner, _) = next_tag(&content_xml, "office:presentation").ok_or("no <office:presentation> in content.xml (not a presentation document?)")?;
+        let media = RefCell::new(HashMap::new());
         let mut slides = Vec::new();
-        let mut rest = presentation_inner;
-        let mut page_num = 0usize;
-        while let Some((page_attrs, page_inner, remainder)) = next_tag(rest, "draw:page") {
-            rest = remainder;
-            page_num += 1;
-
-            // Speaker notes live in a nested <presentation:notes>, which itself contains its own
-            // draw:frame shapes (a thumbnail + a placeholder) -- these are never slide content, so
-            // the main body is scanned only up to where that block starts (always last, in every
-            // real producer's output and per the schema: draw:page's content model ends with it).
+        let pages: Vec<_> = children(presentation_inner).into_iter().filter(|(n, _, _)| *n == "draw:page").collect();
+        for (idx, (_, page_attrs, page_inner)) in pages.into_iter().enumerate() {
+            // Speaker notes are a nested <presentation:notes> block, never slide content.
             let notes_start = page_inner.find("<presentation:notes");
             let body = notes_start.map(|i| &page_inner[..i]).unwrap_or(page_inner);
             let notes_block = notes_start.map(|i| &page_inner[i..]);
 
-            let (page_w, page_h) = page_dimensions(page_attrs, &styles);
-            let elements = extract_page_elements(&mut archive, body, page_w, page_h, &styles, media_dir)?;
-            let speaker_notes = notes_block.and_then(extract_notes_text);
+            let master_name = extract_attr(page_attrs, "draw:master-page-name").unwrap_or("").to_string();
+            let master = styles.masters.get(&master_name);
+            // A page layout with no usable size (0cm, say) falls back to the 16:9 default.
+            let (page_w, page_h) = master.and_then(|(layout, _, _)| styles.page_layouts.get(layout)).copied()
+                .filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 1_000.0 && *h > 1_000.0)
+                .unwrap_or((28.0 * EMU_PER_CM, 15.75 * EMU_PER_CM));
+            let geo = Geo::new(page_w, page_h);
+            let page_style = styles.chain(Scope::Content, "drawing-page", extract_attr(page_attrs, "draw:style-name"));
+            let page_flag = |k: &str| prop(&page_style, k);
+            let footer = (page_flag("presentation:display-footer") == Some("true"))
+                .then(|| extract_attr(page_attrs, "presentation:use-footer-name").and_then(|n| styles.footers.get(n)).cloned())
+                .flatten();
+            let font_scale = if legacy_sizes { 1.0 } else { geo.font_scale };
+            let mut ctx = Ctx { geo, styles: &styles, scope: Scope::Master, media: &media, media_dir, own_file, font_scale, master: master_name.clone(), page_number: idx + 1, footer, backdrop: None };
 
-            let tag = format!("S{}", page_num);
-            let mut slide = Slide { header: Some(tag.clone()), label: Some(format!("Slide {}", page_num)), tag: Some(tag), speaker_notes, ..Default::default() };
+            // The background: the page's own fill, else its master's.
+            let background = if page_flag("presentation:background-visible") == Some("false") {
+                None
+            } else {
+                let own = page_background(&mut archive, &page_style, &ctx);
+                own.or_else(|| {
+                    let mctx = Ctx { scope: Scope::Master, footer: None, backdrop: None, master: String::new(), ..ctx };
+                    let mstyle = styles.chain(Scope::Master, "drawing-page", master.and_then(|(_, s, _)| s.as_deref()));
+                    // The master's page style, else its "<master>-background" presentation style.
+                    page_background(&mut archive, &mstyle, &mctx).or_else(|| {
+                        let bstyle = styles.chain(Scope::Master, "presentation", Some(&format!("{master_name}-background")));
+                        page_background(&mut archive, &bstyle, &mctx)
+                    })
+                })
+            };
+            ctx.backdrop = match &background {
+                Some(SlideBackground::Solid(c)) => Some(c.clone()),
+                Some(SlideBackground::Gradient { stops, .. }) => stops.first().map(|s| s.color.clone()),
+                // A picture: its average colour.
+                Some(SlideBackground::Image { file_path, .. }) => average_color(&media_dir.join(file_path.trim_start_matches("/media/images/"))),
+                _ => None,
+            };
+            let mut elements = Vec::new();
+            // The master's own shapes, behind the page's (unless the page hides them), with its
+            // footer and page number when the page shows them.
+            if let Some((_, _, master_inner)) = master {
+                if page_flag("presentation:background-objects-visible") != Some("false") {
+                    let show_number = page_flag("presentation:display-page-number") == Some("true");
+                    for (name, attrs, inner) in children(master_inner) {
+                        let class = extract_attr(attrs, "presentation:class");
+                        let keep = match class {
+                            None => true,
+                            Some("footer") => ctx.footer.is_some(),
+                            Some("page-number") => show_number,
+                            _ => false,
+                        };
+                        if keep {
+                            elements.extend(shape_elements(&mut archive, name, attrs, inner, &ctx));
+                        }
+                    }
+                }
+            }
+            ctx.scope = Scope::Content;
+            for (name, attrs, inner) in children(body) {
+                // An empty placeholder's prompt isn't stored; its frame (fill, outline) still shows.
+                elements.extend(shape_elements(&mut archive, name, attrs, inner, &ctx));
+            }
+            for (z, el) in elements.iter_mut().enumerate() {
+                el.transform_mut().z_index = z as i32;
+            }
 
+            let tag = format!("S{}", idx + 1);
+            let mut slide = Slide { header: Some(tag.clone()), label: Some(format!("Slide {}", idx + 1)), tag: Some(tag), speaker_notes: notes_block.and_then(extract_notes_text), ..Default::default() };
             if !elements.is_empty() {
                 slide.elements = elements;
                 slide.slide_document_version = 1;
                 slide.project_text_from_elements();
             }
 
-            if let Some(bg) = extract_page_background(page_attrs, &styles, &mut archive, media_dir) {
+            if let Some(bg) = background {
                 slide.background = Some(match &bg {
                     SlideBackground::Solid(c) => c.clone(),
                     SlideBackground::Image { file_path, .. } => file_path.clone(),
+                    SlideBackground::Gradient { kind, stops, angle_deg } => pptx::gradient_css(kind, stops, *angle_deg),
                     _ => String::new(),
                 });
                 slide.background_v2 = Some(bg);
             }
-
             slides.push(slide);
         }
-
         if slides.is_empty() {
             return Err("No slides found in .odp file".into());
         }
-
         Ok(Presentation { id: format!("pres_{}", uuid::Uuid::new_v4()), title, author, slides, theme_name: None })
     }
 }
 
-fn read_zip_text(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let mut file = archive.by_name(name)?;
-    Ok(crate::storage::media_sniff::read_capped_string(&mut file, crate::storage::media_sniff::MAX_ZIP_TEXT_BYTES)?)
+// ---------------------------------------------------------------------------------------------
+// Placement
+// ---------------------------------------------------------------------------------------------
+
+/// A shape's box in page EMU and its rotation (degrees, clockwise): `svg:x/y/width/height`, or a
+/// `draw:transform` (rotate, translate, scale, skewX/Y, matrix -- applied in the order written, as
+/// LibreOffice writes them) placing the unrotated `width` x `height` box.
+fn shape_box(attrs: &str) -> Option<([f64; 4], f64)> {
+    let n = |k: &str| extract_attr(attrs, k).and_then(length_emu);
+    let (w, h) = (n("svg:width").unwrap_or(0.0), n("svg:height").unwrap_or(0.0));
+    let Some(t) = extract_attr(attrs, "draw:transform") else {
+        return Some(([n("svg:x").unwrap_or(0.0), n("svg:y").unwrap_or(0.0), w, h], 0.0));
+    };
+    // The affine map, as (a, b, c, d, e, f): x' = a x + c y + e, y' = b x + d y + f.
+    let mut m = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let then = |m: [f64; 6], n: [f64; 6]| [n[0] * m[0] + n[2] * m[1], n[1] * m[0] + n[3] * m[1], n[0] * m[2] + n[2] * m[3], n[1] * m[2] + n[3] * m[3], n[0] * m[4] + n[2] * m[5] + n[4], n[1] * m[4] + n[3] * m[5] + n[5]];
+    let mut rest = t;
+    // Bounded: each step consumes one "name (args)".
+    while let Some(open) = rest.find('(') {
+        let name = rest[..open].trim().trim_start_matches(',').trim();
+        let Some(close) = rest[open..].find(')') else { break };
+        let args: Vec<&str> = rest[open + 1..open + close].split(|c: char| c.is_whitespace() || c == ',').filter(|a| !a.is_empty()).collect();
+        rest = &rest[open + close + 1..];
+        let num = |i: usize| args.get(i).and_then(|a| a.parse::<f64>().ok()).unwrap_or(0.0);
+        let len = |i: usize| args.get(i).and_then(|a| length_emu(a).or_else(|| a.parse::<f64>().ok().map(|v| v * 360.0))).unwrap_or(0.0);
+        let step = match name {
+            // ODF's rotate turns counter-clockwise on screen.
+            "rotate" => {
+                let a = num(0);
+                [a.cos(), -a.sin(), a.sin(), a.cos(), 0.0, 0.0]
+            }
+            "translate" => [1.0, 0.0, 0.0, 1.0, len(0), len(1)],
+            "scale" => [num(0), 0.0, 0.0, if args.len() > 1 { num(1) } else { num(0) }, 0.0, 0.0],
+            "skewX" => [1.0, 0.0, num(0).tan(), 1.0, 0.0, 0.0],
+            "skewY" => [1.0, num(0).tan(), 0.0, 1.0, 0.0, 0.0],
+            "matrix" => [num(0), num(1), num(2), num(3), len(4), len(5)],
+            _ => continue,
+        };
+        m = then(m, step);
+    }
+    let (cx, cy) = (m[0] * w / 2.0 + m[2] * h / 2.0 + m[4], m[1] * w / 2.0 + m[3] * h / 2.0 + m[5]);
+    let (sx, sy) = ((m[0] * m[0] + m[1] * m[1]).sqrt(), (m[2] * m[2] + m[3] * m[3]).sqrt());
+    let (w, h) = (w * sx, h * sy);
+    let rot = m[1].atan2(m[0]).to_degrees();
+    Some(([cx - w / 2.0, cy - h / 2.0, w, h], if rot.abs() < 1e-6 { 0.0 } else { rot }))
 }
 
-fn read_zip_bytes(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let mut file = archive.by_name(name)?;
-    Ok(crate::storage::media_sniff::read_capped_bytes(&mut file, crate::storage::media_sniff::MAX_ZIP_MEDIA_BYTES)?)
+// ---------------------------------------------------------------------------------------------
+// Shapes
+// ---------------------------------------------------------------------------------------------
+
+/// The elements one page-level tag draws.
+fn shape_elements(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str, attrs: &str, inner: &str, ctx: &Ctx) -> Vec<SlideElement> {
+    let mut out = Vec::new();
+    match name {
+        "draw:frame" => out.extend(frame_elements(archive, attrs, inner, ctx)),
+        "draw:g" => {
+            let kids: Vec<SlideElement> = children(inner).into_iter().flat_map(|(n, a, i)| shape_elements(archive, n, a, i, ctx)).collect();
+            if !kids.is_empty() {
+                out.push(group_of(kids));
+            }
+        }
+        // A shape inside a hyperlink: the shape (links have no place in this model).
+        "draw:a" => {
+            for (n, a, i) in children(inner) {
+                out.extend(shape_elements(archive, n, a, i, ctx));
+            }
+        }
+        "draw:line" | "draw:connector" | "draw:measure" => out.extend(line_element(name, attrs, ctx)),
+        "draw:rect" | "draw:ellipse" | "draw:circle" | "draw:custom-shape" | "draw:polygon" | "draw:polyline" | "draw:path" | "draw:regular-polygon" | "draw:caption" => {
+            out.extend(drawn_shape(archive, name, attrs, inner, ctx));
+        }
+        _ => {}
+    }
+    out
 }
 
-fn extract_xml_tag_text(xml: &str, tag: &str) -> Option<String> {
-    let (content, _) = next_tag_content(xml, tag)?;
-    Some(decode_xml_entities(content))
+fn group_of(children: Vec<SlideElement>) -> SlideElement {
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for c in &children {
+        let t = c.transform();
+        (x0, y0, x1, y1) = (x0.min(t.x), y0.min(t.y), x1.max(t.x + t.w), y1.max(t.y + t.h));
+    }
+    let transform = ElementTransform { x: x0, y: y0, w: (x1 - x0).max(0.0), h: (y1 - y0).max(0.0), ..Default::default() };
+    SlideElement::Group { id: new_id(), transform, children }
 }
 
-/// A length attribute (`svg:x="2.5cm"`, `fo:font-size="12pt"`, ...) converted to centimeters.
-/// ODF allows `cm`/`mm`/`in`/`pt`/`pc`/`px` suffixes; `px` is treated as 1/96in (the CSS/ODF
-/// reference-pixel convention), which only matters for the rare producer that uses it for position.
-fn length_cm(s: &str) -> Option<f64> {
-    let s = s.trim();
-    let split_at = s.find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')?;
-    let (num, unit) = s.split_at(split_at);
-    let value: f64 = num.parse().ok()?;
-    let per_cm = match unit {
-        "cm" => 1.0,
-        "mm" => 0.1,
-        "in" | "\"" => 2.54,
-        "pt" => 2.54 / 72.0,
-        "pc" => 2.54 / 6.0, // 1 pica = 12pt
-        "px" => 2.54 / 96.0,
+fn new_id() -> String {
+    format!("el_{}", uuid::Uuid::new_v4())
+}
+
+/// A colour attribute (`#rrggbb`) with an opacity percentage applied.
+fn with_opacity(color: &str, opacity: Option<&str>) -> String {
+    let a = opacity.and_then(|o| o.trim_end_matches('%').parse::<f64>().ok()).map_or(1.0, |p| (p / 100.0).clamp(0.0, 1.0));
+    crate::storage::pptx_inherit::with_alpha(&color.to_lowercase(), a)
+}
+
+/// A colour with an opacity percentage, composed over white.
+fn over_white(color: &str, opacity: Option<&str>) -> String {
+    let a = opacity.and_then(|o| o.trim_end_matches('%').parse::<f64>().ok()).map_or(1.0, |p| (p / 100.0).clamp(0.0, 1.0));
+    let c = color.trim_start_matches('#');
+    if c.len() < 6 || a >= 1.0 {
+        return color.to_lowercase();
+    }
+    let v = |i: usize| u8::from_str_radix(&c[i..i + 2], 16).map(f64::from).unwrap_or(255.0);
+    let m = |x: f64| (x * a + 255.0 * (1.0 - a)).round() as u8;
+    format!("#{:02x}{:02x}{:02x}", m(v(0)), m(v(2)), m(v(4)))
+}
+
+/// A shape's fill along its style chain: a colour (`#rrggbbaa` when see-through), a gradient (CSS),
+/// a picture (`Err(name)`, the fill image), or none.
+fn shape_fill(chain: &[&Style], ctx: &Ctx) -> Option<Result<String, String>> {
+    let fill = prop(chain, "draw:fill").unwrap_or("solid");
+    let opacity = prop(chain, "draw:opacity");
+    // Filled with the slide's own background.
+    if prop(chain, "loext:fill-use-slide-background") == Some("true") {
+        return ctx.backdrop.clone().map(Ok);
+    }
+    match fill {
+        "none" => None,
+        "gradient" => {
+            let g = prop(chain, "draw:fill-gradient-name").and_then(|n| ctx.styles.gradients.get(n))?;
+            match gradient_of(g, opacity)? {
+                SlideBackground::Gradient { kind, stops, angle_deg } => Some(Ok(pptx::gradient_css(&kind, &stops, angle_deg))),
+                SlideBackground::Solid(c) => Some(Ok(c)),
+                _ => None,
+            }
+        }
+        "bitmap" => prop(chain, "draw:fill-image-name").map(|n| Err(n.to_string())),
+        "hatch" => {
+            // Lines over the background: a see-through tint of the hatch colour, or the
+            // background colour under it when it states one.
+            if prop(chain, "draw:fill-hatch-solid") == Some("true") {
+                prop(chain, "draw:fill-color").map(|c| Ok(with_opacity(c, opacity)))
+            } else {
+                prop(chain, "draw:fill-hatch-name").and_then(|n| ctx.styles.hatches.get(n)).map(|c| Ok(with_opacity(c, Some("35%"))))
+            }
+        }
+        _ => Some(Ok(with_opacity(prop(chain, "draw:fill-color").or_else(|| ctx.defaults("graphic").and_then(|d| d.props.get("draw:fill-color").map(String::as_str))).unwrap_or("#729fcf"), opacity))),
+    }
+}
+
+/// A `<draw:gradient>`'s attributes as a gradient: ODF's styles (linear, axial, radial,
+/// ellipsoid, square, rectangular), angle (tenths of a degree, or with a unit; counter-clockwise,
+/// 0 = top to bottom) and border (the share held at the start colour).
+fn gradient_of(attrs: &str, opacity: Option<&str>) -> Option<SlideBackground> {
+    let color = |k: &str, ik: &str| {
+        let c = extract_attr(attrs, k)?;
+        let intensity = extract_attr(attrs, ik).and_then(|v| v.trim_end_matches('%').parse::<f64>().ok()).unwrap_or(100.0) / 100.0;
+        let (r, g, b) = (u8::from_str_radix(c.get(1..3)?, 16).ok()?, u8::from_str_radix(c.get(3..5)?, 16).ok()?, u8::from_str_radix(c.get(5..7)?, 16).ok()?);
+        let k = |v: u8| (v as f64 * intensity).round() as u8;
+        Some(with_opacity(&format!("#{:02x}{:02x}{:02x}", k(r), k(g), k(b)), opacity))
+    };
+    let (start, end) = (color("draw:start-color", "draw:start-intensity")?, color("draw:end-color", "draw:end-intensity")?);
+    let border = extract_attr(attrs, "draw:border").and_then(|v| v.trim_end_matches('%').parse::<f64>().ok()).unwrap_or(0.0) / 100.0;
+    let angle = extract_attr(attrs, "draw:angle").map(|a| {
+        if let Some(d) = a.strip_suffix("deg") { d.parse::<f64>().unwrap_or(0.0) }
+        else if let Some(r) = a.strip_suffix("rad") { r.parse::<f64>().unwrap_or(0.0).to_degrees() }
+        else if let Some(g) = a.strip_suffix("grad") { g.parse::<f64>().unwrap_or(0.0) * 0.9 }
+        else { a.parse::<f64>().unwrap_or(0.0) / 10.0 }
+    }).unwrap_or(0.0);
+    let stop = |color: &String, offset: f64| GradientStop { color: color.clone(), offset };
+    let style = extract_attr(attrs, "draw:style").unwrap_or("linear");
+    match style {
+        "linear" => Some(SlideBackground::Gradient { kind: "linear".into(), stops: vec![stop(&start, 0.0), stop(&start, border), stop(&end, 1.0)], angle_deg: Some((180.0 - angle).rem_euclid(360.0)) }),
+        // Axial: the end colour in the middle, the start colour at both edges.
+        "axial" => Some(SlideBackground::Gradient { kind: "linear".into(), stops: vec![stop(&start, 0.0), stop(&start, border / 2.0), stop(&end, 0.5), stop(&start, 1.0 - border / 2.0), stop(&start, 1.0)], angle_deg: Some((180.0 - angle).rem_euclid(360.0)) }),
+        // Radial and the rest: the end colour at the centre, the start colour outside.
+        _ => Some(SlideBackground::Gradient { kind: "radial".into(), stops: vec![stop(&end, 0.0), stop(&start, 1.0 - border), stop(&start, 1.0)], angle_deg: None }),
+    }
+}
+
+/// A shape's outline along its style chain: colour (with opacity) and width in EMU, or none.
+fn shape_stroke(chain: &[&Style]) -> Option<(String, f64)> {
+    if prop(chain, "draw:stroke") == Some("none") {
+        return None;
+    }
+    let color = prop(chain, "svg:stroke-color").unwrap_or("#000000");
+    // Width 0 is a hairline: one device pixel, about 0.75pt.
+    let w = prop(chain, "svg:stroke-width").and_then(length_emu).filter(|w| *w > 0.0).unwrap_or(9_525.0);
+    Some((with_opacity(color, prop(chain, "svg:stroke-opacity")), w))
+}
+
+/// A line's width in canvas units (1080 to the canvas height), as path elements use.
+fn canvas_stroke(width_emu: f64, geo: &Geo) -> f64 {
+    ((width_emu.max(6_350.0) / geo.canvas_h * 1080.0) * 100.0).round() / 100.0
+}
+
+/// The elements an evaluated geometry draws in `rect` (turned `rot`): a `Shape` per filled look,
+/// a `Line` per outline-only part, grouped when there's more than one.
+fn geometry_elements(geometry: &Geometry, fill: Option<&str>, stroke: Option<&(String, f64)>, arrows: (bool, bool), rect: [f64; 4], rot: f64, geo: &Geo) -> Vec<SlideElement> {
+    let transform = geo.transform(rect, rot);
+    let mut parts: Vec<(Option<String>, Option<String>, String)> = Vec::new();
+    for p in &geometry.paths {
+        let f = (p.fill != FillMode::None).then(|| fill.map(|f| pptx_geom::shade(f, p.fill))).flatten();
+        let s = if p.stroke { stroke.map(|(c, _)| c.clone()) } else { None };
+        if f.is_none() && s.is_none() {
+            continue;
+        }
+        match parts.last_mut() {
+            Some((pf, ps, d)) if *pf == f && *ps == s => {
+                d.push(' ');
+                d.push_str(&p.d);
+            }
+            _ => parts.push((f, s, p.d.clone())),
+        }
+    }
+    let width = canvas_stroke(stroke.map_or(0.0, |(_, w)| *w), geo);
+    let mut els: Vec<SlideElement> = parts.into_iter().map(|(f, s, d)| match f {
+        Some(fill_color) => SlideElement::Shape { id: new_id(), transform: transform.clone(), shape_kind: "path".into(), fill_color, stroke_width: if s.is_some() { width } else { 0.0 }, stroke_color: s, path: Some(d) },
+        None => SlideElement::Line { id: new_id(), transform: transform.clone(), line_kind: "curved".into(), color: s.unwrap_or_default(), stroke_width: width, start_arrow: arrows.0, end_arrow: arrows.1, path: Some(d) },
+    }).collect();
+    match els.len() {
+        0 => Vec::new(),
+        1 => els,
+        _ => vec![SlideElement::Group { id: new_id(), transform: ElementTransform { rotation_deg: 0.0, ..transform }, children: std::mem::take(&mut els) }],
+    }
+}
+
+/// A rectangle (with rounded corners of radius `r`, EMU) as geometry.
+fn rect_geometry(w: f64, h: f64, r: f64) -> Geometry {
+    if r <= 0.0 {
+        return pptx_geom::preset("rect", "", w, h, (false, false)).unwrap_or_default();
+    }
+    let adj = (r / w.min(h).max(1.0) * 100_000.0).clamp(0.0, 50_000.0);
+    pptx_geom::preset("roundRect", &format!(r#"<a:gd name="adj" fmla="val {adj}"/>"#), w, h, (false, false)).unwrap_or_default()
+}
+
+/// A drawn shape: its geometry painted with its style, a picture fill clipped to it, its text.
+fn drawn_shape(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str, attrs: &str, inner: &str, ctx: &Ctx) -> Vec<SlideElement> {
+    let Some(([x, y, w, h], rot)) = shape_box(attrs) else { return Vec::new() };
+    let chain = ctx.shape_chain(attrs);
+    let mut chain_d = chain.clone();
+    chain_d.extend(ctx.defaults("graphic"));
+    let mut out = Vec::new();
+
+    // A file this app wrote: its own shape names, read back exactly.
+    if ctx.own_file && name == "draw:custom-shape" {
+        let kind = next_tag(inner, "draw:enhanced-geometry").and_then(|(a, _, _)| extract_attr(a, "draw:type")).map(map_custom_shape_type).unwrap_or_else(|| "rect".to_string());
+        out.push(own_shape(&kind, attrs, &chain_d, ctx));
+        out.extend(shape_text(inner, attrs, None, [x, y, w, h], rot, ctx));
+        return out;
+    }
+    if ctx.own_file && matches!(name, "draw:polyline" | "draw:path") {
+        let points = extract_attr(attrs, "draw:points").map_or(2, |p| p.split_whitespace().count());
+        let kind = if name == "draw:path" { "curved" } else if points > 2 { "elbow" } else { "straight" };
+        out.extend(own_line(kind, [x, y, w, h], &chain_d, ctx));
+        return out;
+    }
+    if ctx.own_file && matches!(name, "draw:rect" | "draw:ellipse" | "draw:regular-polygon" | "draw:caption" | "draw:polygon") {
+        let kind = match name {
+            "draw:rect" => "rect",
+            "draw:ellipse" => "ellipse",
+            "draw:regular-polygon" => regular_polygon_kind(attrs),
+            "draw:caption" => "callout",
+            _ => "rect",
+        };
+        out.push(own_shape(kind, attrs, &chain_d, ctx));
+        return out;
+    }
+
+    let view = || -> [f64; 4] {
+        let v: Vec<f64> = extract_attr(attrs, "svg:viewBox").map(|v| v.split_whitespace().filter_map(|n| n.parse().ok()).collect()).unwrap_or_default();
+        if v.len() == 4 && v[2] > 0.0 && v[3] > 0.0 { [v[0], v[1], v[2], v[3]] } else { [0.0, 0.0, (w / 360.0).max(1.0), (h / 360.0).max(1.0)] }
+    };
+    let geometry: Option<Geometry> = match name {
+        "draw:rect" => Some(rect_geometry(w, h, extract_attr(attrs, "draw:corner-radius").and_then(length_emu).unwrap_or(0.0))),
+        "draw:ellipse" | "draw:circle" => Some(ellipse_geometry(attrs, w, h)),
+        "draw:custom-shape" => next_tag(inner, "draw:enhanced-geometry").and_then(|(ga, gi, _)| {
+            // A preset named without its path (LibreOffice always writes one; others may not):
+            // the matching DrawingML preset, drawn exactly.
+            odp_geom::enhanced(ga, gi, w, h).or_else(|| extract_attr(ga, "draw:type").and_then(odf_preset).and_then(|p| pptx_geom::preset(p, "", w, h, (false, false))))
+        }).or_else(|| Some(rect_geometry(w, h, 0.0))),
+        "draw:polygon" | "draw:polyline" => extract_attr(attrs, "draw:points").and_then(|p| odp_geom::points_path(p, view(), name == "draw:polygon")).map(|(d, points)| path_geometry(d, points, name == "draw:polygon")),
+        "draw:path" => extract_attr(attrs, "svg:d").and_then(|d| odp_geom::svg_path(&decode_xml_entities(d), view())).map(|(d, points, closed)| path_geometry(d, points, closed)),
+        "draw:regular-polygon" => Some(regular_polygon_geometry(attrs)),
+        "draw:caption" => Some(rect_geometry(w, h, extract_attr(attrs, "draw:corner-radius").and_then(length_emu).unwrap_or(0.0))),
+        _ => None,
+    };
+    let Some(geometry) = geometry else { return out };
+
+    let stroke = shape_stroke(&chain_d);
+    let arrows = (prop(&chain_d, "draw:marker-start").is_some(), prop(&chain_d, "draw:marker-end").is_some());
+    // A plain rectangle or ellipse stays this app's own shape (as PPTX's import keeps them).
+    let plain = (name == "draw:rect" && extract_attr(attrs, "draw:corner-radius").and_then(length_emu).unwrap_or(0.0) <= 0.0)
+        || (matches!(name, "draw:ellipse" | "draw:circle") && extract_attr(attrs, "draw:kind").is_none_or(|k| k == "full"));
+    if plain {
+        if let Some(fill) = match shape_fill(&chain_d, ctx) { Some(Ok(c)) => Some(Some(c)), None => Some(None), Some(Err(_)) => None } {
+            let base = w.min(h);
+            let stroke_width = stroke.as_ref().map_or(0.0, |(_, sw)| if base > 0.0 { sw / base * 100.0 } else { 0.0 });
+            let kind = if name == "draw:rect" { "rect" } else { "ellipse" };
+            let tctx = ctx.over(fill.as_deref());
+            out.push(SlideElement::Shape { id: new_id(), transform: ctx.geo.transform([x, y, w, h], rot), shape_kind: kind.into(), fill_color: fill.unwrap_or_else(|| "none".into()), stroke_color: stroke.map(|(c, _)| c), stroke_width, path: None });
+            out.extend(shape_text(inner, attrs, None, [x, y, w, h], rot, &tctx));
+            return out;
+        }
+    }
+    let fill = if matches!(name, "draw:polyline") || (name == "draw:path" && geometry.paths.iter().all(|p| p.fill == FillMode::None)) { None } else { shape_fill(&chain_d, ctx) };
+    match &fill {
+        Some(Err(image)) => {
+            out.extend(picture_fill(archive, image, &chain_d, &geometry, [x, y, w, h], rot, ctx));
+            out.extend(geometry_elements(&geometry, None, stroke.as_ref(), arrows, [x, y, w, h], rot, &ctx.geo));
+        }
+        f => out.extend(geometry_elements(&geometry, f.as_ref().and_then(|f| f.as_ref().ok()).map(String::as_str), stroke.as_ref(), arrows, [x, y, w, h], rot, &ctx.geo)),
+    }
+    let backdrop = match &fill { Some(Ok(c)) => Some(c.as_str()), _ => None };
+    out.extend(shape_text(inner, attrs, geometry.text_rect, [x, y, w, h], rot, &ctx.over(backdrop)));
+    out
+}
+
+/// ODF's preset shape names (LibreOffice's gallery) with a DrawingML preset of the same shape.
+fn odf_preset(t: &str) -> Option<&'static str> {
+    Some(match t {
+        "rectangle" | "square" | "flowchart-process" => "rect",
+        "round-rectangle" | "round-square" | "flowchart-alternate-process" => "roundRect",
+        "ellipse" | "circle" | "flowchart-connector" => "ellipse",
+        "diamond" | "flowchart-decision" => "diamond",
+        "isosceles-triangle" => "triangle",
+        "right-triangle" => "rtTriangle",
+        "parallelogram" | "flowchart-data" => "parallelogram",
+        "trapezoid" => "trapezoid",
+        "hexagon" | "flowchart-preparation" => "hexagon",
+        "octagon" => "octagon",
+        "pentagon" => "pentagon",
+        "cross" => "plus",
+        "ring" => "donut",
+        "heart" => "heart",
+        "lightning" => "lightningBolt",
+        "sun" => "sun",
+        "moon" => "moon",
+        "smiley" => "smileyFace",
+        "cloud" => "cloud",
+        "can" => "can",
+        "cube" => "cube",
+        "star4" => "star4",
+        "star5" => "star5",
+        "star6" => "star6",
+        "star8" => "star8",
+        "star12" => "star12",
+        "star24" => "star24",
+        "right-arrow" => "rightArrow",
+        "left-arrow" => "leftArrow",
+        "up-arrow" => "upArrow",
+        "down-arrow" => "downArrow",
+        "left-right-arrow" => "leftRightArrow",
+        "up-down-arrow" => "upDownArrow",
+        "quad-arrow" => "quadArrow",
+        "chevron" => "chevron",
+        "pentagon-right" => "homePlate",
+        "notched-right-arrow" => "notchedRightArrow",
+        "striped-right-arrow" => "stripedRightArrow",
+        "rectangular-callout" => "wedgeRectCallout",
+        "round-rectangular-callout" => "wedgeRoundRectCallout",
+        "round-callout" | "oval-callout" => "wedgeEllipseCallout",
+        "cloud-callout" => "cloudCallout",
+        "flowchart-merge" => "flowChartMerge",
+        "flowchart-extract" => "flowChartExtract",
+        "flowchart-manual-operation" => "flowChartManualOperation",
         _ => return None,
-    };
-    Some(value * per_cm)
+    })
 }
 
-/// A bare point size (`fo:font-size="12pt"`, occasionally unitless) in points.
-fn length_pt(s: &str) -> Option<f64> {
-    let s = s.trim();
-    if let Some(num) = s.strip_suffix("pt") {
-        return num.parse().ok();
-    }
-    length_cm(s).map(|cm| cm / (2.54 / 72.0))
+fn path_geometry(d: String, points: Vec<Vec<(f64, f64)>>, closed: bool) -> Geometry {
+    Geometry { paths: vec![pptx_geom::GeomPath { d, points, fill: if closed { FillMode::Norm } else { FillMode::None }, stroke: true }], text_rect: None }
 }
 
-/// Scans one document's `<office:styles>` and `<office:automatic-styles>` blocks (there can be
-/// one of each, or neither, per document) into `out`. Called once for `content.xml` and once for
-/// `styles.xml`; a name already present (content.xml wins, since it's scanned first and this never
-/// overwrites) is left alone -- content.xml's automatic-styles are where direct per-element
-/// formatting lives, which should win over any same-named common style.
-fn collect_styles(xml: &str, out: &mut Styles) {
-    for section_tag in ["office:styles", "office:automatic-styles"] {
-        let Some((_, section, _)) = next_tag(xml, section_tag) else { continue };
-        let mut rest = section;
-        while let Some((attrs, content, remainder)) = next_tag(rest, "style:style") {
-            rest = remainder;
-            let Some(name) = extract_attr(attrs, "style:name") else { continue };
-            match extract_attr(attrs, "style:family") {
-                Some("text") => {
-                    out.text.entry(name.to_string()).or_insert_with(|| parse_text_style(content));
-                }
-                Some("paragraph") => {
-                    out.para.entry(name.to_string()).or_insert_with(|| parse_para_style(content));
-                }
-                Some("drawing-page") => {
-                    out.page.entry(name.to_string()).or_insert_with(|| parse_page_style(content));
-                }
-                Some("graphic") => {
-                    out.graphic.entry(name.to_string()).or_insert_with(|| parse_graphic_style(attrs, content));
-                }
-                _ => {}
-            }
-        }
+/// An ellipse, or (`draw:kind`) the arc, section (pie) or cut (chord) of one between
+/// `draw:start-angle` and `draw:end-angle` (degrees, counter-clockwise from 3 o'clock).
+fn ellipse_geometry(attrs: &str, w: f64, h: f64) -> Geometry {
+    let kind = extract_attr(attrs, "draw:kind").unwrap_or("full");
+    if kind == "full" {
+        return pptx_geom::preset("ellipse", "", w, h, (false, false)).unwrap_or_default();
     }
-    // page-layouts and master-pages aren't nested inside office:styles/automatic-styles (they're
-    // direct children of office:document-styles), so they're scanned over the whole document instead.
-    let mut rest = xml;
-    while let Some((attrs, content, remainder)) = next_tag(rest, "style:page-layout") {
-        rest = remainder;
-        let Some(name) = extract_attr(attrs, "style:name") else { continue };
-        if let Some((props, _, _)) = next_tag(content, "style:page-layout-properties") {
-            if let (Some(w), Some(h)) = (
-                extract_attr(props, "fo:page-width").and_then(length_cm),
-                extract_attr(props, "fo:page-height").and_then(length_cm),
-            ) {
-                out.page_layouts.entry(name.to_string()).or_insert((w, h));
-            }
-        }
+    let ang = |k: &str| extract_attr(attrs, k).map(|v| v.trim_end_matches("deg").parse::<f64>().unwrap_or(0.0)).unwrap_or(0.0);
+    let (a0, a1) = (ang("draw:start-angle"), ang("draw:end-angle"));
+    let sweep = (a1 - a0).rem_euclid(360.0);
+    let sweep = if sweep == 0.0 { 360.0 } else { sweep };
+    // Counter-clockwise in ODF's y-up sense is decreasing angle on screen: sample the arc.
+    let pt = |deg: f64| (50.0 + 50.0 * deg.to_radians().cos(), 50.0 - 50.0 * deg.to_radians().sin());
+    let n = (sweep / 5.0).ceil().max(2.0) as usize;
+    let pts: Vec<(f64, f64)> = (0..=n).map(|i| pt(a0 + sweep * i as f64 / n as f64)).collect();
+    let mut d = format!("M {:.2} {:.2}", pts[0].0, pts[0].1);
+    for p in &pts[1..] {
+        d.push_str(&format!(" L {:.2} {:.2}", p.0, p.1));
     }
-    let mut rest = xml;
-    while let Some((attrs, _, remainder)) = next_tag(rest, "style:master-page") {
-        rest = remainder;
-        if let (Some(name), Some(layout)) = (extract_attr(attrs, "style:name"), extract_attr(attrs, "style:page-layout-name")) {
-            out.master_pages.entry(name.to_string()).or_insert(layout.to_string());
-        }
+    let mut points = pts.clone();
+    if kind == "section" {
+        d.push_str(" L 50 50");
+        points.push((50.0, 50.0));
     }
-    let mut rest = xml;
-    while let Some((attrs, _, remainder)) = next_tag(rest, "draw:fill-image") {
-        rest = remainder;
-        if let (Some(name), Some(href)) = (extract_attr(attrs, "draw:name"), extract_attr(attrs, "xlink:href")) {
-            out.fill_images.entry(name.to_string()).or_insert(href.to_string());
-        }
+    if kind != "arc" {
+        d.push_str(" Z");
     }
+    Geometry { paths: vec![pptx_geom::GeomPath { d, points: vec![points], fill: if kind == "arc" { FillMode::None } else { FillMode::Norm }, stroke: true }], text_rect: None }
 }
 
-fn parse_text_style(content: &str) -> TextStyle {
-    let mut t = TextStyle::default();
-    let Some((attrs, _, _)) = next_tag(content, "style:text-properties") else { return t };
-    t.bold = extract_attr(attrs, "fo:font-weight").map(|v| v == "bold");
-    t.italic = extract_attr(attrs, "fo:font-style").map(|v| v == "italic");
-    t.underline = extract_attr(attrs, "style:text-underline-style").map(|v| v != "none");
-    t.strike = extract_attr(attrs, "style:text-line-through-style").map(|v| v != "none");
-    t.color = extract_attr(attrs, "fo:color").map(|v| v.to_lowercase());
-    t.font = extract_attr(attrs, "style:font-name").map(|v| v.to_string());
-    t.size_pt = extract_attr(attrs, "fo:font-size").and_then(length_pt);
-    t
-}
-
-fn parse_para_style(content: &str) -> ParaStyle {
-    let mut p = ParaStyle::default();
-    if let Some((attrs, _, _)) = next_tag(content, "style:paragraph-properties") {
-        p.align = extract_attr(attrs, "fo:text-align").map(|v| match v {
-            "right" | "end" => "right",
-            "left" | "start" => "left",
-            "justify" => "justify",
-            _ => "center",
-        }.to_string());
+/// A regular polygon (`draw:corners`), point up; `draw:concave` makes a star whose inner corners
+/// sit at `draw:sharpness` of the way in.
+fn regular_polygon_geometry(attrs: &str) -> Geometry {
+    let n = extract_attr(attrs, "draw:corners").and_then(|v| v.parse::<usize>().ok()).unwrap_or(3).clamp(3, 100);
+    let concave = extract_attr(attrs, "draw:concave") == Some("true");
+    let sharp = extract_attr(attrs, "draw:sharpness").and_then(|v| v.trim_end_matches('%').parse::<f64>().ok()).unwrap_or(0.0) / 100.0;
+    let steps = if concave { 2 * n } else { n };
+    let pts: Vec<(f64, f64)> = (0..steps).map(|i| {
+        let a = -std::f64::consts::FRAC_PI_2 + std::f64::consts::TAU * i as f64 / steps as f64;
+        let r = if concave && i % 2 == 1 { 50.0 * (1.0 - sharp) } else { 50.0 };
+        (50.0 + r * a.cos(), 50.0 + r * a.sin())
+    }).collect();
+    let mut d = String::new();
+    for (i, p) in pts.iter().enumerate() {
+        d.push_str(&format!("{}{:.2} {:.2} ", if i == 0 { "M " } else { "L " }, p.0, p.1));
     }
-    p
+    d.push('Z');
+    Geometry { paths: vec![pptx_geom::GeomPath { d, points: vec![pts], fill: FillMode::Norm, stroke: true }], text_rect: None }
 }
 
-fn parse_graphic_style(style_attrs: &str, content: &str) -> GraphicStyle {
-    let mut g = GraphicStyle { parent: extract_attr(style_attrs, "style:parent-style-name").map(|v| v.to_string()), ..Default::default() };
-    let Some((attrs, _, _)) = next_tag(content, "style:graphic-properties") else { return g };
-    if extract_attr(attrs, "draw:fill") == Some("none") {
-        g.fill_none = true;
+/// A shape from a file this app exported: its own `shape_kind`, colours as written.
+fn own_shape(kind: &str, attrs: &str, chain: &[&Style], ctx: &Ctx) -> SlideElement {
+    let ([x, y, w, h], rot) = shape_box(attrs).unwrap_or(([0.0; 4], 0.0));
+    let fill = if prop(chain, "draw:fill") == Some("none") { None } else { prop(chain, "draw:fill-color").map(str::to_lowercase) };
+    let stroke = shape_stroke(chain).filter(|_| prop(chain, "svg:stroke-color").is_some() || prop(chain, "svg:stroke-width").is_some());
+    let base = w.min(h);
+    let rel = |emu: f64| if base > 0.0 { emu / base * 100.0 } else { 0.0 };
+    // A ring is written as an unfilled, thick-stroked outline in its fill colour (odp_export.rs).
+    let (fill_color, stroke_color, stroke_width) = if kind == "ring" {
+        (stroke.map(|(c, _)| c).unwrap_or_else(|| "none".into()), None, 0.0)
     } else {
-        g.fill_color = extract_attr(attrs, "draw:fill-color").map(|v| v.to_lowercase());
-    }
-    if extract_attr(attrs, "draw:stroke") == Some("none") {
-        g.stroke_none = true;
-    } else {
-        g.stroke_color = extract_attr(attrs, "svg:stroke-color").map(|v| v.to_lowercase());
-        g.stroke_width_cm = extract_attr(attrs, "svg:stroke-width").and_then(length_cm);
-    }
-    g.marker_start = extract_attr(attrs, "draw:marker-start").is_some();
-    g.marker_end = extract_attr(attrs, "draw:marker-end").is_some();
-    g
-}
-
-fn parse_page_style(content: &str) -> PageStyle {
-    let mut p = PageStyle::default();
-    if let Some((attrs, _, _)) = next_tag(content, "style:drawing-page-properties") {
-        if extract_attr(attrs, "draw:fill") == Some("solid") {
-            p.fill_color = extract_attr(attrs, "draw:fill-color").map(|v| v.to_lowercase());
-        } else if extract_attr(attrs, "draw:fill") == Some("bitmap") {
-            p.fill_image_name = extract_attr(attrs, "draw:fill-image-name").map(|v| v.to_string());
-        }
-    }
-    p
-}
-
-/// The page's own size via its master page's page-layout, falling back to the same 16:9 ratio
-/// (at a different absolute size, which doesn't matter once everything is relative 0.0..1.0)
-/// `pptx_import.rs` falls back to when a package doesn't declare one.
-fn page_dimensions(page_attrs: &str, styles: &Styles) -> (f64, f64) {
-    extract_attr(page_attrs, "draw:master-page-name")
-        .and_then(|m| styles.master_pages.get(m))
-        .and_then(|layout| styles.page_layouts.get(layout))
-        .copied()
-        .unwrap_or((28.0, 15.75))
-}
-
-/// The page-level shape tags this importer recognizes, as returned by `next_page_shape` --
-/// `draw:frame` holds text/image/table content, the rest are direct page-level drawing shapes.
-enum PageShapeXml<'a> {
-    Frame(&'a str, &'a str),
-    Rect(&'a str),
-    Ellipse(&'a str),
-    Line(&'a str),
-    Polyline(&'a str),
-    Path(&'a str),
-    CustomShape(&'a str, &'a str),
-    /// A closed multi-point shape (`draw:points`, same attributes as `draw:polyline`) -- a
-    /// distinct spec element from `draw:custom-shape`, not just another preset name. This app's
-    /// `Shape` has no field for an arbitrary point list, so the glyph falls back to a plain rect
-    /// (position/size/fill/stroke preserved, same honest degrade as an unrecognized custom-shape
-    /// preset), rather than silently dropping the shape, which is what happened before this was
-    /// added to the dispatcher at all.
-    Polygon(&'a str),
-    /// A true N-sided regular polygon (`draw:corners`, optionally `draw:concave` for a star-like
-    /// variant) -- a distinct spec element from a custom-shape preset or the free-form `Polygon`
-    /// above.
-    RegularPolygon(&'a str),
-    /// A pointer-line-plus-text callout -- a distinct spec element from the `*-callout`
-    /// custom-shape presets this app already maps to `shape_kind: "callout"`; reuses that same
-    /// glyph.
-    Caption(&'a str),
-    /// A `draw:g`'s own attributes carry nothing this importer uses (see `extract_group_element`),
-    /// so only its already-isolated inner span is kept.
-    Group(&'a str),
-    /// A shape wrapped in a hyperlink (`<draw:a xlink:href="...">...the real shape...</draw:a>`).
-    /// The link itself has no equivalent in this app's model (same gap as PPTX's own hyperlink
-    /// handling, if any), but the shape inside is real content and must not become invisible just
-    /// because it's nested one level deeper than every other page-level shape -- unwrapped in
-    /// place, continuing the same z-order sequence, not treated as a `Group`.
-    HyperlinkWrap(&'a str),
-}
-
-/// Finds whichever of the recognized page-level shape tags occurs earliest in `xml` (so document
-/// order -- and therefore z-index and paint order -- is preserved across different tag kinds),
-/// same "pick the earliest candidate" dispatch `pptx_import.rs`'s `next_slide_shape` uses. A
-/// `draw:g`'s own opening tag always sorts before anything nested inside it, so this never
-/// "sees into" a group's children early; they're only reached once the caller recurses into the
-/// group's own already-isolated inner span.
-fn next_page_shape<'a>(xml: &'a str) -> Option<(PageShapeXml<'a>, &'a str)> {
-    const CANDIDATES: [&str; 12] = [
-        "draw:frame",
-        "draw:rect",
-        "draw:ellipse",
-        "draw:line",
-        "draw:polyline",
-        "draw:path",
-        "draw:custom-shape",
-        "draw:polygon",
-        "draw:regular-polygon",
-        "draw:caption",
-        "draw:g",
-        "draw:a",
-    ];
-    let tag = CANDIDATES.into_iter().filter_map(|t| find_tag_open_pos(xml, t).map(|p| (p, t))).min_by_key(|(p, _)| *p)?.1;
-    match tag {
-        "draw:frame" => next_tag(xml, "draw:frame").map(|(a, c, r)| (PageShapeXml::Frame(a, c), r)),
-        "draw:rect" => next_tag(xml, "draw:rect").map(|(a, _, r)| (PageShapeXml::Rect(a), r)),
-        "draw:ellipse" => next_tag(xml, "draw:ellipse").map(|(a, _, r)| (PageShapeXml::Ellipse(a), r)),
-        "draw:line" => next_tag(xml, "draw:line").map(|(a, _, r)| (PageShapeXml::Line(a), r)),
-        "draw:polyline" => next_tag(xml, "draw:polyline").map(|(a, _, r)| (PageShapeXml::Polyline(a), r)),
-        "draw:path" => next_tag(xml, "draw:path").map(|(a, _, r)| (PageShapeXml::Path(a), r)),
-        "draw:custom-shape" => next_tag(xml, "draw:custom-shape").map(|(a, c, r)| (PageShapeXml::CustomShape(a, c), r)),
-        "draw:polygon" => next_tag(xml, "draw:polygon").map(|(a, _, r)| (PageShapeXml::Polygon(a), r)),
-        "draw:regular-polygon" => next_tag(xml, "draw:regular-polygon").map(|(a, _, r)| (PageShapeXml::RegularPolygon(a), r)),
-        "draw:caption" => next_tag(xml, "draw:caption").map(|(a, _, r)| (PageShapeXml::Caption(a), r)),
-        "draw:g" => extract_balanced_tag(xml, "draw:g").map(|(_, c, r)| (PageShapeXml::Group(c), r)),
-        "draw:a" => extract_balanced_tag(xml, "draw:a").map(|(_, c, r)| (PageShapeXml::HyperlinkWrap(c), r)),
-        _ => unreachable!(),
-    }
-}
-
-/// Walks a page's own content (notes already excluded by the caller) in document order, emitting
-/// one positioned `SlideElement` per recognized shape (see module doc for the full list and the
-/// remaining gaps). `z_index` is assigned densely over only the shapes that actually produced an
-/// element -- a tag this importer still doesn't recognize at all is simply never matched by
-/// `next_page_shape`, so it's skipped rather than mis-parsed, same as PPTX's own gaps.
-fn extract_page_elements(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
-    body: &str,
-    page_w: f64,
-    page_h: f64,
-    styles: &Styles,
-    media_dir: &Path,
-) -> Result<Vec<SlideElement>, Box<dyn std::error::Error>> {
-    let mut elements = Vec::new();
-    let mut rest = body;
-    let mut z = 0i32;
-    let push = |el: Option<SlideElement>, elements: &mut Vec<SlideElement>, z: &mut i32| {
-        if let Some(mut el) = el {
-            el.transform_mut().z_index = *z;
-            elements.push(el);
-            *z += 1;
-        }
+        (fill.unwrap_or_else(|| "none".into()), stroke.as_ref().map(|(c, _)| c.clone()), stroke.as_ref().map_or(0.0, |(_, w)| rel(*w)))
     };
-    while let Some((shape, remainder)) = next_page_shape(rest) {
-        rest = remainder;
-        match shape {
-            PageShapeXml::Frame(attrs, inner) => {
-                let transform = frame_transform(attrs, page_w, page_h);
-                if let Some((img_attrs, _, _)) = next_tag(inner, "draw:image") {
-                    push(extract_image_element(archive, img_attrs, transform, media_dir), &mut elements, &mut z);
-                } else if let Some((_, box_inner, _)) = next_tag(inner, "draw:text-box") {
-                    push(extract_text_element(box_inner, transform, styles), &mut elements, &mut z);
-                } else if let Some((_, table_inner, _)) = next_tag(inner, "table:table") {
-                    push(extract_table_element(table_inner, transform), &mut elements, &mut z);
-                }
-            }
-            PageShapeXml::Rect(attrs) => {
-                let transform = frame_transform(attrs, page_w, page_h);
-                push(Some(extract_shape_element("rect", attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
-            }
-            PageShapeXml::Ellipse(attrs) => {
-                let transform = frame_transform(attrs, page_w, page_h);
-                push(Some(extract_shape_element("ellipse", attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
-            }
-            PageShapeXml::CustomShape(attrs, inner) => {
-                let transform = frame_transform(attrs, page_w, page_h);
-                let kind = next_tag(inner, "draw:enhanced-geometry")
-                    .and_then(|(geo_attrs, _, _)| extract_attr(geo_attrs, "draw:type"))
-                    .map(map_custom_shape_type)
-                    .unwrap_or_else(|| "rect".to_string());
-                push(Some(extract_shape_element(&kind, attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
-            }
-            PageShapeXml::Line(attrs) => {
-                push(Some(extract_line_element(attrs, page_w, page_h, styles)), &mut elements, &mut z);
-            }
-            PageShapeXml::Polyline(attrs) => {
-                let transform = frame_transform(attrs, page_w, page_h);
-                let point_count = extract_attr(attrs, "draw:points").map(|p| p.split_whitespace().count()).unwrap_or(2);
-                let kind = if point_count > 2 { "elbow" } else { "straight" };
-                push(Some(extract_line_shape(kind, attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
-            }
-            PageShapeXml::Path(attrs) => {
-                let transform = frame_transform(attrs, page_w, page_h);
-                push(Some(extract_line_shape("curved", attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
-            }
-            PageShapeXml::Group(inner) => {
-                push(extract_group_element(archive, inner, page_w, page_h, styles, media_dir)?, &mut elements, &mut z);
-            }
-            PageShapeXml::Polygon(attrs) => {
-                let transform = frame_transform(attrs, page_w, page_h);
-                push(Some(extract_shape_element("rect", attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
-            }
-            PageShapeXml::RegularPolygon(attrs) => {
-                let transform = frame_transform(attrs, page_w, page_h);
-                let kind = regular_polygon_kind(attrs);
-                push(Some(extract_shape_element(kind, attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
-            }
-            PageShapeXml::Caption(attrs) => {
-                let transform = frame_transform(attrs, page_w, page_h);
-                push(Some(extract_shape_element("callout", attrs, transform, page_w, page_h, styles)), &mut elements, &mut z);
-            }
-            PageShapeXml::HyperlinkWrap(inner) => {
-                for mut child in extract_page_elements(archive, inner, page_w, page_h, styles, media_dir)? {
-                    child.transform_mut().z_index = z;
-                    elements.push(child);
-                    z += 1;
-                }
-            }
-        }
-    }
-    Ok(elements)
+    SlideElement::Shape { id: new_id(), transform: ctx.geo.transform([x, y, w, h], rot), shape_kind: kind.to_string(), fill_color, stroke_color, stroke_width, path: None }
 }
 
-/// ODF preset/custom-shape type names that mean something this app's own `shape_kind` vocabulary
-/// (`web/src/editor/shape_library.ts`) already has a name for, translated to that name; anything
-/// else (including this app's own round-tripped `shape_kind` strings, which are never one of these
-/// ODF spellings) passes through unchanged, so re-importing this app's own export reconstructs the
-/// exact original `shape_kind`, not just a visually-similar one.
-/// A `draw:regular-polygon`'s `shape_kind`: `draw:concave="true"` is a star-like shape regardless
-/// of corner count (this app's one `"star"` glyph, not a true N-pointed star); otherwise mapped by
-/// corner count to the closest regular shape this app can actually draw, falling back to a plain
-/// rect for a corner count with no good equivalent (same honest degrade as an unrecognized
-/// `draw:custom-shape` preset).
 fn regular_polygon_kind(attrs: &str) -> &'static str {
     if extract_attr(attrs, "draw:concave") == Some("true") {
         return "star";
     }
     match extract_attr(attrs, "draw:corners").and_then(|s| s.parse::<u32>().ok()) {
         Some(3) => "triangle",
-        Some(4) => "diamond", // a point-up square, matching draw:regular-polygon's own default orientation
+        Some(4) => "diamond",
         Some(5) => "pentagon",
         Some(6) => "hexagon",
         Some(8) => "octagon",
@@ -582,16 +886,8 @@ fn regular_polygon_kind(attrs: &str) -> &'static str {
     }
 }
 
-/// Every ODF preset/custom-shape type name mapped here was confirmed against real LibreOffice
-/// Impress itself (not guessed from the spec or from memory): a probe `.odp` naming each candidate
-/// via `draw:type` with no `draw:enhanced-path` at all was handed to real `soffice --convert-to`,
-/// and only a name Impress itself renders a distinct default glyph for (proving it's one its own
-/// shape gallery actually produces) is treated as confirmed here -- see
-/// `docs/IMPORT_EXPORT_NOTES.md` for the full method and the complete confirmed/not-yet-confirmed
-/// list. A handful of flowchart presets (`flowchart-data`, `-decision`, `-manual-operation`,
-/// `-connector`, `-extract`, `-preparation`) turned out to be exactly this app's own
-/// parallelogram/diamond/trapezoid/ellipse/triangle/hexagon shapes under ANSI flowchart names, so
-/// they're mapped straight to those instead of carrying the flowchart name through.
+/// This app's own `shape_kind` for the ODF preset names its exporter writes (and the few ODF
+/// names that mean the same shape), for reading back files this app wrote.
 fn map_custom_shape_type(t: &str) -> String {
     match t.to_ascii_lowercase().as_str() {
         "rectangle" | "square" | "flowchart-process" => "rect".to_string(),
@@ -602,399 +898,713 @@ fn map_custom_shape_type(t: &str) -> String {
         "star4" | "star5" | "star6" | "star8" | "star10" | "star12" | "star24" => "star".to_string(),
         "rectangular-callout" | "round-rectangular-callout" | "oval-callout" | "line-callout-1" | "line-callout-2" => "callout".to_string(),
         "trapezoid" | "flowchart-manual-operation" => "trapezoid".to_string(),
-        "left-right-arrow" => "left-right-arrow".to_string(),
         "parallelogram" | "flowchart-data" => "parallelogram".to_string(),
         "hexagon" | "flowchart-preparation" => "hexagon".to_string(),
-        "octagon" => "octagon".to_string(),
-        "cross" => "cross".to_string(),
-        "pentagon" => "pentagon".to_string(),
-        "heart" => "heart".to_string(),
-        "lightning" => "lightning".to_string(),
-        "left-arrow" => "left-arrow".to_string(),
-        "right-arrow" => "right-arrow".to_string(),
-        "up-arrow" => "up-arrow".to_string(),
-        "down-arrow" => "down-arrow".to_string(),
-        "up-down-arrow" => "up-down-arrow".to_string(),
-        "quad-arrow" => "quad-arrow".to_string(),
-        "chevron" => "chevron".to_string(),
-        "notched-right-arrow" => "notched-right-arrow".to_string(),
-        "striped-right-arrow" => "striped-right-arrow".to_string(),
-        "ring" => "ring".to_string(),
         "flowchart-merge" => "triangle-down".to_string(),
         other => other.to_string(),
     }
 }
 
-fn frame_transform(attrs: &str, page_w: f64, page_h: f64) -> ElementTransform {
-    let mut t = ElementTransform::default();
-    // A rotated/sheared frame replaces svg:x/y/width/height with draw:transform entirely (an SVG-like
-    // "rotate(radians) translate(x y)" string); not reconstructed here (module doc) -- left at the
-    // default box rather than guessed from a transform this importer doesn't parse.
-    if attrs.contains("draw:transform") {
-        return t;
-    }
-    if let (Some(x), Some(y), Some(w), Some(h)) = (
-        extract_attr(attrs, "svg:x").and_then(length_cm),
-        extract_attr(attrs, "svg:y").and_then(length_cm),
-        extract_attr(attrs, "svg:width").and_then(length_cm),
-        extract_attr(attrs, "svg:height").and_then(length_cm),
-    ) {
-        if page_w > 0.0 && page_h > 0.0 {
-            t.x = x / page_w;
-            t.y = y / page_h;
-            t.w = w / page_w;
-            t.h = h / page_h;
-        }
-    }
-    t.normalized()
+/// A line from a file this app wrote: its own `line_kind`, the width relative to its box as written.
+fn own_line(kind: &str, rect: [f64; 4], chain: &[&Style], ctx: &Ctx) -> Option<SlideElement> {
+    let color = prop(chain, "svg:stroke-color").unwrap_or("#000000").to_lowercase();
+    let base = rect[2].min(rect[3]);
+    let stroke_width = prop(chain, "svg:stroke-width").and_then(length_emu).map_or(3.0, |w| if base > 0.0 { w / base * 100.0 } else { 0.0 });
+    Some(SlideElement::Line { id: new_id(), transform: ctx.geo.transform(rect, 0.0), line_kind: kind.into(), color, stroke_width, start_arrow: prop(chain, "draw:marker-start").is_some(), end_arrow: prop(chain, "draw:marker-end").is_some(), path: None })
 }
 
-/// One `<draw:text-box>`'s paragraphs/runs, as rich `TextRun`s in document order, plus the first
-/// paragraph's alignment as a whole-shape approximation -- the same simplification
-/// `extract_slide_runs_and_alignment` in `pptx_import.rs` makes, for the same reason (this app's
-/// `TextParagraphStyle` is one style per text element, not per ODF paragraph).
-fn extract_text_element(box_inner: &str, transform: ElementTransform, styles: &Styles) -> Option<SlideElement> {
-    let mut paragraphs: Vec<Vec<TextRun>> = Vec::new();
-    let mut alignment: Option<String> = None;
-    let mut rest = box_inner;
-    while let Some((p_attrs, p_inner, remainder)) = next_tag(rest, "text:p") {
-        rest = remainder;
-        if alignment.is_none() {
-            alignment = extract_attr(p_attrs, "text:style-name")
-                .and_then(|name| styles.para.get(name))
-                .and_then(|p| p.align.clone());
+/// A line, connector or measure line: from `svg:x1,y1` to `svg:x2,y2`, or (a connector LibreOffice
+/// routed) along its `svg:d` in page coordinates (1/100 mm).
+fn line_element(name: &str, attrs: &str, ctx: &Ctx) -> Option<SlideElement> {
+    let mut chain = ctx.shape_chain(attrs);
+    chain.extend(ctx.defaults("graphic"));
+    let (color, width) = shape_stroke(&chain)?;
+    let n = |k: &str| extract_attr(attrs, k).and_then(length_emu).unwrap_or(0.0);
+    let (x1, y1, x2, y2) = (n("svg:x1"), n("svg:y1"), n("svg:x2"), n("svg:y2"));
+    let arrows = (prop(&chain, "draw:marker-start").is_some(), prop(&chain, "draw:marker-end").is_some());
+    let width = canvas_stroke(width, &ctx.geo);
+    if name == "draw:connector" {
+        if let Some(d) = extract_attr(attrs, "svg:d") {
+            // In 1/100 mm on the page; placed in the box it spans.
+            let pts: Vec<f64> = decode_xml_entities(d).split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-')).filter_map(|v| v.parse().ok()).collect();
+            let (mut bx0, mut by0, mut bx1, mut by1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+            for p in pts.chunks_exact(2) {
+                (bx0, by0, bx1, by1) = (bx0.min(p[0]), by0.min(p[1]), bx1.max(p[0]), by1.max(p[1]));
+            }
+            if bx0 < bx1 || by0 < by1 {
+                let view = [bx0, by0, (bx1 - bx0).max(1.0), (by1 - by0).max(1.0)];
+                if let Some((path, _, _)) = odp_geom::svg_path(&decode_xml_entities(d), view) {
+                    let rect = [bx0 * 360.0, by0 * 360.0, view[2] * 360.0, view[3] * 360.0];
+                    return Some(SlideElement::Line { id: new_id(), transform: ctx.geo.transform(rect, 0.0), line_kind: "curved".into(), color, stroke_width: width, start_arrow: arrows.0, end_arrow: arrows.1, path: Some(path) });
+                }
+            }
         }
-        paragraphs.push(runs_in_paragraph(p_inner, styles));
     }
-    let mut runs = Vec::new();
-    for (idx, para) in paragraphs.into_iter().enumerate() {
-        if idx > 0 {
-            runs.push(TextRun { text: "\n".to_string(), ..Default::default() });
+    let rect = [x1.min(x2), y1.min(y2), (x1 - x2).abs().max(1.0), (y1 - y2).abs().max(1.0)];
+    if ctx.own_file {
+        // A flat line still gets a box this app can select.
+        let floor = |v: f64, page: f64| v.max(page * 0.01);
+        let rect = [rect[0], rect[1], floor(rect[2], ctx.geo.canvas_w - 2.0 * ctx.geo.x_off), floor(rect[3], ctx.geo.canvas_h - 2.0 * ctx.geo.y_off)];
+        return own_line("straight", rect, &chain, ctx);
+    }
+    let p = |x: f64, y: f64| (if rect[2] > 1.0 { (x - rect[0]) / rect[2] * 100.0 } else { 0.0 }, if rect[3] > 1.0 { (y - rect[1]) / rect[3] * 100.0 } else { 0.0 });
+    let (a, b) = (p(x1, y1), p(x2, y2));
+    let path = format!("M {:.2} {:.2} L {:.2} {:.2}", a.0, a.1, b.0, b.1);
+    Some(SlideElement::Line { id: new_id(), transform: ctx.geo.transform(rect, 0.0), line_kind: if ctx.own_file { "straight".into() } else { "curved".into() }, color, stroke_width: width, start_arrow: arrows.0, end_arrow: arrows.1, path: if ctx.own_file { None } else { Some(path) } })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Frames: text boxes, pictures, tables, embedded objects
+// ---------------------------------------------------------------------------------------------
+
+fn frame_elements(archive: &mut ZipArchive<Cursor<&[u8]>>, attrs: &str, inner: &str, ctx: &Ctx) -> Vec<SlideElement> {
+    let Some(([x, y, w, h], rot)) = shape_box(attrs) else { return Vec::new() };
+    let rect = [x, y, w, h];
+    let mut out = Vec::new();
+    // A frame's own fill and outline (a filled text box, a framed picture).
+    let mut chain = ctx.shape_chain(attrs);
+    chain.extend(ctx.defaults("graphic"));
+    let fill = match prop(&chain, "draw:fill") {
+        Some("none") | None => None,
+        _ => shape_fill(&chain, ctx).and_then(Result::ok),
+    };
+    let stroke = (prop(&chain, "draw:stroke").is_some_and(|s| s != "none")).then(|| shape_stroke(&chain)).flatten();
+    if fill.is_some() || stroke.is_some() {
+        out.extend(geometry_elements(&rect_geometry(w, h, 0.0), fill.as_deref(), stroke.as_ref(), (false, false), rect, rot, &ctx.geo));
+    }
+    let kids = children(inner);
+    if let Some((_, _, ti)) = kids.iter().find(|(n, _, _)| *n == "draw:text-box") {
+        out.extend(text_block(ti, attrs, rect, rot, &ctx.over(fill.as_deref()), false));
+    } else if let Some((_, _, ti)) = kids.iter().find(|(n, _, _)| *n == "table:table") {
+        out.extend(table_element(ti, attrs, rect, ctx));
+    } else if let Some(chart) = kids.iter().find(|(n, _, _)| *n == "draw:object").and_then(|(_, a, _)| extract_attr(a, "xlink:href"))
+        .and_then(|h| read_zip_text(archive, &format!("{}/content.xml", h.trim_start_matches("./").trim_end_matches('/'))).ok())
+        .and_then(|doc| crate::storage::odp_chart::to_drawingml(&doc))
+        .and_then(|xml| pptx::chart_elements(&xml, rect, ctx.geo, ctx.media, ctx.media_dir))
+    {
+        // An embedded chart, drawn from its own data.
+        out.push(chart);
+    } else {
+        // A picture: of several (an SVG with a PNG beside it, an object's replacement image), the
+        // first this app can show.
+        let images: Vec<&str> = kids.iter().filter(|(n, _, _)| *n == "draw:image").filter_map(|(_, a, _)| extract_attr(a, "xlink:href")).collect();
+        out.extend(picture(archive, &images, &chain, rect, rot, ctx));
+    }
+    out
+}
+
+/// A picture frame: the first of `hrefs` that can be shown (a raster picture or SVG as an `Image`,
+/// a WMF/EMF drawn as elements), cropped as the frame's style clips it.
+fn picture(archive: &mut ZipArchive<Cursor<&[u8]>>, hrefs: &[&str], chain: &[&Style], rect: [f64; 4], rot: f64, ctx: &Ctx) -> Option<SlideElement> {
+    for href in hrefs {
+        let path = href.trim_start_matches("./");
+        let Ok(bytes) = read_zip_bytes(archive, path) else { continue };
+        if crate::storage::wmf::is_wmf(&bytes) || crate::storage::emf::is_emf(&bytes) {
+            if let Some(el) = pptx::metafile_elements(&bytes, rect, ctx.geo, ctx.media, ctx.media_dir) {
+                return Some(el);
+            }
+            continue;
+        }
+        let Some(file_path) = ctx.store(path.to_string(), &bytes) else { continue };
+        return Some(SlideElement::Image { id: new_id(), transform: ctx.geo.transform(rect, rot), file_path, crop: clip_of(chain, &bytes), mask_shape: None, alt_text: None, fit: Some("stretch".into()) });
+    }
+    None
+}
+
+/// `fo:clip="rect(top, right, bottom, left)"` (lengths of the picture's own size) as a crop.
+fn clip_of(chain: &[&Style], bytes: &[u8]) -> Option<CropRect> {
+    let clip = prop(chain, "fo:clip")?;
+    let inner = clip.trim().strip_prefix("rect(")?.trim_end_matches(')');
+    let v: Vec<f64> = inner.split(|c: char| c == ',' || c.is_whitespace()).filter(|s| !s.is_empty()).map(|s| length_emu(s).unwrap_or(0.0)).collect();
+    if v.len() != 4 || v.iter().all(|x| *x == 0.0) {
+        return None;
+    }
+    let img = image::load_from_memory(bytes).ok()?;
+    let (dx, dy) = pptx::image_dpi(bytes).unwrap_or((96.0, 96.0));
+    let (iw, ih) = (img.width() as f64 / dx * 914_400.0, img.height() as f64 / dy * 914_400.0);
+    let (t, r, b, l) = (v[0] / ih, v[1] / iw, v[2] / ih, v[3] / iw);
+    Some(CropRect { x: l, y: t, w: (1.0 - l - r).clamp(0.01, 1.0), h: (1.0 - t - b).clamp(0.01, 1.0) })
+}
+
+/// A bitmap fill: the picture over the shape's box (stretched, or tiled as `style:repeat` says),
+/// clipped to its outline.
+fn picture_fill(archive: &mut ZipArchive<Cursor<&[u8]>>, image: &str, chain: &[&Style], geometry: &Geometry, rect: [f64; 4], rot: f64, ctx: &Ctx) -> Option<SlideElement> {
+    let href = ctx.styles.fill_images.get(image)?.trim_start_matches("./").to_string();
+    let file_path = fill_picture(archive, &href, chain, [rect[2], rect[3]], [0.0, 0.0, rect[2], rect[3]], false, ctx)?;
+    Some(SlideElement::Image { id: new_id(), transform: ctx.geo.transform(rect, rot), file_path, crop: None, mask_shape: pptx_geom::clip_polygon(geometry), alt_text: None, fit: Some("stretch".into()) })
+}
+
+/// A fill picture for a box `size` EMU big: as it is (stretched), or tiled (`style:repeat`
+/// "repeat") at `draw:fill-image-width`/`-height` (else its own size), from the point
+/// `draw:fill-image-ref-point` names within `area`.
+fn fill_picture(archive: &mut ZipArchive<Cursor<&[u8]>>, href: &str, chain: &[&Style], size: [f64; 2], area: [f64; 4], paper: bool, ctx: &Ctx) -> Option<String> {
+    let repeat = prop(chain, "style:repeat").unwrap_or("repeat");
+    let bytes = read_zip_bytes(archive, href).ok()?;
+    if repeat == "stretch" {
+        return ctx.store(href.to_string(), &bytes);
+    }
+    let key = format!("{href}#tile:{}x{}:{:?}:{paper}", size[0].round(), size[1].round(), area);
+    if let Some(done) = ctx.media.borrow().get(&key) {
+        return Some(done.clone());
+    }
+    // A picture this can't decode (or a metafile) is shown as it is.
+    let Ok(src) = image::load_from_memory(&bytes).map(|i| i.to_rgba8()) else { return ctx.store(href.to_string(), &bytes) };
+    let dpi = pptx::image_dpi(&bytes).unwrap_or((96.0, 96.0));
+    let (nat_w, nat_h) = (src.width() as f64 / dpi.0 * 914_400.0, src.height() as f64 / dpi.1 * 914_400.0);
+    // A tile size as a percentage is of the area filled (LibreOffice's "relative" size); 0 or
+    // none is the picture's own size.
+    let dim = |k: &str, nat: f64, area_len: f64| prop(chain, k).and_then(|v| match v.strip_suffix('%') { Some(p) => p.parse::<f64>().ok().map(|p| area_len * p / 100.0), None => length_emu(v) }).filter(|v| *v > 0.0).unwrap_or(nat);
+    let (tw, th) = (dim("draw:fill-image-width", nat_w, area[2]), dim("draw:fill-image-height", nat_h, area[3]));
+    let algn = match prop(chain, "draw:fill-image-ref-point").unwrap_or("top-left") {
+        "top" => "t", "top-right" => "tr", "left" => "l", "center" => "ctr", "right" => "r", "bottom-left" => "bl", "bottom" => "b", "bottom-right" => "br", _ => "tl",
+    };
+    let tile = format!(r#"sx="{}" sy="{}" algn="{algn}""#, tw / nat_w * 100_000.0, th / nat_h * 100_000.0);
+    let mut out = pptx::tile_picture(&src, Some(dpi), &tile, size, area, 1920.0 / ctx.geo.canvas_w);
+    if repeat == "no-repeat" {
+        // One copy only: everything outside the first tile is cleared.
+        let scale = 1920.0 / ctx.geo.canvas_w;
+        let (aw, ah) = (area[2], area[3]);
+        let ax = match algn { "tr" | "r" | "br" => aw - tw, "t" | "ctr" | "b" => (aw - tw) / 2.0, _ => 0.0 };
+        let ay = match algn { "bl" | "b" | "br" => ah - th, "l" | "ctr" | "r" => (ah - th) / 2.0, _ => 0.0 };
+        let (x0, y0) = ((area[0] + ax) * scale, (area[1] + ay) * scale);
+        let (x1, y1) = (x0 + tw * scale, y0 + th * scale);
+        for (x, y, px) in out.enumerate_pixels_mut() {
+            let (x, y) = (x as f64, y as f64);
+            if x < x0 || x >= x1 || y < y0 || y >= y1 {
+                // A page's background shows the paper (white) around it; a shape's, what's behind.
+                *px = if paper { image::Rgba([255, 255, 255, 255]) } else { image::Rgba([0, 0, 0, 0]) };
+            }
+        }
+    }
+    ctx.store(key, &pptx::encode_picture(out)?)
+}
+
+/// A page's background from its drawing-page style chain: solid, gradient or picture.
+fn page_background(archive: &mut ZipArchive<Cursor<&[u8]>>, chain: &[&Style], ctx: &Ctx) -> Option<SlideBackground> {
+    let opacity = prop(chain, "draw:opacity");
+    match prop(chain, "draw:fill")? {
+        // A see-through page shows the paper (white) behind it.
+        "solid" => prop(chain, "draw:fill-color").map(|c| SlideBackground::Solid(over_white(c, opacity))),
+        "gradient" => prop(chain, "draw:fill-gradient-name").and_then(|n| ctx.styles.gradients.get(n)).and_then(|g| gradient_of(g, opacity)),
+        "bitmap" => {
+            let href = prop(chain, "draw:fill-image-name").and_then(|n| ctx.styles.fill_images.get(n))?.trim_start_matches("./").to_string();
+            let geo = ctx.geo;
+            let area = [geo.x_off, geo.y_off, geo.canvas_w - 2.0 * geo.x_off, geo.canvas_h - 2.0 * geo.y_off];
+            // Tiled over the whole canvas; a stretched picture is the slide's own size.
+            let file_path = fill_picture(archive, &href, chain, [geo.canvas_w, geo.canvas_h], area, true, ctx)?;
+            Some(SlideBackground::Image { file_path, opacity: opacity.and_then(|o| o.trim_end_matches('%').parse::<f64>().ok()).map_or(1.0, |p| p / 100.0) })
+        }
+        "hatch" => prop(chain, "draw:fill-color").map(|c| SlideBackground::Solid(c.to_lowercase())),
+        _ => None,
+    }
+}
+
+/// A table: in a file this app wrote, its own `Table`; otherwise drawn as a group of cells (fill
+/// and border from each cell's style) with their text, columns and rows as wide and tall as the
+/// table's styles say.
+fn table_element(table_inner: &str, attrs: &str, rect: [f64; 4], ctx: &Ctx) -> Option<SlideElement> {
+    let cols_xml: Vec<(&str, &str, &str)> = children(table_inner).into_iter().filter(|(n, _, _)| *n == "table:table-column").collect();
+    let rows_xml: Vec<(&str, &str, &str)> = children(table_inner).into_iter().filter(|(n, _, _)| *n == "table:table-row").collect();
+    let ncols: usize = cols_xml.iter().map(|(_, a, _)| extract_attr(a, "table:number-columns-repeated").and_then(|n| n.parse::<usize>().ok()).unwrap_or(1).min(64)).sum::<usize>().max(1);
+    if ctx.own_file {
+        let mut cells: Vec<Vec<String>> = rows_xml.iter().map(|(_, _, r)| {
+            let mut row: Vec<String> = children(r).into_iter().filter(|(n, _, _)| *n == "table:table-cell").map(|(_, _, c)| plain_paragraphs(c)).collect();
+            row.resize(ncols, String::new());
+            row
+        }).collect();
+        cells.truncate(256);
+        if cells.is_empty() {
+            return None;
+        }
+        return Some(SlideElement::Table { id: new_id(), transform: ctx.geo.transform(rect, 0.0), rows: cells.len(), cols: ncols, cells, text_color: None, border_color: None, font_size_pt: None });
+    }
+    let _ = attrs;
+    let style = |family: &str, name: Option<&str>| ctx.styles.chain(ctx.scope, family, name);
+    let mut widths: Vec<f64> = Vec::new();
+    for (_, a, _) in &cols_xml {
+        let w = prop(&style("table-column", extract_attr(a, "table:style-name")), "style:column-width").and_then(length_emu).unwrap_or(0.0);
+        let n = extract_attr(a, "table:number-columns-repeated").and_then(|n| n.parse::<usize>().ok()).unwrap_or(1).min(64);
+        widths.extend(std::iter::repeat_n(w, n));
+    }
+    let total: f64 = widths.iter().sum();
+    if total <= 0.0 {
+        widths = vec![rect[2] / ncols as f64; ncols];
+    }
+    let heights: Vec<f64> = rows_xml.iter().map(|(_, a, _)| {
+        let st = style("table-row", extract_attr(a, "table:style-name"));
+        prop(&st, "style:row-height").or_else(|| prop(&st, "style:min-row-height")).and_then(length_emu).unwrap_or(rect[3] / rows_xml.len().max(1) as f64)
+    }).collect();
+    let col_x: Vec<f64> = std::iter::once(0.0).chain(widths.iter().scan(0.0, |acc, w| { *acc += w; Some(*acc) })).collect();
+    let row_y: Vec<f64> = std::iter::once(0.0).chain(heights.iter().scan(0.0, |acc, h| { *acc += h; Some(*acc) })).collect();
+    let mut kids = Vec::new();
+    for (r, (_, _, row)) in rows_xml.iter().enumerate().take(256) {
+        let mut c = 0;
+        for (n, a, cell) in children(row) {
+            if c >= ncols {
+                break;
+            }
+            if n == "table:covered-table-cell" {
+                c += 1;
+                continue;
+            }
+            if n != "table:table-cell" {
+                continue;
+            }
+            let span_c = extract_attr(a, "table:number-columns-spanned").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).max(1);
+            let span_r = extract_attr(a, "table:number-rows-spanned").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).max(1);
+            let (c2, r2) = ((c + span_c).min(ncols), (r + span_r).min(rows_xml.len()));
+            let cell_rect = [rect[0] + col_x[c], rect[1] + row_y[r], col_x[c2] - col_x[c], row_y[r2] - row_y[r]];
+            let mut chain = style("table-cell", extract_attr(a, "table:style-name"));
+            chain.extend(ctx.defaults("table-cell"));
+            let fill = match prop(&chain, "draw:fill") {
+                Some("solid") | None if prop(&chain, "draw:fill-color").is_some() => prop(&chain, "draw:fill-color").map(|c| with_opacity(c, prop(&chain, "draw:opacity"))),
+                Some("solid") => prop(&chain, "fo:background-color").filter(|c| *c != "transparent").map(str::to_lowercase),
+                None => prop(&chain, "fo:background-color").filter(|c| *c != "transparent").map(str::to_lowercase),
+                _ => None,
+            };
+            // `fo:border` (or its first side): "0.03cm solid #000000".
+            let border = ["fo:border", "fo:border-top", "fo:border-left", "fo:border-bottom", "fo:border-right"].iter().find_map(|k| prop(&chain, k)).filter(|b| !b.contains("none")).and_then(|b| {
+                let parts: Vec<&str> = b.split_whitespace().collect();
+                let color = parts.iter().find(|p| p.starts_with('#'))?.to_lowercase();
+                let width = parts.iter().find_map(|p| length_emu(p)).unwrap_or(9_525.0);
+                Some((color, width))
+            });
+            let cell_fill = fill.clone();
+            if fill.is_some() || border.is_some() {
+                kids.push(SlideElement::Shape { id: new_id(), transform: ctx.geo.transform(cell_rect, 0.0), shape_kind: "path".into(), fill_color: fill.unwrap_or_else(|| "none".into()), stroke_width: border.as_ref().map_or(0.0, |(_, w)| canvas_stroke(*w, &ctx.geo)), stroke_color: border.map(|(c, _)| c), path: Some("M 0 0 L 100 0 L 100 100 L 0 100 Z".into()) });
+            }
+            kids.extend(text_block(cell, a, cell_rect, 0.0, &ctx.over(cell_fill.as_deref()), true));
+            c += span_c;
+        }
+    }
+    (!kids.is_empty()).then(|| group_of(kids))
+}
+
+fn plain_paragraphs(xml: &str) -> String {
+    children(xml).into_iter().filter(|(n, _, _)| *n == "text:p" || *n == "text:h").map(|(_, _, p)| plain_text_of(p)).collect::<Vec<_>>().join("\n")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Text
+// ---------------------------------------------------------------------------------------------
+
+/// Text inside a drawn shape: its paragraphs in the geometry's text area (else its box).
+fn shape_text(inner: &str, attrs: &str, text_rect: Option<[f64; 4]>, rect: [f64; 4], rot: f64, ctx: &Ctx) -> Option<SlideElement> {
+    let area = match text_rect {
+        Some([l, t, r, b]) if r > l && b > t => {
+            // The text box's centre, moved from the shape's and turned with it.
+            let (w, h) = (r - l, b - t);
+            let (dx, dy) = ((l + r) / 2.0 - rect[2] / 2.0, (t + b) / 2.0 - rect[3] / 2.0);
+            let (sin, cos) = rot.to_radians().sin_cos();
+            let (cx, cy) = (rect[0] + rect[2] / 2.0 + dx * cos - dy * sin, rect[1] + rect[3] / 2.0 + dx * sin + dy * cos);
+            [cx - w / 2.0, cy - h / 2.0, w, h]
+        }
+        _ => rect,
+    };
+    text_block(inner, attrs, area, rot, ctx, true)
+}
+
+/// One text run's formatting, resolved.
+#[derive(Clone, Default)]
+struct RunLook {
+    size_pt: f64,
+    /// `None` when no style states one (a file this app wrote then keeps its own default).
+    color: Option<String>,
+    /// "Automatic" colour: black or white against what's behind it.
+    auto_color: bool,
+    font: Option<String>,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    strike: bool,
+    baseline: &'static str,
+    caps: bool,
+}
+
+/// A run's look along `chains` (nearest first): font size percentages scale what lies beneath.
+fn run_look(chains: &[&Style], ctx: &Ctx) -> RunLook {
+    let mut size = None;
+    let mut factor = 1.0;
+    for s in chains {
+        match s.props.get("fo:font-size") {
+            Some(v) if v.ends_with('%') => factor *= v.trim_end_matches('%').parse::<f64>().unwrap_or(100.0) / 100.0,
+            Some(v) => {
+                if let Some(pt) = length_pt(v) {
+                    size = Some(pt);
+                    break;
+                }
+            }
+            None => {}
+        }
+    }
+    let size_pt = size.unwrap_or(18.0) * factor;
+    // A font name with no font-face declaration is the family itself.
+    let font = prop(chains, "style:font-name").map(|n| ctx.styles.fonts.get(n).cloned().unwrap_or_else(|| n.to_string())).or_else(|| prop(chains, "fo:font-family").map(|f| f.trim_matches(|c| c == '\'' || c == '"').to_string()));
+    let weight = prop(chains, "fo:font-weight").unwrap_or("normal");
+    RunLook {
+        size_pt,
+        // The nearest style that says either a colour or "automatic" decides.
+        color: chains.iter().find_map(|s| {
+            if s.props.get("style:use-window-font-color").is_some_and(|v| v == "true") { Some(None) } else { s.props.get("fo:color").map(|c| Some(c.to_lowercase())) }
+        }).flatten(),
+        auto_color: chains.iter().find_map(|s| if s.props.get("style:use-window-font-color").is_some_and(|v| v == "true") { Some(true) } else { s.props.get("fo:color").map(|_| false) }).unwrap_or(false),
+        font,
+        bold: weight == "bold" || weight.parse::<u32>().is_ok_and(|w| w >= 600),
+        italic: matches!(prop(chains, "fo:font-style"), Some("italic" | "oblique")),
+        underline: prop(chains, "style:text-underline-style").is_some_and(|v| v != "none"),
+        strike: prop(chains, "style:text-line-through-style").is_some_and(|v| v != "none"),
+        baseline: match prop(chains, "style:text-position").and_then(|p| p.split_whitespace().next()) {
+            Some("super") => "super",
+            Some("sub") => "sub",
+            Some(v) => match v.trim_end_matches('%').parse::<f64>() { Ok(x) if x > 0.0 => "super", Ok(x) if x < 0.0 => "sub", _ => "normal" },
+            None => "normal",
+        },
+        caps: matches!(prop(chains, "fo:text-transform"), Some("uppercase")) || prop(chains, "fo:font-variant") == Some("small-caps"),
+    }
+}
+
+/// A stored picture's average colour, as `#rrggbb` (sampled on a small copy).
+fn average_color(path: &Path) -> Option<String> {
+    let img = image::open(path).ok()?.thumbnail(32, 32).to_rgb8();
+    let n = (img.width() * img.height()).max(1) as u64;
+    let sum = img.pixels().fold([0u64; 3], |acc, p| [acc[0] + p[0] as u64, acc[1] + p[1] as u64, acc[2] + p[2] as u64]);
+    Some(format!("#{:02x}{:02x}{:02x}", sum[0] / n, sum[1] / n, sum[2] / n))
+}
+
+/// Whether a colour (`#rrggbb[aa]`) is dark enough that automatic text on it is white
+/// (LibreOffice's threshold: luminance at most 62 of 255).
+fn is_dark(color: Option<&str>) -> bool {
+    let Some(c) = color.and_then(|c| c.strip_prefix('#')).filter(|c| c.len() >= 6) else { return false };
+    let v = |i: usize| u8::from_str_radix(&c[i..i + 2], 16).map(f64::from).unwrap_or(255.0);
+    0.299 * v(0) + 0.587 * v(2) + 0.114 * v(4) <= 62.0
+}
+
+fn run_of(text: String, look: &RunLook, ctx: &Ctx) -> TextRun {
+    // A file this app wrote keeps its own font names and, where it wrote none, its own defaults;
+    // anyone else's unstyled text is black in the default font, as LibreOffice shows it.
+    let (color, font_family) = if ctx.own_file {
+        (look.color.clone().unwrap_or_else(crate::core::models::default_text_color), look.font.clone().unwrap_or_else(crate::core::models::default_font_family))
+    } else {
+        let auto = || if is_dark(ctx.backdrop.as_deref()) { "#ffffff".to_string() } else { "#000000".to_string() };
+        (look.color.clone().filter(|_| !look.auto_color).unwrap_or_else(auto), pptx::css_font_stack(look.font.as_deref().unwrap_or("Liberation Sans")))
+    };
+    TextRun {
+        text: if look.caps { text.to_uppercase() } else { text },
+        bold: look.bold,
+        italic: look.italic,
+        underline: look.underline,
+        strike: look.strike,
+        color,
+        font_family,
+        font_size_pt: (look.size_pt * ctx.font_scale * 10.0).round() / 10.0,
+        baseline_shift: look.baseline.to_string(),
+        ..Default::default()
+    }
+}
+
+/// A paragraph's inline content as runs: text, spans (nested), spaces (`text:s`), tabs, line
+/// breaks (kept inside a run), links, and fields (page number, footer).
+fn inline_runs(xml: &str, chains: &[&Style], ctx: &Ctx, out: &mut Vec<TextRun>) {
+    let mut rest = xml;
+    // Bounded: each pass consumes text or one element.
+    loop {
+        let lt = rest.find('<').unwrap_or(rest.len());
+        if lt > 0 {
+            let text = decode_xml_entities(&rest[..lt]);
+            if !text.is_empty() {
+                out.push(run_of(text, &run_look(chains, ctx), ctx));
+            }
+        }
+        rest = &rest[lt..];
+        if rest.is_empty() {
+            return;
+        }
+        let Some((name, attrs, inner)) = children(rest).into_iter().next() else {
+            // A stray close tag or comment: step past it.
+            rest = rest.find('>').map(|g| &rest[g + 1..]).unwrap_or("");
+            continue;
+        };
+        // Where this element ends: after its close tag (or the self-closing open tag).
+        let open_end = rest.find('>').map_or(rest.len(), |g| g + 1);
+        let end = if inner.is_empty() && rest[..open_end].ends_with("/>") {
+            open_end
+        } else {
+            let close = format!("</{name}>");
+            let body_start = inner.as_ptr() as usize - rest.as_ptr() as usize;
+            rest[body_start + inner.len()..].find(&close).map_or(rest.len(), |p| body_start + inner.len() + p + close.len())
+        };
+        let look = || run_look(chains, ctx);
+        match name {
+            "text:span" | "text:a" => {
+                let mut c: Vec<&Style> = ctx.styles.chain(ctx.scope, "text", extract_attr(attrs, "text:style-name"));
+                c.extend_from_slice(chains);
+                inline_runs(inner, &c, ctx, out);
+            }
+            "text:s" => {
+                let n = extract_attr(attrs, "text:c").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).min(200);
+                out.push(run_of(" ".repeat(n), &look(), ctx));
+            }
+            "text:tab" => out.push(run_of("\t".into(), &look(), ctx)),
+            // A line break stays inside the run before it (a run of exactly "\n" separates paragraphs).
+            "text:line-break" => match out.last_mut() {
+                Some(r) if r.text != "\n" => r.text.push('\n'),
+                _ => out.push(run_of("\n\u{200b}".into(), &look(), ctx)),
+            },
+            "text:page-number" => out.push(run_of(ctx.page_number.to_string(), &look(), ctx)),
+            "presentation:footer" => if let Some(f) = &ctx.footer { out.push(run_of(f.clone(), &look(), ctx)) },
+            "presentation:date-time" | "presentation:header" => {}
+            // Other fields show their current text.
+            _ => inline_runs(inner, chains, ctx, out),
+        }
+        rest = &rest[end.min(rest.len())..];
+    }
+}
+
+/// A list level's marker: a bullet character, a number format, or nothing; with its look.
+struct Marker {
+    bullet: Option<String>,
+    number: Option<(String, String, String, usize)>,
+    /// Indent of this level's text from the frame's left, in EMU (space-before + label width).
+    indent: f64,
+    size_pct: f64,
+    color: Option<String>,
+    font: Option<String>,
+}
+
+fn list_marker(list_inner: &str, level: usize) -> Option<Marker> {
+    let lvl = children(list_inner).into_iter().find(|(_, a, _)| extract_attr(a, "text:level").and_then(|v| v.parse::<usize>().ok()) == Some(level))?;
+    let (name, attrs, inner) = lvl;
+    let props = next_tag(inner, "style:list-level-properties").map(|(a, _, _)| a).unwrap_or("");
+    let n = |k: &str| extract_attr(props, k).and_then(length_emu).unwrap_or(0.0);
+    let mut indent = n("text:space-before") + n("text:min-label-width");
+    if let Some((al, _, _)) = next_tag(inner, "style:list-level-label-alignment") {
+        indent = indent.max(extract_attr(al, "fo:margin-left").and_then(length_emu).unwrap_or(0.0));
+    }
+    let tp = next_tag(inner, "style:text-properties").map(|(a, _, _)| a).unwrap_or("");
+    let size_pct = extract_attr(tp, "fo:font-size").and_then(|v| v.strip_suffix('%')?.parse::<f64>().ok()).unwrap_or(100.0) / 100.0;
+    let color = (extract_attr(tp, "style:use-window-font-color") != Some("true")).then(|| extract_attr(tp, "fo:color").map(str::to_lowercase)).flatten();
+    let font = extract_attr(tp, "fo:font-family").map(str::to_string);
+    let mut m = Marker { bullet: None, number: None, indent, size_pct, color, font };
+    match name {
+        "text:list-level-style-bullet" => m.bullet = extract_attr(attrs, "text:bullet-char").map(decode_xml_entities).filter(|c| !c.trim().is_empty()),
+        "text:list-level-style-number" => {
+            let fmt = extract_attr(attrs, "style:num-format").unwrap_or("");
+            if !fmt.is_empty() {
+                let start = extract_attr(attrs, "text:start-value").and_then(|v| v.parse().ok()).unwrap_or(1);
+                m.number = Some((fmt.to_string(), extract_attr(attrs, "style:num-prefix").unwrap_or("").to_string(), extract_attr(attrs, "style:num-suffix").unwrap_or("").to_string(), start));
+            }
+        }
+        "text:list-level-style-image" => m.bullet = Some("•".into()),
+        _ => {}
+    }
+    Some(m)
+}
+
+/// A number in an ODF number format ("1", "a", "A", "i", "I").
+fn format_number(fmt: &str, n: usize) -> String {
+    let kind = match fmt {
+        "a" => "alphaLcPeriod",
+        "A" => "alphaUcPeriod",
+        "i" => "romanLcPeriod",
+        "I" => "romanUcPeriod",
+        _ => "arabicPeriod",
+    };
+    pptx_inherit_label(kind, n)
+}
+
+fn pptx_inherit_label(kind: &str, n: usize) -> String {
+    // The DrawingML labels end with a period; ODF says its own suffix.
+    crate::storage::pptx_inherit::autonum_label(kind, n).trim_end_matches('.').to_string()
+}
+
+/// A text body (a text box, a shape's or a table cell's paragraphs) as a `TextBlock` in `rect`
+/// (EMU), its paragraphs styled along their chains down to `attrs`' frame style.
+fn text_block(body: &str, attrs: &str, rect: [f64; 4], rot: f64, ctx: &Ctx, centred: bool) -> Option<SlideElement> {
+    let frame = {
+        let mut c = ctx.shape_chain(attrs);
+        if attrs.contains("table:style-name") {
+            c = ctx.styles.chain(ctx.scope, "table-cell", extract_attr(attrs, "table:style-name"));
+        }
+        c
+    };
+    let text_style = ctx.styles.chain(ctx.scope, "paragraph", extract_attr(attrs, "draw:text-style-name"));
+    let class = extract_attr(attrs, "presentation:class");
+    let mut defaults: Vec<&Style> = Vec::new();
+    defaults.extend(ctx.defaults("graphic"));
+    defaults.extend(ctx.defaults("paragraph"));
+    // The frame's presentation style's list, for paragraphs in a list that names none.
+    let frame_list = frame.iter().find_map(|s| s.list.as_deref()).and_then(|n| ctx.styles.lists.get(n));
+
+    // Flatten the body into (paragraph attrs, content, list depth, list style, numbered item index).
+    let mut paras: Vec<(&str, &str, usize, Option<&str>, bool)> = Vec::new();
+    fn walk<'a>(xml: &'a str, depth: usize, list: Option<&'a str>, header: bool, out: &mut Vec<(&'a str, &'a str, usize, Option<&'a str>, bool)>) {
+        for (n, a, i) in children(xml) {
+            match n {
+                "text:p" | "text:h" => out.push((a, i, depth, list, header)),
+                "text:list" => walk(i, depth + 1, extract_attr(a, "text:style-name").or(list), false, out),
+                "text:list-item" => walk(i, depth, list, false, out),
+                "text:list-header" => walk(i, depth, list, true, out),
+                _ => {}
+            }
+            if out.len() > 2_000 {
+                return;
+            }
+        }
+    }
+    walk(body, 0, None, false, &mut paras);
+
+    let mut runs: Vec<TextRun> = Vec::new();
+    let mut align_weight: HashMap<String, usize> = HashMap::new();
+    let mut gaps: Vec<(f64, f64, usize)> = Vec::new();
+    let mut counters = [0usize; 10];
+    let mut any_text = false;
+    let mut any_lead = false;
+    let mut no_lead: Vec<usize> = Vec::new();
+    let mut first: Option<(Vec<&Style>, f64)> = None;
+    let base_indent = paras.iter().find(|p| p.2 > 0).and_then(|p| p.3.and_then(|n| ctx.styles.lists.get(n)).or(frame_list).and_then(|l| list_marker(l, 1))).map_or(0.0, |m| m.indent);
+    for (pi, (pa, pc, depth, list, header)) in paras.iter().enumerate() {
+        // The master's style for this outline level comes between the paragraph and the frame.
+        let level_style: Vec<&Style> = if class == Some("outline") && *depth > 1 {
+            ctx.styles.chain(Scope::Master, "presentation", Some(&format!("{}-outline{}", ctx.master, depth)))
+        } else {
+            Vec::new()
+        };
+        let mut chain: Vec<&Style> = ctx.styles.chain(ctx.scope, "paragraph", extract_attr(pa, "text:style-name"));
+        chain.extend(text_style.iter().copied());
+        chain.extend(level_style);
+        chain.extend(frame.iter().copied());
+        chain.extend(defaults.iter().copied());
+
+        let mut para: Vec<TextRun> = Vec::new();
+        inline_runs(pc, &chain, ctx, &mut para);
+        if pi > 0 {
+            let mut sep = para.first().cloned().unwrap_or_else(|| run_of(String::new(), &run_look(&chain, ctx), ctx));
+            sep.text = "\n".into();
+            runs.push(sep);
+        }
+        let has_text = para.iter().any(|r| !r.text.trim().is_empty());
+        if !has_text {
+            runs.extend(para);
+            continue;
+        }
+        any_text = true;
+        let look = run_look(&chain, ctx);
+        if first.is_none() {
+            first = Some((chain.clone(), look.size_pt));
+        }
+        let weight: usize = para.iter().map(|r| r.text.chars().count()).sum();
+        let align = match prop(&chain, "fo:text-align") {
+            Some("center") => "center",
+            Some("end" | "right") => "right",
+            Some("justify") => "justify",
+            _ => "left",
+        };
+        *align_weight.entry(align.to_string()).or_default() += weight;
+        let gap = |k: &str| prop(&chain, k).and_then(length_pt).unwrap_or(0.0) * ctx.geo.font_scale;
+        gaps.push((gap("fo:margin-top"), gap("fo:margin-bottom"), weight));
+
+        // The list marker and indent.
+        let marker = if *depth > 0 && !header {
+            list.and_then(|n| ctx.styles.lists.get(n)).or(frame_list).and_then(|l| list_marker(l, (*depth).min(10)))
+        } else {
+            None
+        };
+        let label = marker.as_ref().and_then(|m| {
+            let d = (*depth).min(10) - 1;
+            if let Some((fmt, pre, suf, start)) = &m.number {
+                counters[d] += 1;
+                counters.iter_mut().skip(d + 1).for_each(|c| *c = 0);
+                Some(format!("{pre}{}{suf}", format_number(fmt, counters[d] + start - 1)))
+            } else {
+                counters.iter_mut().skip(d).for_each(|c| *c = 0);
+                m.bullet.clone().map(|b| crate::storage::pptx_inherit::bullet_glyph(&b, m.font.as_deref()))
+            }
+        });
+        let en = look.size_pt * 12_700.0 / 2.0;
+        let indent = marker.as_ref().map_or(0.0, |m| (m.indent - base_indent).max(0.0)) + prop(&chain, "fo:margin-left").and_then(length_emu).unwrap_or(0.0).max(0.0);
+        let spaces = if en > 0.0 && indent.is_finite() { (indent / en).round().clamp(0.0, 40.0) as usize } else { 0 };
+        if label.is_some() || spaces > 0 {
+            any_lead = true;
+            let mut lead = para[0].clone();
+            lead.text = format!("{}{}", "\u{2002}".repeat(spaces), label.map(|l| format!("{l} ")).unwrap_or_default());
+            (lead.bold, lead.italic, lead.underline, lead.strike) = (false, false, false, false);
+            if let Some(m) = &marker {
+                if let Some(c) = &m.color {
+                    lead.color = c.clone();
+                }
+                if let Some(f) = &m.font {
+                    lead.font_family = pptx::css_font_stack(f);
+                }
+                lead.font_size_pt = ((lead.font_size_pt * m.size_pct) * 10.0).round() / 10.0;
+            }
+            runs.push(lead);
+        } else {
+            no_lead.push(runs.len());
         }
         runs.extend(para);
     }
-    if runs.is_empty() {
+    if !any_text {
         return None;
     }
+    if any_lead {
+        for at in no_lead.into_iter().rev() {
+            let mut empty = runs[at].clone();
+            empty.text = String::new();
+            runs.insert(at, empty);
+        }
+    }
+    let (first_chain, first_size) = first.unwrap_or_default();
+    let align = align_weight.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))).map(|(a, _)| a).unwrap_or_else(|| "left".into());
+    let mean = |v: Vec<(f64, usize)>| {
+        let total: usize = v.iter().map(|(_, w)| *w).sum();
+        if total == 0 { 0.0 } else { (v.iter().map(|(g, w)| g * *w as f64).sum::<f64>() / total as f64 * 10.0).round() / 10.0 }
+    };
+    let space_before_pt = mean(gaps.iter().skip(1).map(|(b, _, w)| (*b, *w)).collect());
+    let space_after_pt = mean(gaps.iter().take(gaps.len().saturating_sub(1)).map(|(_, a, w)| (*a, *w)).collect());
+    // Line spacing: a percentage of single spacing (1.2 lines of the font), or a fixed height.
+    let line_height = match prop(&first_chain, "fo:line-height") {
+        Some(v) if v.ends_with('%') => v.trim_end_matches('%').parse::<f64>().unwrap_or(100.0) / 100.0 * 1.2,
+        Some(v) => length_pt(v).filter(|_| first_size > 0.0).map_or(1.2, |pt| (pt / first_size).clamp(0.5, 5.0)),
+        None => 1.2,
+    };
+    // Vertical anchor and insets from the frame (a shape's text is centred by default).
+    let mut fchain = frame.clone();
+    fchain.extend(ctx.defaults("graphic"));
+    let vertical_align = match prop(&fchain, "draw:textarea-vertical-align").or_else(|| prop(&fchain, "style:vertical-align")) {
+        Some("middle") => "middle",
+        Some("bottom") => "bottom",
+        Some("top") => "top",
+        _ if centred => "middle",
+        _ => "top",
+    };
+    // This app's own text boxes have no inner margin; anyone else's default to LibreOffice's.
+    let pad = |k: &str, d: f64| prop(&fchain, k).or_else(|| prop(&fchain, "fo:padding")).and_then(length_emu).unwrap_or(if ctx.own_file { 0.0 } else { d });
+    let (pl, pt, pr, pb) = (pad("fo:padding-left", 91_440.0), pad("fo:padding-top", 45_720.0), pad("fo:padding-right", 91_440.0), pad("fo:padding-bottom", 45_720.0));
+    let [x, y, w, h] = rect;
+    let inner = [x + pl, y + pt, (w - pl - pr).max(w * 0.2), (h - pt - pb).max(h * 0.2)];
     Some(SlideElement::TextBlock {
-        id: format!("el_{}", uuid::Uuid::new_v4()),
-        transform,
+        id: new_id(),
+        transform: ctx.geo.transform(inner, rot),
         block: TextBlock {
             runs,
-            paragraph_style: TextParagraphStyle { align: alignment.unwrap_or_else(|| "center".to_string()), ..Default::default() },
+            paragraph_style: TextParagraphStyle {
+                align,
+                line_height: (line_height * 100.0).round() / 100.0,
+                space_before_pt,
+                space_after_pt,
+                vertical_align: Some(vertical_align.to_string()),
+                hanging_indent: any_lead,
+                ..Default::default()
+            },
             effects: ElementEffects::default(),
             autofit: false,
         },
     })
 }
 
-/// A paragraph's runs, in order: bare text directly inside `<text:p>` (before the first
-/// `<text:span>`, between spans, or the whole paragraph if there are none) becomes one neutral
-/// run; each `<text:span text:style-name="..">` becomes a styled run via the resolved `TextStyle`.
-/// An empty run (a span with no text) is skipped, same as PPTX's `<a:r>` handling.
-fn runs_in_paragraph(p_inner: &str, styles: &Styles) -> Vec<TextRun> {
-    let mut out = Vec::new();
-    let mut rest = p_inner;
-    let push_plain = |out: &mut Vec<TextRun>, text: &str| {
-        let text = decode_xml_entities(text);
-        if !text.is_empty() {
-            out.push(TextRun { text, ..Default::default() });
-        }
-    };
-    loop {
-        let Some(span_pos) = find_tag_open_pos(rest, "text:span") else {
-            push_plain(&mut out, rest);
-            break;
-        };
-        push_plain(&mut out, &rest[..span_pos]);
-        let (span_attrs, span_content, remainder) = next_tag(rest, "text:span").expect("find_tag_open_pos just found it");
-        rest = remainder;
-        let text = decode_xml_entities(span_content);
-        if text.is_empty() {
-            continue;
-        }
-        let mut run = TextRun { text, ..Default::default() };
-        if let Some(style) = extract_attr(span_attrs, "text:style-name").and_then(|name| styles.text.get(name)) {
-            if let Some(b) = style.bold {
-                run.bold = b;
-            }
-            if let Some(i) = style.italic {
-                run.italic = i;
-            }
-            if let Some(u) = style.underline {
-                run.underline = u;
-            }
-            if let Some(s) = style.strike {
-                run.strike = s;
-            }
-            if let Some(c) = &style.color {
-                run.color = c.clone();
-            }
-            if let Some(f) = &style.font {
-                run.font_family = f.clone();
-            }
-            if let Some(sz) = style.size_pt {
-                run.font_size_pt = sz;
-            }
-        }
-        out.push(run);
-    }
-    out
-}
-
-fn extract_image_element(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
-    img_attrs: &str,
-    transform: ElementTransform,
-    media_dir: &Path,
-) -> Option<SlideElement> {
-    let href = extract_attr(img_attrs, "xlink:href")?;
-    let path = href.trim_start_matches("./");
-    let image_bytes = read_zip_bytes(archive, path).ok()?;
-    let file_name = crate::storage::media_sniff::write_sniffed_media(media_dir, "odp", &image_bytes)?;
-    Some(SlideElement::Image {
-        id: format!("el_{}", uuid::Uuid::new_v4()),
-        transform,
-        file_path: format!("/media/images/{}", file_name),
-        crop: None::<CropRect>,
-        mask_shape: None,
-        alt_text: None,
-        // Impress stretches a picture to its frame.
-        fit: Some("stretch".into()),
-    })
-}
-
-/// Resolves `draw:style-name` against `styles.graphic`, defaulting to an unfilled, unstroked
-/// shape when the style is missing or unrecognized (never a guessed color).
-/// Resolves `draw:style-name` against `styles.graphic`, walking `style:parent-style-name` (a real
-/// producer's shape gallery routinely leaves fill/stroke unset on the shape's own style and
-/// relies entirely on its parent, almost always named `"standard"`, for the actual color -- see
-/// `GraphicStyle`'s doc) until a level settles each property (an explicit `draw:fill="none"`/
-/// `draw:stroke="none"` also settles it, at whatever `none` value that level means) or the chain
-/// runs out. A cycle (a style naming itself, directly or indirectly, as its own ancestor -- never
-/// legal ODF, but not this importer's job to assume) stops the walk rather than looping forever.
-fn resolve_graphic_style(attrs: &str, styles: &Styles) -> ResolvedGraphicStyle {
-    let mut resolved = ResolvedGraphicStyle::default();
-    let mut fill_settled = false;
-    let mut stroke_settled = false;
-    let mut current = extract_attr(attrs, "draw:style-name").map(|s| s.to_string());
-    let mut seen = std::collections::HashSet::new();
-    while let Some(name) = current {
-        if !seen.insert(name.clone()) {
-            break;
-        }
-        let Some(s) = styles.graphic.get(&name) else { break };
-        if !fill_settled {
-            if s.fill_none {
-                fill_settled = true;
-            } else if s.fill_color.is_some() {
-                resolved.fill_color = s.fill_color.clone();
-                fill_settled = true;
-            }
-        }
-        if !stroke_settled {
-            if s.stroke_none {
-                stroke_settled = true;
-            } else if s.stroke_color.is_some() || s.stroke_width_cm.is_some() {
-                resolved.stroke_color = s.stroke_color.clone();
-                resolved.stroke_width_cm = s.stroke_width_cm;
-                stroke_settled = true;
-            }
-        }
-        resolved.marker_start = resolved.marker_start || s.marker_start;
-        resolved.marker_end = resolved.marker_end || s.marker_end;
-        current = s.parent.clone();
-    }
-    resolved
-}
-
-/// `Shape`/`Line`'s `stroke_width` is not a physical unit -- `shape_library.ts`/`line_tool.ts`
-/// both draw into a fixed `0 0 100 100` SVG viewBox and pass `stroke_width` straight through as
-/// that viewBox's own `stroke-width`, so it's really "percent of the shape's own box" (its
-/// shorter side, since the box is rarely square and the viewBox is stretched to fit both
-/// dimensions independently). Converts a real stroke width in cm to that same relative unit,
-/// using the shape's own box (in cm, on this page) as the reference.
-fn cm_to_relative_stroke(stroke_cm: f64, box_w_cm: f64, box_h_cm: f64) -> f64 {
-    let base = box_w_cm.min(box_h_cm);
-    if base <= 0.0 {
-        return 0.0;
-    }
-    (stroke_cm / base) * 100.0
-}
-
-/// A `draw:rect`/`draw:ellipse`/`draw:custom-shape` as this app's `Shape`. `kind` is already this
-/// app's own `shape_kind` vocabulary (the caller resolves `rect`/`ellipse` from the tag name itself,
-/// or a custom shape's `draw:type` via `map_custom_shape_type`); the exact `draw:enhanced-path` a
-/// custom shape carries is never evaluated -- this app renders by `shape_kind` alone (see module
-/// doc), so an exotic preset still keeps its position/size/color even if its precise outline isn't
-/// reproduced.
-fn extract_shape_element(kind: &str, attrs: &str, transform: ElementTransform, page_w: f64, page_h: f64, styles: &Styles) -> SlideElement {
-    let style = resolve_graphic_style(attrs, styles);
-    // A "ring" (see odp_export.rs's render_element) has no fill at all -- it's exported as an
-    // unfilled, thick-stroked outline with fill_color repurposed as the stroke's own color, so
-    // reading it back takes the ring's color from the stroke instead of the (always empty) fill.
-    let (fill_color, stroke_color, stroke_width) = if kind == "ring" {
-        (style.stroke_color.unwrap_or_else(|| "none".to_string()), None, 0.0)
-    } else {
-        (
-            style.fill_color.unwrap_or_else(|| "none".to_string()),
-            style.stroke_color,
-            style.stroke_width_cm.map(|cm| cm_to_relative_stroke(cm, transform.w * page_w, transform.h * page_h)).unwrap_or(0.0),
-        )
-    };
-    SlideElement::Shape {
-        id: format!("el_{}", uuid::Uuid::new_v4()),
-        transform,
-        shape_kind: kind.to_string(),
-        fill_color,
-        stroke_color,
-        stroke_width,
-        path: None,
-    }
-}
-
-/// A `draw:line` -- the only page-level shape whose position comes from two absolute endpoints
-/// (`svg:x1/y1/x2/y2`) rather than a `svg:x/y/width/height` box -- as this app's `Line` (always
-/// `line_kind: "straight"`; `Line`'s rendering of "arrow" is driven by `start_arrow`/`end_arrow`,
-/// not the kind string, see `web/src/editor/line_tool.ts`). A perfectly horizontal or vertical
-/// line has a zero-width or zero-height bounding box, which this app's `ElementTransform` can't
-/// represent as a selectable element, so it's floored to a thin sliver instead of collapsing to
-/// nothing.
-fn extract_line_element(attrs: &str, page_w: f64, page_h: f64, styles: &Styles) -> SlideElement {
-    let (x1, y1, x2, y2) = (
-        extract_attr(attrs, "svg:x1").and_then(length_cm).unwrap_or(0.0),
-        extract_attr(attrs, "svg:y1").and_then(length_cm).unwrap_or(0.0),
-        extract_attr(attrs, "svg:x2").and_then(length_cm).unwrap_or(0.0),
-        extract_attr(attrs, "svg:y2").and_then(length_cm).unwrap_or(0.0),
-    );
-    let mut transform = ElementTransform::default();
-    if page_w > 0.0 && page_h > 0.0 {
-        transform.x = (x1.min(x2)) / page_w;
-        transform.y = (y1.min(y2)) / page_h;
-        transform.w = ((x1 - x2).abs() / page_w).max(0.01);
-        transform.h = ((y1 - y2).abs() / page_h).max(0.01);
-    }
-    extract_line_shape("straight", attrs, transform.normalized(), page_w, page_h, styles)
-}
-
-/// A `draw:polyline`/`draw:path` already placed via a `svg:x/y/width/height` box (`kind` already
-/// decided by the caller from the point count or tag), or a `draw:line`'s computed box (via
-/// `extract_line_element`), as this app's `Line`.
-fn extract_line_shape(kind: &str, attrs: &str, transform: ElementTransform, page_w: f64, page_h: f64, styles: &Styles) -> SlideElement {
-    let style = resolve_graphic_style(attrs, styles);
-    let color = style.stroke_color.unwrap_or_else(|| "#000000".to_string());
-    let stroke_width = style.stroke_width_cm.map(|cm| cm_to_relative_stroke(cm, transform.w * page_w, transform.h * page_h)).unwrap_or(3.0);
-    let (start_arrow, end_arrow) = (style.marker_start, style.marker_end);
-    SlideElement::Line {
-        id: format!("el_{}", uuid::Uuid::new_v4()),
-        transform,
-        line_kind: kind.to_string(),
-        color,
-        stroke_width,
-        start_arrow,
-        end_arrow,
-        path: None,
-    }
-}
-
-/// A `<table:table>` (already unwrapped from its `draw:frame`) as this app's `Table`. A cell's own
-/// run formatting is not kept (`Table::cells` is plain strings, see module doc); a merged cell's
-/// `table:covered-table-cell` placeholder is a different tag name than `table:table-cell`, so it's
-/// simply not counted as a cell -- the row is padded back out to the table's column count with
-/// empty strings afterward, rather than left short.
-fn extract_table_element(table_inner: &str, transform: ElementTransform) -> Option<SlideElement> {
-    let cols = find_all_tag_attrs(table_inner, "table:table-column").len().max(1);
-    let mut cells: Vec<Vec<String>> = Vec::new();
-    let mut rest = table_inner;
-    while let Some((_, row_inner, remainder)) = next_tag(rest, "table:table-row") {
-        rest = remainder;
-        let mut row = Vec::new();
-        let mut r2 = row_inner;
-        while let Some((_, cell_inner, rem2)) = next_tag(r2, "table:table-cell") {
-            r2 = rem2;
-            row.push(cell_text(cell_inner));
-        }
-        row.resize(cols, String::new());
-        cells.push(row);
-    }
-    if cells.is_empty() {
-        return None;
-    }
-    let rows = cells.len();
-    Some(SlideElement::Table { id: format!("el_{}", uuid::Uuid::new_v4()), transform, rows, cols, cells, text_color: None, border_color: None, font_size_pt: None })
-}
-
-fn cell_text(cell_inner: &str) -> String {
-    let mut paras = Vec::new();
-    let mut rest = cell_inner;
-    while let Some((_, p_inner, remainder)) = next_tag(rest, "text:p") {
-        rest = remainder;
-        paras.push(plain_text_of(p_inner));
-    }
-    paras.join("\n")
-}
-
-/// A `draw:g`'s already-isolated inner span (see `extract_balanced_tag`) as this app's `Group`:
-/// its children keep their own absolute (page-relative) positions -- real producer output doesn't
-/// apply an extra offset/scale at the group level for the common case this was built against (see
-/// `testdata/odp/README.md`), matching how this app's own grouping (`group_elements` in
-/// `src/core/engine/elements.rs`) already treats a group's children -- and the group's own
-/// `transform` is purely their bounding box, used for selection, never applied to render them
-/// (see `createElementNode`'s `'Group'` case in `web/src/core/slide_render.ts`).
-fn extract_group_element(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
-    inner: &str,
-    page_w: f64,
-    page_h: f64,
-    styles: &Styles,
-    media_dir: &Path,
-) -> Result<Option<SlideElement>, Box<dyn std::error::Error>> {
-    let children = extract_page_elements(archive, inner, page_w, page_h, styles, media_dir)?;
-    if children.is_empty() {
-        return Ok(None);
-    }
-    let (mut min_x, mut min_y, mut max_x, mut max_y) = (1.0f64, 1.0f64, 0.0f64, 0.0f64);
-    for child in &children {
-        let t = child.transform();
-        min_x = min_x.min(t.x);
-        min_y = min_y.min(t.y);
-        max_x = max_x.max(t.x + t.w);
-        max_y = max_y.max(t.y + t.h);
-    }
-    let transform = ElementTransform {
-        x: min_x.clamp(0.0, 1.0),
-        y: min_y.clamp(0.0, 1.0),
-        w: (max_x - min_x).clamp(0.0, 1.0),
-        h: (max_y - min_y).clamp(0.0, 1.0),
-        ..Default::default()
-    };
-    Ok(Some(SlideElement::Group { id: format!("el_{}", uuid::Uuid::new_v4()), transform, children }))
-}
-
-fn extract_page_background(
-    page_attrs: &str,
-    styles: &Styles,
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
-    media_dir: &Path,
-) -> Option<SlideBackground> {
-    let style_name = extract_attr(page_attrs, "draw:style-name")?;
-    let page_style = styles.page.get(style_name)?;
-    if let Some(color) = &page_style.fill_color {
-        return Some(SlideBackground::Solid(color.clone()));
-    }
-    if let Some(image_name) = &page_style.fill_image_name {
-        let href = styles.fill_images.get(image_name)?;
-        let path = href.trim_start_matches("./");
-        let image_bytes = read_zip_bytes(archive, path).ok()?;
-        let file_name = crate::storage::media_sniff::write_sniffed_media(media_dir, "odp", &image_bytes)?;
-        return Some(SlideBackground::Image { file_path: format!("/media/images/{}", file_name), opacity: 1.0 });
-    }
-    None
-}
-
 /// Plain text (paragraphs joined with "\n") from the notes block's own text frame
 /// (`presentation:class="notes"`), ignoring the page-thumbnail sibling. `None` for an empty or
-/// placeholder-only notes frame, matching every other "nothing to add" case in this importer.
+/// placeholder-only notes frame.
 fn extract_notes_text(notes_block: &str) -> Option<String> {
     let mut rest = notes_block;
     while let Some((frame_attrs, frame_inner, remainder)) = next_tag(rest, "draw:frame") {
@@ -1020,15 +1630,24 @@ fn extract_notes_text(notes_block: &str) -> Option<String> {
     None
 }
 
+/// A paragraph's text without its markup.
 fn plain_text_of(xml: &str) -> String {
     let mut out = String::new();
     let mut rest = xml;
-    while let Some((span_attrs, span_content, remainder)) = next_tag(rest, "text:span") {
-        let before = &rest[..find_tag_open_pos(rest, "text:span").unwrap_or(0)];
-        out.push_str(&decode_xml_entities(before));
-        let _ = span_attrs;
-        out.push_str(&decode_xml_entities(span_content));
-        rest = remainder;
+    // Bounded: each pass consumes text up to a tag and the tag.
+    while let Some(lt) = rest.find('<') {
+        out.push_str(&decode_xml_entities(&rest[..lt]));
+        let Some(gt) = rest[lt..].find('>') else { break };
+        let tag = &rest[lt + 1..lt + gt];
+        if tag.starts_with("text:s") && !tag.starts_with("text:span") {
+            let n = extract_attr(tag, "text:c").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).min(200);
+            out.push_str(&" ".repeat(n));
+        } else if tag.starts_with("text:line-break") {
+            out.push('\n');
+        } else if tag.starts_with("text:tab") {
+            out.push('\t');
+        }
+        rest = &rest[lt + gt + 1..];
     }
     out.push_str(&decode_xml_entities(rest));
     out
