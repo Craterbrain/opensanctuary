@@ -5,6 +5,7 @@
 // the canvas editor itself uses (see web/src/editor/*.ts), so what an operator
 // designs in the editor is exactly what plays live: no separate rendering
 // logic is implemented here.
+import { placeInGroup } from '../editor/group_layout';
 import { CanvasProjection, computeCanvasProjection, projectRect, NormalizedRect } from './canvas_projection';
 import { renderTextBlockDOM } from '../editor/text_block';
 import { renderImageDOM } from '../editor/image_tools';
@@ -27,6 +28,7 @@ export interface RenderableElement {
   crop?: any;
   mask_shape?: string;
   alt_text?: string;
+  fit?: 'stretch';
   in_point_s?: number;
   out_point_s?: number;
   loop_playback?: boolean;
@@ -43,6 +45,10 @@ export interface RenderableElement {
   rows?: number;
   cols?: number;
   cells?: string[][];
+  text_color?: string;
+  border_color?: string;
+  path?: string;
+  font_size_pt?: number;
   children?: RenderableElement[];
 }
 
@@ -75,6 +81,7 @@ function createElementNode(el: RenderableElement, projection: CanvasProjection):
         crop: el.crop,
         mask_shape: el.mask_shape,
         alt_text: el.alt_text,
+        fit: el.fit,
         opacity: el.transform.opacity
       });
       break;
@@ -95,7 +102,9 @@ function createElementNode(el: RenderableElement, projection: CanvasProjection):
         fill_color: el.fill_color!,
         stroke_color: el.stroke_color,
         stroke_width: el.stroke_width,
-        opacity: el.transform.opacity
+        opacity: el.transform.opacity,
+        path: el.path,
+        scale: projection.contentH > 0 ? projection.contentH / 1080 : 1
       });
       break;
     case 'Line':
@@ -105,7 +114,9 @@ function createElementNode(el: RenderableElement, projection: CanvasProjection):
         stroke_width: el.stroke_width,
         start_arrow: el.start_arrow,
         end_arrow: el.end_arrow,
-        opacity: el.transform.opacity
+        opacity: el.transform.opacity,
+        path: el.path,
+        scale: projection.contentH > 0 ? projection.contentH / 1080 : 1
       });
       break;
     case 'Table':
@@ -113,12 +124,17 @@ function createElementNode(el: RenderableElement, projection: CanvasProjection):
         rows: el.rows!,
         cols: el.cols!,
         cells: el.cells!,
-        opacity: el.transform.opacity
+        opacity: el.transform.opacity,
+        text_color: el.text_color,
+        border_color: el.border_color,
+        font_size_pt: el.font_size_pt,
+        scale: projection.contentH > 0 ? projection.contentH / 1080 : 1,
       }, false);
       break;
     case 'Group':
+      // Children are placed in slide coordinates, but drawn inside the group's own box.
       for (const child of el.children || []) {
-        node.appendChild(createElementNode(child, projection));
+        node.appendChild(placeInGroup(createElementNode(child, projection), rect));
       }
       break;
   }

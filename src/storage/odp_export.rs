@@ -277,7 +277,9 @@ fn render_element(
             } else if fill_color.eq_ignore_ascii_case("none") || fill_color.eq_ignore_ascii_case("transparent") {
                 (r#"draw:fill="none""#.to_string(), normal_stroke_attr())
             } else {
-                (format!(r#"draw:fill="solid" draw:fill-color="{}""#, encode_xml_text(fill_color)), normal_stroke_attr())
+                let (color, opacity) = odf_solid_fill(fill_color);
+                let opacity = if opacity < 0.999 { format!(r#" draw:opacity="{:.0}%""#, opacity * 100.0) } else { String::new() };
+                (format!(r#"draw:fill="solid" draw:fill-color="{}"{opacity}"#, encode_xml_text(&color)), normal_stroke_attr())
             };
             graphic_styles.push_str(&format!(
                 r#"<style:style style:name="{gname}" style:family="graphic"><style:graphic-properties {fill_attr} {stroke_attr} draw:auto-grow-height="false" draw:auto-grow-width="false"/></style:style>"#
@@ -454,4 +456,16 @@ fn run_span(run: &TextRun, text_styles: &mut String, fresh_id: &mut impl FnMut()
         size = run.font_size_pt,
     ));
     format!(r#"<text:span text:style-name="{name}">{text}</text:span>"#, text = encode_xml_text(&run.text))
+}
+
+/// A shape fill as ODF's one solid colour and its opacity: an imported fill can be `#rrggbbaa`
+/// (see-through) or a CSS gradient, which is written as its first colour.
+fn odf_solid_fill(fill: &str) -> (String, f64) {
+    let Some(at) = fill.find('#') else { return (fill.to_string(), 1.0) };
+    let hex: String = fill[at + 1..].chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+    match hex.len() {
+        8 => (format!("#{}", &hex[..6]), u8::from_str_radix(&hex[6..], 16).map(|a| a as f64 / 255.0).unwrap_or(1.0)),
+        6 => (format!("#{hex}"), 1.0),
+        _ => (fill.to_string(), 1.0),
+    }
 }

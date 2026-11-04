@@ -1,6 +1,6 @@
 # Setting up and running the release workflow
 
-_Last edited: 2026-10-29_
+_Last edited: 2026-11-03_
 
 `.github/workflows/release.yml` builds, signs, and publishes a GitHub Release
 (`.deb`, Linux tarball, Windows installer, portable zip, `checksums.txt`,
@@ -191,6 +191,7 @@ committed under `testdata/` so CI runs those tests too:
 |---|---|---|
 | `test1.ews` | **committed**: `testdata/ews/` | A genuine EasyWorship 5 schedule; one public-domain hymn. |
 | `shape-test.odp` | **committed**: `testdata/odp/` | Hand-made in LibreOffice's shape gallery; shapes only, no text or author. |
+| `poi-pptx/*.pptx` | folder only (`$OS_TEST_DOCS`) | Seven real decks from the web plus one truncated file, taken from [Apache POI's test corpus](https://github.com/apache/poi/tree/trunk/test-data/slideshow) -- other people's presentations, so not republished here. `test_pptx_import_of_real_world_decks` uses them (checked against OnlyOffice's rendering of the same files) and skips without them. |
 | `LCspring.ewpx` | folder only (`$OS_TEST_DOCS`) | A real church's announcements deck (event and volunteer slides, an image named after a person) -- not published in this public repo. `test_lcspring_ewpx_presentation_bullets_and_transforms`, the `ewpx_import` tests, the LCspring part of `test_ewsx_schedule_roundtrip` and `e2e_unified_schedule_hub` use it and skip without it. |
 | `test1.ewsx` | folder only | This app's own export (it carries our `manifest.json`), so it adds nothing a generated export doesn't: `test_ewsx_export_reimports_through_easyworships_own_files_not_just_our_manifest` builds one. Used by `e2e_unified_schedule_hub`. |
 

@@ -13,7 +13,9 @@ export function renderVideoDOM(containerEl: HTMLElement, props: VideoElementProp
   // the caller already sizes it absolutely in px.
   containerEl.innerHTML = '';
   containerEl.style.overflow = 'hidden';
-  containerEl.style.position = 'relative';
+  // Only if the caller hasn't placed it: slide renderers position elements absolutely, and that
+  // already contains the absolutely positioned picture inside (overriding it stacked them).
+  if (!containerEl.style.position) containerEl.style.position = 'relative';
 
   const video = document.createElement('video');
   video.src = props.file_path;

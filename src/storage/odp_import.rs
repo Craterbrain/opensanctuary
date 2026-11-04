@@ -759,6 +759,8 @@ fn extract_image_element(
         crop: None::<CropRect>,
         mask_shape: None,
         alt_text: None,
+        // Impress stretches a picture to its frame.
+        fit: Some("stretch".into()),
     })
 }
 
@@ -847,6 +849,7 @@ fn extract_shape_element(kind: &str, attrs: &str, transform: ElementTransform, p
         fill_color,
         stroke_color,
         stroke_width,
+        path: None,
     }
 }
 
@@ -890,6 +893,7 @@ fn extract_line_shape(kind: &str, attrs: &str, transform: ElementTransform, page
         stroke_width,
         start_arrow,
         end_arrow,
+        path: None,
     }
 }
 
@@ -917,7 +921,7 @@ fn extract_table_element(table_inner: &str, transform: ElementTransform) -> Opti
         return None;
     }
     let rows = cells.len();
-    Some(SlideElement::Table { id: format!("el_{}", uuid::Uuid::new_v4()), transform, rows, cols, cells })
+    Some(SlideElement::Table { id: format!("el_{}", uuid::Uuid::new_v4()), transform, rows, cols, cells, text_color: None, border_color: None, font_size_pt: None })
 }
 
 fn cell_text(cell_inner: &str) -> String {

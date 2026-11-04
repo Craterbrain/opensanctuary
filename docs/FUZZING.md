@@ -1,6 +1,6 @@
 # Fuzzing untrusted input parsers
 
-_Last edited: 2026-10-29 07:01_
+_Last edited: 2026-11-04 09:35_
 
 OS-Next's biggest raw-input attack surface isn't the network API (that's
 JSON over a host-token-gated Axum router, handled by `serde`) -- it's the
@@ -32,6 +32,7 @@ one target per hand-rolled parser.
 | `freeshow_fsb` | `FreeShowImporter::import_fsb_content` | JSON text |
 | `scripture_ref` | `parse_scripture_reference` | free-text reference string |
 | `rtf_parse` | `parse_rtf` | raw RTF bytes |
+| `metafile_parse` | `emf::parse` + `wmf::parse` (pictures in PPTX decks) | raw `.emf`/`.wmf` bytes |
 | `bible_import` | `bible_import::parse_bible` + `install` (a Bible from a link or file: USFM, USX, OSIS, Zefania, OpenSong; zip; see `docs/bible-import.md`) | raw bytes (loose files or a zip) |
 | `bundle_open` | `bundle::open` + `inspect` + `import` (OpenSanctuary's own `.ossong`/`.ospres`/`.osservice`/`.osbible`, see `docs/file-formats.md`) | raw archive bytes, or an otherwise well-formed zip whose `manifest.json` and `content.json` are fuzzed |
 
@@ -77,7 +78,7 @@ Run every target for a fixed budget each:
 ```sh
 for t in pptx_import odp_import ewsx_import openlp_service_json openlp_theme \
          openlp_otz freeshow_show_import freeshow_fsb scripture_ref \
-         rtf_parse bundle_open bible_import; do
+         rtf_parse bundle_open bible_import metafile_parse; do
   cargo +nightly fuzz run "$t" -- -max_total_time=120 || break
 done
 ```

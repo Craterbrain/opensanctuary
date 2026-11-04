@@ -1348,6 +1348,24 @@ fn test_group_ungroup_roundtrip() {
         _ => panic!("Expected Group element"),
     };
 
+    // Moving and doubling the group carries its children (stored in slide coordinates) along:
+    // el_1 sat at the group's corner, el_2 0.1 in from it.
+    engine.execute_command(ShowCommand::BatchSlideEdit {
+        item_index: 0,
+        slide_index: 0,
+        ops: vec![os_next::core::commands::SlideEditOp::update_transform(group_id.clone(), os_next::core::models::ElementTransform { x: 0.2, y: 0.1, w: 0.8, h: 0.8, ..Default::default() })],
+    });
+    let moved = engine.snapshot();
+    let SlideElement::Group { children, .. } = &moved.schedule.items[0].slides[0].elements[0] else { panic!("Expected Group element") };
+    let (a, b) = (children[0].transform(), children[1].transform());
+    assert!((a.x - 0.2).abs() < 1e-9 && (a.y - 0.1).abs() < 1e-9, "{a:?}");
+    assert!((b.x - 0.36).abs() < 1e-9, "0.2 + 0.1 * (0.8 / 0.5): {b:?}");
+    // Undo puts the box back, and the children with it.
+    engine.execute_command(ShowCommand::Undo);
+    let back = engine.snapshot();
+    let SlideElement::Group { children, .. } = &back.schedule.items[0].slides[0].elements[0] else { panic!("Expected Group element") };
+    assert!((children[0].transform().x - 0.1).abs() < 1e-9 && (children[1].transform().x - 0.2).abs() < 1e-9);
+
     // Ungroup elements
     engine.execute_command(ShowCommand::UngroupSlideElements {
         item_index: 0,

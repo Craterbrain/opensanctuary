@@ -109,6 +109,14 @@ pub struct TextParagraphStyle {
     pub bullet_kind: String, // "none", "disc", "decimal", "liturgical"
     #[serde(default)]
     pub indent_level: u32,
+    /// Where the text sits in its box: "top", "middle" or "bottom". `None` is the app's own
+    /// default (middle); imported slides set it to keep the authored anchoring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_align: Option<String>,
+    /// Each paragraph's first run is its lead (an indent and a bullet or number, as imported decks
+    /// write them): wrapped lines line up after it, not under it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hanging_indent: bool,
 }
 
 fn default_line_height_num() -> f64 { 1.25 }
@@ -123,6 +131,8 @@ impl Default for TextParagraphStyle {
             space_after_pt: 0.0,
             bullet_kind: "none".to_string(),
             indent_level: 0,
+            vertical_align: None,
+            hanging_indent: false,
         }
     }
 }
@@ -209,6 +219,11 @@ pub enum SlideElement {
         mask_shape: Option<String>,
         #[serde(default)]
         alt_text: Option<String>,
+        /// How the picture fills its box when it isn't cropped: `None` covers it (the app's own
+        /// pictures keep their proportions); `"stretch"` fills it exactly, as PowerPoint draws
+        /// every picture (imported decks set it).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fit: Option<String>,
     },
     Video {
         id: String,
@@ -234,6 +249,11 @@ pub enum SlideElement {
         stroke_color: Option<String>,
         #[serde(default)]
         stroke_width: f64,
+        /// A drawn outline instead of `shape_kind`'s preset: SVG path data in the element's own
+        /// 0..100 box (an imported freeform or metafile drawing). With a path, `stroke_width` is
+        /// in canvas units (1080 to the canvas height) and doesn't stretch with the box.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
     },
     Line {
         id: String,
@@ -245,6 +265,11 @@ pub enum SlideElement {
         start_arrow: bool,
         #[serde(default)]
         end_arrow: bool,
+        /// The line's course as SVG path data in its own 0..100 box (a connector's diagonal or
+        /// elbow, a freeform curve); `None` is `line_kind`'s stock drawing. With a path,
+        /// `stroke_width` is in canvas units, as for `Shape`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
     },
     Table {
         id: String,
@@ -252,6 +277,14 @@ pub enum SlideElement {
         rows: usize,
         cols: usize,
         cells: Vec<Vec<String>>,
+        /// Cell text and border colours and text size. `None` is the app's own look (white on a
+        /// dark slide); an imported table sets them so it stays readable on its own background.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_color: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        border_color: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_size_pt: Option<f64>,
     },
     Group {
         id: String,
@@ -285,6 +318,21 @@ impl SlideElement {
             SlideElement::Table { transform, .. } => transform,
             SlideElement::Group { transform, .. } => transform,
         }
+    }
+
+    /// Sets the element's transform. A group's children are stored in slide coordinates and its
+    /// transform is their box, so a group carries them along: moved, and scaled with its size.
+    pub fn set_transform(&mut self, t: ElementTransform) {
+        let old = self.transform().clone();
+        if let SlideElement::Group { children, .. } = self {
+            let sx = if old.w > 0.0 { t.w / old.w } else { 1.0 };
+            let sy = if old.h > 0.0 { t.h / old.h } else { 1.0 };
+            for child in children.iter_mut() {
+                let c = child.transform().clone();
+                child.set_transform(ElementTransform { x: t.x + (c.x - old.x) * sx, y: t.y + (c.y - old.y) * sy, w: c.w * sx, h: c.h * sy, ..c });
+            }
+        }
+        *self.transform_mut() = t;
     }
 
     pub fn transform_mut(&mut self) -> &mut ElementTransform {

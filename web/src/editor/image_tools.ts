@@ -5,6 +5,8 @@ export interface ImageElementProps {
   crop?: CropRect;
   mask_shape?: string;
   alt_text?: string;
+  /** Uncropped, the picture covers its box; 'stretch' fills it exactly, as PowerPoint draws pictures. */
+  fit?: 'stretch';
   opacity?: number;
 }
 
@@ -47,7 +49,9 @@ export function renderImageDOM(containerEl: HTMLElement, props: ImageElementProp
   // the caller already sizes it absolutely in px.
   containerEl.innerHTML = '';
   containerEl.style.overflow = 'hidden';
-  containerEl.style.position = 'relative';
+  // Only if the caller hasn't placed it: slide renderers position elements absolutely, and that
+  // already contains the absolutely positioned picture inside (overriding it stacked them).
+  if (!containerEl.style.position) containerEl.style.position = 'relative';
 
   // Rendered as a background-image (not <img> + object-fit/clip-path): a crop
   // rect is authored as a fraction of the image's own natural size, and
@@ -69,7 +73,7 @@ export function renderImageDOM(containerEl: HTMLElement, props: ImageElementProp
     inner.style.backgroundSize = size;
     inner.style.backgroundPosition = position;
   } else {
-    inner.style.backgroundSize = 'cover';
+    inner.style.backgroundSize = props.fit === 'stretch' ? '100% 100%' : 'cover';
     inner.style.backgroundPosition = 'center';
   }
 
