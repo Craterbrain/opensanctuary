@@ -277,8 +277,8 @@ pub fn parse(bytes: &[u8]) -> Option<Wmf> {
             match it {
                 WmfItem::Path { subpaths, .. } => subpaths.iter_mut().flatten().for_each(|p| *p = m(*p)),
                 WmfItem::Arc { from, to, center, .. } => {
-                    *from = m(*from);
-                    *to = m(*to);
+                    // One mirror reverses an arc's direction: swapping its ends keeps it counter-clockwise.
+                    (*from, *to) = if flip_x != flip_y { (m(*to), m(*from)) } else { (m(*from), m(*to)) };
                     *center = m(*center);
                 }
                 WmfItem::Text { x, y, .. } => (*x, *y) = m((*x, *y)),
@@ -320,14 +320,16 @@ fn dib_to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
     if !(12..=124).contains(&header) || dib.len() <= header {
         return None;
     }
-    let bit_count = u16le(dib, 14)? as usize;
-    let compression = u32le(dib, 16).unwrap_or(0);
-    let mut colors = u32le(dib, 32).unwrap_or(0) as usize;
+    // An OS/2 BITMAPCOREHEADER (12 bytes) keeps its bit count at 10 and uses 3-byte palette entries.
+    let core = header == 12;
+    let bit_count = u16le(dib, if core { 10 } else { 14 })? as usize;
+    let compression = if core { 0 } else { u32le(dib, 16).unwrap_or(0) };
+    let mut colors = if core { 0 } else { u32le(dib, 32).unwrap_or(0) as usize };
     if colors == 0 && bit_count <= 8 {
         colors = 1 << bit_count;
     }
     let masks = if compression == 3 && header == 40 { 12 } else { 0 };
-    let offset = 14 + header + masks + colors * 4;
+    let offset = 14 + header + masks + colors * if core { 3 } else { 4 };
     let total = 14 + dib.len();
     let mut out = Vec::with_capacity(total);
     out.extend_from_slice(b"BM");

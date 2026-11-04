@@ -1,3 +1,4 @@
+import { carryGroupChildren } from './group_layout';
 import { EditorSlide, SlideElement, SlideEditOp, SlideBackground, TextStyleUpdate, TextRun, normalizeTransform } from './types';
 import { EditorCanvas } from './canvas';
 import { EditorToolbar, applyArchetypeToSlide, ArrangeAction, AlignAction } from './toolbar';
@@ -685,6 +686,7 @@ export class SlideEditor {
     const cur = this.getActiveSlide();
     const selected = this.getSelectedElements();
     if (selected.length === 0) return;
+    const before = new Map(selected.map(el => [el.id, { ...el.transform }]));
 
     this.history.pushState(cur);
 
@@ -724,6 +726,7 @@ export class SlideEditor {
 
     selected.forEach(el => {
       el.transform = normalizeTransform(el.transform);
+      carryGroupChildren(el, before.get(el.id)!);
     });
 
     this.canvas.render();
@@ -857,9 +860,11 @@ export class SlideEditor {
 
     this.history.pushState(cur);
     for (const el of selected) {
+      const before = { ...el.transform };
       el.transform.x += dx;
       el.transform.y += dy;
       el.transform = normalizeTransform(el.transform);
+      carryGroupChildren(el, before);
     }
     this.canvas.render();
     this.syncUIState();

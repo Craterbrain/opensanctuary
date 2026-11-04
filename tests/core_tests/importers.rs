@@ -2324,11 +2324,13 @@ fn test_pptx_import_against_a_real_libreoffice_fixture() {
     assert_eq!(els.len(), 2, "{:?}", els.iter().map(|e| e.id()).collect::<Vec<_>>());
 
     use os_next::core::models::SlideElement;
-    let SlideElement::Table { rows, cols, cells, transform, .. } = &els[0] else { panic!("expected the table: {:?}", els[0]) };
-    assert_eq!(*rows, 2);
-    assert_eq!(*cols, 2);
-    assert_eq!(cells[0], vec!["R0C0".to_string(), "R0C1".to_string()]);
-    assert_eq!(cells[1], vec!["R1C0".to_string(), "R1C1".to_string()]);
+    // The table is a group of its cells: each a text block in its own column and row.
+    let SlideElement::Group { children: cells, transform, .. } = &els[0] else { panic!("expected the table: {:?}", els[0]) };
+    let cell = |t: &str| cells.iter().find_map(|c| match c { SlideElement::TextBlock { transform, block, .. } if block.runs.iter().any(|r| r.text == t) => Some(transform.clone()), _ => None }).unwrap_or_else(|| panic!("no cell {t}"));
+    let (a, b, c) = (cell("R0C0"), cell("R0C1"), cell("R1C0"));
+    assert!(b.x > a.x && (b.y - a.y).abs() < 1e-9, "R0C1 right of R0C0");
+    assert!(c.y > a.y && (c.x - a.x).abs() < 1e-9, "R1C0 below R0C0");
+    cell("R1C1");
     assert!(transform.x > 0.0 && transform.x < 1.0, "{}", transform.x);
 
     let SlideElement::Group { children, .. } = &els[1] else { panic!("expected the group: {:?}", els[1]) };
@@ -2716,19 +2718,18 @@ fn test_pptx_import_table_with_merged_cells_placed_by_real_column_not_appended()
     let bytes = build_single_slide_pptx(slide_xml);
     let media_dir = tempfile::tempdir().unwrap();
     let pres = PptxImporter::import_pptx_bytes(&bytes, "stem", media_dir.path()).expect("should parse");
-    let SlideElement::Table { rows, cols, cells, .. } = &pres.slides[0].elements[0] else { panic!() };
-    assert_eq!(*rows, 2);
-    assert_eq!(*cols, 3);
-    // Merge NOT at the trailing edge: a naive "append real cells, pad the end"
-    // approach would produce ["AB", "C", ""] (C shifted into the covered slot's
-    // column instead of its own) -- this is the case that actually distinguishes
-    // correct placement from that bug, unlike the row below.
-    assert_eq!(cells[0], vec!["AB".to_string(), String::new(), "C".to_string()], "merge NOT at the trailing edge");
-    // Contrast case: merge AT the trailing edge, where append-and-pad happens to
-    // produce the same result as correct positional placement -- kept to show why
-    // the row above is the one that actually matters, not because this one alone
-    // would have caught anything.
-    assert_eq!(cells[1], vec!["A".to_string(), "BC".to_string(), String::new()], "merge at the trailing edge");
+    // Cells are placed by their own column; a span is as wide as the columns it covers.
+    let SlideElement::Group { children, .. } = &pres.slides[0].elements[0] else { panic!("expected the table group") };
+    let cell = |t: &str| children.iter().find_map(|c| match c { SlideElement::TextBlock { transform, block, .. } if block.runs.iter().any(|r| r.text == t) => Some(transform.clone()), _ => None }).unwrap_or_else(|| panic!("no cell {t}"));
+    let col = 1_000_000.0 / 12_192_000.0;
+    // The table sits 100000 EMU in; text sits inside the cells' default 0.1in margins.
+    let inset = (100_000.0 + 91_440.0) / 12_192_000.0;
+    for (text, x, w_cols) in [("AB", 0.0, 2.0), ("C", 2.0, 1.0), ("A", 0.0, 1.0), ("BC", 1.0, 2.0)] {
+        let t = cell(text);
+        assert!((t.x - (x * col + inset)).abs() < 1e-6, "{text}: x {}", t.x);
+        assert!((t.w - (w_cols * col - 2.0 * 91_440.0 / 12_192_000.0)).abs() < 1e-6, "{text}: w {}", t.w);
+    }
+    assert_eq!(children.iter().filter(|c| matches!(c, SlideElement::TextBlock { .. })).count(), 4, "covered cells are not cells");
 }
 
 #[test]
@@ -2901,6 +2902,26 @@ fn test_pptx_import_of_real_world_decks() {
         runs(&children, &mut labels);
         assert!(labels.iter().any(|(t, _)| t == "Parallel Lines"), "{labels:?}");
         assert!(children.iter().any(|c| matches!(c, SlideElement::Line { path: Some(d), .. } if d.contains(" A "))), "the angle arcs");
+    }
+    // The slides that needed charts, SmartArt and styled tables (checked against both renderers).
+    if let Some(children) = group_of("aascu.org_hbcu_leadershipsummit_cooper_.pptx", 6) {
+        let bars = children.iter().filter(|c| matches!(c, SlideElement::Shape { shape_kind, .. } if shape_kind == "rect")).count();
+        assert!(bars >= 20, "a percent-stacked chart of 5 categories x 4 series, plus legend swatches: {bars}");
+        let mut labels = Vec::new();
+        runs(&children, &mut labels);
+        assert!(labels.iter().any(|(t, _)| t == "Native American") && labels.iter().any(|(t, _)| t == "100%"), "{labels:?}");
+    }
+    if let Some(children) = group_of("ae.ac.uaeu.faculty_nafaachbili_GeomLec1.pptx", 9) {
+        let mut labels = Vec::new();
+        runs(&children, &mut labels);
+        assert!(labels.iter().any(|(t, _)| t.starts_with("1- A line can be drawn")), "the SmartArt's saved drawing: {labels:?}");
+    }
+    if let Some(children) = group_of("au.asn.aes.www_conferences_2011_presentations_Fri_20Room4Level4_20930_20Maloney.pptx", 10) {
+        // The table style's header row: dark fill (dk1), white bold text.
+        assert!(children.iter().any(|c| matches!(c, SlideElement::Shape { fill_color, .. } if fill_color == "#00215b")), "header fill");
+        let mut labels = Vec::new();
+        runs(&children, &mut labels);
+        assert!(labels.iter().any(|(t, c)| t == "Principle" && c == "#ffffff"), "{labels:?}");
     }
     if let Some(path) = test_doc("poi-pptx/ca.ubc.cs.people_~emhill_presentations_HowWeRefactor.pptx") {
         let pres = PptxImporter::import_pptx_bytes(&std::fs::read(path).unwrap(), "stem", media_dir.path()).unwrap();

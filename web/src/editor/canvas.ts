@@ -7,7 +7,7 @@ import { renderVideoDOM } from './video_tools';
 import { renderShapeDOM } from './shape_library';
 import { renderLineDOM } from './line_tool';
 import { renderTableDOM } from './table';
-import { placeInGroup } from './group_layout';
+import { carryGroupChildren, placeInGroup } from './group_layout';
 import { snapElement, renderGuidesOverlay } from './guides';
 import { applyResolvedBackground, isVideoBackground } from '../core/presentation_helpers';
 import { autoFitLyrics } from '../core/autofit';
@@ -417,6 +417,7 @@ export class EditorCanvas {
       const startClientY = e.clientY;
       const initX = el.transform.x;
       const initY = el.transform.y;
+      const before = { ...el.transform };
       const otherElements = this.currentSlide!.elements.filter(other => other.id !== el.id);
 
       const onMouseMove = (moveEv: MouseEvent) => {
@@ -443,6 +444,7 @@ export class EditorCanvas {
         window.removeEventListener('mouseup', onMouseUp);
         renderGuidesOverlay(this.stage, [], this.projection.contentW, this.projection.contentH);
         el.transform = normalizeTransform(el.transform);
+        carryGroupChildren(el, before);
         this.notifyChange();
       };
 

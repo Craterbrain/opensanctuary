@@ -171,6 +171,16 @@ fn plain_color(name: &str, attrs: &str, _inner: &str) -> Option<String> {
     }
 }
 
+fn srgb_to_linear(v: f64) -> f64 {
+    if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+}
+
+/// Applies `f` to each channel in linear light and converts back.
+fn linear_map((r, g, b): (f64, f64, f64), f: impl Fn(f64) -> f64) -> (f64, f64, f64) {
+    let m = |c: f64| linear_to_srgb(f(srgb_to_linear(c)).clamp(0.0, 1.0));
+    (m(r), m(g), m(b))
+}
+
 fn linear_to_srgb(v: f64) -> f64 {
     if v <= 0.0031308 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
 }
@@ -295,8 +305,10 @@ fn apply_modifiers(base: &str, inner: &str) -> String {
                 let l = if name == "a:lumMod" { l * v } else { l + v };
                 (r, g, b) = hsl_to_rgb(h, s, l.clamp(0.0, 1.0));
             }
-            "a:tint" => (r, g, b) = (r + (1.0 - r) * (1.0 - v), g + (1.0 - g) * (1.0 - v), b + (1.0 - b) * (1.0 - v)),
-            "a:shade" => (r, g, b) = (r * v, g * v, b * v),
+            // Tint and shade work in linear light (as Office and LibreOffice do), so a tinted navy
+            // washes out to a near-neutral grey rather than staying visibly blue.
+            "a:tint" => (r, g, b) = linear_map((r, g, b), |c| c + (1.0 - c) * (1.0 - v)),
+            "a:shade" => (r, g, b) = linear_map((r, g, b), |c| c * v),
             _ => {}
         }
     }
@@ -694,7 +706,8 @@ mod tests {
         assert_eq!(pal.color("a:schemeClr", r#"val="bg1""#, "", None).as_deref(), Some("#ffffff"));
         // "Darker 50%" of white is mid grey; tint 50% of black is mid grey too.
         assert_eq!(pal.color("a:schemeClr", r#"val="bg1""#, r#"<a:lumMod val="50000"/>"#, None).as_deref(), Some("#808080"));
-        assert_eq!(pal.color("a:srgbClr", r#"val="000000""#, r#"<a:tint val="50000"/>"#, None).as_deref(), Some("#808080"));
+        // Tint works in linear light: half-way to white from black is a light grey, not #808080.
+        assert_eq!(pal.color("a:srgbClr", r#"val="000000""#, r#"<a:tint val="50000"/>"#, None).as_deref(), Some("#bcbcbc"));
         let dark = ClrMap::from_attrs(r#"bg1="dk1" tx1="lt1""#);
         assert_eq!(Palette { theme: &theme, map: &dark }.color("a:schemeClr", r#"val="tx1""#, "", None).as_deref(), Some("#ffffff"));
     }

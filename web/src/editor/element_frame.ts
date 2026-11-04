@@ -1,5 +1,6 @@
 import { ElementTransform, SlideElement, normalizeTransform } from './types';
 import { snapElement, renderGuidesOverlay } from './guides';
+import { carryGroupChildren } from './group_layout';
 import {
   createResizeHandleElements,
   layoutResizeHandles,
@@ -175,6 +176,7 @@ export class ElementFrame {
         if (this.frameEl.parentElement) {
           renderGuidesOverlay(this.frameEl.parentElement, [], this.canvasWidth, this.canvasHeight);
         }
+        if (this.activeElement) carryGroupChildren(this.activeElement, initT);
         if (this.onTransformCb && this.activeElement) {
           this.onTransformCb({ elementId: this.activeElement.id, transform: this.activeElement.transform, isEnd: true });
         }

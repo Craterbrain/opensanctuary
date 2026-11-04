@@ -37,7 +37,7 @@ fn apply_slide_edit_op(slide: &mut Slide, op: &crate::core::commands::SlideEditO
         }
         SlideEditOp::UpdateTransform { element_id, transform } => {
             if let Some(el) = slide.elements.iter_mut().find(|e| e.id() == element_id) {
-                *el.transform_mut() = transform.clone().normalized();
+                el.set_transform(transform.clone().normalized());
             } else {
                 tracing::warn!("SlideEditOp UpdateTransform: element_id {} not found on slide, dropped", element_id);
             }

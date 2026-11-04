@@ -310,6 +310,21 @@ impl SlideElement {
         }
     }
 
+    /// Sets the element's transform. A group's children are stored in slide coordinates and its
+    /// transform is their box, so a group carries them along: moved, and scaled with its size.
+    pub fn set_transform(&mut self, t: ElementTransform) {
+        let old = self.transform().clone();
+        if let SlideElement::Group { children, .. } = self {
+            let sx = if old.w > 0.0 { t.w / old.w } else { 1.0 };
+            let sy = if old.h > 0.0 { t.h / old.h } else { 1.0 };
+            for child in children.iter_mut() {
+                let c = child.transform().clone();
+                child.set_transform(ElementTransform { x: t.x + (c.x - old.x) * sx, y: t.y + (c.y - old.y) * sy, w: c.w * sx, h: c.h * sy, ..c });
+            }
+        }
+        *self.transform_mut() = t;
+    }
+
     pub fn transform_mut(&mut self) -> &mut ElementTransform {
         match self {
             SlideElement::TextBlock { transform, .. } => transform,
