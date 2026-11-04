@@ -413,6 +413,9 @@ fn store_media(key: String, bytes: &[u8], ctx: &Ctx) -> Option<String> {
     if let Some(done) = ctx.media.borrow().get(&key) {
         return Some(done.clone());
     }
+    // An SVG is kept as a picture of itself (the app stores no SVG).
+    let drawn = crate::storage::svg_raster::is_svg(bytes).then(|| crate::storage::svg_raster::to_png(bytes)).flatten();
+    let bytes = drawn.as_deref().unwrap_or(bytes);
     // Extension comes from the bytes, not the archive entry's name -- see storage::media_sniff.
     let name = crate::storage::media_sniff::write_sniffed_media(ctx.media_dir, "pptx", bytes)?;
     let served = format!("/media/images/{}", name);

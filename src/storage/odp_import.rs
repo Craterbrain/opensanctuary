@@ -312,7 +312,9 @@ impl<'a> Ctx<'a> {
         if let Some(done) = self.media.borrow().get(&key) {
             return Some(done.clone());
         }
-        let name = crate::storage::media_sniff::write_sniffed_media(self.media_dir, "odp", bytes)?;
+        // An SVG is kept as a picture of itself (the app stores no SVG).
+        let drawn = crate::storage::svg_raster::is_svg(bytes).then(|| crate::storage::svg_raster::to_png(bytes)).flatten();
+        let name = crate::storage::media_sniff::write_sniffed_media(self.media_dir, "odp", drawn.as_deref().unwrap_or(bytes))?;
         let served = format!("/media/images/{name}");
         self.media.borrow_mut().insert(key, served.clone());
         Some(served)
