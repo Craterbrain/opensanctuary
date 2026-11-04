@@ -35,6 +35,7 @@ fn sample_presentation_for_export(media_root: &std::path::Path, image_bytes: &[u
         crop: None,
         mask_shape: None,
         alt_text: None,
+        fit: None,
     };
     // A dropped reference (the file doesn't exist) must not break export, just skip that element.
     let missing_image = SlideElement::Image {
@@ -44,6 +45,7 @@ fn sample_presentation_for_export(media_root: &std::path::Path, image_bytes: &[u
         crop: None,
         mask_shape: None,
         alt_text: None,
+        fit: None,
     };
 
     let shape_rect = SlideElement::Shape {
@@ -2417,14 +2419,17 @@ fn test_pptx_import_reconstructs_shapes_lines_connectors_and_nested_groups() {
     let els = &pres.slides[0].elements;
     assert_eq!(els.len(), 5, "{:?}", els.iter().map(|e| e.id()).collect::<Vec<_>>());
 
-    let SlideElement::Shape { shape_kind, fill_color, stroke_color, stroke_width, .. } = &els[0] else { panic!("expected the diamond: {:?}", els[0]) };
-    assert_eq!(shape_kind, "diamond");
+    // Presets are drawn from their DrawingML definitions, corner to corner of the box.
+    let SlideElement::Shape { shape_kind, fill_color, stroke_color, stroke_width, path, .. } = &els[0] else { panic!("expected the diamond: {:?}", els[0]) };
+    assert_eq!((shape_kind.as_str(), path.as_deref()), ("path", Some("M 0 50 L 50 0 L 100 50 L 50 100 Z")));
     assert_eq!(fill_color.to_lowercase(), "#ff00aa");
     assert_eq!(stroke_color.as_deref().map(str::to_lowercase).as_deref(), Some("#112233"));
     assert!(*stroke_width > 0.0);
 
-    let SlideElement::Shape { shape_kind, fill_color, .. } = &els[1] else { panic!("expected the callout: {:?}", els[1]) };
-    assert_eq!(shape_kind, "callout", "OOXML's wedgeRectCallout maps to this app's callout glyph");
+    let SlideElement::Shape { shape_kind, fill_color, path, .. } = &els[1] else { panic!("expected the callout: {:?}", els[1]) };
+    assert_eq!(shape_kind, "path");
+    // wedgeRectCallout's default tail tip is 20.833% left of and 62.5% below the centre: under the box.
+    assert!(path.as_deref().is_some_and(|d| d.contains("L 29.17 112.5")), "{path:?}");
     assert_eq!(fill_color.to_lowercase(), "#00aa55");
 
     let SlideElement::Line { line_kind, color, start_arrow, end_arrow, .. } = &els[2] else { panic!("expected the plain-sp line: {:?}", els[2]) };
@@ -2454,7 +2459,7 @@ fn test_pptx_import_reconstructs_shapes_lines_connectors_and_nested_groups() {
     let SlideElement::Group { children: inner_children, .. } = &children[1] else { panic!("expected the nested group: {:?}", children[1]) };
     assert_eq!(inner_children.len(), 1);
     let SlideElement::Shape { shape_kind, fill_color, transform: star_t, .. } = &inner_children[0] else { panic!("expected the star: {:?}", inner_children[0]) };
-    assert_eq!(shape_kind, "star");
+    assert_eq!(shape_kind, "path");
     assert_eq!(fill_color.to_lowercase(), "#ffee00");
     // This is the number that actually exercises the nested-group fix: the inner
     // group's own off=(200000,200000)/ext=(200000,200000) must FIRST be remapped
@@ -2577,7 +2582,7 @@ fn test_pptx_import_resolves_what_slides_inherit_from_layout_master_and_theme() 
     assert_eq!(body.paragraph_style.vertical_align.as_deref(), Some("top"));
 
     // A theme-styled shape: filled from its fillRef, its text white from its fontRef, the line break kept.
-    assert!(slide.elements.iter().any(|e| matches!(e, SlideElement::Shape { shape_kind, fill_color, stroke_color, .. } if shape_kind == "hexagon" && fill_color == "#4f81bd" && stroke_color.is_none())));
+    assert!(slide.elements.iter().any(|e| matches!(e, SlideElement::Shape { shape_kind, fill_color, stroke_color, path: Some(d), .. } if shape_kind == "path" && d.starts_with("M 0 50 L ") && fill_color == "#4f81bd" && stroke_color.is_none())));
     let (_, hex_text) = texts.iter().find(|(_, b)| text_of(b).contains("Line A")).expect("shape text");
     assert_eq!(text_of(hex_text), "Line A\nLine B");
     assert_eq!(hex_text.runs[0].color, "#ffffff");
@@ -2930,4 +2935,117 @@ fn test_pptx_import_of_real_world_decks() {
         runs(&pres.slides[0].elements, &mut found);
         assert!(found.iter().any(|(t, c)| t.contains("Refactor, and") && c == "#ffffff"), "{found:?}");
     }
+}
+
+/// A deck exercising shape looks and text spacing as real decks write them: fills a placeholder
+/// inherits, theme fill styles (`fillRef`) that are gradients, see-through fills, `useBgFill`,
+/// preset geometry with shaded parts, master paragraph spacing, and an empty `<p:bg/>`.
+fn build_styled_pptx() -> Vec<u8> {
+    use std::io::{Cursor, Write};
+    use zip::write::FileOptions;
+    use zip::ZipWriter;
+
+    const NS: &str = r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+    let rel = |pairs: &[(&str, &str, &str)]| {
+        let rows: String = pairs.iter().map(|(id, ty, target)| format!(r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{ty}" Target="{target}"/>"#)).collect();
+        format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rows}</Relationships>"#)
+    };
+    let sp = |id: u32, extra_attrs: &str, sppr: &str, style: &str, text: &str| format!(
+        r#"<p:sp{extra_attrs}><p:nvSpPr><p:cNvPr id="{id}" name="S{id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="{x}" y="100000"/><a:ext cx="1000000" cy="500000"/></a:xfrm>{sppr}</p:spPr>{style}<p:txBody><a:bodyPr/><a:p>{text}</a:p></p:txBody></p:sp>"#,
+        x = id as u64 * 1_100_000);
+    let accent_ref = |idx: u32| format!(r#"<p:style><a:lnRef idx="0"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="{idx}"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></p:style>"#);
+    let parts: Vec<(&str, String)> = vec![
+        ("ppt/presentation.xml", format!(r#"<p:presentation {NS}><p:sldIdLst><p:sldId id="256" r:id="rId2"/><p:sldId id="257" r:id="rId3"/></p:sldIdLst><p:sldSz cx="12192000" cy="6858000"/></p:presentation>"#)),
+        ("ppt/_rels/presentation.xml.rels", rel(&[("rId2", "slide", "slides/slide1.xml"), ("rId3", "slide", "slides/slide2.xml")])),
+        ("ppt/theme/theme1.xml", format!(r#"<a:theme {NS} name="T"><a:themeElements>
+            <a:clrScheme name="T"><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="1F497D"/></a:dk2><a:lt2><a:srgbClr val="EEECE1"/></a:lt2><a:accent1><a:srgbClr val="4F81BD"/></a:accent1></a:clrScheme>
+            <a:fontScheme name="T"><a:majorFont><a:latin typeface="Calibri"/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/></a:minorFont></a:fontScheme>
+            <a:fmtScheme name="T"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+              <a:gradFill><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"><a:tint val="50000"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:shade val="50000"/></a:schemeClr></a:gs></a:gsLst><a:lin ang="5400000"/></a:gradFill>
+            </a:fillStyleLst></a:fmtScheme>
+            </a:themeElements></a:theme>"#)),
+        ("ppt/slideMasters/slideMaster1.xml", format!(r#"<p:sldMaster {NS}><p:cSld>
+            <p:bg><p:bgPr><a:solidFill><a:srgbClr val="203040"/></a:solidFill></p:bgPr></p:bg>
+            <p:spTree>
+              <p:sp><p:nvSpPr><p:cNvPr id="3" name="Body"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="457200" y="1600200"/><a:ext cx="8229600" cy="4525963"/></a:xfrm><a:solidFill><a:srgbClr val="00CC99"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:t>Click</a:t></a:r></a:p></p:txBody></p:sp>
+            </p:spTree></p:cSld>
+            <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" hlink="hlink" folHlink="folHlink"/>
+            <p:txStyles><p:bodyStyle><a:lvl1pPr><a:spcBef><a:spcPct val="20000"/></a:spcBef><a:buNone/><a:defRPr sz="2000"/></a:lvl1pPr></p:bodyStyle></p:txStyles></p:sldMaster>"#)),
+        ("ppt/slideMasters/_rels/slideMaster1.xml.rels", rel(&[("rId1", "theme", "../theme/theme1.xml")])),
+        ("ppt/slideLayouts/slideLayout1.xml", format!(r#"<p:sldLayout {NS}><p:cSld><p:spTree/></p:cSld></p:sldLayout>"#)),
+        ("ppt/slideLayouts/_rels/slideLayout1.xml.rels", rel(&[("rId1", "slideMaster", "../slideMasters/slideMaster1.xml")])),
+        ("ppt/slides/slide1.xml", format!(r#"<p:sld {NS}><p:cSld><p:spTree>
+              <p:sp><p:nvSpPr><p:cNvPr id="2" name="Body"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/>
+                <a:p><a:r><a:t>One</a:t></a:r><a:br/><a:r><a:t>Two</a:t></a:r></a:p><a:p><a:r><a:t>Three</a:t></a:r></a:p></p:txBody></p:sp>
+              {grad}{alpha}{bgfill}{can}{oval}
+              <p:sp><p:nvSpPr><p:cNvPr id="9" name="List"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="100000" y="5000000"/><a:ext cx="4000000" cy="1000000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/>
+                <a:p><a:pPr marL="342900" indent="-342900"><a:lnSpc><a:spcPts val="3000"/></a:lnSpc><a:buChar char="&#8226;"/></a:pPr><a:r><a:rPr sz="2000"/><a:t>Bullet</a:t></a:r></a:p>
+                <a:p><a:pPr><a:buNone/></a:pPr><a:r><a:rPr sz="2000"/><a:t>Plain</a:t></a:r></a:p></p:txBody></p:sp>
+            </p:spTree></p:cSld></p:sld>"#,
+            grad = sp(3, "", r#"<a:prstGeom prst="rect"/>"#, &accent_ref(2), ""),
+            alpha = sp(4, "", r#"<a:prstGeom prst="rect"/><a:solidFill><a:srgbClr val="FF0000"><a:alpha val="50000"/></a:srgbClr></a:solidFill>"#, "", ""),
+            bgfill = sp(5, r#" useBgFill="1""#, r#"<a:prstGeom prst="rect"/>"#, "", ""),
+            can = sp(6, "", r#"<a:prstGeom prst="can"/><a:solidFill><a:srgbClr val="808080"/></a:solidFill><a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln>"#, "", ""),
+            oval = sp(7, "", r#"<a:prstGeom prst="ellipse"/>"#, &accent_ref(1), "<a:r><a:t>In the oval</a:t></a:r>"))),
+        ("ppt/slides/_rels/slide1.xml.rels", rel(&[("rId1", "slideLayout", "../slideLayouts/slideLayout1.xml")])),
+        ("ppt/slides/slide2.xml", format!(r#"<p:sld {NS}><p:cSld><p:bg/><p:spTree/></p:cSld></p:sld>"#)),
+        ("ppt/slides/_rels/slide2.xml.rels", rel(&[("rId1", "slideLayout", "../slideLayouts/slideLayout1.xml")])),
+    ];
+    let mut zw = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = FileOptions::<()>::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, content) in parts {
+        zw.start_file(name, options).unwrap();
+        zw.write_all(content.as_bytes()).unwrap();
+    }
+    zw.finish().unwrap().into_inner()
+}
+
+#[test]
+fn test_pptx_import_paints_shapes_and_spaces_paragraphs_as_the_deck_says() {
+    use os_next::core::models::SlideElement;
+    let media_dir = tempfile::tempdir().unwrap();
+    let pres = PptxImporter::import_pptx_bytes(&build_styled_pptx(), "stem", media_dir.path()).expect("should parse");
+    let els = &pres.slides[0].elements;
+    let shape_at = |x_emu: f64| els.iter().find(|e| (e.transform().x - x_emu / 12_192_000.0).abs() < 1e-6 && !matches!(e, SlideElement::TextBlock { .. }))
+        .unwrap_or_else(|| panic!("no shape at {x_emu}: {els:?}"));
+    let fill_of = |e: &SlideElement| match e { SlideElement::Shape { fill_color, .. } => fill_color.clone(), other => panic!("not a shape: {other:?}") };
+
+    // The body placeholder states no fill: it takes the master placeholder's, drawn behind its text.
+    assert_eq!(fill_of(&els[0]), "#00cc99");
+    let SlideElement::TextBlock { block: body, .. } = &els[1] else { panic!("{:?}", els[1]) };
+    // A line break stays inside its run; only paragraphs are separated by a run of exactly "\n",
+    // and the master's 20% space before (of 20pt text, 30pt on this canvas: 6pt) is kept.
+    let texts: Vec<&str> = body.runs.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!(texts, ["One\n", "Two", "\n", "Three"]);
+    assert_eq!((body.paragraph_style.space_before_pt, body.paragraph_style.space_after_pt), (6.0, 0.0));
+
+    // fillRef idx=2 is the theme's gradient, in the colour the reference passes in.
+    let grad = fill_of(shape_at(3.0 * 1_100_000.0));
+    assert!(grad.starts_with("linear-gradient(180deg, #"), "{grad}");
+    assert_eq!(fill_of(shape_at(4.0 * 1_100_000.0)), "#ff000080", "50% alpha");
+    assert_eq!(fill_of(shape_at(5.0 * 1_100_000.0)), "#203040", "useBgFill takes the slide's background");
+
+    // A can's lid is a lighter part of its own, its outline a separate stroke-only line.
+    let SlideElement::Group { children, .. } = shape_at(6.0 * 1_100_000.0) else { panic!("the can should be a group") };
+    assert!(children.iter().any(|c| matches!(c, SlideElement::Shape { fill_color, .. } if fill_color == "#808080")));
+    assert!(children.iter().any(|c| matches!(c, SlideElement::Shape { fill_color, .. } if fill_color == "#b3b3b3")), "the lighter lid: {children:?}");
+    assert!(children.iter().any(|c| matches!(c, SlideElement::Line { color, .. } if color == "#000000")));
+
+    // Text in an ellipse is set in its inscribed rectangle, not the whole box.
+    let oval_text = els.iter().find_map(|e| match e { SlideElement::TextBlock { transform, block, .. } if block.runs.iter().any(|r| r.text == "In the oval") => Some(transform), _ => None }).unwrap();
+    let oval = shape_at(7.0 * 1_100_000.0).transform();
+    assert!(oval_text.x > oval.x + 0.1 * oval.w && oval_text.w < 0.75 * oval.w, "{oval_text:?} in {oval:?}");
+
+    // A list: the bullet is its paragraph's lead (wrapped lines hang after it), a paragraph
+    // without one gets an empty lead so every paragraph starts with one, and exact line spacing
+    // (30pt per line of 20pt text) is 1.5 lines.
+    let list = els.iter().find_map(|e| match e { SlideElement::TextBlock { block, .. } if block.runs.iter().any(|r| r.text == "Plain") => Some(block), _ => None }).unwrap();
+    let texts: Vec<&str> = list.runs.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!(texts, ["\u{2002}\u{2002}\u{2002}• ", "Bullet", "\n", "", "Plain"], "the lead keeps the level's indent");
+    assert!(list.paragraph_style.hanging_indent);
+    assert_eq!(list.paragraph_style.line_height, 1.5);
+    assert!(!body.paragraph_style.hanging_indent, "no leads, no hanging");
+
+    // An empty <p:bg/> states nothing: the master's background shows.
+    assert_eq!(pres.slides[1].background.as_deref(), Some("#203040"));
 }

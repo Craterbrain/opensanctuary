@@ -1,6 +1,7 @@
 pub mod bible_import;
 pub mod bundle;
 pub mod db;
+pub mod emf;
 pub mod ewsx;
 pub mod freeshow_import;
 pub mod freeshow_show_import;
@@ -9,6 +10,7 @@ pub mod openlp_import;
 pub mod paths;
 pub mod pattern_cache;
 pub mod pd_songs;
+pub mod pptx_geom;
 pub mod pptx_import;
 pub mod pptx_inherit;
 pub mod wmf;

@@ -40,3 +40,44 @@ describe("pictures keep the position their renderer gave them", () => {
     }
   });
 });
+
+describe("imported fills", () => {
+  test("a CSS gradient fill becomes an SVG gradient over the shape's box; a colour stays as is", async () => {
+    const { svgPaint } = await import("../src/editor/svg_path");
+    const node = (tag: string): any => ({
+      tag, attrs: {} as Record<string, string>, children: [] as any[],
+      setAttribute(k: string, v: string) { this.attrs[k] = v; },
+      appendChild(c: any) { this.children.push(c); return c; },
+      insertBefore(c: any) { this.children.unshift(c); return c; },
+      querySelector(sel: string) { return this.children.find((c: any) => c.tag === sel) ?? null; },
+    });
+    const original = (globalThis as any).document;
+    (globalThis as any).document = { createElementNS: (_ns: string, tag: string) => node(tag) };
+    try {
+      const svg = node("svg");
+      expect(svgPaint(svg, "#11223380")).toBe("#11223380");
+      const paint = svgPaint(svg, "linear-gradient(180deg, #ff0000 0%, #0000ff80 100%)");
+      const grad = svg.querySelector("defs").children[0];
+      expect(paint).toBe(`url(#${grad.attrs.id})`);
+      expect(grad.tag).toBe("linearGradient");
+      // 180deg runs top to bottom.
+      expect([grad.attrs.x1, grad.attrs.y1, grad.attrs.x2, grad.attrs.y2].map(Number).map((v: number) => Math.round(v * 100) / 100)).toEqual([0.5, 0, 0.5, 1]);
+      expect(grad.children.map((s: any) => [s.attrs.offset, s.attrs["stop-color"]])).toEqual([["0%", "#ff0000"], ["100%", "#0000ff80"]]);
+      expect(svg.querySelector("defs").children.length).toBe(1);
+      svgPaint(svg, "radial-gradient(circle, #ffffff 0%, #000000 100%)");
+      expect(svg.querySelector("defs").children[1].tag).toBe("radialGradient");
+    } finally {
+      (globalThis as any).document = original;
+    }
+  });
+});
+
+describe("paragraph spacing", () => {
+  test("only a run of exactly a newline separates paragraphs; a line break inside a run doesn't", async () => {
+    const { splitParagraphs } = await import("../src/editor/text_block");
+    const r = (text: string) => ({ text, font_size_pt: 20 }) as any;
+    const paras = splitParagraphs([r("One\n"), r("Two"), r("\n"), r("\n"), r("Three")]);
+    expect(paras.map((p) => p.runs.map((x: any) => x.text))).toEqual([["One\n", "Two"], [], ["Three"]]);
+    expect(paras[1]!.lineStyle?.text).toBe("\n");
+  });
+});

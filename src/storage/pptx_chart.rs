@@ -517,7 +517,7 @@ mod tests {
         let inh = Inherited::default();
         let media = RefCell::new(HashMap::new());
         let dir = tempfile::tempdir().unwrap();
-        let ctx = Ctx { geo: Geo::new(12_192_000.0, 6_858_000.0), theme: &theme, map: ClrMap::default(), inh: &inh, media: &media, media_dir: dir.path(), table_styles: "" };
+        let ctx = Ctx { geo: Geo::new(12_192_000.0, 6_858_000.0), theme: &theme, map: ClrMap::default(), inh: &inh, media: &media, media_dir: dir.path(), table_styles: "", bg_fill: None };
         f(&ctx)
     }
 

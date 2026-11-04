@@ -83,6 +83,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "metafile_parse"
+path = "fuzz_targets/metafile_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "rtf_parse"
 path = "fuzz_targets/rtf_parse.rs"
 test = false

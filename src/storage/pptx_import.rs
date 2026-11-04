@@ -5,6 +5,7 @@ use std::path::Path;
 use zip::ZipArchive;
 
 use crate::core::models::{GradientStop, Presentation, Slide, SlideBackground, SlideElement};
+use crate::storage::pptx_geom;
 use crate::storage::pptx_inherit::{self as inh, children, child, Bullet, ClrMap, Inherited, Palette, Ph, RunProps, Theme};
 use crate::storage::xml_scan::{decode_xml_entities, extract_attr, find_all_tag_attrs, next_tag, next_tag_content};
 
@@ -30,8 +31,8 @@ impl PptxImporter {
     /// pillarboxed (or letterboxed) rather than stretched, and point sizes are scaled from the
     /// deck's own slide height to that canvas (`Geo`).
     ///
-    /// Still not reconstructed: charts and SmartArt, per-paragraph spacing, and a rotated group's
-    /// children (only its linear offset/scale is applied, see `GroupRemap`).
+    /// Still not reconstructed: a rotated group's children (only its linear offset/scale is
+    /// applied, see `GroupRemap`), tiled picture fills, and EMF+-only pictures.
     ///
     /// `media_dir` is where an extracted picture gets written -- pass the app's `web/media/images`
     /// so the resulting `/media/images/<file>` path is servable.
@@ -81,7 +82,14 @@ impl PptxImporter {
                 None => std::rc::Rc::new(LayoutInfo { inherited: Inherited { default_style: default_style.clone(), ..Default::default() }, ..Default::default() }),
             };
             let map = info.map.overridden(&slide_xml);
-            let ctx = Ctx { geo, theme: &info.theme, map, inh: &info.inherited, media: &media, media_dir, table_styles: &table_styles };
+            let mut ctx = Ctx { geo, theme: &info.theme, map, inh: &info.inherited, media: &media, media_dir, table_styles: &table_styles, bg_fill: None };
+            let parts = [(path.as_str(), slide_xml.as_str()), (info.layout_path.as_str(), info.layout_xml.as_str()), (info.master_path.as_str(), info.master_xml.as_str())];
+            let background = resolve_background(&mut archive, &parts, &ctx);
+            ctx.bg_fill = match &background {
+                Some(SlideBackground::Solid(c)) => Some(c.clone()),
+                Some(SlideBackground::Gradient { stops, .. }) => stops.first().map(|s| s.color.clone()),
+                _ => None,
+            };
 
             // Decorations first (paint order: master, then layout, then the slide's own shapes).
             let mut elements = Vec::new();
@@ -117,8 +125,7 @@ impl PptxImporter {
                 slide.project_text_from_elements();
             }
 
-            let parts = [(path.as_str(), slide_xml.as_str()), (info.layout_path.as_str(), info.layout_xml.as_str()), (info.master_path.as_str(), info.master_xml.as_str())];
-            if let Some(bg) = resolve_background(&mut archive, &parts, &ctx) {
+            if let Some(bg) = background {
                 slide.background = Some(match &bg {
                     SlideBackground::Solid(c) => c.clone(),
                     SlideBackground::Image { file_path, .. } => file_path.clone(),
@@ -283,6 +290,8 @@ struct Ctx<'a> {
     media_dir: &'a Path,
     /// `ppt/tableStyles.xml`, for tables' looks.
     table_styles: &'a str,
+    /// The slide background's colour (a gradient's first stop), for shapes with `useBgFill`.
+    bg_fill: Option<String>,
 }
 
 impl Ctx<'_> {
@@ -541,9 +550,38 @@ fn extract_text_shape_element(shape_inner: &str, ctx: &Ctx, remap: Option<&Group
         let (rx, ry, rw, rh) = match remap { Some(r) => r.apply(rx, ry, rw, rh), None => (rx, ry, rw, rh) };
         Some(([rx, ry, rw, rh], 0.0))
     });
-    let (rect, rot) = tx_rect.or_else(|| own_rect(shape_inner, remap)).or_else(|| inherited_rect.map(|r| (r, 0.0)))
+    let has_tx_rect = tx_rect.is_some();
+    let (mut rect, rot) = tx_rect.or_else(|| own_rect(shape_inner, remap)).or_else(|| inherited_rect.map(|r| (r, 0.0)))
         .unwrap_or(([ctx.geo.canvas_w * 0.05 - ctx.geo.x_off, ctx.geo.canvas_h * 0.07 - ctx.geo.y_off, ctx.geo.canvas_w * 0.9, ctx.geo.canvas_h * 0.86], 0.0));
+    // Text sits in the geometry's own text rectangle: an ellipse's inscribed box, an arrow's shaft.
+    if !has_tx_rect {
+        rect = geometry_text_rect(shape_inner, ctx, rect, rot);
+    }
     text_block_element(txbody, &list, &body, style_color, rect, rot, ctx)
+}
+
+/// `rect` (a shape's box, turned `rot` degrees about its centre) narrowed to its geometry's text
+/// rectangle, still turning about the same point. A rectangle's text box is the whole shape.
+fn geometry_text_rect(shape_inner: &str, ctx: &Ctx, rect: [f64; 4], rot: f64) -> [f64; 4] {
+    let [x, y, w, h] = rect;
+    let geometry = match shape_geometry(shape_inner, ctx) {
+        GeomSource::Preset("rect", _) => return rect,
+        GeomSource::Preset(prst, av) => pptx_geom::preset(prst, av, w, h, (false, false)),
+        GeomSource::Custom(cust) => Some(pptx_geom::custom(cust, w, h, (false, false))),
+    };
+    let Some([l, t, r, b]) = geometry.and_then(|g| g.text_rect) else { return rect };
+    if r - l <= 0.0 || b - t <= 0.0 {
+        return rect;
+    }
+    let (flip_h, flip_v) = xfrm_flips(shape_inner);
+    let (l, r) = if flip_h { (w - r, w - l) } else { (l, r) };
+    let (t, b) = if flip_v { (h - b, h - t) } else { (t, b) };
+    // The text box's centre, moved from the shape's centre and turned with the shape.
+    let (dx, dy) = ((l + r) / 2.0 - w / 2.0, (t + b) / 2.0 - h / 2.0);
+    let (sin, cos) = rot.to_radians().sin_cos();
+    let (cx, cy) = (x + w / 2.0 + dx * cos - dy * sin, y + h / 2.0 + dx * sin + dy * cos);
+    let (tw, th) = (r - l, b - t);
+    [cx - tw / 2.0, cy - th / 2.0, tw, th]
 }
 
 /// A text body (`<p:txBody>`, a table cell's `<a:txBody>`) as a `TextBlock` in the EMU box `rect`,
@@ -554,29 +592,47 @@ fn text_block_element(txbody: &str, list: &inh::ListStyle, body: &inh::BodyProps
 
     let mut runs: Vec<crate::core::models::TextRun> = Vec::new();
     let mut first_level: Option<inh::Level> = None;
+    let mut first_font_pt = 0.0;
+    // Whether any paragraph starts with a lead run (indent, bullet): then each one gets one, empty
+    // where it has none, so the renderer can hang wrapped lines after it.
+    let mut any_lead = false;
+    let mut no_lead: Vec<usize> = Vec::new();
     // This app has one alignment per text box: the one most of the text uses.
     let mut align_weight: HashMap<String, usize> = HashMap::new();
     let mut counters = [0usize; 9];
     let mut any_text = false;
+    // (space before, space after) per paragraph with text, in canvas points, weighted by its length.
+    let mut gaps: Vec<(f64, f64, usize)> = Vec::new();
     for (pi, (_, _, p_inner)) in children(txbody).into_iter().filter(|(n, _, _)| *n == "a:p").enumerate() {
         let (ppr_attrs, ppr_inner) = child(p_inner, "a:pPr").map(|(_, a, i)| (a, i)).unwrap_or(("", ""));
         let lvl = extract_attr(ppr_attrs, "lvl").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0).min(8);
         let level = inh::Level::parse(ppr_attrs, ppr_inner).over(&list.0[lvl]);
 
         let mut para: Vec<crate::core::models::TextRun> = Vec::new();
+        // A line break (Shift+Enter) joins its neighbour's text, so a run that is exactly "\n"
+        // only ever separates paragraphs -- which is where the renderer puts paragraph spacing.
+        let mut pending_break = false;
         for (name, _, inner) in children(p_inner) {
             let rpr = child(inner, "a:rPr").map(|(_, a, i)| RunProps::parse(a, i)).unwrap_or_default().over(&level.run);
             match name {
                 "a:r" | "a:fld" => {
                     let text: String = children(inner).into_iter().filter(|(n, _, _)| *n == "a:t").map(|(_, _, t)| decode_xml_entities(t)).collect();
                     if !text.is_empty() {
+                        let text = if std::mem::take(&mut pending_break) { format!("\n{text}") } else { text };
                         para.push(text_run(text, &rpr, ctx, style_color.as_deref(), size_scale));
                     }
                 }
                 // A line break inside a paragraph (Shift+Enter), not a new paragraph.
-                "a:br" => para.push(text_run("\n".into(), &rpr, ctx, style_color.as_deref(), size_scale)),
+                "a:br" => match para.last_mut() {
+                    Some(prev) => prev.text.push('\n'),
+                    None if pending_break => para.push(text_run("\n".into(), &rpr, ctx, style_color.as_deref(), size_scale)),
+                    None => pending_break = true,
+                },
                 _ => {}
             }
+        }
+        if pending_break {
+            para.push(text_run("\n".into(), &level.run, ctx, style_color.as_deref(), size_scale));
         }
 
         if pi > 0 {
@@ -589,8 +645,18 @@ fn text_block_element(txbody: &str, list: &inh::ListStyle, body: &inh::BodyProps
             any_text = true;
             if first_level.is_none() {
                 first_level = Some(level.clone());
+                first_font_pt = para.iter().map(|r| r.font_size_pt).fold(0.0, f64::max);
             }
-            *align_weight.entry(level.align.clone().unwrap_or_else(|| "l".into())).or_default() += para.iter().map(|r| r.text.chars().count()).sum::<usize>();
+            let weight = para.iter().map(|r| r.text.chars().count()).sum::<usize>();
+            *align_weight.entry(level.align.clone().unwrap_or_else(|| "l".into())).or_default() += weight;
+            // Spacing shrinks with the body's autofit (`lnSpcReduction`), like the line spacing.
+            let font_pt = para.iter().map(|r| r.font_size_pt).fold(0.0, f64::max);
+            let squeeze = (1.0 - body.line_reduction.unwrap_or(0.0)).max(0.0);
+            let gap = |s: Option<inh::Spacing>| s.map_or(0.0, |s| match s {
+                inh::Spacing::Points(p) => p * ctx.geo.font_scale,
+                inh::Spacing::OfFont(_) => s.points(font_pt),
+            } * squeeze);
+            gaps.push((gap(level.space_before), gap(level.space_after), weight));
             let marker = match &level.bullet {
                 Some(Bullet::Char(c)) => Some(inh::bullet_glyph(c, level.bullet_font.as_deref())),
                 Some(Bullet::AutoNum(kind)) => {
@@ -615,6 +681,7 @@ fn text_block_element(txbody: &str, list: &inh::ListStyle, body: &inh::BodyProps
             let spaces = if en_emu > 0.0 && indent_emu.is_finite() { (indent_emu / en_emu).round().clamp(0.0, 40.0) as usize } else { 2 * lvl };
             let indent = "\u{2002}".repeat(spaces);
             if marker.is_some() || !indent.is_empty() {
+                any_lead = true;
                 let mut lead = para[0].clone();
                 lead.text = format!("{indent}{}", marker.map(|m| format!("{m} ")).unwrap_or_default());
                 lead.bold = false;
@@ -624,12 +691,21 @@ fn text_block_element(txbody: &str, list: &inh::ListStyle, body: &inh::BodyProps
                     lead.color = c;
                 }
                 runs.push(lead);
+            } else {
+                no_lead.push(runs.len());
             }
         }
         runs.extend(para);
     }
     if !any_text {
         return None;
+    }
+    if any_lead {
+        for at in no_lead.into_iter().rev() {
+            let mut empty = runs[at].clone();
+            empty.text = String::new();
+            runs.insert(at, empty);
+        }
     }
 
     let level = first_level.unwrap_or_default();
@@ -640,8 +716,22 @@ fn text_block_element(txbody: &str, list: &inh::ListStyle, body: &inh::BodyProps
         Some("just") | Some("justLow") | Some("dist") => "justify",
         _ => "left",
     };
+    // One gap per text box (this app's paragraph style is per box): the length-weighted mean of
+    // the gaps that actually fall between paragraphs -- not before the first or after the last.
+    let mean = |v: Vec<(f64, usize)>| {
+        let total: usize = v.iter().map(|(_, w)| *w).sum();
+        if total == 0 { 0.0 } else { (v.iter().map(|(g, w)| g * *w as f64).sum::<f64>() / total as f64 * 10.0).round() / 10.0 }
+    };
+    let space_before_pt = mean(gaps.iter().skip(1).map(|(b, _, w)| (*b, *w)).collect());
+    let space_after_pt = mean(gaps.iter().take(gaps.len().saturating_sub(1)).map(|(_, a, w)| (*a, *w)).collect());
     // PowerPoint's single spacing is about 1.2 lines of the font size.
-    let line_height = ((level.line_spacing.unwrap_or(1.0) - body.line_reduction.unwrap_or(0.0)).max(0.5) * 1.2 * 100.0).round() / 100.0;
+    // Exact spacing (points) is that many points per line of the first line's text.
+    let line_height = match level.line_spacing {
+        Some(inh::Spacing::Points(p)) if first_font_pt > 0.0 => (p * ctx.geo.font_scale / first_font_pt).clamp(0.5, 5.0),
+        Some(inh::Spacing::OfFont(k)) => (k - body.line_reduction.unwrap_or(0.0)).max(0.5) * 1.2,
+        _ => (1.0 - body.line_reduction.unwrap_or(0.0)).max(0.5) * 1.2,
+    };
+    let line_height = (line_height * 100.0).round() / 100.0;
     let vertical_align = match body.anchor.as_deref() {
         Some("ctr") => "middle",
         Some("b") => "bottom",
@@ -661,7 +751,10 @@ fn text_block_element(txbody: &str, list: &inh::ListStyle, body: &inh::BodyProps
             paragraph_style: crate::core::models::TextParagraphStyle {
                 align: align.to_string(),
                 line_height,
+                space_before_pt,
+                space_after_pt,
                 vertical_align: Some(vertical_align.to_string()),
+                hanging_indent: any_lead,
                 ..Default::default()
             },
             effects: crate::core::models::ElementEffects::default(),
@@ -682,20 +775,90 @@ fn text_block_element(txbody: &str, list: &inh::ListStyle, body: &inh::BodyProps
 fn extract_picture_element(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, pic_inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) -> Option<SlideElement> {
     let rid = next_tag(pic_inner, "a:blip").and_then(|(attrs, _, _)| extract_attr(attrs, "r:embed"))?.to_string();
     let (rect, rot) = shape_rect(pic_inner, ctx, remap)?;
-    let file_path = match embedded(archive, part_path, &rid, ctx)? {
-        Embedded::Served(path) => path,
-        // A Windows Metafile (old clip art, drawn figures) can't be shown as a picture: its
-        // drawing becomes elements instead.
-        Embedded::Bytes(_, bytes) if crate::storage::wmf::is_wmf(&bytes) => return metafile_group(&bytes, rect, rot, ctx),
-        Embedded::Bytes(media_path, bytes) => store_media(media_path, &bytes, ctx)?,
-    };
+    picture_element(archive, part_path, &rid, rect, rot, pic_inner, ctx)
+}
+
+/// The picture relationship `rid` of `part_path` drawn in `rect`, cropped as `pic_inner`'s
+/// `<a:srcRect>` says, with its "set transparent colour" (`<a:clrChange>`) applied.
+fn picture_element(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, rid: &str, rect: [f64; 4], rot: f64, pic_inner: &str, ctx: &Ctx) -> Option<SlideElement> {
     // <a:srcRect> crops in thousandths of a percent from each edge.
-    let crop = next_tag(pic_inner, "a:srcRect").map(|(a, _, _)| {
+    let src = next_tag(pic_inner, "a:srcRect").map(|(a, _, _)| {
         let f = |k: &str| extract_attr(a, k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) / 100_000.0;
-        let (l, t, r, b) = (f("l"), f("t"), f("r"), f("b"));
-        crate::core::models::CropRect { x: l, y: t, w: (1.0 - l - r).clamp(0.01, 1.0), h: (1.0 - t - b).clamp(0.01, 1.0) }
-    }).filter(|c| c.x != 0.0 || c.y != 0.0 || c.w != 1.0 || c.h != 1.0);
-    Some(SlideElement::Image { id: format!("el_{}", uuid::Uuid::new_v4()), transform: ctx.geo.transform(rect, rot), file_path, crop, mask_shape: None, alt_text: None })
+        [f("l"), f("t"), f("r"), f("b")]
+    }).filter(|c| c.iter().any(|v| *v != 0.0));
+    let clear = transparent_color(pic_inner, ctx);
+    let media_path = embedded_path(archive, part_path, rid)?;
+    let key = match &clear {
+        Some(c) => format!("{media_path}#clear{c}"),
+        None => media_path.clone(),
+    };
+    let cached = ctx.media.borrow().get(&key).cloned();
+    let file_path = match cached {
+        Some(done) => done,
+        None => {
+            let bytes = read_zip_bytes(archive, &media_path).ok()?;
+            // A Windows or Enhanced Metafile (clip art, drawn figures, pasted charts and tables)
+            // can't be shown as a picture: its drawing becomes elements instead.
+            if crate::storage::wmf::is_wmf(&bytes) || crate::storage::emf::is_emf(&bytes) {
+                return metafile_group(&bytes, rect, rot, ctx, src, clear.as_deref());
+            }
+            let bytes = clear.as_deref().and_then(|c| without_color(&bytes, c)).unwrap_or(bytes);
+            store_media(key, &bytes, ctx)?
+        }
+    };
+    let crop = src.map(|[l, t, r, b]| crate::core::models::CropRect { x: l, y: t, w: (1.0 - l - r).clamp(0.01, 1.0), h: (1.0 - t - b).clamp(0.01, 1.0) });
+    Some(SlideElement::Image { id: format!("el_{}", uuid::Uuid::new_v4()), transform: ctx.geo.transform(rect, rot), file_path, crop, mask_shape: None, alt_text: None, fit: Some("stretch".into()) })
+}
+
+/// A picture's "set transparent colour" (`<a:clrChange>` to a see-through colour): the colour
+/// that disappears, as `#rrggbb`.
+fn transparent_color(pic_inner: &str, ctx: &Ctx) -> Option<String> {
+    let (_, blip, _) = next_tag(pic_inner, "a:blip")?;
+    let (_, change, _) = next_tag(blip, "a:clrChange")?;
+    let pal = ctx.palette();
+    let (_, _, to) = child(change, "a:clrTo")?;
+    let (_, alpha) = children(to).into_iter().find_map(|(n, a, i)| pal.color_alpha(n, a, i, None))?;
+    if alpha >= 0.5 {
+        return None;
+    }
+    child(change, "a:clrFrom").and_then(|(_, _, i)| pal.first_color(i, None))
+}
+
+/// A raster picture with the pixels of `color` (give or take rounding) made transparent, as PNG.
+fn without_color(bytes: &[u8], color: &str) -> Option<Vec<u8>> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let mut rgba = img.to_rgba8();
+    let hex = color.trim_start_matches('#');
+    let c = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok().map(i32::from);
+    let (r, g, b) = (c(0)?, c(2)?, c(4)?);
+    for p in rgba.pixels_mut() {
+        if (i32::from(p[0]) - r).abs() <= 2 && (i32::from(p[1]) - g).abs() <= 2 && (i32::from(p[2]) - b).abs() <= 2 {
+            p[3] = 0;
+        }
+    }
+    let mut out = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(rgba).write_to(&mut out, image::ImageFormat::Png).ok()?;
+    Some(out.into_inner())
+}
+
+/// An embedded object (`<p:oleObj>`: a chart from another program, an old slide, an equation) as
+/// the preview picture its file keeps for it: a `<p:pic>` inside the object (PowerPoint 2010 and
+/// later), else the picture its legacy VML drawing gives the shape `spid` names.
+fn ole_preview(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) -> Option<SlideElement> {
+    let rect = frame_rect(inner, remap)?;
+    let (ole_attrs, ole_inner, _) = next_tag(inner, "p:oleObj")?;
+    if let Some((_, pic, _)) = next_tag(ole_inner, "p:pic") {
+        let rid = next_tag(pic, "a:blip").and_then(|(a, _, _)| extract_attr(a, "r:embed"))?.to_string();
+        return picture_element(archive, part_path, &rid, rect, 0.0, pic, ctx);
+    }
+    let spid = extract_attr(ole_attrs, "spid")?;
+    let vml_path = rel_target_of_type(archive, part_path, "/vmlDrawing")?;
+    let vml = String::from_utf8_lossy(&read_zip_bytes(archive, &vml_path).ok()?).into_owned();
+    // VML is loose markup: find the shape by its id, then its picture before the shape ends.
+    let at = vml.find(&format!(r#"id="{spid}""#))?;
+    let shape = &vml[at..at + vml[at..].find("</v:shape>")?];
+    let rid = next_tag(shape, "v:imagedata").and_then(|(a, _, _)| extract_attr(a, "o:relid").or_else(|| extract_attr(a, "r:id")))?.to_string();
+    picture_element(archive, &vml_path, &rid, rect, 0.0, "", ctx)
 }
 
 /// `Shape`/`Line`'s `stroke_width` is a percent of the shape's own box (its shorter side) -- both
@@ -728,39 +891,94 @@ fn fill_color(name: &str, inner: &str, ctx: &Ctx, ph: Option<&str>) -> Option<St
     }
 }
 
-/// Reads a shape's fill and stroke: what its `<p:spPr>` states, else what its `<p:style>`'s
-/// `fillRef`/`lnRef` take from the theme (index 0 meaning none). `<a:noFill/>` is "nothing here".
-fn extract_shape_style(shape_inner: &str, ctx: &Ctx) -> ShapeStyle {
-    let sppr = next_tag(shape_inner, "p:spPr").map(|(_, c, _)| c).unwrap_or("");
-    let style = next_tag(shape_inner, "p:style").map(|(_, c, _)| c).unwrap_or("");
-    let style_ref = |tag: &str| next_tag(style, tag).filter(|(a, _, _)| extract_attr(a, "idx").is_some_and(|i| i != "0")).and_then(|(_, i, _)| ctx.palette().first_color(i, None));
+/// A shape fill element as this app's `fill_color`: a colour (`#rrggbbaa` when see-through), or a
+/// gradient as CSS (`linear-gradient(...)`, which the renderer draws as an SVG gradient). A
+/// pattern is drawn as its foreground colour; a picture fill isn't a colour (`None`).
+fn fill_paint(name: &str, inner: &str, ctx: &Ctx, ph: Option<&str>) -> Option<String> {
+    match name {
+        "a:solidFill" => ctx.palette().first_color_with_alpha(inner, ph),
+        "a:gradFill" => match gradient_of(inner, ctx, ph)? {
+            SlideBackground::Gradient { kind, stops, angle_deg } => Some(gradient_css(&kind, &stops, angle_deg)),
+            SlideBackground::Solid(c) => Some(c),
+            _ => None,
+        },
+        "a:pattFill" => child(inner, "a:fgClr").and_then(|(_, _, i)| ctx.palette().first_color_with_alpha(i, ph)),
+        _ => None,
+    }
+}
 
-    let own: Vec<_> = children(sppr);
-    let fill_el = own.iter().find(|(n, _, _)| matches!(*n, "a:noFill" | "a:solidFill" | "a:gradFill" | "a:pattFill" | "a:blipFill"));
-    let fill = match fill_el {
-        Some(("a:noFill", _, _)) => "none".to_string(),
-        Some((n, _, i)) => fill_color(n, i, ctx, None).unwrap_or_else(|| "none".to_string()),
-        None => style_ref("a:fillRef").unwrap_or_else(|| "none".to_string()),
+/// A theme style reference (`<a:fillRef idx="3"><a:schemeClr val="accent1"/></a:fillRef>`): the
+/// theme's fill style `idx` (1001 and up: its background fills) painted in the colour it passes
+/// in. Index 0 is no fill.
+fn theme_fill(ref_attrs: &str, ref_inner: &str, ctx: &Ctx) -> Option<String> {
+    let idx = extract_attr(ref_attrs, "idx").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+    if idx == 0 {
+        return None;
+    }
+    let ph = ctx.palette().first_color_with_alpha(ref_inner, None);
+    let fill = if idx >= 1001 { ctx.theme.bg_fills.get(idx - 1001) } else { ctx.theme.fills.get(idx - 1) };
+    fill.and_then(|f| children(f).into_iter().next())
+        .and_then(|(n, _, i)| fill_paint(n, i, ctx, ph.as_deref()))
+        .or(ph)
+}
+
+/// Reads a shape's fill and stroke. Each comes from the first of these that states it: the
+/// shape's `<p:spPr>`, its `<p:style>`'s `fillRef`/`lnRef` (theme styles; index 0 meaning none),
+/// then -- for a placeholder -- the same pair on its layout's placeholder, then its master's.
+/// `<a:noFill/>` is "nothing here"; `useBgFill` paints the shape with the slide's background.
+fn extract_shape_style(shape_inner: &str, ctx: &Ctx, use_bg_fill: bool) -> ShapeStyle {
+    let own = (next_tag(shape_inner, "p:spPr").map(|(_, c, _)| c).unwrap_or(""), next_tag(shape_inner, "p:style").map(|(_, c, _)| c).unwrap_or(""));
+    let mut chain = vec![own];
+    chain.extend(ctx.inh.shape_parts(Ph::of_shape(shape_inner).as_ref()));
+    let style_ref = |style: &str, tag: &str| -> Option<Option<String>> {
+        let (a, i, _) = next_tag(style, tag)?;
+        Some(extract_attr(a, "idx").filter(|i| *i != "0").and_then(|_| ctx.palette().first_color(i, None)))
     };
 
-    let stroke_color;
+    let fill = if use_bg_fill {
+        ctx.bg_fill.clone().unwrap_or_else(|| "none".to_string())
+    } else {
+        chain.iter().find_map(|(sppr, style)| {
+            let own = children(sppr).into_iter().find(|(n, _, _)| matches!(*n, "a:noFill" | "a:solidFill" | "a:gradFill" | "a:pattFill" | "a:blipFill"));
+            let style_fill = || next_tag(style, "a:fillRef").map(|(a, i, _)| theme_fill(a, i, ctx));
+            match own {
+                Some(("a:noFill", _, _)) => Some(None),
+                // A gradient without stops (some writers emit one) leaves the colour to the style.
+                Some(("a:gradFill", _, i)) if next_tag(i, "a:gs").is_none() => style_fill(),
+                Some((n, _, i)) => Some(fill_paint(n, i, ctx, None)),
+                None => style_fill(),
+            }
+        }).flatten().unwrap_or_else(|| "none".to_string())
+    };
+
+    // The outline: the nearest `<a:ln>` gives width and arrowheads; its colour is the nearest
+    // stated one, an `<a:ln>`'s fill or a style's `lnRef`.
     let mut stroke_width_emu = 0.0;
     let mut start_arrow = false;
     let mut end_arrow = false;
-    let ln = own.iter().find(|(n, _, _)| *n == "a:ln");
-    if let Some((_, ln_attrs, ln_inner)) = ln {
-        stroke_width_emu = extract_attr(ln_attrs, "w").and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-        let ln_fill = children(ln_inner).into_iter().find(|(n, _, _)| matches!(*n, "a:noFill" | "a:solidFill" | "a:gradFill" | "a:pattFill"));
-        stroke_color = match ln_fill {
-            Some(("a:noFill", _, _)) => None,
-            Some((n, _, i)) => fill_color(n, i, ctx, None),
-            None => style_ref("a:lnRef"),
-        };
-        // headEnd = the line's first point, tailEnd = its last; type="none" is no marker.
-        start_arrow = next_tag(ln_inner, "a:headEnd").map(|(a, _, _)| extract_attr(a, "type") != Some("none")).unwrap_or(false);
-        end_arrow = next_tag(ln_inner, "a:tailEnd").map(|(a, _, _)| extract_attr(a, "type") != Some("none")).unwrap_or(false);
-    } else {
-        stroke_color = style_ref("a:lnRef");
+    let mut stroke_color = None;
+    let mut have_ln = false;
+    for (sppr, style) in &chain {
+        let ln = children(sppr).into_iter().find(|(n, _, _)| *n == "a:ln");
+        if let Some((_, ln_attrs, ln_inner)) = ln {
+            if !have_ln {
+                have_ln = true;
+                stroke_width_emu = extract_attr(ln_attrs, "w").and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                // headEnd = the line's first point, tailEnd = its last; type="none" is no marker.
+                start_arrow = next_tag(ln_inner, "a:headEnd").map(|(a, _, _)| extract_attr(a, "type") != Some("none")).unwrap_or(false);
+                end_arrow = next_tag(ln_inner, "a:tailEnd").map(|(a, _, _)| extract_attr(a, "type") != Some("none")).unwrap_or(false);
+            }
+            let ln_fill = children(ln_inner).into_iter().find(|(n, _, _)| matches!(*n, "a:noFill" | "a:solidFill" | "a:gradFill" | "a:pattFill"));
+            match ln_fill {
+                Some(("a:noFill", _, _)) => break,
+                Some((n, _, i)) => { stroke_color = fill_color(n, i, ctx, None); break }
+                None => {}
+            }
+        }
+        if let Some(c) = style_ref(style, "a:lnRef") {
+            stroke_color = c;
+            break;
+        }
     }
     if stroke_color.is_some() && stroke_width_emu == 0.0 {
         stroke_width_emu = 9_525.0; // PowerPoint's default 0.75pt line
@@ -799,133 +1017,98 @@ fn canvas_stroke(width_emu: f64, ctx: &Ctx) -> f64 {
     ((width_emu.max(6_350.0) / ctx.geo.canvas_h * 1080.0) * 100.0).round() / 100.0
 }
 
-/// A shape's `<a:custGeom>` as path data in its own box: each `<a:path>` has its own coordinate
-/// size (`w`/`h`, else the shape's), and commands moveTo, lnTo, cubicBezTo, quadBezTo, arcTo,
-/// close. Returns the data and whether any part is filled (an outline with nothing filled is a
-/// line, drawn with its arrowheads). Guide formulas aren't evaluated: a point that names one
-/// makes the shape unreadable (`None`).
-fn custom_geometry_path(cust: &str, ext: (f64, f64), flip: (bool, bool)) -> Option<(String, bool)> {
-    let (_, path_lst, _) = next_tag(cust, "a:pathLst")?;
-    let mut d = PathData::default();
-    let mut filled = false;
-    for (name, attrs, inner) in children(path_lst) {
-        if name != "a:path" {
-            continue;
-        }
-        let num = |k: &str| extract_attr(attrs, k).and_then(|v| v.parse::<f64>().ok()).filter(|v| *v > 0.0);
-        let (w, h) = (num("w").unwrap_or(ext.0), num("h").unwrap_or(ext.1));
-        if w <= 0.0 || h <= 0.0 {
-            continue;
-        }
-        filled |= extract_attr(attrs, "fill") != Some("none");
-        let map = |(x, y): (f64, f64)| {
-            let (mut x, mut y) = (x / w * 100.0, y / h * 100.0);
-            if flip.0 { x = 100.0 - x }
-            if flip.1 { y = 100.0 - y }
-            (x, y)
-        };
-        let pts = |inner: &str| -> Option<Vec<(f64, f64)>> {
-            children(inner).into_iter().filter(|(n, _, _)| *n == "a:pt").map(|(_, a, _)| {
-                Some((extract_attr(a, "x")?.parse::<f64>().ok()?, extract_attr(a, "y")?.parse::<f64>().ok()?))
-            }).collect()
-        };
-        let mut cur = (0.0, 0.0);
-        for (cmd, a, i) in children(inner) {
-            match cmd {
-                "a:moveTo" | "a:lnTo" | "a:cubicBezTo" | "a:quadBezTo" => {
-                    let p = pts(i)?;
-                    let letter = match cmd { "a:moveTo" => 'M', "a:lnTo" => 'L', "a:cubicBezTo" => 'C', _ => 'Q' };
-                    cur = *p.last()?;
-                    d.cmd(letter, &p.into_iter().map(map).collect::<Vec<_>>());
-                }
-                "a:arcTo" => {
-                    let g = |k: &str| extract_attr(a, k).and_then(|v| v.parse::<f64>().ok());
-                    let (wr, hr, st, sw) = (g("wR")?, g("hR")?, g("stAng")? / 60_000.0, g("swAng")? / 60_000.0);
-                    let (st_r, end_r) = (st.to_radians(), (st + sw).to_radians());
-                    let center = (cur.0 - wr * st_r.cos(), cur.1 - hr * st_r.sin());
-                    let end = (center.0 + wr * end_r.cos(), center.1 + hr * end_r.sin());
-                    // A flip mirrors the arc, which turns its direction around (once per flip).
-                    let sweep = (sw > 0.0) != (flip.0 != flip.1);
-                    d.arc(wr / w * 100.0, hr / h * 100.0, sw.abs() > 180.0, sweep, map(end));
-                    cur = end;
-                }
-                "a:close" => d.close(),
-                _ => {}
-            }
-        }
-    }
-    (!d.0.is_empty()).then_some((d.0, filled))
-}
-
 fn xfrm_flips(shape_inner: &str) -> (bool, bool) {
     let attrs = next_tag(shape_inner, "p:spPr").and_then(|(_, sppr, _)| next_tag(sppr, "a:xfrm")).map(|(a, _, _)| a).unwrap_or("");
     (extract_attr(attrs, "flipH") == Some("1"), extract_attr(attrs, "flipV") == Some("1"))
 }
 
-/// Builds a `Shape` from a `<p:sp>`: a preset geometry, or a freeform (`<a:custGeom>`) as a path.
-/// An unfilled freeform is a drawn line (an arrow, often) and comes back as a `Line`. `None` when
-/// there's no geometry (a placeholder with nothing drawn) or it would draw nothing at all.
-fn extract_autoshape_element(shape_inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) -> Option<SlideElement> {
-    let (_, sppr_content, _) = next_tag(shape_inner, "p:spPr")?;
-    let style = extract_shape_style(shape_inner, ctx);
+/// Builds a `Shape` from a `<p:sp>`. Its geometry -- a preset or a freeform (`<a:custGeom>`) --
+/// is evaluated for the shape's size into exact path data (`pptx_geom`); only a plain rectangle or
+/// ellipse stays a library shape. A geometry whose parts are painted differently (a can's lighter
+/// lid, an outline-only stroke over a fill) comes back as a `Group` of one element per look, and an
+/// unfilled one as a `Line` (an arrow, often). `None` when it would draw nothing at all.
+fn extract_autoshape_element(shape_inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>, use_bg_fill: bool) -> Option<SlideElement> {
+    let style = extract_shape_style(shape_inner, ctx, use_bg_fill);
     if style.fill_color == "none" && style.stroke_color.is_none() {
         return None;
     }
     let (rect, rot) = shape_rect(shape_inner, ctx, remap)?;
-    let id = format!("el_{}", uuid::Uuid::new_v4());
     let transform = ctx.geo.transform(rect, rot);
-    if let Some((_, cust, _)) = next_tag(sppr_content, "a:custGeom") {
-        let (d, filled) = custom_geometry_path(cust, (rect[2], rect[3]), xfrm_flips(shape_inner))?;
-        let stroke_width = canvas_stroke(style.stroke_width_emu, ctx);
-        if !filled || style.fill_color == "none" {
-            let color = style.stroke_color.clone()?;
-            return Some(SlideElement::Line { id, transform, line_kind: "curved".into(), color, stroke_width, start_arrow: style.start_arrow, end_arrow: style.end_arrow, path: Some(d) });
+    let flips = xfrm_flips(shape_inner);
+    let geometry = match shape_geometry(shape_inner, ctx) {
+        GeomSource::Custom(cust) => pptx_geom::custom(cust, rect[2], rect[3], flips),
+        GeomSource::Preset(prst, av) => match prst {
+            "rect" | "flowChartProcess" | "ellipse" | "flowChartConnector" => {
+                let stroke_width = if style.stroke_color.is_some() { emu_to_relative_stroke(style.stroke_width_emu, rect[2], rect[3]) } else { 0.0 };
+                let shape_kind = if prst.contains("ect") || prst == "flowChartProcess" { "rect" } else { "ellipse" };
+                return Some(SlideElement::Shape { id: new_id(), transform, shape_kind: shape_kind.into(), fill_color: style.fill_color, stroke_color: style.stroke_color, stroke_width, path: None });
+            }
+            _ => match pptx_geom::preset(prst, av, rect[2], rect[3], flips) {
+                Some(g) => g,
+                None => {
+                    let stroke_width = if style.stroke_color.is_some() { emu_to_relative_stroke(style.stroke_width_emu, rect[2], rect[3]) } else { 0.0 };
+                    return Some(SlideElement::Shape { id: new_id(), transform, shape_kind: map_prst_geom_type(prst), fill_color: style.fill_color, stroke_color: style.stroke_color, stroke_width, path: None });
+                }
+            },
+        },
+    };
+    geometry_element(&geometry, &style, transform, ctx)
+}
+
+fn new_id() -> String {
+    format!("el_{}", uuid::Uuid::new_v4())
+}
+
+enum GeomSource<'a> {
+    Custom(&'a str),
+    /// A preset's name and the shape's adjust values (`<a:avLst>` contents).
+    Preset(&'a str, &'a str),
+}
+
+/// A shape's geometry: its own, else (a placeholder) its layout's or master's, else a rectangle.
+fn shape_geometry<'a>(shape_inner: &'a str, ctx: &Ctx<'a>) -> GeomSource<'a> {
+    let own_sppr = next_tag(shape_inner, "p:spPr").map(|(_, c, _)| c).unwrap_or("");
+    let inherited = ctx.inh.shape_parts(Ph::of_shape(shape_inner).as_ref());
+    for sppr in std::iter::once(own_sppr).chain(inherited.iter().map(|(sp, _)| *sp)) {
+        if let Some((_, cust, _)) = next_tag(sppr, "a:custGeom") {
+            return GeomSource::Custom(cust);
         }
-        return Some(SlideElement::Shape { id, transform, shape_kind: "path".into(), fill_color: style.fill_color, stroke_width: if style.stroke_color.is_some() { stroke_width } else { 0.0 }, stroke_color: style.stroke_color, path: Some(d) });
-    }
-    let (geom_attrs, geom_inner, _) = next_tag(sppr_content, "a:prstGeom")?;
-    let prst = extract_attr(geom_attrs, "prst")?;
-    if prst == "arc" {
-        // An open arc of the ellipse filling the box, clockwise from adj1 to adj2 (60000ths of a
-        // degree; 270 to 0 when unset): a line, so it keeps its arrowheads.
-        let adj = |name: &str, default: f64| {
-            next_tag(geom_inner, "a:avLst").map(|(_, i, _)| children(i)).unwrap_or_default().into_iter()
-                .find(|(n, a, _)| *n == "a:gd" && extract_attr(a, "name") == Some(name))
-                .and_then(|(_, a, _)| extract_attr(a, "fmla")?.strip_prefix("val ")?.trim().parse::<f64>().ok())
-                .unwrap_or(default) / 60_000.0
-        };
-        let (st, end) = (adj("adj1", 16_200_000.0), adj("adj2", 0.0));
-        let sweep = (end - st).rem_euclid(360.0);
-        let point = |deg: f64| (50.0 + 50.0 * deg.to_radians().cos(), 50.0 + 50.0 * deg.to_radians().sin());
-        let (flip_h, flip_v) = xfrm_flips(shape_inner);
-        let f = |(x, y): (f64, f64)| (if flip_h { 100.0 - x } else { x }, if flip_v { 100.0 - y } else { y });
-        let mut d = PathData::default();
-        d.cmd('M', &[f(point(st))]);
-        d.arc(50.0, 50.0, sweep > 180.0, flip_h == flip_v, f(point(st + sweep)));
-        let color = style.stroke_color.clone()?;
-        return Some(SlideElement::Line { id, transform, line_kind: "curved".into(), color, stroke_width: canvas_stroke(style.stroke_width_emu, ctx), start_arrow: style.start_arrow, end_arrow: style.end_arrow, path: Some(d.0) });
-    }
-    // Arrow-ended boxes the shape library has no faithful stand-in for: drawn from their geometry,
-    // the point as long as `adj` (a share of the shorter side) says.
-    if matches!(prst, "homePlate" | "chevron") {
-        let adj = next_tag(geom_inner, "a:avLst").map(|(_, i, _)| children(i)).unwrap_or_default().into_iter()
-            .find(|(n, a, _)| *n == "a:gd" && extract_attr(a, "name") == Some("adj"))
-            .and_then(|(_, a, _)| extract_attr(a, "fmla")?.strip_prefix("val ")?.trim().parse::<f64>().ok())
-            .unwrap_or(50_000.0) / 100_000.0;
-        let k = (adj * rect[2].min(rect[3]) / rect[2].max(1.0) * 100.0).clamp(0.0, 100.0);
-        let (flip_h, flip_v) = xfrm_flips(shape_inner);
-        let f = |(x, y): (f64, f64)| (if flip_h { 100.0 - x } else { x }, if flip_v { 100.0 - y } else { y });
-        let mut d = PathData::default();
-        d.cmd('M', &[f((0.0, 0.0))]);
-        d.cmd('L', &[f((100.0 - k, 0.0)), f((100.0, 50.0)), f((100.0 - k, 100.0)), f((0.0, 100.0))]);
-        if prst == "chevron" {
-            d.cmd('L', &[f((k, 50.0))]);
+        if let Some((attrs, inner, _)) = next_tag(sppr, "a:prstGeom") {
+            let av = next_tag(inner, "a:avLst").map(|(_, i, _)| i).unwrap_or("");
+            return GeomSource::Preset(extract_attr(attrs, "prst").unwrap_or("rect"), av);
         }
-        d.close();
-        return Some(SlideElement::Shape { id, transform, shape_kind: "path".into(), fill_color: style.fill_color, stroke_width: if style.stroke_color.is_some() { canvas_stroke(style.stroke_width_emu, ctx) } else { 0.0 }, stroke_color: style.stroke_color, path: Some(d.0) });
     }
-    let stroke_width = if style.stroke_color.is_some() { emu_to_relative_stroke(style.stroke_width_emu, rect[2], rect[3]) } else { 0.0 };
-    Some(SlideElement::Shape { id, transform, shape_kind: map_prst_geom_type(prst), fill_color: style.fill_color, stroke_color: style.stroke_color, stroke_width, path: None })
+    GeomSource::Preset("rect", "")
+}
+
+/// The elements an evaluated geometry draws, painted with `style`: consecutive paths that look
+/// alike share one element; a filled part is a `Shape`, an outline-only part a `Line`.
+fn geometry_element(geometry: &pptx_geom::Geometry, style: &ShapeStyle, transform: crate::core::models::ElementTransform, ctx: &Ctx) -> Option<SlideElement> {
+    let mut parts: Vec<(Option<String>, Option<String>, String)> = Vec::new();
+    for p in &geometry.paths {
+        let fill = (p.fill != pptx_geom::FillMode::None && style.fill_color != "none").then(|| pptx_geom::shade(&style.fill_color, p.fill));
+        let stroke = if p.stroke { style.stroke_color.clone() } else { None };
+        if fill.is_none() && stroke.is_none() {
+            continue;
+        }
+        match parts.last_mut() {
+            Some((f, s, d)) if *f == fill && *s == stroke => {
+                d.push(' ');
+                d.push_str(&p.d);
+            }
+            _ => parts.push((fill, stroke, p.d.clone())),
+        }
+    }
+    let stroke_width = canvas_stroke(style.stroke_width_emu, ctx);
+    let mut elements: Vec<SlideElement> = parts.into_iter().map(|(fill, stroke, d)| match fill {
+        Some(fill_color) => SlideElement::Shape { id: new_id(), transform: transform.clone(), shape_kind: "path".into(), fill_color, stroke_width: if stroke.is_some() { stroke_width } else { 0.0 }, stroke_color: stroke, path: Some(d) },
+        None => SlideElement::Line { id: new_id(), transform: transform.clone(), line_kind: "curved".into(), color: stroke.unwrap_or_default(), stroke_width, start_arrow: style.start_arrow, end_arrow: style.end_arrow, path: Some(d) },
+    }).collect();
+    match elements.len() {
+        0 => None,
+        1 => elements.pop(),
+        _ => Some(SlideElement::Group { id: new_id(), transform: crate::core::models::ElementTransform { rotation_deg: 0.0, ..transform }, children: elements }),
+    }
 }
 
 /// Builds a `Line` from a `<p:sp prst="line">` or a `<p:cxnSp>` connector. Its course is drawn
@@ -966,7 +1149,7 @@ fn extract_line_element(inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) -> O
         d.cmd('L', &[f((100.0, 100.0))]);
         "straight"
     };
-    let style = extract_shape_style(inner, ctx);
+    let style = extract_shape_style(inner, ctx, false);
     // No line colour at all (`<a:ln><a:noFill/>`, or nothing styled): an invisible guide, not a line.
     let color = style.stroke_color.clone()?;
     let (rect, rot) = shape_rect(inner, ctx, remap)?;
@@ -985,10 +1168,18 @@ fn extract_line_element(inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) -> O
 /// A Windows Metafile picture as a group of ordinary elements (`wmf`): each path a `Shape` (or a
 /// `Line` when open), each string a `TextBlock`, each bitmap an `Image`, laid out over the
 /// picture's own rectangle. `None` when the metafile draws nothing this can read.
-fn metafile_group(bytes: &[u8], rect: [f64; 4], rot: f64, ctx: &Ctx) -> Option<SlideElement> {
+fn metafile_group(bytes: &[u8], rect: [f64; 4], rot: f64, ctx: &Ctx, crop: Option<[f64; 4]>, clear: Option<&str>) -> Option<SlideElement> {
     use crate::storage::wmf::WmfItem;
-    let wmf = crate::storage::wmf::parse(bytes)?;
-    let (fx, fy, fw, fh) = wmf.frame;
+    let wmf = if crate::storage::emf::is_emf(bytes) { crate::storage::emf::parse(bytes)? } else { crate::storage::wmf::parse(bytes)? };
+    let (mut fx, mut fy, mut fw, mut fh) = wmf.frame;
+    // A crop shows part of the picture's frame in the box (what lies outside isn't clipped).
+    if let Some([l, t, r, b]) = crop {
+        if l + r < 1.0 && t + b < 1.0 {
+            (fx, fy, fw, fh) = (fx + l * fw, fy + t * fh, fw * (1.0 - l - r), fh * (1.0 - t - b));
+        }
+    }
+    // The picture's transparent colour paints nothing.
+    let keep = |c: Option<String>| c.filter(|c| clear.is_none_or(|k| !c.eq_ignore_ascii_case(k)));
     let (sx, sy) = (rect[2] / fw, rect[3] / fh);
     let at = |(x, y): (f64, f64)| (rect[0] + (x - fx) * sx, rect[1] + (y - fy) * sy);
     let id = || format!("el_{}", uuid::Uuid::new_v4());
@@ -1007,6 +1198,7 @@ fn metafile_group(bytes: &[u8], rect: [f64; 4], rot: f64, ctx: &Ctx) -> Option<S
     for item in wmf.items {
         match item {
             WmfItem::Path { subpaths, closed, fill, stroke } => {
+                let (fill, stroke) = (keep(fill), stroke.filter(|(c, _)| keep(Some(c.clone())).is_some()));
                 let abs: Vec<Vec<(f64, f64)>> = subpaths.iter().map(|s| s.iter().map(|p| at(*p)).collect()).collect();
                 let b = bbox(&mut abs.iter().flatten().copied());
                 let mut d = PathData::default();
@@ -1031,6 +1223,7 @@ fn metafile_group(bytes: &[u8], rect: [f64; 4], rot: f64, ctx: &Ctx) -> Option<S
                 }
             }
             WmfItem::Arc { center, rx, ry, from, to, large, closed, pie, fill, stroke } => {
+                let (fill, stroke) = (keep(fill), stroke.filter(|(c, _)| keep(Some(c.clone())).is_some()));
                 let (c, f, t) = (at(center), at(from), at(to));
                 let (rx, ry) = (rx * sx, ry * sy);
                 let b = [c.0 - rx, c.1 - ry, (2.0 * rx).max(1.0), (2.0 * ry).max(1.0)];
@@ -1060,11 +1253,19 @@ fn metafile_group(bytes: &[u8], rect: [f64; 4], rot: f64, ctx: &Ctx) -> Option<S
                 }
             }
             WmfItem::Text { x, y, text, size, color, font, bold, italic, align, baseline, angle_deg } => {
+                let Some(color) = keep(Some(color)) else { continue };
                 let size_emu = size * sy;
                 let (w, h) = (text.chars().count() as f64 * size_emu * 0.62 + size_emu, size_emu * 1.3);
                 let (ax, ay) = at((x, y));
                 let left = match align { "center" => ax - w / 2.0, "right" => ax - w, _ => ax };
                 let top = if baseline { ay - size_emu * 0.85 } else { ay };
+                // GDI turns text about its anchor point; this app turns a box about its centre,
+                // so move the centre where turning about the anchor puts it.
+                let (left, top) = {
+                    let (sin, cos) = (-angle_deg).to_radians().sin_cos();
+                    let (dx, dy) = (left + w / 2.0 - ax, top + h / 2.0 - ay);
+                    (ax + dx * cos - dy * sin - w / 2.0, ay + dx * sin + dy * cos - h / 2.0)
+                };
                 let run = crate::core::models::TextRun {
                     text, bold, italic, color, font_family: css_font_stack(&font),
                     font_size_pt: ((size_emu / 12_700.0 * ctx.geo.font_scale) * 10.0).round() / 10.0,
@@ -1087,11 +1288,15 @@ fn metafile_group(bytes: &[u8], rect: [f64; 4], rot: f64, ctx: &Ctx) -> Option<S
                     img.write_to(&mut out, image::ImageFormat::Png).ok()?;
                     Some(out.into_inner())
                 });
+                let png = match (png, clear) {
+                    (Some(png), Some(c)) => Some(without_color(&png, c).unwrap_or(png)),
+                    (png, _) => png,
+                };
                 // Keyed by content: a master's metafile logo is drawn on every slide, stored once.
-                let key = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); bmp.hash(&mut h); format!("wmf-bitmap:{:x}:{}", h.finish(), bmp.len()) };
+                let key = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); bmp.hash(&mut h); format!("wmf-bitmap:{:x}:{}:{}", h.finish(), bmp.len(), clear.unwrap_or("")) };
                 if let Some(file_path) = png.and_then(|png| store_media(key, &png, ctx)) {
                     let (x0, y0) = at((x, y));
-                    children.push(SlideElement::Image { id: id(), transform: ctx.geo.transform([x0, y0, w * sx, h * sy], 0.0), file_path, crop: None, mask_shape: None, alt_text: None });
+                    children.push(SlideElement::Image { id: id(), transform: ctx.geo.transform([x0, y0, w * sx, h * sy], 0.0), file_path, crop: None, mask_shape: None, alt_text: None, fit: Some("stretch".into()) });
                 }
             }
         }
@@ -1340,6 +1545,9 @@ fn extract_graphic_frame(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &st
     if uri.ends_with("/diagram") {
         return extract_smartart(archive, part_path, inner, ctx, remap, decorations_only);
     }
+    if uri.ends_with("/ole") {
+        return Ok(ole_preview(archive, part_path, inner, ctx, remap));
+    }
     if uri.ends_with("/chart") {
         let Some(rid) = next_tag(inner, "c:chart").and_then(|(a, _, _)| extract_attr(a, "r:id")) else { return Ok(None) };
         let Some(chart_path) = embedded_path(archive, part_path, rid) else { return Ok(None) };
@@ -1357,15 +1565,9 @@ fn extract_smartart(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, in
     let Some(data_rid) = next_tag(inner, "dgm:relIds").and_then(|(a, _, _)| extract_attr(a, "r:dm")) else { return Ok(None) };
     let Some(data_path) = embedded_path(archive, part_path, data_rid) else { return Ok(None) };
     let data_xml = read_zip_text(archive, &data_path).unwrap_or_default();
-    let Some(drawing_rid) = next_tag(&data_xml, "dsp:dataModelExt").and_then(|(a, _, _)| extract_attr(a, "relId").map(str::to_string)) else { return Ok(None) };
-    let Some(drawing_path) = embedded_path(archive, part_path, &drawing_rid) else { return Ok(None) };
-    let Ok(drawing) = read_zip_text(archive, &drawing_path) else { return Ok(None) };
     let Some((_, xfrm, _)) = next_tag(inner, "p:xfrm") else { return Ok(None) };
     let n = |tag: &str, k: &str| next_tag(xfrm, tag).and_then(|(a, _, _)| extract_attr(a, k)?.parse::<f64>().ok());
     let (Some(x), Some(y), Some(w), Some(h)) = (n("a:off", "x"), n("a:off", "y"), n("a:ext", "cx"), n("a:ext", "cy")) else { return Ok(None) };
-    // The drawing's shapes are the same markup under another prefix, placed from the frame's corner.
-    let drawing = drawing.replace("<dsp:", "<p:").replace("</dsp:", "</p:");
-    let Some(tree) = next_tag_content(&drawing, "p:spTree").map(|(c, _)| c) else { return Ok(None) };
     let own = GroupRemap { off_x: x, off_y: y, ext_cx: w, ext_cy: h, ch_off_x: 0.0, ch_off_y: 0.0, ch_ext_cx: w, ch_ext_cy: h };
     let frame = match remap {
         Some(r) => {
@@ -1374,14 +1576,155 @@ fn extract_smartart(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, in
         }
         None => own,
     };
-    // The drawing's own shapes are its picture, not placeholders to skip.
-    let _ = decorations_only;
-    let children = extract_shapes_in_scope(archive, &drawing_path, tree, ctx, Some(&frame), false)?;
+    let rect = [frame.off_x, frame.off_y, frame.ext_cx, frame.ext_cy];
+    // The drawing PowerPoint saves with the diagram (its shapes as laid out), when there is one.
+    let drawing = next_tag(&data_xml, "dsp:dataModelExt")
+        .and_then(|(a, _, _)| extract_attr(a, "relId").map(str::to_string))
+        .and_then(|rid| embedded_path(archive, part_path, &rid))
+        .and_then(|path| Some((read_zip_text(archive, &path).ok()?, path)));
+    let mut children = Vec::new();
+    if let Some((drawing, drawing_path)) = drawing {
+        // The drawing's shapes are the same markup under another prefix, placed from the frame's corner.
+        let drawing = drawing.replace("<dsp:", "<p:").replace("</dsp:", "</p:");
+        if let Some(tree) = next_tag_content(&drawing, "p:spTree").map(|(c, _)| c) {
+            // The drawing's own shapes are its picture, not placeholders to skip.
+            let _ = decorations_only;
+            children = extract_shapes_in_scope(archive, &drawing_path, tree, ctx, Some(&frame), false)?;
+        }
+    }
+    if children.is_empty() {
+        let layout = next_tag(inner, "dgm:relIds").and_then(|(a, _, _)| extract_attr(a, "r:lo"))
+            .and_then(|rid| embedded_path(archive, part_path, rid))
+            .and_then(|path| read_zip_text(archive, &path).ok())
+            .and_then(|xml| next_tag(&xml, "dgm:layoutDef").and_then(|(a, _, _)| extract_attr(a, "uniqueId").map(|u| u.rsplit('/').next().unwrap_or(u).to_string())))
+            .unwrap_or_default();
+        children = smartart_outline(&data_xml, &layout, rect, ctx);
+    }
     if children.is_empty() {
         return Ok(None);
     }
-    let rect = [frame.off_x, frame.off_y, frame.ext_cx, frame.ext_cy];
     Ok(Some(SlideElement::Group { id: format!("el_{}", uuid::Uuid::new_v4()), transform: ctx.geo.transform(rect, 0.0), children }))
+}
+
+/// A diagram saved without its drawing (other programs write only the data): its content laid out
+/// plainly in `rect` so nothing it says is lost, though its exact layout is. Block lists (the
+/// `layout` families `default`, horizontal and vertical lists and processes) get a box per
+/// top-level item -- in a grid, a row or a column -- with its sub-items as bullet lines; any other
+/// layout (cycles, pyramids, hierarchies...) is drawn as just its text, an indented outline.
+fn smartart_outline(data_xml: &str, layout: &str, rect: [f64; 4], ctx: &Ctx) -> Vec<SlideElement> {
+    let Some((_, model, _)) = next_tag(data_xml, "dgm:dataModel") else { return Vec::new() };
+    let mut text: HashMap<&str, String> = HashMap::new();
+    let mut doc = None;
+    for (_, a, i) in next_tag(model, "dgm:ptLst").map(|(_, l, _)| children(l)).unwrap_or_default() {
+        let (Some(id), kind) = (extract_attr(a, "modelId"), extract_attr(a, "type").unwrap_or("node")) else { continue };
+        match kind {
+            "doc" => doc = Some(id),
+            "node" => {
+                let t = next_tag(i, "dgm:t").map(|(_, t, _)| children(t).into_iter().filter(|(n, _, _)| *n == "a:p").map(|(_, _, p)| {
+                    children(p).into_iter().filter(|(n, _, _)| *n == "a:r").flat_map(|(_, _, r)| children(r).into_iter().filter(|(n, _, _)| *n == "a:t").map(|(_, _, t)| decode_xml_entities(t))).collect::<String>()
+                }).filter(|l| !l.trim().is_empty()).collect::<Vec<_>>().join("\n")).unwrap_or_default();
+                text.insert(id, t);
+            }
+            _ => {}
+        }
+    }
+    // Parent -> children, in their order.
+    let mut kids: HashMap<&str, Vec<(i64, &str)>> = HashMap::new();
+    for (_, a, _) in next_tag(model, "dgm:cxnLst").map(|(_, l, _)| children(l)).unwrap_or_default() {
+        if extract_attr(a, "type").is_some_and(|t| t != "parOf") {
+            continue;
+        }
+        if let (Some(src), Some(dest)) = (extract_attr(a, "srcId"), extract_attr(a, "destId")) {
+            let ord = extract_attr(a, "srcOrd").and_then(|v| v.parse().ok()).unwrap_or(0);
+            kids.entry(src).or_default().push((ord, dest));
+        }
+    }
+    kids.values_mut().for_each(|v| v.sort());
+    let child_ids = |id: &str| kids.get(id).map(|v| v.iter().map(|(_, d)| *d).filter(|d| text.contains_key(d)).collect::<Vec<_>>()).unwrap_or_default();
+    let Some(doc) = doc else { return Vec::new() };
+    let top = child_ids(doc);
+    if top.is_empty() {
+        return Vec::new();
+    }
+    let n = top.len().min(64);
+    let pal = ctx.palette();
+    let family = layout.trim_end_matches(|c: char| c.is_ascii_digit() || c == '#');
+    let cols = match family {
+        // A grid about as wide as the frame is.
+        "default" => ((n as f64 * rect[2] / rect[3].max(1.0)).sqrt().round() as usize).clamp(1, n),
+        "hList" | "hProcess" | "lProcess" | "process" => n,
+        "vList" | "vProcess" | "bList" | "list" => 1,
+        _ => {
+            // Just the text: each item, its sub-items indented beneath it.
+            let ink = pal.color("a:schemeClr", r#"val="tx1""#, "", None).unwrap_or_else(|| "#000000".into());
+            let lines: Vec<(usize, String)> = top.iter().take(n).flat_map(|id| {
+                std::iter::once((0, text[id].clone())).chain(child_ids(id).into_iter().take(32).map(|c| (1, text[c].clone())))
+            }).filter(|(_, t)| !t.trim().is_empty()).collect();
+            if lines.is_empty() {
+                return Vec::new();
+            }
+            let font_pt = (rect[3] / 12_700.0 / (lines.len() as f64 * 1.5 + 0.5)).clamp(8.0, 32.0) * ctx.geo.font_scale;
+            let mut runs = Vec::new();
+            for (i, (depth, t)) in lines.into_iter().enumerate() {
+                let run = |t: String| crate::core::models::TextRun { text: t, color: ink.clone(), font_family: ctx.font(None), font_size_pt: (font_pt * 10.0).round() / 10.0, ..Default::default() };
+                if i > 0 {
+                    runs.push(run("\n".into()));
+                }
+                runs.push(run(if depth == 0 { t } else { format!("\u{2002}\u{2002}• {t}") }));
+            }
+            return vec![SlideElement::TextBlock {
+                id: new_id(),
+                transform: ctx.geo.transform(rect, 0.0),
+                block: crate::core::models::TextBlock {
+                    runs,
+                    paragraph_style: crate::core::models::TextParagraphStyle { align: "left".into(), line_height: 1.2, vertical_align: Some("middle".into()), ..Default::default() },
+                    effects: Default::default(),
+                    autofit: false,
+                },
+            }];
+        }
+    };
+    let rows = n.div_ceil(cols);
+    let gap = rect[2].min(rect[3]) * 0.03;
+    let (bw, bh) = ((rect[2] - gap * (cols - 1) as f64) / cols as f64, (rect[3] - gap * (rows - 1) as f64) / rows as f64);
+    let fill = pal.color("a:schemeClr", r#"val="accent1""#, "", None).unwrap_or_else(|| "#4472c4".into());
+    let ink = pal.color("a:schemeClr", r#"val="lt1""#, "", None).unwrap_or_else(|| "#ffffff".into());
+    let mut out = Vec::new();
+    for (k, id) in top.into_iter().take(n).enumerate() {
+        let (c, r) = (k % cols, k / cols);
+        let b = [rect[0] + c as f64 * (bw + gap), rect[1] + r as f64 * (bh + gap), bw, bh];
+        out.push(SlideElement::Shape { id: new_id(), transform: ctx.geo.transform(b, 0.0), shape_kind: "rounded_rect".into(), fill_color: fill.clone(), stroke_color: None, stroke_width: 0.0, path: None });
+        let mut lines = vec![text.get(id).cloned().unwrap_or_default()];
+        lines.extend(child_ids(id).into_iter().take(32).map(|c| format!("• {}", text[c])));
+        let lines: Vec<String> = lines.into_iter().filter(|l| !l.trim().is_empty()).collect();
+        if lines.is_empty() {
+            continue;
+        }
+        // Sized to fit the box: its height shared between the lines, a little smaller for sub-items.
+        let font_pt = (bh / 12_700.0 / (lines.len() as f64 * 1.5 + 0.5)).clamp(8.0, 40.0) * ctx.geo.font_scale;
+        let runs = lines.iter().enumerate().flat_map(|(i, l)| {
+            let size = if i == 0 { font_pt } else { font_pt * 0.8 };
+            let run = |t: String| crate::core::models::TextRun { text: t, color: ink.clone(), font_family: ctx.font(None), font_size_pt: (size * 10.0).round() / 10.0, ..Default::default() };
+            let mut v = Vec::new();
+            if i > 0 {
+                v.push(run("\n".into()));
+            }
+            v.push(run(l.clone()));
+            v
+        }).collect();
+        let inset = gap.max(45_720.0);
+        out.push(SlideElement::TextBlock {
+            id: new_id(),
+            transform: ctx.geo.transform([b[0] + inset, b[1] + inset, (b[2] - 2.0 * inset).max(1.0), (b[3] - 2.0 * inset).max(1.0)], 0.0),
+            block: crate::core::models::TextBlock {
+                runs,
+                paragraph_style: crate::core::models::TextParagraphStyle { align: "center".into(), line_height: 1.2, vertical_align: Some("middle".into()), ..Default::default() },
+                effects: Default::default(),
+                autofit: false,
+            },
+        });
+    }
+    out
 }
 
 /// Builds a `Group` from a `<p:grpSp>`: reads its off/ext/chOff/chExt into a `GroupRemap` and
@@ -1450,7 +1793,7 @@ fn extract_shapes_in_scope(
     decorations_only: bool,
 ) -> Result<Vec<SlideElement>, Box<dyn std::error::Error>> {
     let mut elements = Vec::new();
-    for (name, _, inner) in children(scope_xml) {
+    for (name, attrs, inner) in children(scope_xml) {
         if decorations_only && Ph::of_shape(inner).is_some() {
             continue;
         }
@@ -1464,7 +1807,8 @@ fn extract_shapes_in_scope(
                     continue;
                 }
                 // A filled or outlined box with text in it is two elements: the box, then its text.
-                elements.extend(extract_autoshape_element(inner, ctx, remap));
+                let use_bg_fill = extract_attr(attrs, "useBgFill").is_some_and(|v| v == "1" || v == "true");
+                elements.extend(extract_autoshape_element(inner, ctx, remap, use_bg_fill));
                 elements.extend(text);
             }
             "p:pic" => elements.extend(extract_picture_element(archive, part_path, inner, ctx, remap)),
@@ -1507,7 +1851,7 @@ fn resolve_background(archive: &mut ZipArchive<Cursor<&[u8]>>, parts: &[(&str, &
             let theme_path = ctx.theme.path.clone();
             return background_from_fill(archive, &theme_path, name, attrs, inner, ctx, ph.as_deref()).or(ph.map(SlideBackground::Solid));
         }
-        return None;
+        // An empty `<p:bg/>` states nothing: the layout's or master's background shows.
     }
     None
 }
@@ -1517,33 +1861,37 @@ fn background_from_fill(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str
     match name {
         "a:solidFill" => pal.first_color(inner, ph).map(SlideBackground::Solid),
         "a:pattFill" => child(inner, "a:fgClr").and_then(|(_, _, i)| pal.first_color(i, ph)).map(SlideBackground::Solid),
-        "a:gradFill" => {
-            let mut stops: Vec<GradientStop> = next_tag(inner, "a:gsLst")
-                .map(|(_, l, _)| children(l).into_iter().filter_map(|(_, a, i)| {
-                    let pos = extract_attr(a, "pos").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) / 100_000.0;
-                    Some(GradientStop { color: pal.first_color(i, ph)?, offset: pos })
-                }).collect())
-                .unwrap_or_default();
-            stops.sort_by(|a, b| a.offset.total_cmp(&b.offset));
-            match stops.len() {
-                0 => None,
-                1 => Some(SlideBackground::Solid(stops.remove(0).color)),
-                _ => {
-                    if child(inner, "a:path").is_some() {
-                        Some(SlideBackground::Gradient { kind: "radial".into(), stops, angle_deg: None })
-                    } else {
-                        // OOXML's 0deg runs left to right; CSS's 90deg does.
-                        let ang = child(inner, "a:lin").and_then(|(_, a, _)| extract_attr(a, "ang")).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) / 60_000.0;
-                        Some(SlideBackground::Gradient { kind: "linear".into(), stops, angle_deg: Some((ang + 90.0) % 360.0) })
-                    }
-                }
-            }
-        }
+        "a:gradFill" => gradient_of(inner, ctx, ph),
         "a:blipFill" => {
             let rid = next_tag(inner, "a:blip").and_then(|(a, _, _)| extract_attr(a, "r:embed"))?.to_string();
             extract_embedded_image(archive, part_path, &rid, ctx).map(|file_path| SlideBackground::Image { file_path, opacity: 1.0 })
         }
         _ => None,
+    }
+}
+
+/// A `<a:gradFill>` as a gradient (a single stop is just a colour). Stops keep their opacity.
+fn gradient_of(inner: &str, ctx: &Ctx, ph: Option<&str>) -> Option<SlideBackground> {
+    let pal = ctx.palette();
+    let mut stops: Vec<GradientStop> = next_tag(inner, "a:gsLst")
+        .map(|(_, l, _)| children(l).into_iter().filter_map(|(_, a, i)| {
+            let pos = extract_attr(a, "pos").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) / 100_000.0;
+            Some(GradientStop { color: pal.first_color_with_alpha(i, ph)?, offset: pos })
+        }).collect())
+        .unwrap_or_default();
+    stops.sort_by(|a, b| a.offset.total_cmp(&b.offset));
+    match stops.len() {
+        0 => None,
+        1 => Some(SlideBackground::Solid(stops.remove(0).color)),
+        _ => {
+            if child(inner, "a:path").is_some() {
+                Some(SlideBackground::Gradient { kind: "radial".into(), stops, angle_deg: None })
+            } else {
+                // OOXML's 0deg runs left to right; CSS's 90deg does.
+                let ang = child(inner, "a:lin").and_then(|(_, a, _)| extract_attr(a, "ang")).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) / 60_000.0;
+                Some(SlideBackground::Gradient { kind: "linear".into(), stops, angle_deg: Some((ang + 90.0) % 360.0) })
+            }
+        }
     }
 }
 

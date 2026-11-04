@@ -69,6 +69,8 @@ export interface TextParagraphStyle {
   indent_level?: number;
   /** Where the text sits in its box; unset is middle (imported slides keep their authored anchoring). */
   vertical_align?: 'top' | 'middle' | 'bottom';
+  /** Each paragraph's first run is its lead (indent and bullet): wrapped lines line up after it. */
+  hanging_indent?: boolean;
 }
 
 export interface TextOutline {
@@ -130,6 +132,8 @@ export type SlideElement =
       crop?: CropRect;
       mask_shape?: string;
       alt_text?: string;
+      /** Uncropped, the picture covers its box; 'stretch' fills it exactly (imported decks). */
+      fit?: 'stretch';
     }
   | {
       type: 'Video';
