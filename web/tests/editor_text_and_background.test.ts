@@ -373,6 +373,18 @@ describe('Slide Editor Text Tools & Background Picker', () => {
     expect(editor.getActiveSlide().tag).toBeUndefined();
   });
 
+  test('hiding a slide other than the active one is undone on that slide', () => {
+    const second = { ...JSON.parse(JSON.stringify(sampleSlide)), id: 'second' };
+    editor.open([sampleSlide, second], 0);
+    editor.setSlideHidden(1, true);
+    expect(editor.getAllSlides()[1]!.hidden).toBe(true);
+    editor.undo();
+    expect(editor.getAllSlides()[1]!.hidden).toBeUndefined();
+    expect(editor.getActiveSlide().id).toBe(sampleSlide.id);
+    editor.redo();
+    expect(editor.getAllSlides()[1]!.hidden).toBe(true);
+  });
+
   test('SlideEditor hides tagger when set to presentation or scripture mode', () => {
     // Default open mode is song
     expect(editor.isSongMode()).toBe(true);

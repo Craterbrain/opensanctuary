@@ -903,7 +903,8 @@ mod scriptures_json {
         db.insert_scriptures_batch(&[chapter("WEB", "John", 3, &["For God so loved the world"])]).unwrap();
         // Rows another writer could have left: unreadable verses and the wrong shape -> `[]` either way.
         let conn = rusqlite::Connection::open(dir.join("bibles/KJV.db")).unwrap();
-        for (id, verses) in [("bad1", "not json"), ("bad2", r#"[{"verse_number":"one","text":"x"}]"#), ("bad3", r#"{"verse_number":1}"#), ("bad4", r#"[{"verse_number":1,"text":2}]"#)] {
+        // And readable verses carrying fields of their own, which come back without them.
+        for (id, verses) in [("bad1", "not json"), ("bad2", r#"[{"verse_number":"one","text":"x"}]"#), ("bad3", r#"{"verse_number":1}"#), ("bad4", r#"[{"verse_number":1,"text":2}]"#), ("extra", r#"[{"verse_number":1,"text":"x","footnote":"y"}]"#)] {
             conn.execute(
                 "INSERT INTO scriptures (id, book, chapter, verse_start, verse_end, version, reference, verses_json, theme_name) VALUES (?1, 'Ruth', 1, 1, 1, 'KJV', ?2, ?3, NULL)",
                 rusqlite::params![id, format!("Ruth 1 {id}"), verses],

@@ -292,7 +292,8 @@ function editExistingItem(item: any, scheduleContext: { itemIndex: number; slide
         transition: s.transition ?? undefined,
         slide_document_version: s.slide_document_version || 2,
         duration_seconds: s.duration_seconds,
-        hidden: s.hidden || undefined
+        hidden: s.hidden || undefined,
+        source_index: idx
       };
       base.elements = (s.elements && s.elements.length > 0) ? s.elements : applyArchetypeToSlide(layout, base);
       return base;
@@ -572,14 +573,19 @@ async function saveEditorItem(addToSchedule = false) {
   if (editingScheduleContext && currentSnapshot && currentSnapshot.schedule) {
     const schedItem = currentSnapshot.schedule.items[editingScheduleContext.itemIndex];
     const schedSlides = (schedItem && schedItem.slides) || [];
-    // Slides carry no id to match on, only their position: if slides were added or removed in
-    // the editor (which the schedule's copy doesn't get), positions no longer line up and a
-    // flag would land on the wrong slide -- leave the schedule's copy alone then.
-    if (schedSlides.length === studioSlides.length) studioSlides.forEach((s, idx) => {
-      if (!!schedSlides[idx]?.hidden !== !!s.hidden) {
-        sendCommand({ SetSlideHidden: { item_index: editingScheduleContext!.itemIndex, slide_index: idx, hidden: !!s.hidden } });
+    // Slides carry no id: each is matched to the schedule's copy by where it was when the editor
+    // opened (`source_index`), so moving slides around doesn't move a flag onto the wrong one.
+    // Slides added in the editor have no counterpart; a copied slide shares its original's
+    // position, so a position two slides claim is ambiguous and left alone.
+    const claims = new Map<number, number>();
+    for (const s of studioSlides) if (s.source_index !== undefined) claims.set(s.source_index, (claims.get(s.source_index) ?? 0) + 1);
+    for (const s of studioSlides) {
+      const at = s.source_index;
+      if (at === undefined || claims.get(at) !== 1 || at >= schedSlides.length) continue;
+      if (!!schedSlides[at]?.hidden !== !!s.hidden) {
+        sendCommand({ SetSlideHidden: { item_index: editingScheduleContext!.itemIndex, slide_index: at, hidden: !!s.hidden } });
       }
-    });
+    }
   }
 
   const slides = studioSlides.map((s, idx) => ({
