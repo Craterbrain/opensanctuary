@@ -9,7 +9,13 @@ import { spawnTestServer, teardownTestServer, pollUntil, type SpawnedTestServer 
 // reachable from a fresh install with no Bible in it: the empty Scriptures tab points at the plugin,
 // the plugin lists our translations first, and installing one stores the real text. Uses the live
 // repository (like the other plugin e2e tests use their live hosts).
-describe("E2E: public-domain Bibles from the OpenSanctuary Bibles repository", () => {
+//
+// Installing whole Bibles is thousands of downloads from GitHub, which on shared CI runners can be
+// slow enough to time out a pull request's checks for reasons that have nothing to do with it. So
+// pull-request CI (CI=true) skips this file; .github/workflows/live-network.yml runs it daily and
+// by hand with OS_NEXT_LIVE_NET=1. A local `bun test` (CI unset) still runs it.
+const skipOnCi = process.env.CI === "true" && process.env.OS_NEXT_LIVE_NET !== "1";
+describe.skipIf(skipOnCi)("E2E: public-domain Bibles from the OpenSanctuary Bibles repository", () => {
   let server: SpawnedTestServer;
   let browser: Browser;
   let page: Page;
