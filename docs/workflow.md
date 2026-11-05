@@ -1,6 +1,6 @@
 # Setting up and running the release workflow
 
-_Last edited: 2026-11-03_
+_Last edited: 2026-11-05_
 
 `.github/workflows/release.yml` builds, signs, and publishes a GitHub Release
 (`.deb`, Linux tarball, Windows installer, portable zip, `checksums.txt`,
@@ -14,7 +14,7 @@ publishes, and it deliberately does **not** run tests.
 
 ## Current status
 
-- The workflow is **working and has published real releases**, most recently `v0.3.5` (2026-10-25). Each release carries the `.deb`, Linux tarball, Flatpak, Windows installer and portable zip, plus `checksums.txt` and `checksums.txt.minisig`.
+- The workflow is **working and has published real releases**, most recently `v0.5.0` (2026-11-05). Each release carries the `.deb`, Linux tarball, Flatpak, Windows installer and portable zip, plus `checksums.txt` and `checksums.txt.minisig`.
 - Project status: no 1.0 yet; the current line is beta 3.
 - `ci.yml` runs on every PR into `main` (the default branch). `main` is protected: a PR must be up to date and green to merge.
 - `ci.yml`'s Rust and frontend jobs cache compiled dependencies with `Swatinem/rust-cache` (pinned to a commit, like the other third-party actions). `release.yml` deliberately doesn't: release artifacts are signed, so they're always built from scratch.
@@ -92,15 +92,71 @@ workflow requests its own `contents: write` for the publish job only, so
    branch rule only lets a PR merge once it's up to date with `main` and its
    checks pass, so the merge commit's code is exactly what that run tested —
    CI doesn't run again on the merge itself. To check a specific commit
-   anyway: **Actions** → **CI** → **Run workflow** on `main`.
+   anyway: **Actions** → **CI** → **Run workflow** on `main`. The one
+   exception is the version-bump PR itself (next section).
 4. Run `cargo test` and `cd web && bun run build && bun test` locally if you
    want an earlier signal than CI.
 
-## Cutting a release
+## The version-bump PR, step by step
+
+The bump is its own PR that touches only `Cargo.toml` and `Cargo.lock`. Start
+from an up-to-date `main` and check every step's result before the next one:
 
 ```sh
-git tag -a v0.3.5 -m "OpenSanctuary 0.3.5"   # the tag is v<Cargo.toml version>, on the merged release commit
-git push origin v0.3.5
+git checkout main && git pull
+git checkout -b release-0.5.0
+sed -i 's/^version = "0.4.1"/version = "0.5.0"/' Cargo.toml
+cargo check                      # updates the os-next entry in Cargo.lock
+git diff --stat                  # exactly Cargo.toml and Cargo.lock, 1 line each
+git commit -am "Release 0.5.0"
+git log -2 --format='%h %p %s'   # the new commit, whose one parent is main's tip
+git push -u origin release-0.5.0
+gh pr create --base main --title "Release 0.5.0" --body "Version bump to 0.5.0."
+gh pr view --json files -q '.files[].path'   # again: only Cargo.toml and Cargo.lock
+```
+
+If you commit under another identity (for example a GitHub noreply address),
+pass it as `git -c user.name=... -c user.email=... commit ...`. Don't add
+`--author` or other flags to `git commit` and then "fix" the result with
+`git commit --amend`.
+
+**What went wrong cutting 0.5.0.** The first `git commit` was given a stray
+`-c` flag, so it failed and committed nothing. Its error was hidden
+(`2>/dev/null`), and the next command, `git commit --amend --reset-author
+--no-edit`, ran anyway. With no new commit to amend, it rewrote `HEAD`,
+which was `main`'s merge commit for #105. That gave the release branch a copy
+of that merge with a new hash, and the bump files were left uncommitted. The
+PR showed one commit, "Merge pull request #105", instead of "Release 0.5.0".
+`main` itself was untouched, and nothing was merged or tagged before it was
+caught.
+
+The fix was to reset the branch to `origin/main` with the changes kept
+(`git reset --soft origin/main`), commit the bump properly, and
+`git push --force-with-lease` the release branch. Never force-push `main`.
+
+To avoid it:
+
+- Never hide a git command's errors, and don't run the next step when one
+  fails (chain with `&&`).
+- Only use `git commit --amend` on a commit you just made on that branch.
+  Check `git log -1` first: if it shows someone else's commit or a merge, stop.
+- Before merging, check that the PR's commit list is the single "Release
+  x.y.z" commit and its file list is only `Cargo.toml` and `Cargo.lock`.
+
+A PR that only bumps the version may be merged with `gh pr merge --admin`
+without waiting for CI. The code it ships was already tested on the PRs that
+brought it in. Anything else in the PR (a code or doc change) means it waits
+for green CI like any other.
+
+## Cutting a release
+
+Tag the merge commit of the version-bump PR, not your local branch:
+
+```sh
+git checkout main && git pull
+grep '^version' Cargo.toml       # must show the new version
+git tag -a v0.5.0 -m "OpenSanctuary 0.5.0"   # the tag is v<Cargo.toml version>, on the merged release commit
+git push origin v0.5.0
 ```
 
 Watch it under the repo's **Actions** tab → **Release**. Jobs run in this order:
@@ -117,6 +173,14 @@ Watch it under the repo's **Actions** tab → **Release**. Jobs run in this orde
    be installed first (the packaging scripts do this).
 3. `sign-and-publish`: writes `checksums.txt`, signs it, re-verifies the
    signature against the public-key variable, then creates the Release.
+
+The workflow publishes the files with no description. When it finishes, add
+the title and notes (what changed for users, grouped by feature, in the style
+of earlier releases):
+
+```sh
+gh release edit v0.5.0 --title "OpenSanctuary 0.5.0" --notes-file notes.md
+```
 
 To rebuild and republish an existing tag: **Actions** → **Release** →
 **Run workflow**, enter the tag. It checks out that tag, not the default branch.
