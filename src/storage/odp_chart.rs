@@ -129,6 +129,13 @@ pub fn to_drawingml(doc: &str) -> Option<String> {
             continue;
         }
         let values: Vec<String> = extract_attr(a, "chart:values-cell-range-address").map(|r| range(r).into_iter().map(at).collect()).unwrap_or_default();
+        // A scatter's x values: its own `chart:domain`, else the x axis's categories.
+        let x_values: Option<Vec<String>> = (main_kind == "c:scatterChart").then(|| {
+            children(inner).into_iter().find(|(n, _, _)| *n == "chart:domain")
+                .and_then(|(_, da, _)| extract_attr(da, "table:cell-range-address"))
+                .map(|r| range(r).into_iter().map(at).collect())
+                .unwrap_or_else(|| cats.clone())
+        }).filter(|xs: &Vec<String>| xs.iter().any(|v| v.trim().parse::<f64>().is_ok()));
         if values.is_empty() {
             continue;
         }
@@ -154,7 +161,8 @@ pub fn to_drawingml(doc: &str) -> Option<String> {
             }
         }
         series_xml.push_str(&format!(
-            r#"<c:ser><c:tx><c:strRef>{name}</c:strRef></c:tx>{sp}{points}{dl}<c:cat><c:strRef>{cat}</c:strRef></c:cat><c:val><c:numRef>{val}</c:numRef></c:val></c:ser>"#,
+            r#"<c:ser><c:tx><c:strRef>{name}</c:strRef></c:tx>{sp}{points}{dl}<c:cat><c:strRef>{cat}</c:strRef></c:cat>{xval}<c:val><c:numRef>{val}</c:numRef></c:val></c:ser>"#,
+            xval = x_values.map(|xs| format!("<c:xVal><c:numRef>{}</c:numRef></c:xVal>", cache(&xs, true))).unwrap_or_default(),
             name = cache(std::slice::from_ref(&name), false),
             cat = cache(&cats, false),
             val = cache(&values, true),

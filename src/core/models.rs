@@ -532,12 +532,14 @@ impl Slide {
         let mut parts = Vec::new();
         for el in &self.elements {
             if let SlideElement::TextBlock { block, .. } = el {
+                // (Without the zero-width stand-in importers put in a breaks-only paragraph.)
                 let block_text = block
                     .runs
                     .iter()
                     .map(|r| r.text.as_str())
                     .collect::<Vec<_>>()
-                    .join("");
+                    .join("")
+                    .replace('\u{200b}', "");
                 if !block_text.trim().is_empty() {
                     parts.push(block_text);
                 }

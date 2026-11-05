@@ -175,6 +175,17 @@ fn bezier(p0: (f64, f64), c1: (f64, f64), c2: (f64, f64), p3: (f64, f64)) -> imp
     })
 }
 
+/// A pattern brush record's (EMR_CREATEMONOBRUSH / EMR_CREATEDIBPATTERNBRUSHPT) picture, as its
+/// average colour: ihBrush, iUsage, then the bitmap header's and bits' offsets and sizes.
+fn pattern_color(r: &[u8]) -> Option<String> {
+    let (off_bmi, cb_bmi, off_bits, cb_bits) = (u32le(r, 16)? as usize, u32le(r, 20)? as usize, u32le(r, 24)? as usize, u32le(r, 28)? as usize);
+    let mut dib = r.get(off_bmi..off_bmi.checked_add(cb_bmi)?)?.to_vec();
+    dib.extend_from_slice(r.get(off_bits..off_bits.checked_add(cb_bits)?)?);
+    let bmp = crate::storage::wmf::dib_to_bmp(&dib)?;
+    let img = image::load_from_memory_with_format(&bmp, image::ImageFormat::Bmp).ok()?.to_rgb8();
+    Some(crate::storage::pptx_import::average_hex(&img, 1))
+}
+
 /// Logical points of an elliptical arc in box `(l, t, r, b)`, from the radial through `start`,
 /// `sweep` radians (negative: counter-clockwise on screen), as `n` steps.
 fn arc_points((l, t, r, b): (f64, f64, f64, f64), start: f64, sweep: f64, n: usize) -> Vec<(f64, f64)> {
@@ -203,6 +214,7 @@ pub fn parse(bytes: &[u8]) -> Option<Wmf> {
     let mut objects: HashMap<u32, Obj> = HashMap::new();
     let mut items: Vec<WmfItem> = Vec::new();
     let mut path: Option<PathBuild> = None;
+    let mut ended: Option<PathBuild> = None;
 
     let pen_of = |dc: &Dc| dc.pen.as_ref().map(|(c, w)| (c.clone(), dc.xf.len(*w).max(1.0)));
 
@@ -236,7 +248,9 @@ pub fn parse(bytes: &[u8]) -> Option<Wmf> {
                     };
                 }
             }
-            33 => saved.push(dc.clone()),
+            // (Bounded: a file of nothing but SaveDC records can't grow this without limit.)
+            33 if saved.len() < 1024 => saved.push(dc.clone()),
+            33 => {}
             34 => {
                 let n = i32le(r, 8).unwrap_or(-1.0).abs().max(1.0) as usize;
                 for _ in 0..n.min(saved.len()) {
@@ -250,7 +264,15 @@ pub fn parse(bytes: &[u8]) -> Option<Wmf> {
                 let obj = match kind {
                     38 => Obj::Pen { null: u32le(r, 12).is_some_and(|s| s & 0xF == 5), width: i32le(r, 16).unwrap_or(0.0), color: colorref(r, 24).unwrap_or_else(|| "#000000".into()) },
                     95 => Obj::Pen { null: u32le(r, 28).is_some_and(|s| s & 0xF == 5) || u32le(r, 36) == Some(1), width: u32le(r, 32).unwrap_or(0) as f64, color: colorref(r, 40).unwrap_or_else(|| "#000000".into()) },
-                    39 => Obj::Brush { null: u32le(r, 12) == Some(1), color: colorref(r, 16).unwrap_or_else(|| "#000000".into()) },
+                    // A hatched brush (style 2) draws thin lines of its colour over what's behind: a
+                    // see-through tint of it, as the ODP importer shows a hatch.
+                    39 => {
+                        let color = colorref(r, 16).unwrap_or_else(|| "#000000".into());
+                        let color = if u32le(r, 12) == Some(2) { crate::storage::pptx_inherit::with_alpha(&color, 0.35) } else { color };
+                        Obj::Brush { null: u32le(r, 12) == Some(1), color }
+                    }
+                    // A pattern brush (mono or DIB): its picture's average colour.
+                    93 | 94 => Obj::Brush { null: false, color: pattern_color(r).unwrap_or_else(|| "#808080".into()) },
                     82 => {
                         let face: String = char::decode_utf16((0..32).map_while(|k| r.get(40 + 2 * k..42 + 2 * k).map(|b| u16::from_le_bytes([b[0], b[1]]))).take_while(|c| *c != 0))
                             .map(|c| c.unwrap_or('?')).collect();
@@ -292,16 +314,26 @@ pub fn parse(bytes: &[u8]) -> Option<Wmf> {
             24 => dc.text_color = colorref(r, 8).unwrap_or_else(|| "#000000".into()),
             22 => dc.text_align = u32le(r, 8).unwrap_or(0),
             57 => dc.clockwise = u32le(r, 8) == Some(2),
-            59 => path = Some(PathBuild::default()),
-            68 => path = None,
-            60 => {}
+            // BeginPath (59) opens a bracket; EndPath (60) closes it, keeping the path for a later
+            // Fill/Stroke (drawing after it goes on the page again). FlattenPath (65) and WidenPath
+            // (66) leave it as it is (curves are already points here). SelectClipPath (67) uses it
+            // up as a clip, which isn't drawn (clipping isn't supported); AbortPath (68) drops it.
+            59 => {
+                path = Some(PathBuild::default());
+                ended = None;
+            }
+            60 => ended = path.take(),
+            67 | 68 => {
+                path = None;
+                ended = None;
+            }
             61 => {
                 if let Some((_, closed)) = path.as_mut().and_then(|p| p.figures.last_mut()) {
                     *closed = true;
                 }
             }
             62..=64 => {
-                if let Some(p) = path.take() {
+                if let Some(p) = path.take().or_else(|| ended.take()) {
                     let fill = if kind == 64 { None } else { dc.brush.clone() };
                     let stroke = if kind == 62 { None } else { pen_of(&dc) };
                     let subpaths: Vec<Vec<(f64, f64)>> = p.figures.iter().filter(|(f, _)| f.len() >= 2).map(|(f, _)| f.clone()).collect();
@@ -424,7 +456,11 @@ pub fn parse(bytes: &[u8]) -> Option<Wmf> {
             45 | 46 | 47 | 55 => {
                 let Some(((l, t, rr, b), s, e)) = (|| Some(((i32le(r, 8)?, i32le(r, 12)?, i32le(r, 16)?, i32le(r, 20)?), pt(24)?, pt(32)?)))() else { at += size; continue };
                 let (cx, cy) = ((l + rr) / 2.0, (t + b) / 2.0);
-                let (a0, a1) = ((s.1 - cy).atan2(s.0 - cx), (e.1 - cy).atan2(e.0 - cx));
+                // Where each radial meets the ellipse, as its parametric angle (x = cx + rx cos t,
+                // y = cy + ry sin t): on a box that isn't square that differs from the radial's angle.
+                let (rx, ry) = (((rr - l) / 2.0).abs().max(f64::EPSILON), ((b - t) / 2.0).abs().max(f64::EPSILON));
+                let param = |p: (f64, f64)| ((p.1 - cy) * rx).atan2((p.0 - cx) * ry);
+                let (a0, a1) = (param(s), param(e));
                 // Counter-clockwise on screen (y down) is decreasing angle; clockwise increasing.
                 let tau = std::f64::consts::TAU;
                 let mut sweep = if dc.clockwise { (a1 - a0).rem_euclid(tau) } else { -(a0 - a1).rem_euclid(tau) };
@@ -615,5 +651,55 @@ mod tests {
         bytes[n - 16..n - 12].copy_from_slice(&0x7FFF_FFF0u32.to_le_bytes());
         let wmf = parse(&bytes).unwrap();
         assert!(matches!(&wmf.items[0], WmfItem::Path { subpaths, .. } if subpaths[0].len() == 2));
+    }
+
+    #[test]
+    fn drawing_after_a_clip_path_bracket_is_drawn() {
+        // Office's pattern: a clip rectangle in a path bracket, then the real drawing.
+        let bytes = emf(&[
+            rec(59, &[]),
+            rec(43, &[0, 0, 100, 100]),
+            rec(60, &[]),
+            rec(67, &[]),
+            rec(43, &[10, 10, 20, 20]),
+            rec(54, &[30, 30]),
+        ]);
+        let wmf = parse(&bytes).unwrap();
+        assert_eq!(wmf.items.len(), 2, "the rectangle and the line after the clip: {:?}", wmf.items);
+    }
+
+    #[test]
+    fn a_flattened_path_is_still_stroked_and_a_clip_path_is_not_drawn() {
+        let bytes = emf(&[
+            // Begin, a line, End, FlattenPath, StrokePath: the line is drawn.
+            rec(59, &[]),
+            rec(27, &[0, 0]),
+            rec(54, &[50, 50]),
+            rec(60, &[]),
+            rec(65, &[]),
+            rec(64, &[]),
+            // A clip bracket: SelectClipPath uses the path up, so a Fill after it draws nothing.
+            rec(59, &[]),
+            rec(43, &[0, 0, 100, 100]),
+            rec(60, &[]),
+            rec(67, &[]),
+            rec(62, &[]),
+        ]);
+        let wmf = parse(&bytes).unwrap();
+        assert_eq!(wmf.items.len(), 1, "{:?}", wmf.items);
+        let WmfItem::Path { closed, .. } = &wmf.items[0] else { panic!() };
+        assert!(!closed, "the stroked line");
+    }
+
+    #[test]
+    fn a_pie_on_a_wide_box_starts_where_its_radial_meets_the_ellipse() {
+        // Box 0..200 x 0..50 (centre 100, 25); start radial at 45 degrees towards (200, 125), end straight down.
+        let bytes = emf(&[rec(47, &[0, 0, 200, 50, 200, 125, 100, 200])]);
+        let wmf = parse(&bytes).unwrap();
+        let WmfItem::Path { subpaths, .. } = &wmf.items[0] else { panic!("{:?}", wmf.items) };
+        // The ray at 45 degrees meets the ellipse x = 100 + 100 cos t, y = 25 + 25 sin t where
+        // 25 sin t = 100 cos t: t = atan(4), at about (124.3, 49.3).
+        let (x, y) = subpaths[0][0];
+        assert!((x - 124.25).abs() < 0.5 && (y - 49.25).abs() < 0.5, "{x} {y}");
     }
 }

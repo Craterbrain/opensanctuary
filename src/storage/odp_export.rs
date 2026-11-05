@@ -459,7 +459,11 @@ fn run_span(run: &TextRun, text_styles: &mut String, fresh_id: &mut impl FnMut()
         // This app's points are on its 1080-unit canvas; ODF's are real points on the page.
         size = ((run.font_size_pt / ODF_FONT_SCALE) * 100.0).round() / 100.0,
     ));
-    format!(r#"<text:span text:style-name="{name}">{text}</text:span>"#, text = encode_xml_text(&run.text))
+    // A line break inside a run is ODF's own element (a raw newline would collapse to a space); the
+    // zero-width space importers use to keep a breaks-only paragraph's run from reading as a
+    // paragraph break is a stand-in, not text.
+    let text = run.text.replace('\u{200b}', "").split('\n').map(encode_xml_text).collect::<Vec<_>>().join("<text:line-break/>");
+    format!(r#"<text:span text:style-name="{name}">{text}</text:span>"#)
 }
 
 /// A shape fill as ODF's one solid colour and its opacity: an imported fill can be `#rrggbbaa`
@@ -468,7 +472,11 @@ fn odf_solid_fill(fill: &str) -> (String, f64) {
     let Some(at) = fill.find('#') else { return (fill.to_string(), 1.0) };
     let hex: String = fill[at + 1..].chars().take_while(|c| c.is_ascii_hexdigit()).collect();
     match hex.len() {
-        8 => (format!("#{}", &hex[..6]), u8::from_str_radix(&hex[6..], 16).map(|a| a as f64 / 255.0).unwrap_or(1.0)),
+        8 => {
+            let full = format!("#{hex}");
+            let (color, alpha) = crate::storage::pptx_inherit::split_alpha(&full);
+            (color.to_string(), alpha)
+        }
         6 => (format!("#{hex}"), 1.0),
         _ => (fill.to_string(), 1.0),
     }

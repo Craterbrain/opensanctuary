@@ -16,6 +16,8 @@ enum Kind {
 struct Series {
     name: String,
     values: Vec<Option<f64>>,
+    /// A scatter series' own x values (`<c:xVal>`), when they are numbers.
+    x: Option<Vec<Option<f64>>>,
     color: Option<String>,
     /// Single points' own colours (`<c:dPt>`), by index.
     points: Vec<Option<String>>,
@@ -94,7 +96,9 @@ fn parse_groups(plot: &str, ctx: &Ctx) -> Vec<Group> {
                 }
                 points[i] = fill;
             }
-            Series { name, values, color, points, labels }
+            let x = next_tag(s, "c:xVal").map(|(_, v, _)| cache_points(v).into_iter().map(|v| v.and_then(|v| v.trim().parse::<f64>().ok())).collect::<Vec<_>>())
+                .filter(|xs| xs.iter().any(Option::is_some));
+            Series { name, values, x, color, points, labels }
         }).collect::<Vec<_>>();
         if series.is_empty() {
             continue;
@@ -172,7 +176,7 @@ impl Draw<'_, '_> {
 
 impl Draw<'_, '_> {
     fn id() -> String {
-        format!("el_{}", uuid::Uuid::new_v4())
+        new_id()
     }
 
     fn rect(&mut self, r: [f64; 4], fill: &str, stroke: Option<&str>) {
@@ -446,9 +450,36 @@ fn draw_axes_chart(d: &mut Draw, plot: &str, groups: &[Group], cats: &[String], 
     let zero = vpos(0.0f64.clamp(lo, hi));
     if horizontal { d.line((zero, py), (zero, py + ph), "#868686", 9_525.0) } else { d.line((px, zero), (px + pw, zero), "#868686", 9_525.0) }
 
+    // Scatter series with numeric x values go along an x value axis instead of categories.
+    let xs: Vec<f64> = groups.iter().flat_map(|g| g.series.iter()).filter_map(|s| s.x.as_ref()).flatten().flatten().copied().collect();
+    let x_axis = (!horizontal && !xs.is_empty()).then(|| {
+        let (lo, hi) = xs.iter().fold((f64::MAX, f64::MIN), |(a, b), v| (a.min(*v), b.max(*v)));
+        let step = nice_step((hi - lo).max(f64::EPSILON), 5.0);
+        let lo = if lo >= 0.0 && lo < step * 2.0 { 0.0 } else { (lo / step).floor() * step };
+        (lo, ((hi / step).ceil() * step).max(lo + step), step)
+    });
+    let xpos = |v: f64| x_axis.map_or(px, |(lo, hi, _)| px + (v - lo) / (hi - lo) * pw);
+    // A scatter's x axis is its horizontal value axis (axPos b or t), and its `c:delete` hides the labels.
+    let x_deleted = children(plot).into_iter()
+        .filter(|(n, _, _)| *n == "c:valAx")
+        .find(|(_, _, ax)| next_tag(ax, "c:axPos").and_then(|(a, _, _)| extract_attr(a, "val")).is_some_and(|p| p == "b" || p == "t"))
+        .and_then(|(_, _, ax)| next_tag(ax, "c:delete").and_then(|(a, _, _)| extract_attr(a, "val")))
+        == Some("1");
+    if let Some((xlo, xhi, xstep)) = x_axis {
+        let mut v = xlo;
+        let mut guard = 0;
+        while v <= xhi + xstep * 1e-6 && guard < 50 {
+            if !x_deleted {
+                d.text([xpos(v) - em * 2.5, py + ph + em * 0.2, em * 5.0, em * 1.4], &number(v, false), 0.9, "#595959", "center", "top", false);
+            }
+            v += xstep;
+            guard += 1;
+        }
+    }
+
     // Category labels.
     let band = if horizontal { ph } else { pw } / ncat as f64;
-    if !deleted("c:catAx") {
+    if !deleted("c:catAx") && x_axis.is_none() {
         for (i, c) in cats.iter().enumerate().take(ncat) {
             if horizontal {
                 // First category at the bottom, as Office draws horizontal bars.
@@ -502,18 +533,23 @@ fn draw_axes_chart(d: &mut Draw, plot: &str, groups: &[Group], cats: &[String], 
             }
             Kind::Line => {
                 for (k, s) in g.series.iter().enumerate() {
-                    let pts: Vec<(f64, f64)> = s.values.iter().enumerate().filter_map(|(c, v)| v.map(|v| (px + (c as f64 + 0.5) * band, vpos(v.clamp(lo, hi))))).collect();
+                    // Each drawn point with the index of its value (a gap leaves one out).
+                    let at_x = |c: usize| match (&s.x, x_axis) {
+                        (Some(xs), Some(_)) => xs.get(c).copied().flatten().map(xpos),
+                        _ => Some(px + (c as f64 + 0.5) * band),
+                    };
+                    let pts: Vec<(usize, f64, f64)> = s.values.iter().enumerate().filter_map(|(c, v)| Some((c, at_x(c)?, vpos((*v)?.clamp(lo, hi))))).collect();
                     if pts.len() < 2 {
                         continue;
                     }
-                    let local = |(x, y): (f64, f64)| ((x - px) / pw * 100.0, (y - py) / ph * 100.0);
+                    let local = |&(_, x, y): &(usize, f64, f64)| ((x - px) / pw * 100.0, (y - py) / ph * 100.0);
                     let mut p = PathData::default();
-                    p.cmd('M', &[local(pts[0])]);
-                    p.cmd('L', &pts[1..].iter().map(|q| local(*q)).collect::<Vec<_>>());
+                    p.cmd('M', &[local(&pts[0])]);
+                    p.cmd('L', &pts[1..].iter().map(local).collect::<Vec<_>>());
                     let color = s.color.clone().unwrap_or_else(|| d.color(color_k + k));
                     d.path([px, py, pw, ph], p.0, None, Some((&color, 28_575.0)));
                     if s.labels {
-                        for (c, (lx, ly)) in pts.iter().enumerate() {
+                        for &(c, lx, ly) in &pts {
                             let label = number(s.values.get(c).copied().flatten().unwrap_or(0.0), fmt_percent);
                             d.text([lx - em * 2.0, ly - em * 1.6, em * 4.0, em * 1.4], &label, 0.9, "#404040", "center", "bottom", false);
                         }
@@ -597,5 +633,37 @@ mod tests {
         assert_eq!(number(0.25, true), "25%");
         assert_eq!(number(12.0, false), "12");
         assert_eq!(number(3.14159, false), "3.1");
+    }
+
+    fn texts(g: &SlideElement) -> Vec<(String, f64, f64)> {
+        let SlideElement::Group { children, .. } = g else { panic!("a group") };
+        children.iter().filter_map(|c| match c { SlideElement::TextBlock { block, transform: t, .. } => Some((block.runs[0].text.clone(), t.x + t.w / 2.0, t.y + t.h)), _ => None }).collect()
+    }
+
+    #[test]
+    fn line_labels_stay_on_their_own_points_across_a_gap() {
+        with_ctx(|ctx| {
+            let xml = r#"<c:chartSpace><c:chart><c:plotArea><c:lineChart><c:grouping val="standard"/><c:ser><c:dLbls><c:showVal val="1"/></c:dLbls>
+                <c:val><c:numRef><c:numCache><c:ptCount val="4"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt><c:pt idx="3"><c:v>4</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:lineChart><c:catAx/><c:valAx/></c:plotArea></c:chart></c:chartSpace>"#;
+            let g = chart_group(xml, [0.0, 0.0, 9_144_000.0, 5_000_000.0], ctx).expect("a chart");
+            let labels: Vec<String> = texts(&g).into_iter().map(|t| t.0).filter(|t| ["0", "1", "3", "4"].contains(&t.as_str())).collect();
+            // The value-axis labels include "0"/"1"/"3"/"4" too; the point labels are the last three.
+            assert_eq!(labels[labels.len() - 3..], ["1", "3", "4"], "{labels:?}");
+        });
+    }
+
+    #[test]
+    fn a_scatter_places_points_by_their_x_values() {
+        with_ctx(|ctx| {
+            let pts = |tag: &str, v: [f64; 3]| format!(r#"<{tag}><c:numRef><c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>{}</c:v></c:pt><c:pt idx="1"><c:v>{}</c:v></c:pt><c:pt idx="2"><c:v>{}</c:v></c:pt></c:numCache></c:numRef></{tag}>"#, v[0], v[1], v[2]);
+            let xml = format!(r#"<c:chartSpace><c:chart><c:plotArea><c:scatterChart><c:ser><c:dLbls><c:showVal val="1"/></c:dLbls>{}{}</c:ser></c:scatterChart><c:valAx/><c:valAx/></c:plotArea></c:chart></c:chartSpace>"#,
+                pts("c:xVal", [0.0, 1.0, 10.0]), pts("c:yVal", [5.0, 6.0, 7.0]));
+            let g = chart_group(&xml, [0.0, 0.0, 9_144_000.0, 5_000_000.0], ctx).expect("a chart");
+            let t = texts(&g);
+            let at = |label: &str| t.iter().rev().find(|x| x.0 == label).map(|x| x.1).unwrap();
+            // x = 0, 1, 10: the second point sits a tenth of the way from the first to the third.
+            let (a, b, c) = (at("5"), at("6"), at("7"));
+            assert!(((b - a) / (c - a) - 0.1).abs() < 0.02, "{a} {b} {c}");
+        });
     }
 }
