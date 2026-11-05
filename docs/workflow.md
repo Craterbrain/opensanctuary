@@ -82,37 +82,45 @@ workflow requests its own `contents: write` for the publish job only, so
    the workflow's first step fails otherwise. This matters: the `.deb` filename
    comes from `Cargo.toml`, and the updater refuses a release whose signed
    filename doesn't carry the tag's version.
-2. Decide which plugins ship. Release packages bundle the
+2. Update the **Status** note near the top of `README.md`. The "latest release
+   is `vX.Y.Z`" line changes in the version-bump PR (next section). Anything
+   else in the note goes in an ordinary PR before it: what is now built, tested
+   or still untested (CCLI reporting, local HTTPS, the TV apps), and whether
+   it is still beta.
+3. Decide which plugins ship. Release packages bundle the
    `Craterbrain/opensanctuary-plugins` commit named in `packaging/plugins.ref`
    (fetched by `packaging/fetch-plugins.sh`, which `build-deb.sh` and
    `build-windows-installer.sh` run), not `web/plugins/`. To ship newer plugins,
    point it at that repo's new merge commit and update the dev copies in
    `web/plugins/` to match; `ci.yml`'s `plugins` job fails while they differ.
-3. Land it through a PR and confirm `ci.yml` is green on the PR. `main`'s
+4. Land it through a PR and confirm `ci.yml` is green on the PR. `main`'s
    branch rule only lets a PR merge once it's up to date with `main` and its
    checks pass, so the merge commit's code is exactly what that run tested —
    CI doesn't run again on the merge itself. To check a specific commit
    anyway: **Actions** → **CI** → **Run workflow** on `main`. The one
    exception is the version-bump PR itself (next section).
-4. Run `cargo test` and `cd web && bun run build && bun test` locally if you
+5. Run `cargo test` and `cd web && bun run build && bun test` locally if you
    want an earlier signal than CI.
 
 ## The version-bump PR, step by step
 
-The bump is its own PR that touches only `Cargo.toml` and `Cargo.lock`. Start
-from an up-to-date `main` and check every step's result before the next one:
+The bump is its own PR. It changes only the version: `Cargo.toml`,
+`Cargo.lock`, and the "latest release" line in `README.md`'s Status note.
+Start from an up-to-date `main` and check every step's result before the next
+one:
 
 ```sh
 git checkout main && git pull
 git checkout -b release-0.5.0
 sed -i 's/^version = "0.4.1"/version = "0.5.0"/' Cargo.toml
 cargo check                      # updates the os-next entry in Cargo.lock
-git diff --stat                  # exactly Cargo.toml and Cargo.lock, 1 line each
+sed -i 's|\[`v0.4.1`\]|[`v0.5.0`]|' README.md   # the Status note's "latest release" link
+git diff --stat                  # exactly Cargo.toml, Cargo.lock and README.md, 1 line each
 git commit -am "Release 0.5.0"
 git log -2 --format='%h %p %s'   # the new commit, whose one parent is main's tip
 git push -u origin release-0.5.0
 gh pr create --base main --title "Release 0.5.0" --body "Version bump to 0.5.0."
-gh pr view --json files -q '.files[].path'   # again: only Cargo.toml and Cargo.lock
+gh pr view --json files -q '.files[].path'   # again: only those three files
 ```
 
 If you commit under another identity (for example a GitHub noreply address),
@@ -141,9 +149,10 @@ To avoid it:
 - Only use `git commit --amend` on a commit you just made on that branch.
   Check `git log -1` first: if it shows someone else's commit or a merge, stop.
 - Before merging, check that the PR's commit list is the single "Release
-  x.y.z" commit and its file list is only `Cargo.toml` and `Cargo.lock`.
+  x.y.z" commit and its file list is only `Cargo.toml`, `Cargo.lock` and
+  `README.md`, each with the one version line changed.
 
-A PR that only bumps the version may be merged with `gh pr merge --admin`
+A PR that only bumps the version (those three version lines) may be merged with `gh pr merge --admin`
 without waiting for CI. The code it ships was already tested on the PRs that
 brought it in. Anything else in the PR (a code or doc change) means it waits
 for green CI like any other.
