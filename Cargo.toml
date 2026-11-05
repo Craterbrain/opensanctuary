@@ -1,6 +1,6 @@
 [package]
 name = "os-next"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 # std::fs::File::lock (the test keyring's cross-process lock) is stable from 1.89.
 rust-version = "1.89"
