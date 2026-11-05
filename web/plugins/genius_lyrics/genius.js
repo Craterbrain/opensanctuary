@@ -352,9 +352,13 @@
    *  "Bethel Music (Ft. Brian Johnson)". */
   function artistNames(credit) {
     return String(credit || '')
+      // "/" and "+" join two names when both sides are real names ("Bethel Music/Jenn Johnson"), not
+      // inside a short one ("AC/DC").
+      .replace(/([^\s\/+]{3,})\s*[\/+]\s*(?=[^\s\/+]{3,})/g, '$1, ')
       // Only the separators credit lines actually use: splitting on "and" would turn "Hillsong Young and
-      // Free" into an artist called "Free" (a rock band).
-      .split(/\s*(?:,|&|\+|•|\/|\(|\)|\[|\]|\bfeat\.?|\bft\.?|\bfeaturing\b)\s*/i)
+      // Free" into an artist called "Free" (a rock band). "feat"/"ft" only as whole words (not "Feather
+      // Rose"), "/" and "+" only between spaces (not "AC/DC").
+      .split(/\s*(?:,|&|•|\(|\)|\[|\]|\bfeat\b\.?|\bft\b\.?|\bfeaturing\b)\s*|\s+[\/+]\s+/i)
       .map(normName)
       .filter(function (n) { return n && n !== 'recommended for you'; });
   }
@@ -383,9 +387,20 @@
 
   function overlaps(a, b) { return a.some(function (x) { return b.indexOf(x) !== -1; }); }
 
+  /** Whether two core titles name the same song: equal, or one the other's start at a word break
+   *  ("way maker" / "way maker live session") -- never an empty title, nor a start shorter than four
+   *  characters ("holy" matches "holy forever"; "go" and "joy" match only themselves). */
+  function sameTitle(a, b) {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    var shorter = a.length < b.length ? a : b, longer = a.length < b.length ? b : a;
+    return shorter.length >= 4 && longer.indexOf(shorter) === 0 && longer.charAt(shorter.length) === ' ';
+  }
+
   /** Genres known for each artist from song records: { "patrick mayberry": ["Christian"], ... }. */
   function genresByArtist(records) {
-    var map = {};
+    // No prototype: an artist called "constructor" or "toString" is a key like any other.
+    var map = Object.create(null);
     records.forEach(function (r) {
       r.artists.forEach(function (a) { (map[a] = map[a] || []).push(r.genre); });
     });
@@ -409,18 +424,20 @@
    */
   function classifyHits(hits, songRecords, artistGenres) {
     var byArtist = genresByArtist(songRecords);
-    artistGenres = artistGenres || {};
+    artistGenres = artistGenres || Object.create(null);
+    var genreOf = function (a) { return Object.prototype.hasOwnProperty.call(artistGenres, a) ? artistGenres[a] : null; };
     hits.forEach(function (hit) {
       var artists = artistNames(hit.artist);
       var title = coreTitle(hit.title);
       var same = songRecords.filter(function (r) {
-        return overlaps(r.artists, artists) && (r.title === title || r.title.indexOf(title) === 0 || title.indexOf(r.title) === 0);
+        return overlaps(r.artists, artists) && sameTitle(r.title, title);
       });
       var v = verdict(same.map(function (r) { return r.genre; }));
       var genre = same.length ? (same.find(function (r) { return isChristianGenre(r.genre); }) || same[0]).genre : null;
       // The primary artist's genres decide before a featured artist's.
       for (var i = 0; !v && i < artists.length; i++) {
-        var known = (byArtist[artists[i]] || []).concat(artistGenres[artists[i]] ? [artistGenres[artists[i]]] : []);
+        var looked = genreOf(artists[i]);
+        var known = (byArtist[artists[i]] || []).concat(looked ? [looked] : []);
         v = verdict(known);
         if (v) genre = known.find(isChristianGenre) || known[0];
       }
@@ -431,13 +448,15 @@
     return hits;
   }
 
-  /** Artists of hits the song records say nothing about: the ones worth an artist lookup (first `max`). */
-  function artistsToLookUp(hits, songRecords, max) {
+  /** Artists of hits the song records say nothing about, other than the ones in `skip` (looked up
+   *  already): the ones worth an artist lookup, the first `max`. */
+  function artistsToLookUp(hits, songRecords, max, skip) {
     var byArtist = genresByArtist(songRecords);
     var out = [];
     hits.forEach(function (hit) {
       var artists = artistNames(hit.artist);
       if (!artists.length || artists.some(function (a) { return byArtist[a]; })) return;
+      if (skip && Object.prototype.hasOwnProperty.call(skip, artists[0])) return;
       if (out.indexOf(artists[0]) === -1) out.push(artists[0]);
     });
     return out.slice(0, max);
@@ -446,7 +465,7 @@
   var api = {
     isChristianGenre: isChristianGenre, itunesSongSearchUrl: itunesSongSearchUrl, itunesArtistSearchUrl: itunesArtistSearchUrl,
     artistNames: artistNames, coreTitle: coreTitle, parseItunesSongs: parseItunesSongs, parseItunesArtistGenre: parseItunesArtistGenre,
-    classifyHits: classifyHits, artistsToLookUp: artistsToLookUp,
+    classifyHits: classifyHits, artistsToLookUp: artistsToLookUp, sameTitle: sameTitle,
     searchTerms: searchTerms, answersQuery: answersQuery, searchUrl: searchUrl, parseSearchResponse: parseSearchResponse, isGeniusUrl: isGeniusUrl,
     lrclibSearchUrl: lrclibSearchUrl, parseLrclibResponse: parseLrclibResponse, plainLyricsToSong: plainLyricsToSong,
     extractCcli: extractCcli, stripHtml: stripHtml, extractLyrics: extractLyrics, lyricsToSong: lyricsToSong, pageToSong: pageToSong
