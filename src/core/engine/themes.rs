@@ -2,8 +2,9 @@ use crate::core::commands::ShowCommand;
 use crate::core::events::ShowEvent;
 use crate::core::models::{Schedule, ShowState};
 use super::elements::sync_item_in_state;
+use super::live::{first_visible_from, is_hidden_at, prev_visible_before};
 
-pub(super) fn plan_theme_events(_state: &ShowState, schedule: &Schedule, cmd: &ShowCommand) -> Vec<ShowEvent> {
+pub(super) fn plan_theme_events(state: &ShowState, schedule: &Schedule, cmd: &ShowCommand) -> Vec<ShowEvent> {
     let mut events = Vec::new();
     match cmd {
         ShowCommand::SetItemTheme { item_index, theme_name, background } => {
@@ -41,6 +42,23 @@ pub(super) fn plan_theme_events(_state: &ShowState, schedule: &Schedule, cmd: &S
                         slide_index: *slide_index,
                         hidden: *hidden,
                     });
+                    // A hidden slide is never shown: if the live or staged copy of this item is on
+                    // the slide just hidden, it moves to the next visible one (else the one before).
+                    if *hidden {
+                        let mut after = item.clone();
+                        after.slides[*slide_index].hidden = true;
+                        let moved = |pos: usize| (is_hidden_at(&after, pos)).then(|| first_visible_from(&after, pos + 1).or_else(|| prev_visible_before(&after, pos))).flatten();
+                        if state.live_item.as_ref().is_some_and(|l| l.id == item.id) {
+                            if let Some(slide_index) = moved(state.live_slide_index) {
+                                events.push(ShowEvent::LiveSlideChanged { slide_index });
+                            }
+                        }
+                        if state.staged_item.as_ref().is_some_and(|s| s.id == item.id) {
+                            if let Some(slide_index) = moved(state.staged_slide_index) {
+                                events.push(ShowEvent::StagedSlideChanged { slide_index });
+                            }
+                        }
+                    }
                 }
             }
         }

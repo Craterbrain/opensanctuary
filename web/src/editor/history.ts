@@ -34,6 +34,16 @@ export class EditorHistoryManager {
     return this.redoStack.length > 0;
   }
 
+  /** The id of the slide the next undo restores (an edit can be to a slide that isn't the active one). */
+  public nextUndoId(): string | undefined {
+    return this.undoStack[this.undoStack.length - 1]?.id;
+  }
+
+  /** The id of the slide the next redo restores. */
+  public nextRedoId(): string | undefined {
+    return this.redoStack[this.redoStack.length - 1]?.id;
+  }
+
   public undo(currentSlide: EditorSlide): EditorSlide | null {
     if (!this.canUndo()) return null;
     const prev = this.undoStack.pop()!;

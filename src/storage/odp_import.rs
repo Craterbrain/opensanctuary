@@ -267,11 +267,6 @@ fn read_zip_text(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<
     Ok(crate::storage::media_sniff::read_capped_string(&mut file, crate::storage::media_sniff::MAX_ZIP_TEXT_BYTES)?)
 }
 
-fn read_zip_bytes(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let mut file = archive.by_name(name)?;
-    Ok(crate::storage::media_sniff::read_capped_bytes(&mut file, crate::storage::media_sniff::MAX_ZIP_MEDIA_BYTES)?)
-}
-
 /// Everything shape extraction needs for one page.
 struct Ctx<'a> {
     geo: Geo,
@@ -1015,7 +1010,7 @@ fn frame_elements(archive: &mut ZipArchive<Cursor<&[u8]>>, attrs: &str, inner: &
 fn picture(archive: &mut ZipArchive<Cursor<&[u8]>>, hrefs: &[&str], chain: &[&Style], rect: [f64; 4], rot: f64, ctx: &Ctx) -> Option<SlideElement> {
     for href in hrefs {
         let path = href.trim_start_matches("./");
-        let Ok(bytes) = read_zip_bytes(archive, path) else { continue };
+        let Ok(bytes) = pptx::read_picture_bytes(archive, path) else { continue };
         if crate::storage::wmf::is_wmf(&bytes) || crate::storage::emf::is_emf(&bytes) {
             if let Some(el) = pptx::metafile_elements(&bytes, rect, ctx.geo, ctx.media, ctx.media_dir) {
                 return Some(el);
@@ -1056,7 +1051,7 @@ fn picture_fill(archive: &mut ZipArchive<Cursor<&[u8]>>, image: &str, chain: &[&
 /// `draw:fill-image-ref-point` names within `area`.
 fn fill_picture(archive: &mut ZipArchive<Cursor<&[u8]>>, href: &str, chain: &[&Style], size: [f64; 2], area: [f64; 4], paper: bool, ctx: &Ctx) -> Option<String> {
     let repeat = prop(chain, "style:repeat").unwrap_or("repeat");
-    let bytes = read_zip_bytes(archive, href).ok()?;
+    let bytes = pptx::read_picture_bytes(archive, href).ok()?;
     // A page is drawn over white paper, so its see-through picture is blended onto white here
     // (the app's own background opacity isn't drawn by every view).
     let fade = if paper { prop(chain, "draw:opacity").and_then(|o| o.trim_end_matches('%').parse::<f64>().ok()).map_or(1.0, |p| (p / 100.0).clamp(0.0, 1.0)) } else { 1.0 };

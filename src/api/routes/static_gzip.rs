@@ -1,16 +1,20 @@
 //! Gzip for the static web UI (the `ServeDir` fallback) without paying for it on every
-//! request: each file is compressed once per version -- keyed by path + `Last-Modified` +
-//! length, so a rebuilt bundle or an edited `style.css` is picked up immediately -- and the
-//! compressed bytes are reused from memory after that. No `.gz` files on disk to go stale
-//! under `bun --watch`, and no per-request deflate the way a plain compression layer would.
+//! request: each distinct file content is compressed once -- keyed by a hash of the bytes, so a
+//! rebuilt bundle or an edited `style.css` is picked up immediately (even a same-length rewrite
+//! within the same second), and every spelling of one file's URL shares one entry -- and the
+//! compressed bytes are reused from memory after that. Reading the file each time is cheap (it's
+//! in the page cache); compressing it is what's saved. Requests that miss together wait for one
+//! compression. The cache is bounded. No `.gz` files on disk to go stale under `bun --watch`.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::body::{Body, Bytes};
 use axum::extract::Request;
-use axum::http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, LAST_MODIFIED, RANGE, VARY};
+use axum::http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, RANGE, VARY};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -20,15 +24,23 @@ const MIN_BYTES: u64 = 1024;
 /// Larger than this isn't a UI asset (bundles are ~1MB); serve it as-is rather than buffer it.
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
 
-struct Entry {
-    last_modified: HeaderValue,
-    len: u64,
-    gz: Bytes,
+/// The most compressed bytes kept; past it the cache starts again empty (the UI's own files are a
+/// few MB, so this only bites when something keeps asking for new content).
+const MAX_CACHED_BYTES: usize = 64 * 1024 * 1024;
+
+/// One content's compressed form, filled by whichever request gets there first (`None` when
+/// compressing didn't make it smaller).
+type Slot = Arc<tokio::sync::OnceCell<Option<Bytes>>>;
+
+#[derive(Default)]
+struct Cache {
+    slots: HashMap<(u64, usize), Slot>,
+    bytes: usize,
 }
 
-fn cache() -> &'static Mutex<HashMap<String, Entry>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Entry>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+fn cache() -> &'static Mutex<Cache> {
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(Cache::default()))
 }
 
 fn accepts_gzip(headers: &HeaderMap) -> bool {
@@ -64,7 +76,6 @@ pub(super) async fn gzip_static(req: Request, next: Next) -> Response {
     // GET only: ServeDir answers HEAD with the file's length but an empty body, and gzipping
     // (and caching) that would hand every later GET a compressed empty file.
     let wants_gzip = req.method() == Method::GET && accepts_gzip(req.headers()) && !req.headers().contains_key(RANGE);
-    let path = req.uri().path().to_owned();
     let mut res = next.run(req).await;
 
     if !compressible(res.headers()) {
@@ -75,19 +86,9 @@ pub(super) async fn gzip_static(req: Request, next: Next) -> Response {
     if !wants_gzip || res.status() != StatusCode::OK || res.headers().contains_key(CONTENT_ENCODING) {
         return res;
     }
-    let Some(last_modified) = res.headers().get(LAST_MODIFIED).cloned() else { return res };
     let Some(len) = res.headers().get(CONTENT_LENGTH).and_then(|v| v.to_str().ok()?.parse::<u64>().ok()) else { return res };
     if !(MIN_BYTES..=MAX_BYTES).contains(&len) {
         return res;
-    }
-
-    let hit = {
-        let c = cache().lock().unwrap_or_else(|e| e.into_inner());
-        c.get(&path).filter(|e| e.len == len && e.last_modified == last_modified).map(|e| e.gz.clone())
-    };
-    if let Some(gz) = hit {
-        // Dropping ServeDir's body unpolled means the file is never actually read.
-        return gzipped(res, gz);
     }
 
     let (parts, body) = res.into_parts();
@@ -95,19 +96,38 @@ pub(super) async fn gzip_static(req: Request, next: Next) -> Response {
         // The file failed mid-read; the headers already promised a length we can't deliver.
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    let to_compress = raw.clone();
-    let gz = match tokio::task::spawn_blocking(move || gzip(&to_compress)).await {
-        Ok(Ok(gz)) if (gz.len() as u64) < len => Bytes::from(gz),
-        _ => return Response::from_parts(parts, Body::from(raw)),
+    let key = {
+        let mut h = DefaultHasher::new();
+        raw.hash(&mut h);
+        (h.finish(), raw.len())
     };
-    cache().lock().unwrap_or_else(|e| e.into_inner()).insert(path, Entry { last_modified, len, gz: gz.clone() });
-    gzipped(Response::from_parts(parts, Body::empty()), gz)
+    let slot: Slot = {
+        let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
+        if !c.slots.contains_key(&key) && c.bytes > MAX_CACHED_BYTES {
+            *c = Cache::default();
+        }
+        c.slots.entry(key).or_default().clone()
+    };
+    let to_compress = raw.clone();
+    let gz = slot.get_or_init(|| async move {
+        let gz = match tokio::task::spawn_blocking(move || gzip(&to_compress)).await {
+            Ok(Ok(gz)) if (gz.len() as u64) < len => Some(Bytes::from(gz)),
+            _ => None,
+        };
+        let size = gz.as_ref().map_or(0, Bytes::len);
+        cache().lock().unwrap_or_else(|e| e.into_inner()).bytes += size;
+        gz
+    }).await.clone();
+    match gz {
+        Some(gz) => gzipped(Response::from_parts(parts, Body::empty()), gz),
+        None => Response::from_parts(parts, Body::from(raw)),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::header::IF_MODIFIED_SINCE;
+    use axum::http::header::{IF_MODIFIED_SINCE, LAST_MODIFIED};
     use std::io::Read;
     use tower::Service;
 
@@ -162,6 +182,30 @@ mod tests {
         std::fs::write(d.join("bundle.js"), &v2).unwrap();
         let (_, body) = get(&d, "/bundle.js", &[(ACCEPT_ENCODING, "gzip")]).await;
         assert_eq!(gunzip(&body), v2.as_bytes());
+        // So is a rewrite of the same length within that second: the content is what's keyed.
+        let v3 = "console.log('v3!');\n".repeat(500);
+        assert_eq!(v3.len(), v2.len());
+        std::fs::write(d.join("bundle.js"), &v3).unwrap();
+        let (_, body) = get(&d, "/bundle.js", &[(ACCEPT_ENCODING, "gzip")]).await;
+        assert_eq!(gunzip(&body), v3.as_bytes());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn spellings_of_one_file_and_concurrent_misses_share_one_entry() {
+        let d = tmp_dir("alias");
+        let js = "console.log('alias');\n".repeat(700);
+        std::fs::write(d.join("bundle.js"), &js).unwrap();
+        // Several requests at once, under different spellings of the same path.
+        let paths = ["/bundle.js", "/b%75ndle.js", "/%62undle.js", "/bu%6edle.js"];
+        let results = futures_util::future::join_all(paths.iter().map(|p| get(&d, p, &[(ACCEPT_ENCODING, "gzip")]))).await;
+        for (res, body) in &results {
+            assert_eq!(res.headers()[CONTENT_ENCODING], "gzip");
+            assert_eq!(gunzip(body), js.as_bytes());
+        }
+        // Keyed by content: the one entry all four spellings shared.
+        let key = { let mut h = DefaultHasher::new(); Bytes::from(js.clone()).hash(&mut h); (h.finish(), js.len()) };
+        assert!(cache().lock().unwrap().slots.contains_key(&key));
         let _ = std::fs::remove_dir_all(&d);
     }
 

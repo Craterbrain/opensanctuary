@@ -255,6 +255,9 @@ export interface EditorSlide {
   reference_label?: string;
   /** Hidden slides stay in the presentation but are never shown live. */
   hidden?: boolean;
+  /** Where this slide sat in the item when the editor opened it (slides carry no id), so a
+   * change to it reaches the same slide of the schedule's copy however slides were moved. Not saved. */
+  source_index?: number;
 }
 
 /**
