@@ -14,7 +14,8 @@ pub fn use_test_keyring_file(path: std::path::PathBuf) {
     let _ = TEST_KEYRING_FILE.set(path);
 }
 
-fn test_keyring_file() -> Option<&'static std::path::Path> {
+/// The test keyring file in use, if any (`use_test_keyring_file`).
+pub fn test_keyring_file() -> Option<&'static std::path::Path> {
     TEST_KEYRING_FILE.get().map(|p| p.as_path())
 }
 
@@ -63,8 +64,9 @@ mod test_file {
         crate::storage::write_private(&tmp, &data).and_then(|_| std::fs::rename(&tmp, path)).map_err(|e| format!("Test keyring write error: {e}"))
     }
 
+    /// A read needs no cross-process lock: writes replace the file whole, by rename.
     pub fn get(path: &Path, service: &str, account: &str) -> Result<Option<String>, String> {
-        let _held = hold(path)?;
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         Ok(load(path)?.remove(&key(service, account)))
     }
 

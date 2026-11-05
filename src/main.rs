@@ -83,6 +83,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     if let Some(path) = &args.test_keyring_file {
+        // Only for what the test servers are: headless, their data in a temporary folder. A real
+        // install started with this (a copied service file, a wrapper script) refuses to run rather
+        // than keep its secrets in a plain file.
+        let in_temp = std::path::absolute(path).is_ok_and(|p| p.starts_with(std::env::temp_dir()));
+        if !args.headless || !in_temp {
+            eprintln!("--test-keyring-file is for test servers only: it needs --headless and a file under {}", std::env::temp_dir().display());
+            std::process::exit(2);
+        }
         tracing::warn!("--test-keyring-file: secrets go to {} instead of the OS keyring; this is not a normal run", path.display());
         os_next::storage::keyring::use_test_keyring_file(path.clone());
     }

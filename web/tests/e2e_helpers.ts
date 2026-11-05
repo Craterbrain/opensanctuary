@@ -41,11 +41,6 @@ export function testServerArgs(dataDir: string): string[] {
   return ["--test-keyring-file", join(dataDir, "keyring.json")];
 }
 
-/** The environment a test server runs with: this process's own, plus `extra`. */
-export function testServerEnv(extra: Record<string, string> = {}): Record<string, string | undefined> {
-  return { ...process.env, ...extra };
-}
-
 /**
  * Spawns the release binary headless against a fresh temp data dir and
  * waits until it accepts connections before returning. Throws (with the
@@ -87,7 +82,7 @@ export async function spawnTestServer(opts: {
       cwd: resolve(import.meta.dir, "../../"),
       stdout: "pipe",
       stderr: "pipe",
-      env: testServerEnv(opts.env),
+      env: { ...process.env, ...opts.env },
     }
   );
 

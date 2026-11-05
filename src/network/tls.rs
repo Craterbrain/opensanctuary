@@ -113,7 +113,9 @@ impl TlsKeyStore {
             .flatten()
             .filter(|k| !k.trim().is_empty())
             .or_else(|| {
-                (service == TLS_KEYRING_SERVICE)
+                // The old shared file in the user's config folder -- never for a test server, whose
+                // secrets must not come from the real install's (its test keyring is the whole store).
+                (service == TLS_KEYRING_SERVICE && crate::storage::keyring::test_keyring_file().is_none())
                     .then(|| read_fallback_key_at(&crate::storage::paths::config_dir().join(KEY_FILE_NAME)))
                     .flatten()
             })
