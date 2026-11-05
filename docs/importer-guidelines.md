@@ -1,8 +1,11 @@
-# Slide & Presentation Import Formats: Engineering Guidelines & Lessons Learned
+# Writing an importer: engineering guidelines
 
 _Last edited: 2026-11-05_
 
 This document distills the architectural conventions, critical lessons learned, and failure modes encountered during the formatted import implementations for EasyWorship (`.ewsx`), PowerPoint (`.pptx`), OpenDocument Impress (`.odp`), OpenLP (`.sqlite`, `.osj`, `.osz`), and FreeShow (`.show`, `.project`).
+
+For developers. OpenSanctuary's own file types (`.ossong`, `.ospres`, ...) are described for users in
+[`file-formats.md`](file-formats.md).
 
 ---
 

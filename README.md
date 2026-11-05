@@ -211,6 +211,7 @@ plugins in [`web/plugins/`](web/plugins/) are worked examples.
 | Broadcasting to OBS | [`docs/BROADCASTING.md`](docs/BROADCASTING.md) |
 | Trusted local HTTPS (Caddy) | [`docs/LOCAL_HTTPS.md`](docs/LOCAL_HTTPS.md) |
 | CCLI reporting | [`docs/CCLI_REPORTING.md`](docs/CCLI_REPORTING.md) |
+| Writing an importer | [`docs/importer-guidelines.md`](docs/importer-guidelines.md) |
 | Writing plugins | [`docs/PLUGINS.md`](docs/PLUGINS.md), [`docs/PLUGIN_PERMISSIONS.md`](docs/PLUGIN_PERMISSIONS.md) |
 | Updates and release signing | [`docs/update.md`](docs/update.md), [`docs/SIGNING.md`](docs/SIGNING.md) |
 | Installers and packaging | [`docs/installer.md`](docs/installer.md) |
@@ -248,4 +249,4 @@ folder.
 
 ---
 
-_Last edited: 2026-10-29_
+_Last edited: 2026-11-05_
