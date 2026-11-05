@@ -32,7 +32,7 @@ small server on one machine. Everything else is a web page: the operator
 console, the front-of-house output, the stage monitor, and a phone remote.
 
 > **Status: beta.** The latest release is
-> [`v0.4.1`](https://github.com/Craterbrain/opensanctuary/releases/latest).
+> [`v0.5.0`](https://github.com/Craterbrain/opensanctuary/releases/latest).
 > There is no 1.0 yet. The scheduling engine, multi-display output, most
 > importers and plugins are built and used for real. CCLI reporting and
 > the local-network HTTPS certificate setup (Caddy) are built but **not yet
