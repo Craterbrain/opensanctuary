@@ -1409,19 +1409,7 @@ fn run_look(chains: &[&Style], ctx: &Ctx) -> RunLook {
 /// A stored picture's average colour, as `#rrggbb`, sampled as LibreOffice's draft fill colour
 /// does: every pixel on a grid of about 8 × 8 steps from the top-left corner.
 fn average_color(path: &Path) -> Option<String> {
-    let img = image::open(path).ok()?.to_rgb8();
-    let (w, h) = img.dimensions();
-    let (sx, sy) = ((w / 8).max(1) as usize, (h / 8).max(1) as usize);
-    let (mut sum, mut n) = ([0u64; 3], 0u64);
-    for y in (0..h).step_by(sy) {
-        for x in (0..w).step_by(sx) {
-            let p = img.get_pixel(x, y);
-            (0..3).for_each(|i| sum[i] += p[i] as u64);
-            n += 1;
-        }
-    }
-    let n = n.max(1);
-    Some(format!("#{:02x}{:02x}{:02x}", sum[0] / n, sum[1] / n, sum[2] / n))
+    Some(pptx::average_hex(&image::open(path).ok()?.to_rgb8(), 8))
 }
 
 /// Whether a colour (`#rrggbb[aa]`) is dark enough that automatic text on it is white, by
@@ -1601,13 +1589,24 @@ fn text_block(body: &str, attrs: &str, rect: [f64; 4], rot: f64, ctx: &Ctx, cent
 
     // Flatten the body into (paragraph attrs, content, list depth, list style, numbered item index).
     let mut paras: Vec<(&str, &str, usize, Option<&str>, bool)> = Vec::new();
-    fn walk<'a>(xml: &'a str, depth: usize, list: Option<&'a str>, header: bool, out: &mut Vec<(&'a str, &'a str, usize, Option<&'a str>, bool)>) {
+    // Paragraphs (by index) whose list says to go on counting where the last one stopped
+    // (`text:continue-numbering`, `text:continue-list`).
+    let mut continuing: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    fn walk<'a>(xml: &'a str, depth: usize, list: Option<&'a str>, header: bool, cont: bool, out: &mut Vec<(&'a str, &'a str, usize, Option<&'a str>, bool)>, continuing: &mut std::collections::HashSet<usize>) {
         for (n, a, i) in children(xml) {
             match n {
-                "text:p" | "text:h" => out.push((a, i, depth, list, header)),
-                "text:list" => walk(i, depth + 1, extract_attr(a, "text:style-name").or(list), false, out),
-                "text:list-item" => walk(i, depth, list, false, out),
-                "text:list-header" => walk(i, depth, list, true, out),
+                "text:p" | "text:h" => {
+                    if cont {
+                        continuing.insert(out.len());
+                    }
+                    out.push((a, i, depth, list, header))
+                }
+                "text:list" => {
+                    let cont = cont || extract_attr(a, "text:continue-numbering") == Some("true") || extract_attr(a, "text:continue-list").is_some();
+                    walk(i, depth + 1, extract_attr(a, "text:style-name").or(list), false, cont, out, continuing)
+                }
+                "text:list-item" => walk(i, depth, list, false, cont, out, continuing),
+                "text:list-header" => walk(i, depth, list, true, cont, out, continuing),
                 _ => {}
             }
             if out.len() > 2_000 {
@@ -1615,12 +1614,13 @@ fn text_block(body: &str, attrs: &str, rect: [f64; 4], rot: f64, ctx: &Ctx, cent
             }
         }
     }
-    walk(body, 0, None, false, &mut paras);
+    walk(body, 0, None, false, false, &mut paras, &mut continuing);
 
     let mut runs: Vec<TextRun> = Vec::new();
     let mut align_weight: HashMap<String, usize> = HashMap::new();
     let mut gaps: Vec<(f64, f64, usize)> = Vec::new();
     let mut counters = [0usize; 10];
+    let mut numbering_broken = false;
     let mut any_text = false;
     let mut any_lead = false;
     let mut no_lead: Vec<usize> = Vec::new();
@@ -1672,13 +1672,16 @@ fn text_block(body: &str, attrs: &str, rect: [f64; 4], rot: f64, ctx: &Ctx, cent
             list.and_then(|n| ctx.styles.lists.get(n)).or(frame_list).and_then(|l| list_marker(l, (*depth).min(10)))
         } else {
             // A paragraph outside any list (or a list header) ends the numbering: the next numbered
-            // list starts again from its first number, as Impress counts.
-            counters = [0; 10];
+            // list starts again from its first number, as Impress counts -- unless it says to go on.
+            numbering_broken = true;
             None
         };
         let label = marker.as_ref().and_then(|m| {
             let d = (*depth).min(10) - 1;
             if let Some((fmt, pre, suf, start)) = &m.number {
+                if std::mem::take(&mut numbering_broken) && !continuing.contains(&pi) {
+                    counters = [0; 10];
+                }
                 counters[d] += 1;
                 counters.iter_mut().skip(d + 1).for_each(|c| *c = 0);
                 Some(format!("{pre}{}{suf}", format_number(fmt, counters[d] + start - 1)))
@@ -1865,7 +1868,7 @@ mod tests {
     }
 
     #[test]
-    fn numbering_starts_again_after_a_paragraph_outside_the_list() {
+    fn numbering_starts_again_after_a_paragraph_outside_the_list_unless_continued() {
         let p = import(r#"<office:document-content><office:automatic-styles>
             <text:list-style style:name="L1"><text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix="."/></text:list-style>
           </office:automatic-styles><office:body><office:presentation><draw:page>
@@ -1879,5 +1882,18 @@ mod tests {
         let text: String = block.runs.iter().map(|r| r.text.as_str()).collect();
         assert!(text.contains("2. ") && !text.contains("3. "), "{text:?}");
         assert_eq!(text.matches("1. ").count(), 2, "{text:?}");
+        // A list that says to continue counts on from 2.
+        let p = import(r#"<office:document-content><office:automatic-styles>
+            <text:list-style style:name="L1"><text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix="."/></text:list-style>
+          </office:automatic-styles><office:body><office:presentation><draw:page>
+            <draw:frame svg:x="1cm" svg:y="1cm" svg:width="10cm" svg:height="8cm"><draw:text-box>
+              <text:list text:style-name="L1"><text:list-item><text:p>a</text:p></text:list-item><text:list-item><text:p>b</text:p></text:list-item></text:list>
+              <text:p>between</text:p>
+              <text:list text:style-name="L1" text:continue-numbering="true"><text:list-item><text:p>c</text:p></text:list-item></text:list>
+            </draw:text-box></draw:frame>
+          </draw:page></office:presentation></office:body></office:document-content>"#);
+        let SlideElement::TextBlock { block, .. } = &p.slides[0].elements[0] else { panic!() };
+        let text: String = block.runs.iter().map(|r| r.text.as_str()).collect();
+        assert!(text.contains("3. "), "{text:?}");
     }
 }

@@ -175,8 +175,6 @@ fn bezier(p0: (f64, f64), c1: (f64, f64), c2: (f64, f64), p3: (f64, f64)) -> imp
     })
 }
 
-/// Logical points of an elliptical arc in box `(l, t, r, b)`, from the radial through `start`,
-/// `sweep` radians (negative: counter-clockwise on screen), as `n` steps.
 /// A pattern brush record's (EMR_CREATEMONOBRUSH / EMR_CREATEDIBPATTERNBRUSHPT) picture, as its
 /// average colour: ihBrush, iUsage, then the bitmap header's and bits' offsets and sizes.
 fn pattern_color(r: &[u8]) -> Option<String> {
@@ -185,11 +183,11 @@ fn pattern_color(r: &[u8]) -> Option<String> {
     dib.extend_from_slice(r.get(off_bits..off_bits.checked_add(cb_bits)?)?);
     let bmp = crate::storage::wmf::dib_to_bmp(&dib)?;
     let img = image::load_from_memory_with_format(&bmp, image::ImageFormat::Bmp).ok()?.to_rgb8();
-    let n = (img.width() as u64 * img.height() as u64).max(1);
-    let sum = img.pixels().fold([0u64; 3], |a, p| [a[0] + p[0] as u64, a[1] + p[1] as u64, a[2] + p[2] as u64]);
-    Some(format!("#{:02x}{:02x}{:02x}", sum[0] / n, sum[1] / n, sum[2] / n))
+    Some(crate::storage::pptx_import::average_hex(&img, 1))
 }
 
+/// Logical points of an elliptical arc in box `(l, t, r, b)`, from the radial through `start`,
+/// `sweep` radians (negative: counter-clockwise on screen), as `n` steps.
 fn arc_points((l, t, r, b): (f64, f64, f64, f64), start: f64, sweep: f64, n: usize) -> Vec<(f64, f64)> {
     let (cx, cy, rx, ry) = ((l + r) / 2.0, (t + b) / 2.0, (r - l).abs() / 2.0, (b - t).abs() / 2.0);
     (0..=n).map(|k| {
@@ -316,15 +314,16 @@ pub fn parse(bytes: &[u8]) -> Option<Wmf> {
             24 => dc.text_color = colorref(r, 8).unwrap_or_else(|| "#000000".into()),
             22 => dc.text_align = u32le(r, 8).unwrap_or(0),
             57 => dc.clockwise = u32le(r, 8) == Some(2),
-            // BeginPath opens a bracket; EndPath closes it, keeping the path for a later Fill/Stroke
-            // (drawing after it goes on the page again). A clip path isn't drawn (clipping isn't
-            // supported); Flatten/WidenPath leave it as it is; AbortPath drops it.
+            // BeginPath (59) opens a bracket; EndPath (60) closes it, keeping the path for a later
+            // Fill/Stroke (drawing after it goes on the page again). FlattenPath (65) and WidenPath
+            // (66) leave it as it is (curves are already points here). SelectClipPath (67) uses it
+            // up as a clip, which isn't drawn (clipping isn't supported); AbortPath (68) drops it.
             59 => {
                 path = Some(PathBuild::default());
                 ended = None;
             }
             60 => ended = path.take(),
-            65 | 68 => {
+            67 | 68 => {
                 path = None;
                 ended = None;
             }
@@ -667,6 +666,29 @@ mod tests {
         ]);
         let wmf = parse(&bytes).unwrap();
         assert_eq!(wmf.items.len(), 2, "the rectangle and the line after the clip: {:?}", wmf.items);
+    }
+
+    #[test]
+    fn a_flattened_path_is_still_stroked_and_a_clip_path_is_not_drawn() {
+        let bytes = emf(&[
+            // Begin, a line, End, FlattenPath, StrokePath: the line is drawn.
+            rec(59, &[]),
+            rec(27, &[0, 0]),
+            rec(54, &[50, 50]),
+            rec(60, &[]),
+            rec(65, &[]),
+            rec(64, &[]),
+            // A clip bracket: SelectClipPath uses the path up, so a Fill after it draws nothing.
+            rec(59, &[]),
+            rec(43, &[0, 0, 100, 100]),
+            rec(60, &[]),
+            rec(67, &[]),
+            rec(62, &[]),
+        ]);
+        let wmf = parse(&bytes).unwrap();
+        assert_eq!(wmf.items.len(), 1, "{:?}", wmf.items);
+        let WmfItem::Path { closed, .. } = &wmf.items[0] else { panic!() };
+        assert!(!closed, "the stroked line");
     }
 
     #[test]

@@ -459,7 +459,11 @@ fn run_span(run: &TextRun, text_styles: &mut String, fresh_id: &mut impl FnMut()
         // This app's points are on its 1080-unit canvas; ODF's are real points on the page.
         size = ((run.font_size_pt / ODF_FONT_SCALE) * 100.0).round() / 100.0,
     ));
-    format!(r#"<text:span text:style-name="{name}">{text}</text:span>"#, text = encode_xml_text(&run.text))
+    // A line break inside a run is ODF's own element (a raw newline would collapse to a space); the
+    // zero-width space importers use to keep a breaks-only paragraph's run from reading as a
+    // paragraph break is a stand-in, not text.
+    let text = run.text.replace('\u{200b}', "").split('\n').map(encode_xml_text).collect::<Vec<_>>().join("<text:line-break/>");
+    format!(r#"<text:span text:style-name="{name}">{text}</text:span>"#)
 }
 
 /// A shape fill as ODF's one solid colour and its opacity: an imported fill can be `#rrggbbaa`

@@ -170,9 +170,12 @@ export function reconcileTextBlockFromDOM(containerEl: HTMLElement): TextRun[] {
       pushText('\n', inheritedStyle);
     } else if (node.nodeName === 'SPAN') {
       const el = node as HTMLElement;
-      // An empty paragraph's stand-in character isn't text.
-      if (el.dataset.placeholder === '1' && (el.textContent || '').replace(/\u200b/g, '') === '') return;
       const style = { ...inheritedStyle, ...styleFromSpan(el) };
+      // An empty paragraph's stand-in character isn't text: dropped, and dropped from what was typed into it.
+      if (el.dataset.placeholder === '1') {
+        pushText((el.textContent || '').replace(/\u200b/g, ''), style);
+        return;
+      }
       // A paragraph's lead (indent, bullet) is kept even when empty: the runs after it are its text.
       if (el.dataset.lead === '1' && !el.textContent) {
         pushText('', style, true);

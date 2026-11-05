@@ -459,11 +459,17 @@ fn draw_axes_chart(d: &mut Draw, plot: &str, groups: &[Group], cats: &[String], 
         (lo, ((hi / step).ceil() * step).max(lo + step), step)
     });
     let xpos = |v: f64| x_axis.map_or(px, |(lo, hi, _)| px + (v - lo) / (hi - lo) * pw);
+    // A scatter's x axis is its horizontal value axis (axPos b or t), and its `c:delete` hides the labels.
+    let x_deleted = children(plot).into_iter()
+        .filter(|(n, _, _)| *n == "c:valAx")
+        .find(|(_, _, ax)| next_tag(ax, "c:axPos").and_then(|(a, _, _)| extract_attr(a, "val")).is_some_and(|p| p == "b" || p == "t"))
+        .and_then(|(_, _, ax)| next_tag(ax, "c:delete").and_then(|(a, _, _)| extract_attr(a, "val")))
+        == Some("1");
     if let Some((xlo, xhi, xstep)) = x_axis {
         let mut v = xlo;
         let mut guard = 0;
         while v <= xhi + xstep * 1e-6 && guard < 50 {
-            if !deleted("c:catAx") {
+            if !x_deleted {
                 d.text([xpos(v) - em * 2.5, py + ph + em * 0.2, em * 5.0, em * 1.4], &number(v, false), 0.9, "#595959", "center", "top", false);
             }
             v += xstep;

@@ -29,4 +29,9 @@ describe("reading imported paragraphs back after an edit", () => {
     // The break after "First" carries its look (bold), not nothing.
     expect(runs[2]!.bold).toBe(true);
   });
+
+  test("text typed into an empty paragraph keeps none of its stand-in character", () => {
+    const container: any = { childNodes: [div([span([text("\u200bhello")], { placeholder: true })])] };
+    expect(reconcileTextBlockFromDOM(container).map((r) => r.text)).toEqual(["hello"]);
+  });
 });

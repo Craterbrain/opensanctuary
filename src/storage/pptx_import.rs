@@ -571,16 +571,23 @@ fn extract_text_shape_element(shape_inner: &str, ctx: &Ctx, remap: Option<&Group
     text_block_element(txbody, &list, &body, style_color, rect, rot, ctx)
 }
 
-/// `rect` (a shape's box, turned `rot` degrees about its centre) narrowed to its geometry's text
-/// rectangle, still turning about the same point. A rectangle's text box is the whole shape.
-/// A shape's geometry evaluated for a `w` x `h` box, remembered for the next call about the same
-/// shape: its text box and its drawing both need it, and evaluating every guide twice is waste.
-fn evaluated(shape_inner: &str, w: f64, h: f64, flips: (bool, bool), eval: impl FnOnce() -> Option<pptx_geom::Geometry>) -> Option<pptx_geom::Geometry> {
-    type Key = (u64, usize, u64, u64, (bool, bool));
+/// A geometry evaluated for a `w` x `h` box, remembered for the next call about the same one: a
+/// shape's text box and its drawing both need it, and evaluating every guide twice is waste.
+/// Keyed by the geometry's own markup (`source`: the preset and its adjust values, or the custom
+/// geometry -- the shape's own or the one its placeholder inherits), not by where it sits.
+fn evaluated(source: &GeomSource, w: f64, h: f64, flips: (bool, bool), eval: impl FnOnce() -> Option<pptx_geom::Geometry>) -> Option<pptx_geom::Geometry> {
+    type Key = (u64, u64, u64, (bool, bool));
     thread_local!(static LAST: RefCell<Option<(Key, Option<pptx_geom::Geometry>)>> = const { RefCell::new(None) });
-    // Keyed by the shape's markup itself (hashed), not where it sits in memory.
-    let digest = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); shape_inner.hash(&mut h); h.finish() };
-    let key: Key = (digest, shape_inner.len(), w.to_bits(), h.to_bits(), flips);
+    let digest = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        match source {
+            GeomSource::Custom(c) => ("custom", *c, "").hash(&mut h),
+            GeomSource::Preset(p, av) => ("preset", *p, *av).hash(&mut h),
+        }
+        h.finish()
+    };
+    let key: Key = (digest, w.to_bits(), h.to_bits(), flips);
     if let Some(hit) = LAST.with(|l| l.borrow().as_ref().filter(|(k, _)| *k == key).map(|(_, g)| g.clone())) {
         return hit;
     }
@@ -589,12 +596,15 @@ fn evaluated(shape_inner: &str, w: f64, h: f64, flips: (bool, bool), eval: impl 
     g
 }
 
+/// `rect` (a shape's box, turned `rot` degrees about its centre) narrowed to its geometry's text
+/// rectangle, still turning about the same point. A rectangle's text box is the whole shape.
 fn geometry_text_rect(shape_inner: &str, ctx: &Ctx, rect: [f64; 4], rot: f64) -> [f64; 4] {
     let [x, y, w, h] = rect;
-    let geometry = match shape_geometry(shape_inner, ctx) {
+    let source = shape_geometry(shape_inner, ctx);
+    let geometry = match source {
         GeomSource::Preset("rect", _) => return rect,
-        GeomSource::Preset(prst, av) => evaluated(shape_inner, w, h, (false, false), || pptx_geom::preset(prst, av, w, h, (false, false))),
-        GeomSource::Custom(cust) => evaluated(shape_inner, w, h, (false, false), || Some(pptx_geom::custom(cust, w, h, (false, false)))),
+        GeomSource::Preset(prst, av) => evaluated(&source, w, h, (false, false), || pptx_geom::preset(prst, av, w, h, (false, false))),
+        GeomSource::Custom(cust) => evaluated(&source, w, h, (false, false), || Some(pptx_geom::custom(cust, w, h, (false, false)))),
     };
     let Some([l, t, r, b]) = geometry.and_then(|g| g.text_rect) else { return rect };
     if r - l <= 0.0 || b - t <= 0.0 {
@@ -883,6 +893,23 @@ fn clear_color(img: &mut image::RgbaImage, color: &str) {
             p[3] = 0;
         }
     }
+}
+
+/// A picture's average colour as `#rrggbb`, from every pixel on a grid about `steps` x `steps`
+/// across it (1: every pixel).
+pub(crate) fn average_hex(img: &image::RgbImage, steps: u32) -> String {
+    let (w, h) = img.dimensions();
+    let (sx, sy) = if steps <= 1 { (1, 1) } else { ((w / steps).max(1) as usize, (h / steps).max(1) as usize) };
+    let (mut sum, mut n) = ([0u64; 3], 0u64);
+    for y in (0..h).step_by(sy) {
+        for x in (0..w).step_by(sx) {
+            let p = img.get_pixel(x, y);
+            (0..3).for_each(|i| sum[i] += p[i] as u64);
+            n += 1;
+        }
+    }
+    let n = n.max(1);
+    format!("#{:02x}{:02x}{:02x}", sum[0] / n, sum[1] / n, sum[2] / n)
 }
 
 /// Whether picture bytes are a JPEG (a photograph, as a rule).
@@ -1177,15 +1204,16 @@ fn extract_autoshape_element(shape_inner: &str, ctx: &Ctx, remap: Option<&GroupR
     let (rect, rot) = shape_rect(shape_inner, ctx, remap)?;
     let transform = ctx.geo.transform(rect, rot);
     let flips = xfrm_flips(shape_inner);
-    let geometry = match shape_geometry(shape_inner, ctx) {
-        GeomSource::Custom(cust) => evaluated(shape_inner, rect[2], rect[3], flips, || Some(pptx_geom::custom(cust, rect[2], rect[3], flips)))?,
+    let source = shape_geometry(shape_inner, ctx);
+    let geometry = match source {
+        GeomSource::Custom(cust) => evaluated(&source, rect[2], rect[3], flips, || Some(pptx_geom::custom(cust, rect[2], rect[3], flips)))?,
         GeomSource::Preset(prst, av) => match prst {
             "rect" | "flowChartProcess" | "ellipse" | "flowChartConnector" => {
                 let stroke_width = if style.stroke_color.is_some() { emu_to_relative_stroke(style.stroke_width_emu, rect[2], rect[3]) } else { 0.0 };
                 let shape_kind = if matches!(prst, "rect" | "flowChartProcess") { "rect" } else { "ellipse" };
                 return Some(SlideElement::Shape { id: new_id(), transform, shape_kind: shape_kind.into(), fill_color: style.fill_color, stroke_color: style.stroke_color, stroke_width, path: None });
             }
-            _ => match evaluated(shape_inner, rect[2], rect[3], flips, || pptx_geom::preset(prst, av, rect[2], rect[3], flips)) {
+            _ => match evaluated(&source, rect[2], rect[3], flips, || pptx_geom::preset(prst, av, rect[2], rect[3], flips)) {
                 Some(g) => g,
                 None => {
                     let stroke_width = if style.stroke_color.is_some() { emu_to_relative_stroke(style.stroke_width_emu, rect[2], rect[3]) } else { 0.0 };
