@@ -34,17 +34,39 @@ mod storage;
 
 /// Points every keyring call in this test binary at one throwaway file instead of the OS keyring
 /// of the machine running the tests, where the real app keeps entries of the same names (a plugin's
-/// API keys, the licensed-passage key, the TLS key). Set in-process, not through the environment
-/// (src/storage/keyring.rs, `use_test_keyring_file`); the file lives in cargo's `target/tmp`, one
-/// per run. Idempotent; `base_app_state`, `open_db` and `open_db_with_dirs` call it.
+/// API keys, the licensed-passage key, the TLS key). Set in-process (src/storage/keyring.rs,
+/// `use_test_keyring_file`); the file lives in cargo's `target/tmp`, one per run, and the files of
+/// earlier runs are cleared. Runs when the test binary loads (`ISOLATE_KEYRING_AT_LOAD`), before any
+/// test -- so a test that reaches the keyring some other way than these helpers is covered too.
+/// Idempotent; `base_app_state`, `open_db` and `open_db_with_dirs` still call it.
 fn isolate_keyring() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("core_tests_keyring_{}.json", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        os_next::storage::keyring::use_test_keyring_file(path);
+        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if name.to_string_lossy().starts_with("core_tests_keyring_") {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+        os_next::storage::keyring::use_test_keyring_file(dir.join(format!("core_tests_keyring_{}.json", std::process::id())));
     });
 }
+
+/// `isolate_keyring` run as the test binary loads, before the harness starts any test (an
+/// initializer in the platform's load-time constructor section, as the `ctor` crate does).
+#[used]
+#[cfg_attr(any(target_os = "linux", target_os = "android", target_os = "freebsd"), link_section = ".init_array")]
+#[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
+#[cfg_attr(windows, link_section = ".CRT$XCU")]
+static ISOLATE_KEYRING_AT_LOAD: extern "C" fn() = {
+    extern "C" fn isolate_at_load() {
+        isolate_keyring();
+    }
+    isolate_at_load
+};
 
 /// `Database::new` for this test binary. A library on disk reaches the keyring for its
 /// licensed-passage key (sealing, reading or purging a passage), so open one only through this
@@ -170,4 +192,14 @@ fn test_doc(name: &str) -> Option<std::path::PathBuf> {
         .unwrap_or_else(|_| std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("Documents/OpenSanctuary-test-docs"));
     let path = dir.join(name);
     if path.exists() { Some(path) } else { eprintln!("skipping: {} not present ($OS_TEST_DOCS)", path.display()); None }
+}
+
+#[test]
+fn the_keyring_is_isolated_before_any_helper_runs() {
+    // No open_db / base_app_state first: the load-time initializer has already pointed the keyring here.
+    os_next::storage::KeyringService::set_secret("OpenSanctuary:CoreTest", "probe", "isolated").unwrap();
+    let file = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("core_tests_keyring_{}.json", std::process::id()));
+    let text = std::fs::read_to_string(&file).expect("the secret went to this run's test keyring file");
+    assert!(text.contains("isolated"));
+    os_next::storage::KeyringService::delete_secret("OpenSanctuary:CoreTest", "probe").unwrap();
 }

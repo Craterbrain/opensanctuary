@@ -34,8 +34,8 @@ const LEGACY_SHARED_KEYRING_ACCOUNT: &str = "tls_private_key";
 /// `tls_private_key:<id>`.
 const SETTING_KEY_TLS_KEY_ID: &str = "tlsKeyId";
 /// `OS_NEXT_TLS_KEY_STORE=file` keeps the private key in an owner-only file next to the database
-/// instead of the OS keyring. The e2e test servers set it, so test runs never write to the
-/// developer's real keyring.
+/// instead of the OS keyring (a headless install). Test servers don't need it: their
+/// `--test-keyring-file` already keeps every secret out of the developer's real keyring.
 const ENV_TLS_KEY_STORE: &str = "OS_NEXT_TLS_KEY_STORE";
 const KEY_FILE_NAME: &str = "tls_private_key.pem";
 pub const DEFAULT_HTTPS_PORT: u16 = 8443;

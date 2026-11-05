@@ -32,13 +32,18 @@ export interface SpawnedTestServer {
 }
 
 /**
- * The environment every test server runs with: its secrets (plugin API keys, the licensed-passage
- * key, the TLS key) go to files in its own data dir, never the OS keyring of the machine running
+ * The arguments every test server runs with: its secrets (plugin API keys, the licensed-passage
+ * key, the TLS key) go to one file in its own data dir, never the OS keyring of the machine running
  * the tests -- where they would overwrite the real app's entries of the same name
- * (src/storage/keyring.rs, OS_NEXT_TEST_KEYRING_FILE; src/network/tls.rs, OS_NEXT_TLS_KEY_STORE).
+ * (src/storage/keyring.rs, `--test-keyring-file`).
  */
-export function testServerEnv(dataDir: string, extra: Record<string, string> = {}): Record<string, string | undefined> {
-  return { ...process.env, OS_NEXT_TLS_KEY_STORE: "file", OS_NEXT_TEST_KEYRING_FILE: join(dataDir, "keyring.json"), ...extra };
+export function testServerArgs(dataDir: string): string[] {
+  return ["--test-keyring-file", join(dataDir, "keyring.json")];
+}
+
+/** The environment a test server runs with: this process's own, plus `extra`. */
+export function testServerEnv(extra: Record<string, string> = {}): Record<string, string | undefined> {
+  return { ...process.env, ...extra };
 }
 
 /**
@@ -75,13 +80,14 @@ export async function spawnTestServer(opts: {
       "--port", opts.port.toString(),
       "--db-path", dbPath,
       "--web-dir", opts.webDir ?? resolve(import.meta.dir, "../"),
+      ...testServerArgs(testDir),
       ...(opts.extraArgs ?? []),
     ],
     {
       cwd: resolve(import.meta.dir, "../../"),
       stdout: "pipe",
       stderr: "pipe",
-      env: testServerEnv(testDir, opts.env),
+      env: testServerEnv(opts.env),
     }
   );
 

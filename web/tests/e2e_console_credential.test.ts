@@ -4,7 +4,7 @@ import { spawn, type Subprocess } from "bun";
 import { resolve, join } from "path";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
-import { testServerEnv } from "./e2e_helpers";
+import { testServerArgs, testServerEnv } from "./e2e_helpers";
 
 /**
  * A remote console (a browser on another machine, reached over the HTTPS plane at the
@@ -25,8 +25,8 @@ describe("E2E Live Test: remote console credential survives restarts and is revo
   async function startServer(): Promise<{ origin: string; hostToken: string }> {
     proc = spawn(
       [binary, "--headless", "--skip-first-time-setup", "--port", String(PORT), "--https-port", String(HTTPS_PORT),
-        "--db-path", dbPath, "--web-dir", resolve(import.meta.dir, "../")],
-      { cwd: resolve(import.meta.dir, "../../"), stdout: "pipe", stderr: "ignore", env: testServerEnv(testDir, { OS_NEXT_PRINT_TOKEN: "1" }) },
+        "--db-path", dbPath, "--web-dir", resolve(import.meta.dir, "../"), ...testServerArgs(testDir)],
+      { cwd: resolve(import.meta.dir, "../../"), stdout: "pipe", stderr: "ignore", env: testServerEnv({ OS_NEXT_PRINT_TOKEN: "1" }) },
     );
     // The banner prints the token URL; read stdout until it appears.
     const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
