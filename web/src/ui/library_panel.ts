@@ -323,7 +323,11 @@ function prepareBundleMenuItem(tabName: string, item: LibraryItem): void {
  * cheaply, without keeping a second copy of a response that can be megabytes) and the parsed items. */
 const libraryTabCache = new Map<string, { fingerprint: string; items: LibraryItem[] }>();
 
-/** A response's length and two independent 32-bit FNV-1a hashes of it. */
+/** A response's length, its 32-bit FNV-1a hash, and a second 32-bit multiply-xorshift hash with a
+ * different multiplier: 64 hash bits, so an unchanged refetch is told apart without keeping the text.
+ * Not `crypto.subtle.digest`: that exists only in secure contexts, and the panel is also opened over
+ * plain http from other machines on the LAN. Not a defence against crafted collisions (the server's
+ * own response is the only input). */
 export function responseFingerprint(text: string): string {
   let a = 0x811c9dc5;
   let b = 0x01000193 ^ 0x5bd1e995;
@@ -1034,7 +1038,7 @@ export function renderCatalog(items: LibraryItem[], tabName: string, matchedOnli
     }
     selectedCatalogIndex = targetIdx;
     const target = items[targetIdx];
-    if (target && !alreadyPreviewing(target)) selectAndPreviewItem(target, tabName);
+    if (target && !alreadyPreviewing(target, tabName)) selectAndPreviewItem(target, tabName);
   } else if (!matchedOnlineRef) {
     if (resourcePreviewMonitor) {
       resourcePreviewMonitor.innerHTML = '<div class="asset-preview-empty">No items match query</div>';
@@ -1440,13 +1444,23 @@ let lastPreviewedItem: LibraryItem | null = null;
 /** True if `item` is what the preview already shows and is still what's staged, so a re-render
  * of the catalog (every search keystroke keeps the same top match selected) can skip
  * re-rendering the preview and re-staging it on the server -- ~60% of a keystroke's cost. */
-function alreadyPreviewing(item: LibraryItem): boolean {
+function alreadyPreviewing(item: LibraryItem, tabName: string): boolean {
   if (!ctx || item !== lastPreviewedItem || ctx.getSelectedLibraryItem() !== item) return false;
   const staged = ctx.getCurrentSnapshot()?.state.staged_item;
+  if (!staged || !item.id) return false;
   // The staged copy of a library item is `sched_<kind>_<its id>` (to_schedule_item): the same
-  // item, not just one with the same title (a schedule's own copy, or another arrangement).
-  return !!staged && !!item.id && staged.id.endsWith(`_${item.id}`);
+  // item, not just one with the same title (a schedule's own copy, or another arrangement),
+  // nor an item of another kind whose id happens to end the same way.
+  return (STAGED_ID_KINDS[tabName] ?? []).some(kind => staged.id === `sched_${kind}_${item.id}`);
 }
+
+/** The `sched_<kind>_` prefixes the server gives a staged item from each tab (models.rs). */
+const STAGED_ID_KINDS: Record<string, string[]> = {
+  songs: ['song'],
+  scriptures: ['scrip', 'lic'],
+  presentations: ['pres'],
+  media: ['media']
+};
 
 export function selectAndPreviewItem(item: LibraryItem, tabName: string) {
   if (!ctx) return;

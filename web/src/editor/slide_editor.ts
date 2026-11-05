@@ -555,7 +555,8 @@ export class SlideEditor {
     if (index < 0 || index >= this.slides.length) return;
     const slide = this.slides[index];
     if (!slide) return;
-    this.history.pushState(this.getActiveSlide());
+    // The slide that changes (often not the active one), so undo puts back the right one.
+    this.history.pushState(slide);
     slide.tag = tag ? tag.trim() : undefined;
     if (slide.tag) {
       const tagUpper = slide.tag.toUpperCase();
@@ -576,7 +577,8 @@ export class SlideEditor {
     if (index < 0 || index >= this.slides.length) return;
     const slide = this.slides[index];
     if (!slide) return;
-    this.history.pushState(this.getActiveSlide());
+    // The slide that changes (often not the active one), so undo puts back the right one.
+    this.history.pushState(slide);
     slide.duration_seconds = durationSeconds && durationSeconds > 0 ? durationSeconds : undefined;
     this.filmstrip.setSlides(this.slides, this.activeIndex);
     this.syncUIState();
@@ -616,17 +618,24 @@ export class SlideEditor {
   }
 
   public undo(): void {
-    this.restoreFromHistory(this.history.nextUndoId(), (cur) => this.history.undo(cur));
+    this.restoreFromHistory(this.history.nextUndoId(), (cur) => this.history.undo(cur), () => this.history.dropNextUndo());
   }
 
   public redo(): void {
-    this.restoreFromHistory(this.history.nextRedoId(), (cur) => this.history.redo(cur));
+    this.restoreFromHistory(this.history.nextRedoId(), (cur) => this.history.redo(cur), () => this.history.dropNextRedo());
   }
 
-  /** Puts a history snapshot back onto the slide it was taken of (by id; the active slide when
-   * that one is gone), redrawing the canvas only when that is the slide on it. */
-  private restoreFromHistory(id: string | undefined, step: (cur: EditorSlide) => EditorSlide | null): void {
+  /** Puts a history snapshot back onto the slide it was taken of (by id), redrawing the canvas
+   * only when that is the slide on it. A snapshot of a slide since deleted is skipped. */
+  private restoreFromHistory(id: string | undefined, step: (cur: EditorSlide) => EditorSlide | null, drop: () => void): void {
     const found = id === undefined ? -1 : this.slides.findIndex((s) => s.id === id);
+    if (id !== undefined && found < 0) {
+      // That slide was deleted since: its snapshot belongs to no slide here, so it's dropped
+      // (never written over the active one); the next undo goes on from there.
+      drop();
+      this.syncUIState();
+      return;
+    }
     const index = found >= 0 ? found : this.activeIndex;
     const cur = this.slides[index];
     if (!cur) return;

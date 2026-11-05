@@ -44,6 +44,15 @@ export class EditorHistoryManager {
     return this.redoStack[this.redoStack.length - 1]?.id;
   }
 
+  /** Drops the next undo (redo) step without applying it: its slide is gone. */
+  public dropNextUndo(): void {
+    this.undoStack.pop();
+  }
+
+  public dropNextRedo(): void {
+    this.redoStack.pop();
+  }
+
   public undo(currentSlide: EditorSlide): EditorSlide | null {
     if (!this.canUndo()) return null;
     const prev = this.undoStack.pop()!;

@@ -2,9 +2,10 @@
 //! request: each distinct file content is compressed once -- keyed by a hash of the bytes, so a
 //! rebuilt bundle or an edited `style.css` is picked up immediately (even a same-length rewrite
 //! within the same second), and every spelling of one file's URL shares one entry -- and the
-//! compressed bytes are reused from memory after that. Reading the file each time is cheap (it's
-//! in the page cache); compressing it is what's saved. Requests that miss together wait for one
-//! compression. The cache is bounded. No `.gz` files on disk to go stale under `bun --watch`.
+//! compressed bytes are reused from memory after that. Compressing is what's saved; reading and
+//! hashing the file is skipped too once a path's (Last-Modified, length) has been seen and that
+//! mtime is old enough that no same-second rewrite can still share it. Requests that miss together
+//! wait for one compression. The cache is bounded. No `.gz` files on disk to go stale under `bun --watch`.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -14,7 +15,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::body::{Body, Bytes};
 use axum::extract::Request;
-use axum::http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, RANGE, VARY};
+use axum::http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, LAST_MODIFIED, RANGE, VARY};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -27,15 +28,44 @@ const MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// The most compressed bytes kept; past it the cache starts again empty (the UI's own files are a
 /// few MB, so this only bites when something keeps asking for new content).
 const MAX_CACHED_BYTES: usize = 64 * 1024 * 1024;
+/// The most entries kept (content slots plus path shortcuts), so content that doesn't compress --
+/// which costs no bytes -- can't grow the maps without bound either.
+const MAX_ENTRIES: usize = 4096;
+/// How far a file's Last-Modified (whole seconds) must be in the past before (path, Last-Modified,
+/// length) is trusted to mean the same content: a rewrite within that second could keep all three.
+const SETTLED_SECS: i64 = 2;
 
 /// One content's compressed form, filled by whichever request gets there first (`None` when
 /// compressing didn't make it smaller).
 type Slot = Arc<tokio::sync::OnceCell<Option<Bytes>>>;
 
+type ContentKey = (u64, usize);
+
 #[derive(Default)]
 struct Cache {
-    slots: HashMap<(u64, usize), Slot>,
+    slots: HashMap<ContentKey, Slot>,
+    /// (request path, Last-Modified, length) of a settled file -> its content's key.
+    by_path: HashMap<(String, HeaderValue, u64), ContentKey>,
     bytes: usize,
+    /// Bumped on every reset, so a compression that finishes after one doesn't count its bytes
+    /// against the new, empty cache it isn't in.
+    generation: u64,
+}
+
+impl Cache {
+    fn make_room(&mut self) {
+        if self.bytes > MAX_CACHED_BYTES || self.slots.len() + self.by_path.len() >= MAX_ENTRIES {
+            let generation = self.generation + 1;
+            *self = Cache { generation, ..Cache::default() };
+        }
+    }
+}
+
+/// Whether a Last-Modified value is far enough in the past that the file can't still be rewritten
+/// within that same second.
+fn settled(last_modified: &HeaderValue) -> bool {
+    let Some(t) = last_modified.to_str().ok().and_then(|v| chrono::DateTime::parse_from_rfc2822(v).ok()) else { return false };
+    chrono::Utc::now().signed_duration_since(t).num_seconds() >= SETTLED_SECS
 }
 
 fn cache() -> &'static Mutex<Cache> {
@@ -76,6 +106,7 @@ pub(super) async fn gzip_static(req: Request, next: Next) -> Response {
     // GET only: ServeDir answers HEAD with the file's length but an empty body, and gzipping
     // (and caching) that would hand every later GET a compressed empty file.
     let wants_gzip = req.method() == Method::GET && accepts_gzip(req.headers()) && !req.headers().contains_key(RANGE);
+    let path = req.uri().path().to_owned();
     let mut res = next.run(req).await;
 
     if !compressible(res.headers()) {
@@ -91,6 +122,18 @@ pub(super) async fn gzip_static(req: Request, next: Next) -> Response {
         return res;
     }
 
+    let path_key = res.headers().get(LAST_MODIFIED).filter(|lm| settled(lm)).map(|lm| (path, lm.clone(), len));
+    if let Some(pk) = &path_key {
+        let known = {
+            let c = cache().lock().unwrap_or_else(|e| e.into_inner());
+            c.by_path.get(pk).and_then(|key| c.slots.get(key)).and_then(|slot| slot.get().cloned().flatten())
+        };
+        if let Some(gz) = known {
+            // Unchanged since it was hashed: the file's body is dropped unread.
+            return gzipped(res, gz);
+        }
+    }
+
     let (parts, body) = res.into_parts();
     let Ok(raw) = axum::body::to_bytes(body, MAX_BYTES as usize).await else {
         // The file failed mid-read; the headers already promised a length we can't deliver.
@@ -101,12 +144,18 @@ pub(super) async fn gzip_static(req: Request, next: Next) -> Response {
         raw.hash(&mut h);
         (h.finish(), raw.len())
     };
-    let slot: Slot = {
+    let (slot, generation): (Slot, u64) = {
         let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-        if !c.slots.contains_key(&key) && c.bytes > MAX_CACHED_BYTES {
-            *c = Cache::default();
+        if !c.slots.contains_key(&key) {
+            c.make_room();
         }
-        c.slots.entry(key).or_default().clone()
+        if let Some(pk) = path_key {
+            if !c.by_path.contains_key(&pk) {
+                c.make_room();
+            }
+            c.by_path.insert(pk, key);
+        }
+        (c.slots.entry(key).or_default().clone(), c.generation)
     };
     let to_compress = raw.clone();
     let gz = slot.get_or_init(|| async move {
@@ -115,7 +164,10 @@ pub(super) async fn gzip_static(req: Request, next: Next) -> Response {
             _ => None,
         };
         let size = gz.as_ref().map_or(0, Bytes::len);
-        cache().lock().unwrap_or_else(|e| e.into_inner()).bytes += size;
+        let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
+        if c.generation == generation {
+            c.bytes += size;
+        }
         gz
     }).await.clone();
     match gz {
@@ -246,6 +298,41 @@ mod tests {
         assert_eq!(res.headers()[CONTENT_ENCODING], "gzip");
         assert_eq!(gunzip(&body), js.as_bytes());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn a_settled_file_is_served_without_rereading_it() {
+        let d = tmp_dir("settled");
+        let file = d.join("old.js");
+        let set = |text: &str| {
+            std::fs::write(&file, text).unwrap();
+            let f = std::fs::File::options().write(true).open(&file).unwrap();
+            f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600)).unwrap();
+        };
+        let v1 = "console.log('old1');\n".repeat(400);
+        set(&v1);
+        let (_, body) = get(&d, "/old.js", &[(ACCEPT_ENCODING, "gzip")]).await;
+        assert_eq!(gunzip(&body), v1.as_bytes());
+        // Same path, Last-Modified and length: taken on trust, so the stale copy proves the
+        // shortcut skipped the read. (Real files can't do this: their mtime moves on a rewrite.)
+        let v2 = "console.log('old2');\n".repeat(400);
+        set(&v2);
+        let (_, body) = get(&d, "/old.js", &[(ACCEPT_ENCODING, "gzip")]).await;
+        assert_eq!(gunzip(&body), v1.as_bytes());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_reset_drops_bytes_counted_by_an_older_generation() {
+        let mut c = Cache { bytes: MAX_CACHED_BYTES + 1, generation: 7, ..Cache::default() };
+        c.make_room();
+        assert_eq!((c.bytes, c.generation), (0, 8));
+        for i in 0..MAX_ENTRIES {
+            c.slots.insert((i as u64, 0), Slot::default());
+        }
+        c.make_room();
+        assert!(c.slots.is_empty());
+        assert_eq!(c.generation, 9);
     }
 
     #[tokio::test]
