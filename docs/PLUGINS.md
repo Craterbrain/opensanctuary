@@ -1,6 +1,6 @@
 # OS-Next Plugin System
 
-_Last edited: 2026-10-29_
+_Last edited: 2026-11-04_
 
 A plugin extends OpenSanctuary in one of two ways, and **nothing runs until the operator approves it**
 in Settings > Plugins:
@@ -194,8 +194,9 @@ design, threat model and remaining phases are in [PLUGIN_PERMISSIONS.md](PLUGIN_
   server and the Song Library panel; it is now `web/plugins/genius_lyrics/` (id kept from when it only
   searched Genius; the name is Song Lyrics). It searches LRCLIB, an open community lyrics database, and
   Genius together, so Genius's bot filter refusing a request never hides LRCLIB's results. It is a sandboxed
-  panel that asks only for `lrclib.net` and `genius.com`, `library.write` on songs, and optionally
-  `AddToSchedule`/`GoLive`. Approve
+  panel that asks only for `lrclib.net`, `genius.com` and `itunes.apple.com` (the iTunes store's search,
+  sent the search terms and the results' artist names to sort Christian music first), `library.write` on
+  songs, and optionally `AddToSchedule`/`GoLive`. Approve
   it in Settings > Plugins and it appears as a panel. It is also the worked example of a plugin that
   needs the network.
 - **No pre-manifest or native plugins.** A bare `.js` script in `web/plugins/` with no `.plugin.json`, the

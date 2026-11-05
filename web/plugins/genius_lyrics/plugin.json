@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "id": "genius_lyrics",
   "name": "Song Lyrics",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "publisher": "OpenSanctuary",
   "description": "Search LRCLIB (an open community lyrics database) and Genius for song lyrics, Christian music first, and import them into your song library as slides.",
   "web": {

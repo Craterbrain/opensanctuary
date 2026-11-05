@@ -20,7 +20,8 @@
   }
 
   /** Christian songs first, then ones whose genre couldn't be told; the rest behind a "show" row. */
-  function renderFiltered(hits) {
+  /** Christian (then unknown) results, the rest behind a button; `onShowAll` runs when it's pressed. */
+  function renderFiltered(hits, onShowAll) {
     var shown = hits.filter(function (h) { return h.faith === 'christian'; })
       .concat(hits.filter(function (h) { return h.faith !== 'christian' && h.faith !== 'other'; }));
     var others = hits.filter(function (h) { return h.faith === 'other'; });
@@ -35,6 +36,7 @@
       btn.addEventListener('click', function () {
         li.remove();
         others.forEach(function (hit) { listEl.appendChild(hitRow(hit)); });
+        if (onShowAll) onShowAll();
       });
       li.appendChild(btn);
       listEl.appendChild(li);
@@ -87,9 +89,11 @@
 
   /** net.fetch, tried again (twice, after a short pause) when the server says it's busy: LRCLIB often
    *  answers 503 "The server is busy, please retry in a moment" -- about 4 searches in 10 at times. */
-  async function fetchPatiently(url) {
+  async function fetchPatiently(url, stillWanted) {
     var res;
     for (var attempt = 0; attempt < 3; attempt++) {
+      // A newer search has taken over: don't keep a busy server busier for this one.
+      if (attempt && stillWanted && !stillWanted()) return res;
       if (attempt) await pause(attempt * 700);
       res = await OS.call('net.fetch', { url: url });
       if (res.status !== 429 && res.status < 500) return res;
@@ -101,8 +105,8 @@
     return new Error(status === 429 || status === 503 ? label + ' is busy right now' : label + ' answered ' + status);
   }
 
-  async function fetchHits(label, url, parse, query, patient) {
-    var res = patient ? await fetchPatiently(url) : await OS.call('net.fetch', { url: url });
+  async function fetchHits(label, url, parse, query, stillWanted) {
+    var res = stillWanted ? await fetchPatiently(url, stillWanted) : await OS.call('net.fetch', { url: url });
     if (res.status !== 200) throw sourceError(label, res.status);
     return parse(res.body, query);
   }
@@ -114,11 +118,13 @@
 
   /** Genre records for the query (one iTunes song search) plus a lookup for each artist that leaves
    *  unexplained (up to 5 new ones). null when iTunes can't be reached: then nothing is filtered. */
-  async function genreRecords(songsPromise, hits) {
-    var records = await songsPromise;
+  async function genreRecords(query, hits) {
+    var records = await OS.call('net.fetch', { url: Lyrics.itunesSongSearchUrl(query) })
+      .then(function (res) { return res.status === 200 ? Lyrics.parseItunesSongs(res.body) : null; })
+      .catch(function () { return null; });
     if (!records) return null;
-    var artistGenres = {};
-    var pending = Lyrics.artistsToLookUp(hits, records, 50).filter(function (a) { return !(a in artistGenreCache); }).slice(0, 5);
+    var artistGenres = Object.create(null);
+    var pending = Lyrics.artistsToLookUp(hits, records, 5, artistGenreCache);
     await Promise.all(pending.map(async function (artist) {
       try {
         var res = await OS.call('net.fetch', { url: Lyrics.itunesArtistSearchUrl(artist) });
@@ -138,14 +144,11 @@
     var mine = ++searchSeq;
     setStatus('\u2728 Searching LRCLIB and Genius for \u201c' + q + '\u201d\u2026');
     listEl.textContent = '';
-    // Genres come from iTunes, fetched alongside the lyrics searches.
-    var songsPromise = OS.call('net.fetch', { url: Lyrics.itunesSongSearchUrl(q) })
-      .then(function (res) { return res.status === 200 ? Lyrics.parseItunesSongs(res.body) : null; })
-      .catch(function () { return null; });
+    var stillWanted = function () { return mine === searchSeq; };
     // LRCLIB is an open lyrics database; Genius sits behind a bot filter that often refuses us, so it is
     // a bonus: its failure never hides LRCLIB's results.
     var results = await Promise.all([
-      fetchHits('LRCLIB', Lyrics.lrclibSearchUrl(q), Lyrics.parseLrclibResponse, q, true).catch(function (e) { return e; }),
+      fetchHits('LRCLIB', Lyrics.lrclibSearchUrl(q), Lyrics.parseLrclibResponse, q, stillWanted).catch(function (e) { return e; }),
       fetchHits('Genius', Lyrics.searchUrl(q), Lyrics.parseSearchResponse, q).catch(function (e) { return e; })
     ]);
     if (mine !== searchSeq) return;
@@ -158,15 +161,25 @@
       return;
     }
     setStatus('\u2728 Checking which of ' + hits.length + ' result' + (hits.length === 1 ? ' is' : 's are') + ' Christian music\u2026');
-    var genres = await genreRecords(songsPromise, hits);
-    if (mine !== searchSeq) return;
-    if (!genres) {
+    var unfiltered = function (why) {
       renderHits(hits);
-      setStatus(hits.length + ' result' + (hits.length === 1 ? '' : 's') + note + ' \u2014 couldn\u2019t check genres, so nothing is filtered.');
-      return;
+      setStatus(hits.length + ' result' + (hits.length === 1 ? '' : 's') + note + ' \u2014 ' + why + ', so nothing is filtered.');
+    };
+    // Genres come from iTunes, asked only once there are results to sort (it allows ~20 requests a
+    // minute). Any failure in sorting still shows every result: the lyrics were found.
+    var counts;
+    try {
+      var genres = await genreRecords(q, hits);
+      if (mine !== searchSeq) return;
+      if (!genres) return unfiltered('couldn\u2019t check genres');
+      Lyrics.classifyHits(hits, genres.records, genres.artistGenres);
+      counts = renderFiltered(hits, function () {
+        setStatus(hits.length + ' result' + (hits.length === 1 ? '' : 's') + note + ', ' + counts.hidden + ' not listed as Christian music');
+      });
+    } catch (e) {
+      if (mine !== searchSeq) return;
+      return unfiltered('genres couldn\u2019t be sorted (' + e.message + ')');
     }
-    Lyrics.classifyHits(hits, genres.records, genres.artistGenres);
-    var counts = renderFiltered(hits);
     if (counts.shown) {
       setStatus(counts.shown + ' result' + (counts.shown === 1 ? '' : 's') + note +
         (counts.hidden ? ' \u00b7 ' + counts.hidden + ' other' + (counts.hidden === 1 ? '' : 's') + ' hidden' : ''));
