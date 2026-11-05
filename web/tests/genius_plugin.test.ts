@@ -243,6 +243,8 @@ describe("Lyrics plugin: Christian-music filter (iTunes genres)", () => {
     expect(Genius.artistNames("Featherstone ft. Crowder")).toEqual(["featherstone", "crowder"]);
     expect(Genius.artistNames("AC/DC")).toEqual(["ac dc"]);
     expect(Genius.artistNames("Bethel Music / Jenn Johnson")).toEqual(["bethel music", "jenn johnson"]);
+    expect(Genius.artistNames("Bethel Music/Jenn Johnson")).toEqual(["bethel music", "jenn johnson"]);
+    expect(Genius.artistNames("Hillsong+Brooke Ligertwood")).toEqual(["hillsong", "brooke ligertwood"]);
     // An artist named after a built-in object property is a key like any other (it hung the search).
     const records = Genius.parseItunesSongs(itunesSongs([["Something", "Constructor", "Rock"], ["X", "toString", "Pop"]]));
     const hits = Genius.classifyHits([hit("Song", "Constructor"), hit("Song", "toString"), hit("Song", "valueOf")], records, {});

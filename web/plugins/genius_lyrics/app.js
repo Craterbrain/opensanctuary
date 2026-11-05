@@ -19,8 +19,8 @@
     hits.forEach(function (hit) { listEl.appendChild(hitRow(hit)); });
   }
 
-  /** Christian songs first, then ones whose genre couldn't be told; the rest behind a "show" row. */
-  /** Christian (then unknown) results, the rest behind a button; `onShowAll` runs when it's pressed. */
+  /** Christian songs first, then ones whose genre couldn't be told; the rest behind a "show" row
+   *  (`onShowAll` runs when it's pressed). */
   function renderFiltered(hits, onShowAll) {
     var shown = hits.filter(function (h) { return h.faith === 'christian'; })
       .concat(hits.filter(function (h) { return h.faith !== 'christian' && h.faith !== 'other'; }));
@@ -92,9 +92,9 @@
   async function fetchPatiently(url, stillWanted) {
     var res;
     for (var attempt = 0; attempt < 3; attempt++) {
-      // A newer search has taken over: don't keep a busy server busier for this one.
-      if (attempt && stillWanted && !stillWanted()) return res;
       if (attempt) await pause(attempt * 700);
+      // A newer search has taken over during the pause: don't keep a busy server busier for this one.
+      if (attempt && stillWanted && !stillWanted()) return res;
       res = await OS.call('net.fetch', { url: url });
       if (res.status !== 429 && res.status < 500) return res;
     }
@@ -118,12 +118,9 @@
 
   /** Genre records for the query (one iTunes song search) plus a lookup for each artist that leaves
    *  unexplained (up to 5 new ones). null when iTunes can't be reached: then nothing is filtered. */
-  async function genreRecords(query, hits) {
-    var records = await OS.call('net.fetch', { url: Lyrics.itunesSongSearchUrl(query) })
-      .then(function (res) { return res.status === 200 ? Lyrics.parseItunesSongs(res.body) : null; })
-      .catch(function () { return null; });
-    if (!records) return null;
-    var artistGenres = Object.create(null);
+  async function genreRecords(songsPromise, hits, stillWanted) {
+    var records = await songsPromise;
+    if (!records || !stillWanted()) return null;
     var pending = Lyrics.artistsToLookUp(hits, records, 5, artistGenreCache);
     await Promise.all(pending.map(async function (artist) {
       try {
@@ -131,8 +128,8 @@
         if (res.status === 200) artistGenreCache[artist] = Lyrics.parseItunesArtistGenre(res.body, artist) || '';
       } catch (e) { /* unknown stays unknown, and is asked again next time */ }
     }));
-    Object.keys(artistGenreCache).forEach(function (a) { if (artistGenreCache[a]) artistGenres[a] = artistGenreCache[a]; });
-    return { records: records, artistGenres: artistGenres };
+    // The cache itself: an artist iTunes doesn't know is '' there, which counts as unknown.
+    return { records: records, artistGenres: artistGenreCache };
   }
 
   // Bumped by each search; an older one still in flight never paints over a newer one's results.
@@ -145,6 +142,11 @@
     setStatus('\u2728 Searching LRCLIB and Genius for \u201c' + q + '\u201d\u2026');
     listEl.textContent = '';
     var stillWanted = function () { return mine === searchSeq; };
+    // Genres come from iTunes, its song search sent alongside the lyrics searches (so sorting doesn't
+    // wait for them); the artist lookups after it only if there are results.
+    var songsPromise = OS.call('net.fetch', { url: Lyrics.itunesSongSearchUrl(q) })
+      .then(function (res) { return res.status === 200 ? Lyrics.parseItunesSongs(res.body) : null; })
+      .catch(function () { return null; });
     // LRCLIB is an open lyrics database; Genius sits behind a bot filter that often refuses us, so it is
     // a bonus: its failure never hides LRCLIB's results.
     var results = await Promise.all([
@@ -162,14 +164,15 @@
     }
     setStatus('\u2728 Checking which of ' + hits.length + ' result' + (hits.length === 1 ? ' is' : 's are') + ' Christian music\u2026');
     var unfiltered = function (why) {
+      // Whatever a sort that failed half-way marked is dropped: nothing is filtered, nothing is labelled.
+      hits.forEach(function (h) { delete h.faith; delete h.genre; });
       renderHits(hits);
       setStatus(hits.length + ' result' + (hits.length === 1 ? '' : 's') + note + ' \u2014 ' + why + ', so nothing is filtered.');
     };
-    // Genres come from iTunes, asked only once there are results to sort (it allows ~20 requests a
-    // minute). Any failure in sorting still shows every result: the lyrics were found.
+    // Any failure in sorting still shows every result: the lyrics were found.
     var counts;
     try {
-      var genres = await genreRecords(q, hits);
+      var genres = await genreRecords(songsPromise, hits, stillWanted);
       if (mine !== searchSeq) return;
       if (!genres) return unfiltered('couldn\u2019t check genres');
       Lyrics.classifyHits(hits, genres.records, genres.artistGenres);

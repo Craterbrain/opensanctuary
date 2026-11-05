@@ -352,6 +352,9 @@
    *  "Bethel Music (Ft. Brian Johnson)". */
   function artistNames(credit) {
     return String(credit || '')
+      // "/" and "+" join two names when both sides are real names ("Bethel Music/Jenn Johnson"), not
+      // inside a short one ("AC/DC").
+      .replace(/([^\s\/+]{3,})\s*[\/+]\s*(?=[^\s\/+]{3,})/g, '$1, ')
       // Only the separators credit lines actually use: splitting on "and" would turn "Hillsong Young and
       // Free" into an artist called "Free" (a rock band). "feat"/"ft" only as whole words (not "Feather
       // Rose"), "/" and "+" only between spaces (not "AC/DC").
@@ -386,7 +389,7 @@
 
   /** Whether two core titles name the same song: equal, or one the other's start at a word break
    *  ("way maker" / "way maker live session") -- never an empty title, nor a start shorter than four
-   *  letters ("holy" matches "holy forever", "go" matches nothing it merely begins). */
+   *  characters ("holy" matches "holy forever"; "go" and "joy" match only themselves). */
   function sameTitle(a, b) {
     if (!a || !b) return false;
     if (a === b) return true;
@@ -433,7 +436,8 @@
       var genre = same.length ? (same.find(function (r) { return isChristianGenre(r.genre); }) || same[0]).genre : null;
       // The primary artist's genres decide before a featured artist's.
       for (var i = 0; !v && i < artists.length; i++) {
-        var known = (byArtist[artists[i]] || []).concat(genreOf(artists[i]) ? [genreOf(artists[i])] : []);
+        var looked = genreOf(artists[i]);
+        var known = (byArtist[artists[i]] || []).concat(looked ? [looked] : []);
         v = verdict(known);
         if (v) genre = known.find(isChristianGenre) || known[0];
       }
