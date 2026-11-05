@@ -265,6 +265,11 @@ impl ShowEngine {
             | ShowEvent::MediaVolumeSet { .. }
             | ShowEvent::MediaPrerolled { .. } => media::apply_media_event(state, schedule, event),
         }
+        // Whatever changed the items (a slide hidden, slides reordered, an arrangement set, a schedule
+        // loaded), the live and staged copies never rest on a hidden slide.
+        if touches_schedule {
+            live::keep_off_hidden(state);
+        }
     }
 
     pub fn restore_from_events(&self, events: Vec<crate::core::events::EventEnvelope>) {

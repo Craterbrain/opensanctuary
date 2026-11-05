@@ -1962,6 +1962,26 @@ fn test_hiding_the_live_slide_moves_off_it_and_direct_staging_skips_hidden() {
     let snap = engine.snapshot();
     assert_eq!(snap.state.staged_item.as_ref().map(|i| i.id.as_str()), Some("lib"));
     assert_eq!(snap.state.staged_slide_index, 1);
+
+    // Removing the live slide can leave a hidden one at the live position: the output moves off it
+    // too, and the section-jump cursor follows (its letter key goes on from where live is).
+    engine.execute_command(ShowCommand::SetSlideHidden { item_index: 0, slide_index: 2, hidden: false });
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(0), slide_index: Some(0) });
+    engine.execute_command(ShowCommand::RemoveItemSlide { item_index: 0, slide_index: 0 });
+    let snap = engine.snapshot();
+    let live = snap.state.live_item.as_ref().unwrap();
+    assert!(!live.slides[snap.state.live_slide_index].hidden, "live on a visible slide: {}", snap.state.live_slide_index);
+    assert_eq!(live.slides[snap.state.live_slide_index].text, "a2");
+    let letter = os_next::engine::effective_arrangement(live)[snap.state.live_slide_index].section_id.chars().next().unwrap().to_uppercase().to_string();
+    assert_eq!(snap.state.section_jump_cursor.get(&letter), Some(&snap.state.live_slide_index));
+
+    // One hidden throughout is still staged (the Library shows it), on its first slide.
+    let mut all_hidden = simple_item("hid", "Hid", &["h0", "h1"]);
+    all_hidden.slides.iter_mut().for_each(|s| s.hidden = true);
+    engine.execute_command(ShowCommand::StageItemDirect(all_hidden));
+    let snap = engine.snapshot();
+    assert_eq!(snap.state.staged_item.as_ref().map(|i| i.id.as_str()), Some("hid"));
+    assert_eq!(snap.state.staged_slide_index, 0);
 }
 
 #[test]

@@ -492,8 +492,10 @@ export class SlideEditor {
     });
   }
 
-  private switchSlide(newIndex: number): void {
-    if (newIndex === this.activeIndex || newIndex < 0 || newIndex >= this.slides.length) return;
+  /** Shows slide `newIndex`. `rebind` redoes it even at the same index: after a delete or a
+   * reorder the slide at the active index may be a different one (or the one on the canvas gone). */
+  private switchSlide(newIndex: number, rebind = false): void {
+    if ((newIndex === this.activeIndex && !rebind) || newIndex < 0 || newIndex >= this.slides.length) return;
     this.activeCropOverlay?.destroy();
     this.activeCropOverlay = null;
     this.activeIndex = newIndex;
@@ -538,7 +540,7 @@ export class SlideEditor {
     this.slides.splice(idx, 1);
     const nextIdx = Math.min(this.activeIndex, this.slides.length - 1);
     this.filmstrip.setSlides(this.slides, nextIdx);
-    this.switchSlide(nextIdx);
+    this.switchSlide(nextIdx, true);
   }
 
   private reorderSlides(from: number, to: number): void {
@@ -548,14 +550,15 @@ export class SlideEditor {
     this.slides.splice(to, 0, moved);
     this.activeIndex = to;
     this.filmstrip.setSlides(this.slides, this.activeIndex);
-    this.switchSlide(to);
+    this.switchSlide(to, true);
   }
 
   public setSlideTag(index: number, tag: string | null): void {
     if (index < 0 || index >= this.slides.length) return;
     const slide = this.slides[index];
     if (!slide) return;
-    this.history.pushState(this.getActiveSlide());
+    // The slide that changes (often not the active one), so undo puts back the right one.
+    this.history.pushState(slide);
     slide.tag = tag ? tag.trim() : undefined;
     if (slide.tag) {
       const tagUpper = slide.tag.toUpperCase();
@@ -576,7 +579,8 @@ export class SlideEditor {
     if (index < 0 || index >= this.slides.length) return;
     const slide = this.slides[index];
     if (!slide) return;
-    this.history.pushState(this.getActiveSlide());
+    // The slide that changes (often not the active one), so undo puts back the right one.
+    this.history.pushState(slide);
     slide.duration_seconds = durationSeconds && durationSeconds > 0 ? durationSeconds : undefined;
     this.filmstrip.setSlides(this.slides, this.activeIndex);
     this.syncUIState();
@@ -616,22 +620,33 @@ export class SlideEditor {
   }
 
   public undo(): void {
-    this.restoreFromHistory(this.history.nextUndoId(), (cur) => this.history.undo(cur));
+    this.restoreFromHistory(() => this.history.nextUndoId(), (cur) => this.history.undo(cur), () => this.history.dropNextUndo());
   }
 
   public redo(): void {
-    this.restoreFromHistory(this.history.nextRedoId(), (cur) => this.history.redo(cur));
+    this.restoreFromHistory(() => this.history.nextRedoId(), (cur) => this.history.redo(cur), () => this.history.dropNextRedo());
   }
 
-  /** Puts a history snapshot back onto the slide it was taken of (by id; the active slide when
-   * that one is gone), redrawing the canvas only when that is the slide on it. */
-  private restoreFromHistory(id: string | undefined, step: (cur: EditorSlide) => EditorSlide | null): void {
-    const found = id === undefined ? -1 : this.slides.findIndex((s) => s.id === id);
+  /** Puts a history snapshot back onto the slide it was taken of (by id), redrawing the canvas
+   * only when that is the slide on it. A snapshot of a slide since deleted is skipped. */
+  private restoreFromHistory(nextId: () => string | undefined, step: (cur: EditorSlide) => EditorSlide | null, drop: () => void): void {
+    let id = nextId();
+    let found = id === undefined ? -1 : this.slides.findIndex((s) => s.id === id);
+    while (id !== undefined && found < 0) {
+      // That slide was deleted since: its snapshot belongs to no slide here, so it's dropped
+      // (never written over the active one), and the step goes on to the next one.
+      drop();
+      id = nextId();
+      found = id === undefined ? -1 : this.slides.findIndex((s) => s.id === id);
+    }
     const index = found >= 0 ? found : this.activeIndex;
     const cur = this.slides[index];
     if (!cur) return;
     const restored = step(cur);
-    if (!restored) return;
+    if (!restored) {
+      this.syncUIState(); // dead snapshots may have emptied the stack
+      return;
+    }
     this.activeCropOverlay?.destroy();
     this.activeCropOverlay = null;
     this.slides[index] = restored;

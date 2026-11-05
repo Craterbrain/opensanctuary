@@ -152,13 +152,13 @@ fn update_section_jump_cursor(state: &mut ShowState) {
 }
 
 /// Whether the slide at an arrangement play position is hidden (never shown live).
-pub(super) fn is_hidden_at(item: &ScheduleItem, play_position: usize) -> bool {
+fn is_hidden_at(item: &ScheduleItem, play_position: usize) -> bool {
     resolve_slide_at(item, play_position).is_some_and(|s| s.hidden)
 }
 
 /// The first non-hidden play position in `item` (at or after `from`), or `None` when every
 /// slide from there on is hidden.
-pub(super) fn first_visible_from(item: &ScheduleItem, from: usize) -> Option<usize> {
+fn first_visible_from(item: &ScheduleItem, from: usize) -> Option<usize> {
     (from..effective_arrangement(item).len()).find(|&i| !is_hidden_at(item, i))
 }
 
@@ -168,8 +168,21 @@ fn last_visible(item: &ScheduleItem) -> Option<usize> {
 }
 
 /// The nearest non-hidden play position before `pos`.
-pub(super) fn prev_visible_before(item: &ScheduleItem, pos: usize) -> Option<usize> {
+fn prev_visible_before(item: &ScheduleItem, pos: usize) -> Option<usize> {
     (0..pos.min(effective_arrangement(item).len())).rev().find(|&i| !is_hidden_at(item, i))
+}
+
+/// Moves the live and staged positions off a hidden slide: to the next visible one, else the one
+/// before (an item hidden throughout stays where it is -- it can't go live anyway).
+pub(super) fn keep_off_hidden(state: &mut ShowState) {
+    let moved = |item: &ScheduleItem, pos: usize| is_hidden_at(item, pos).then(|| first_visible_from(item, pos + 1).or_else(|| prev_visible_before(item, pos))).flatten();
+    if let Some(next) = state.live_item.as_ref().and_then(|i| moved(i, state.live_slide_index)) {
+        state.live_slide_index = next;
+        update_section_jump_cursor(state);
+    }
+    if let Some(next) = state.staged_item.as_ref().and_then(|i| moved(i, state.staged_slide_index)) {
+        state.staged_slide_index = next;
+    }
 }
 
 /// An item with slides, all of them hidden, has nothing to show. An item with no slides at
@@ -287,13 +300,12 @@ pub(super) fn plan_live_events(state: &ShowState, schedule: &Schedule, cmd: &Sho
             }
         }
         ShowCommand::StageItemDirect(item) => {
-            // As StageItem: the first slide that isn't hidden (an all-hidden item isn't staged).
-            if let Some(slide_index) = visible_start(item, 0, false) {
-                events.push(ShowEvent::ItemStaged {
-                    item: Some(item.clone()),
-                    slide_index,
-                });
-            }
+            // As StageItem: the first slide that isn't hidden. An item hidden throughout is still
+            // staged (the Library is showing it), on its first slide -- Go Live refuses it.
+            events.push(ShowEvent::ItemStaged {
+                item: Some(item.clone()),
+                slide_index: visible_start(item, 0, false).unwrap_or(0),
+            });
         }
         ShowCommand::NextSlide => {
             if let Some(ref live) = state.live_item {

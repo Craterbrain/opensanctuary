@@ -3,8 +3,9 @@
 //! rebuilt bundle or an edited `style.css` is picked up immediately (even a same-length rewrite
 //! within the same second), and every spelling of one file's URL shares one entry -- and the
 //! compressed bytes are reused from memory after that. Reading the file each time is cheap (it's
-//! in the page cache); compressing it is what's saved. Requests that miss together wait for one
-//! compression. The cache is bounded. No `.gz` files on disk to go stale under `bun --watch`.
+//! in the page cache); compressing it is what's saved. Not keyed by (path, Last-Modified, length) to
+//! skip the read: `rsync -a`, `cp -p`, unzip and reproducible builds all keep old mtimes, and a stale
+//! gzip would outlive the update. Requests that miss together wait for one compression. The cache is bounded. No `.gz` files on disk to go stale under `bun --watch`.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -27,15 +28,32 @@ const MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// The most compressed bytes kept; past it the cache starts again empty (the UI's own files are a
 /// few MB, so this only bites when something keeps asking for new content).
 const MAX_CACHED_BYTES: usize = 64 * 1024 * 1024;
+/// The most entries kept, so content that doesn't compress -- which costs no bytes -- can't grow
+/// the map without bound either.
+const MAX_ENTRIES: usize = 4096;
 
 /// One content's compressed form, filled by whichever request gets there first (`None` when
 /// compressing didn't make it smaller).
 type Slot = Arc<tokio::sync::OnceCell<Option<Bytes>>>;
 
+type ContentKey = (u64, usize);
+
 #[derive(Default)]
 struct Cache {
-    slots: HashMap<(u64, usize), Slot>,
+    slots: HashMap<ContentKey, Slot>,
     bytes: usize,
+    /// Bumped on every reset, so a compression that finishes after one doesn't count its bytes
+    /// against the new, empty cache it isn't in.
+    generation: u64,
+}
+
+impl Cache {
+    fn make_room(&mut self) {
+        if self.bytes > MAX_CACHED_BYTES || self.slots.len() >= MAX_ENTRIES {
+            let generation = self.generation + 1;
+            *self = Cache { generation, ..Cache::default() };
+        }
+    }
 }
 
 fn cache() -> &'static Mutex<Cache> {
@@ -101,12 +119,12 @@ pub(super) async fn gzip_static(req: Request, next: Next) -> Response {
         raw.hash(&mut h);
         (h.finish(), raw.len())
     };
-    let slot: Slot = {
+    let (slot, generation): (Slot, u64) = {
         let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-        if !c.slots.contains_key(&key) && c.bytes > MAX_CACHED_BYTES {
-            *c = Cache::default();
+        if !c.slots.contains_key(&key) {
+            c.make_room();
         }
-        c.slots.entry(key).or_default().clone()
+        (c.slots.entry(key).or_default().clone(), c.generation)
     };
     let to_compress = raw.clone();
     let gz = slot.get_or_init(|| async move {
@@ -115,7 +133,10 @@ pub(super) async fn gzip_static(req: Request, next: Next) -> Response {
             _ => None,
         };
         let size = gz.as_ref().map_or(0, Bytes::len);
-        cache().lock().unwrap_or_else(|e| e.into_inner()).bytes += size;
+        let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
+        if c.generation == generation {
+            c.bytes += size;
+        }
         gz
     }).await.clone();
     match gz {
@@ -246,6 +267,19 @@ mod tests {
         assert_eq!(res.headers()[CONTENT_ENCODING], "gzip");
         assert_eq!(gunzip(&body), js.as_bytes());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_reset_drops_bytes_counted_by_an_older_generation() {
+        let mut c = Cache { bytes: MAX_CACHED_BYTES + 1, generation: 7, ..Cache::default() };
+        c.make_room();
+        assert_eq!((c.bytes, c.generation), (0, 8));
+        for i in 0..MAX_ENTRIES {
+            c.slots.insert((i as u64, 0), Slot::default());
+        }
+        c.make_room();
+        assert!(c.slots.is_empty());
+        assert_eq!(c.generation, 9);
     }
 
     #[tokio::test]

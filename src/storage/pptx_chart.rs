@@ -632,7 +632,7 @@ mod tests {
         assert_eq!(nice_step(7.0, 5.0), 2.0);
         assert_eq!(number(0.25, true), "25%");
         assert_eq!(number(12.0, false), "12");
-        assert_eq!(number(3.14159, false), "3.1");
+        assert_eq!(number(1.23456, false), "1.2");
     }
 
     fn texts(g: &SlideElement) -> Vec<(String, f64, f64)> {
