@@ -71,6 +71,7 @@ function makeFakeDocument() {
 
 let fakeDocument: ReturnType<typeof makeFakeDocument>;
 let highlightCatalogRow: (idx: number) => void;
+  let responseFingerprint: typeof import('../src/ui/library_panel.ts').responseFingerprint;
 
 describe('library_panel.ts: highlightCatalogRow', () => {
   beforeAll(async () => {
@@ -87,7 +88,7 @@ describe('library_panel.ts: highlightCatalogRow', () => {
     fakeDocument = makeFakeDocument();
     (globalThis as any).document = fakeDocument;
     try {
-      ({ highlightCatalogRow } = await import('../src/ui/library_panel.ts'));
+      ({ highlightCatalogRow, responseFingerprint } = await import('../src/ui/library_panel.ts'));
     } finally {
       // Restore immediately -- library_panel.ts's module-level code has
       // already run synchronously by the time the import above resolves,
@@ -134,5 +135,13 @@ describe('library_panel.ts: highlightCatalogRow', () => {
     highlightCatalogRow(1);
     expect(itemRow0.classList.contains('selected')).toBe(false);
     expect(itemRow1.classList.contains('selected')).toBe(true);
+  });
+
+  test('a library response is told from another by its fingerprint, not a kept copy', () => {
+    const a = JSON.stringify([{ id: 'x', title: 'Amazing Grace' }]);
+    const b = JSON.stringify([{ id: 'x', title: 'Amazing Gracf' }]);
+    expect(responseFingerprint(a)).toBe(responseFingerprint(String(a)));
+    expect(responseFingerprint(a)).not.toBe(responseFingerprint(b));
+    expect(responseFingerprint('')).not.toBe(responseFingerprint(' '));
   });
 });

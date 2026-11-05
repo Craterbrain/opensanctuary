@@ -198,8 +198,10 @@ impl Database {
     /// Bibles (12MB+ of JSON). Same objects, fields, order and fallbacks as `get_scriptures`:
     /// a chapter whose verses don't read as `[{verse_number, text}]` gets `[]`, as there.
     pub fn get_scriptures_json(&self) -> Result<Vec<u8>> {
-        // Accepts exactly what deserializing into `Vec<ScriptureVerse>` accepts; borrows the text.
+        // Exactly the canonical form (no other fields); borrows the text. Anything else is read
+        // into `ScriptureVerse` and written back, as `get_scriptures` would show it.
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct VerseShape<'a> {
             #[allow(dead_code)]
             verse_number: u32,
@@ -236,7 +238,8 @@ impl Database {
                 let theme_name: Option<String> = row.get(8)?;
                 // Borrowed from SQLite's row buffer: copied once, into `out`, not into a String first.
                 let verses_json = row.get_ref(7)?.as_str()?;
-                let verses_ok = serde_json::from_str::<Vec<VerseShape>>(verses_json).is_ok();
+                let canonical = serde_json::from_str::<Vec<VerseShape>>(verses_json).is_ok();
+                let rewritten = if canonical { None } else { serde_json::from_str::<Vec<ScriptureVerse>>(verses_json).ok().and_then(|v| serde_json::to_vec(&v).ok()) };
 
                 let mut out = Vec::with_capacity(verses_json.len() + 200);
                 out.push(b'{');
@@ -254,7 +257,11 @@ impl Database {
                 out.push(b',');
                 str_field(&mut out, "reference", &reference);
                 out.extend_from_slice(b",\"verses\":");
-                out.extend_from_slice(if verses_ok { verses_json.as_bytes() } else { b"[]" });
+                out.extend_from_slice(match (&rewritten, canonical) {
+                    (_, true) => verses_json.as_bytes(),
+                    (Some(v), false) => v,
+                    (None, false) => b"[]",
+                });
                 out.push(b',');
                 str_field(&mut out, "theme_name", &theme_name);
                 out.push(b'}');

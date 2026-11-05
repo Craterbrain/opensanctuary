@@ -319,8 +319,21 @@ function prepareBundleMenuItem(tabName: string, item: LibraryItem): void {
   el.textContent = tabName === 'scriptures' && item?.version ? `📦 Save the ${item.version} Bible as OpenSanctuary File...` : '📦 Save as OpenSanctuary File...';
 }
 
-/** Each tab's last `/api/<tab>` response: raw text (to tell an unchanged refetch cheaply) and the parsed items. */
-const libraryTabCache = new Map<string, { text: string; items: LibraryItem[] }>();
+/** Each tab's last `/api/<tab>` response: a fingerprint of its text (to tell an unchanged refetch
+ * cheaply, without keeping a second copy of a response that can be megabytes) and the parsed items. */
+const libraryTabCache = new Map<string, { fingerprint: string; items: LibraryItem[] }>();
+
+/** A response's length and two independent 32-bit FNV-1a hashes of it. */
+export function responseFingerprint(text: string): string {
+  let a = 0x811c9dc5;
+  let b = 0x01000193 ^ 0x5bd1e995;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193);
+    b = Math.imul(b ^ c, 0x5bd1e995) ^ (b >>> 15);
+  }
+  return `${text.length}:${(a >>> 0).toString(36)}:${(b >>> 0).toString(36)}`;
+}
 
 export async function loadLibraryTab(tabName?: string, opts: { keepPluginView?: boolean } = {}) {
   if (!ctx) return;
@@ -373,10 +386,11 @@ export async function loadLibraryTab(tabName?: string, opts: { keepPluginView?: 
     if (res.ok) {
       const text = await res.text();
       if (reqId !== currentLibraryTabRequestId) return;
-      if (cached && cached.text === text) return;
+      const fingerprint = responseFingerprint(text);
+      if (cached && cached.fingerprint === fingerprint) return;
       const data = JSON.parse(text);
       activeLibraryItems = Array.isArray(data) ? data : [];
-      libraryTabCache.set(normTab, { text, items: activeLibraryItems });
+      libraryTabCache.set(normTab, { fingerprint, items: activeLibraryItems });
       filterAndRenderCatalog();
     } else {
       libraryTabCache.delete(normTab);
@@ -1429,7 +1443,9 @@ let lastPreviewedItem: LibraryItem | null = null;
 function alreadyPreviewing(item: LibraryItem): boolean {
   if (!ctx || item !== lastPreviewedItem || ctx.getSelectedLibraryItem() !== item) return false;
   const staged = ctx.getCurrentSnapshot()?.state.staged_item;
-  return !!staged && staged.title === (item.title || item.name || item.reference);
+  // The staged copy of a library item is `sched_<kind>_<its id>` (to_schedule_item): the same
+  // item, not just one with the same title (a schedule's own copy, or another arrangement).
+  return !!staged && !!item.id && staged.id.endsWith(`_${item.id}`);
 }
 
 export function selectAndPreviewItem(item: LibraryItem, tabName: string) {
