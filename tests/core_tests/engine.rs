@@ -1943,6 +1943,28 @@ fn test_hidden_slides_are_skipped_and_blocked() {
 }
 
 #[test]
+fn test_hiding_the_live_slide_moves_off_it_and_direct_staging_skips_hidden() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    engine.execute_command(ShowCommand::AddToSchedule(simple_item("a", "A", &["a0", "a1", "a2"])));
+
+    // Hiding the slide on screen moves the output to the next visible slide...
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(0), slide_index: Some(1) });
+    engine.execute_command(ShowCommand::SetSlideHidden { item_index: 0, slide_index: 1, hidden: true });
+    assert_eq!(live_slide(&engine), 2);
+    // ...or, at the end, back to the one before.
+    engine.execute_command(ShowCommand::SetSlideHidden { item_index: 0, slide_index: 2, hidden: true });
+    assert_eq!(live_slide(&engine), 0);
+
+    // The Library's direct preview opens an item on its first visible slide, not a hidden slide 0.
+    let mut item = simple_item("lib", "Lib", &["h0", "v1"]);
+    item.slides[0].hidden = true;
+    engine.execute_command(ShowCommand::StageItemDirect(item));
+    let snap = engine.snapshot();
+    assert_eq!(snap.state.staged_item.as_ref().map(|i| i.id.as_str()), Some("lib"));
+    assert_eq!(snap.state.staged_slide_index, 1);
+}
+
+#[test]
 fn test_hidden_slides_across_items() {
     let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
     engine.execute_command(ShowCommand::AddToSchedule(simple_item("a", "A", &["a0", "a1"])));
