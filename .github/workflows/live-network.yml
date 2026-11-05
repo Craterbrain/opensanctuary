@@ -1,0 +1,60 @@
+# Tests that depend on outside hosts too heavily for pull-request CI: installing whole public-domain
+# Bibles from github.com/Craterbrain/opensanctuary-bibles (web/tests/e2e_public_domain_bibles.test.ts)
+# is thousands of downloads, and a slow day on GitHub would otherwise fail unrelated pull requests.
+# ci.yml skips that file (CI=true); this runs it daily and by hand (Actions > Live network tests >
+# Run workflow), so a broken repository or plugin still shows up within a day.
+
+name: Live network tests
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bibles:
+    name: Public-domain Bibles install from the live repository
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      # See ci.yml's `rust` job for why these two env vars matter here.
+      - name: Install system dependencies (BUILDING.md) + a keyring for the tests
+        working-directory: .
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev gnome-keyring dbus
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Install Playwright's browser
+        run: bunx playwright install --with-deps chromium
+
+      - name: Build the release server the e2e tests spawn (target/release/os-next)
+        working-directory: .
+        run: cargo build --release
+
+      - name: bun test (live network)
+        env:
+          OS_NEXT_LIVE_NET: "1"
+        run: |
+          dbus-run-session -- bash -c '
+            echo -n ci | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            bun test tests/e2e_public_domain_bibles.test.ts'

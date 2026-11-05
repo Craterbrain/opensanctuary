@@ -35,9 +35,14 @@ describe("E2E Live Test: Per-Run Rich Text Selection Splitting", () => {
   test("Bolding a mid-word selection splits the run without losing the rest of the text", async () => {
     await openSlideEditor(page, 'song');
 
-    // Enter edit mode on the lyric text box via a real double-click.
-    await page.dblclick('.editor-slide-canvas-stage .slide-canvas-element');
-    await page.waitForSelector('.editor-slide-canvas-stage .slide-canvas-element[contenteditable="true"]');
+    // Enter edit mode on the lyric text box via a real double-click. On a busy machine the first
+    // double-click can land before the editor has wired its handlers, so try again until it takes.
+    const editable = '.editor-slide-canvas-stage .slide-canvas-element[contenteditable="true"]';
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await page.dblclick('.editor-slide-canvas-stage .slide-canvas-element');
+      if (await page.waitForSelector(editable, { timeout: 4000 }).then(() => true, () => false)) break;
+    }
+    await page.waitForSelector(editable, { timeout: 4000 });
 
     const editingId = await page.evaluate(() =>
       (document.querySelector('.editor-slide-canvas-stage .slide-canvas-element[contenteditable="true"]') as HTMLElement | null)?.dataset.elementId ?? null
@@ -73,7 +78,7 @@ describe("E2E Live Test: Per-Run Rich Text Selection Splitting", () => {
     expect(selectionMade).toBe(true);
 
     await page.evaluate(() => (window as any).__debugApplyTextStyle({ bold: true }));
-    await page.waitForFunction(() => (window as any).getCanvasSlideEditorDebugState().activeSlideElements[0].block.runs.some((r: any) => r.bold));
+    await page.waitForFunction(() => (window as any).getCanvasSlideEditorDebugState().activeSlideElements[0].block.runs.some((r: any) => r.bold), null, { timeout: 10000 });
 
     const after = await page.evaluate(() => {
       const state = (window as any).getCanvasSlideEditorDebugState();
@@ -91,5 +96,5 @@ describe("E2E Live Test: Per-Run Rich Text Selection Splitting", () => {
     expect(boldRuns.length).toBe(1);
     expect(boldRuns[0].text).toBe('sweet');
     expect(boldRuns[0].text).not.toBe(before);
-  }, 20000);
+  }, 60000);
 });

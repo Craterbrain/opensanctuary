@@ -24,6 +24,8 @@
 #               installed first -- and those tests spawn a real
 #               target/release/os-next (web/tests/e2e_helpers.ts), so this
 #               job builds it too.
+#               Tests that install whole Bibles from GitHub skip here (CI=true)
+#               and run in live-network.yml instead, daily.
 #   plugins  -- the dev copies in web/plugins/ match the opensanctuary-plugins
 #               commit release packages bundle (packaging/plugins.ref).
 #
