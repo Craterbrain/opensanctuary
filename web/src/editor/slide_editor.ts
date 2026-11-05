@@ -526,6 +526,8 @@ export class SlideEditor {
     if (!target) return;
     const copy: EditorSlide = JSON.parse(JSON.stringify(target));
     copy.id = `slide-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
+    // A copy has no counterpart in the schedule's copy of the item (see source_index).
+    delete copy.source_index;
     this.slides.splice(idx + 1, 0, copy);
     this.filmstrip.setSlides(this.slides, idx + 1);
     this.switchSlide(idx + 1);
@@ -584,7 +586,9 @@ export class SlideEditor {
     if (index < 0 || index >= this.slides.length) return;
     const slide = this.slides[index];
     if (!slide) return;
-    this.history.pushState(this.getActiveSlide());
+    // The slide that changes (often not the active one: the filmstrip's hide button), so undo
+    // puts back the right one.
+    this.history.pushState(slide);
     slide.hidden = hidden ? true : undefined;
     this.filmstrip.setSlides(this.slides, this.activeIndex);
     this.syncUIState();
@@ -612,27 +616,28 @@ export class SlideEditor {
   }
 
   public undo(): void {
-    const cur = this.getActiveSlide();
-    const prev = this.history.undo(cur);
-    if (prev) {
-      this.activeCropOverlay?.destroy();
-      this.activeCropOverlay = null;
-      this.slides[this.activeIndex] = prev;
-      this.canvas.setSlide(prev);
-      this.syncUIState();
-    }
+    this.restoreFromHistory(this.history.nextUndoId(), (cur) => this.history.undo(cur));
   }
 
   public redo(): void {
-    const cur = this.getActiveSlide();
-    const next = this.history.redo(cur);
-    if (next) {
-      this.activeCropOverlay?.destroy();
-      this.activeCropOverlay = null;
-      this.slides[this.activeIndex] = next;
-      this.canvas.setSlide(next);
-      this.syncUIState();
-    }
+    this.restoreFromHistory(this.history.nextRedoId(), (cur) => this.history.redo(cur));
+  }
+
+  /** Puts a history snapshot back onto the slide it was taken of (by id; the active slide when
+   * that one is gone), redrawing the canvas only when that is the slide on it. */
+  private restoreFromHistory(id: string | undefined, step: (cur: EditorSlide) => EditorSlide | null): void {
+    const found = id === undefined ? -1 : this.slides.findIndex((s) => s.id === id);
+    const index = found >= 0 ? found : this.activeIndex;
+    const cur = this.slides[index];
+    if (!cur) return;
+    const restored = step(cur);
+    if (!restored) return;
+    this.activeCropOverlay?.destroy();
+    this.activeCropOverlay = null;
+    this.slides[index] = restored;
+    if (index === this.activeIndex) this.canvas.setSlide(restored);
+    this.filmstrip.setSlides(this.slides, this.activeIndex);
+    this.syncUIState();
   }
 
   private arrange(action: ArrangeAction): void {

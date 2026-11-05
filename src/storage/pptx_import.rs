@@ -348,6 +348,11 @@ fn read_zip_text(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<
     Ok(crate::storage::media_sniff::read_capped_string(&mut file, crate::storage::media_sniff::MAX_ZIP_TEXT_BYTES)?)
 }
 
+/// A picture part's bytes, an SVG already drawn to PNG (see storage::svg_raster).
+pub(crate) fn read_picture_bytes(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    Ok(crate::storage::svg_raster::as_raster(read_zip_bytes(archive, name)?))
+}
+
 fn read_zip_bytes(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut file = archive.by_name(name)?;
     Ok(crate::storage::media_sniff::read_capped_bytes(&mut file, crate::storage::media_sniff::MAX_ZIP_MEDIA_BYTES)?)
@@ -403,7 +408,7 @@ fn embedded(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, rid: &str,
     if let Some(done) = ctx.media.borrow().get(&media_path) {
         return Some(Embedded::Served(done.clone()));
     }
-    let bytes = read_zip_bytes(archive, &media_path).ok()?;
+    let bytes = read_picture_bytes(archive, &media_path).ok()?;
     Some(Embedded::Bytes(media_path, bytes))
 }
 
@@ -818,7 +823,7 @@ fn picture_element(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, rid
     let file_path = match cached {
         Some(done) => done,
         None => {
-            let bytes = read_zip_bytes(archive, &media_path).ok()?;
+            let bytes = read_picture_bytes(archive, &media_path).ok()?;
             // A Windows or Enhanced Metafile (clip art, drawn figures, pasted charts and tables)
             // can't be shown as a picture: its drawing becomes elements instead.
             if crate::storage::wmf::is_wmf(&bytes) || crate::storage::emf::is_emf(&bytes) {
@@ -885,7 +890,7 @@ fn picture_filled_shape(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str
             let file_path = match cached {
                 Some(done) => done,
                 None => {
-                    let bytes = read_zip_bytes(archive, &media_path).ok()?;
+                    let bytes = read_picture_bytes(archive, &media_path).ok()?;
                     let src = image::load_from_memory(&bytes).ok()?.to_rgba8();
                     let out = tile_picture(&src, image_dpi(&bytes), tile, [rect[2], rect[3]], [0.0, 0.0, rect[2], rect[3]], 1920.0 / ctx.geo.canvas_w);
                     store_media(key, &encode_picture(out)?, ctx)?
@@ -2144,7 +2149,7 @@ fn background_picture(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, 
     if let Some(done) = ctx.media.borrow().get(&key) {
         return Some(done.clone());
     }
-    let bytes = read_zip_bytes(archive, &media_path).ok()?;
+    let bytes = read_picture_bytes(archive, &media_path).ok()?;
     let mut src = image::load_from_memory(&bytes).ok()?.to_rgba8();
     if let Some(r) = recolor {
         r.apply(&mut src);
