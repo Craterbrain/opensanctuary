@@ -115,7 +115,8 @@ git checkout -b release-0.5.0
 sed -i 's/^version = "0.4.1"/version = "0.5.0"/' Cargo.toml
 cargo check                      # updates the os-next entry in Cargo.lock
 sed -i 's|\[`v0.4.1`\]|[`v0.5.0`]|' README.md   # the Status note's "latest release" link
-git diff --stat                  # exactly Cargo.toml, Cargo.lock and README.md, 1 line each
+sed -i "s/^_Last edited: .*_\$/_Last edited: $(date +%F)_/" README.md   # or let .githooks/pre-commit do it
+git diff                         # 1 line each in Cargo.toml and Cargo.lock; in README.md the version and the date
 git commit -am "Release 0.5.0"
 git log -2 --format='%h %p %s'   # the new commit, whose one parent is main's tip
 git push -u origin release-0.5.0
@@ -150,12 +151,14 @@ To avoid it:
   Check `git log -1` first: if it shows someone else's commit or a merge, stop.
 - Before merging, check that the PR's commit list is the single "Release
   x.y.z" commit and its file list is only `Cargo.toml`, `Cargo.lock` and
-  `README.md`, each with the one version line changed.
+  `README.md`: the version lines, plus README's "Last edited" date.
 
-A PR that only bumps the version (those three version lines) may be merged with `gh pr merge --admin`
-without waiting for CI. The code it ships was already tested on the PRs that
-brought it in. Anything else in the PR (a code or doc change) means it waits
-for green CI like any other.
+A PR that only bumps the version (those version lines and README's date) may
+be merged with `gh pr merge --admin` without waiting for CI: the code it ships
+was already tested on the PRs that brought it in. So may a documentation-only
+PR, since `ci.yml` skips the tests for those anyway. Every PR is still
+reviewed first. Anything else in the PR (code, config, workflows,
+dependencies) means it waits for green CI like any other.
 
 ## Cutting a release
 
