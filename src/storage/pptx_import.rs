@@ -108,7 +108,7 @@ impl PptxImporter {
             elements.extend(extract_shapes_in_scope(&mut archive, path, tree, &ctx, None, false)?);
             // ActiveX controls (buttons, boxes) sit outside the shape tree; each keeps a picture of itself.
             if let Some((_, controls, _)) = next_tag(&slide_xml, "p:controls") {
-                for (_, _, pic) in find_pics(controls) {
+                for (_, _, pic) in control_pics(controls) {
                     elements.extend(extract_picture_element(&mut archive, path, pic, &ctx, None));
                 }
             }
@@ -269,8 +269,8 @@ impl LayoutInfo {
         let theme = Theme::parse(&read_zip_text(archive, &theme_path).unwrap_or_default(), &theme_path);
         let master_map = next_tag(&master_xml, "p:clrMap").map(|(a, _, _)| ClrMap::from_attrs(a)).unwrap_or_default();
         let inherited = Inherited {
-            layout_phs: inh::part_placeholders(&layout_xml),
-            master_phs: inh::part_placeholders(&master_xml),
+            layout_phs: inh::part_placeholders(&layout_xml, layout_path),
+            master_phs: inh::part_placeholders(&master_xml, &master_path),
             title_style: inh::master_text_style(&master_xml, "p:titleStyle"),
             body_style: inh::master_text_style(&master_xml, "p:bodyStyle"),
             other_style: inh::master_text_style(&master_xml, "p:otherStyle"),
@@ -571,14 +571,40 @@ fn extract_text_shape_element(shape_inner: &str, ctx: &Ctx, remap: Option<&Group
     text_block_element(txbody, &list, &body, style_color, rect, rot, ctx)
 }
 
+/// A geometry evaluated for a `w` x `h` box, remembered for the next call about the same one: a
+/// shape's text box and its drawing both need it, and evaluating every guide twice is waste.
+/// Keyed by the geometry's own markup (`source`: the preset and its adjust values, or the custom
+/// geometry -- the shape's own or the one its placeholder inherits), not by where it sits.
+fn evaluated(source: &GeomSource, w: f64, h: f64, flips: (bool, bool), eval: impl FnOnce() -> Option<pptx_geom::Geometry>) -> Option<pptx_geom::Geometry> {
+    type Key = (u64, u64, u64, (bool, bool));
+    thread_local!(static LAST: RefCell<Option<(Key, Option<pptx_geom::Geometry>)>> = const { RefCell::new(None) });
+    let digest = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        match source {
+            GeomSource::Custom(c) => ("custom", *c, "").hash(&mut h),
+            GeomSource::Preset(p, av) => ("preset", *p, *av).hash(&mut h),
+        }
+        h.finish()
+    };
+    let key: Key = (digest, w.to_bits(), h.to_bits(), flips);
+    if let Some(hit) = LAST.with(|l| l.borrow().as_ref().filter(|(k, _)| *k == key).map(|(_, g)| g.clone())) {
+        return hit;
+    }
+    let g = eval();
+    LAST.with(|l| *l.borrow_mut() = Some((key, g.clone())));
+    g
+}
+
 /// `rect` (a shape's box, turned `rot` degrees about its centre) narrowed to its geometry's text
 /// rectangle, still turning about the same point. A rectangle's text box is the whole shape.
 fn geometry_text_rect(shape_inner: &str, ctx: &Ctx, rect: [f64; 4], rot: f64) -> [f64; 4] {
     let [x, y, w, h] = rect;
-    let geometry = match shape_geometry(shape_inner, ctx) {
+    let source = shape_geometry(shape_inner, ctx);
+    let geometry = match source {
         GeomSource::Preset("rect", _) => return rect,
-        GeomSource::Preset(prst, av) => pptx_geom::preset(prst, av, w, h, (false, false)),
-        GeomSource::Custom(cust) => Some(pptx_geom::custom(cust, w, h, (false, false))),
+        GeomSource::Preset(prst, av) => evaluated(&source, w, h, (false, false), || pptx_geom::preset(prst, av, w, h, (false, false))),
+        GeomSource::Custom(cust) => evaluated(&source, w, h, (false, false), || Some(pptx_geom::custom(cust, w, h, (false, false)))),
     };
     let Some([l, t, r, b]) = geometry.and_then(|g| g.text_rect) else { return rect };
     if r - l <= 0.0 || b - t <= 0.0 {
@@ -622,28 +648,29 @@ fn text_block_element(txbody: &str, list: &inh::ListStyle, body: &inh::BodyProps
         let mut para: Vec<crate::core::models::TextRun> = Vec::new();
         // A line break (Shift+Enter) joins its neighbour's text, so a run that is exactly "\n"
         // only ever separates paragraphs -- which is where the renderer puts paragraph spacing.
-        let mut pending_break = false;
+        // Breaks before any text wait for it; a paragraph of breaks alone ends with a zero-width
+        // space, so its run is never exactly "\n".
+        let mut pending_breaks = 0usize;
         for (name, _, inner) in children(p_inner) {
             let rpr = child(inner, "a:rPr").map(|(_, a, i)| RunProps::parse(a, i)).unwrap_or_default().over(&level.run);
             match name {
                 "a:r" | "a:fld" => {
                     let text: String = children(inner).into_iter().filter(|(n, _, _)| *n == "a:t").map(|(_, _, t)| decode_xml_entities(t)).collect();
                     if !text.is_empty() {
-                        let text = if std::mem::take(&mut pending_break) { format!("\n{text}") } else { text };
+                        let text = format!("{}{text}", "\n".repeat(std::mem::take(&mut pending_breaks)));
                         para.push(text_run(text, &rpr, ctx, style_color.as_deref(), size_scale));
                     }
                 }
                 // A line break inside a paragraph (Shift+Enter), not a new paragraph.
                 "a:br" => match para.last_mut() {
                     Some(prev) => prev.text.push('\n'),
-                    None if pending_break => para.push(text_run("\n".into(), &rpr, ctx, style_color.as_deref(), size_scale)),
-                    None => pending_break = true,
+                    None => pending_breaks = (pending_breaks + 1).min(1000),
                 },
                 _ => {}
             }
         }
-        if pending_break {
-            para.push(text_run("\n".into(), &level.run, ctx, style_color.as_deref(), size_scale));
+        if pending_breaks > 0 {
+            para.push(text_run(format!("{}\u{200b}", "\n".repeat(pending_breaks)), &level.run, ctx, style_color.as_deref(), size_scale));
         }
 
         if pi > 0 {
@@ -729,12 +756,7 @@ fn text_block_element(txbody: &str, list: &inh::ListStyle, body: &inh::BodyProps
     };
     // One gap per text box (this app's paragraph style is per box): the length-weighted mean of
     // the gaps that actually fall between paragraphs -- not before the first or after the last.
-    let mean = |v: Vec<(f64, usize)>| {
-        let total: usize = v.iter().map(|(_, w)| *w).sum();
-        if total == 0 { 0.0 } else { (v.iter().map(|(g, w)| g * *w as f64).sum::<f64>() / total as f64 * 10.0).round() / 10.0 }
-    };
-    let space_before_pt = mean(gaps.iter().skip(1).map(|(b, _, w)| (*b, *w)).collect());
-    let space_after_pt = mean(gaps.iter().take(gaps.len().saturating_sub(1)).map(|(_, a, w)| (*a, *w)).collect());
+    let (space_before_pt, space_after_pt) = paragraph_gaps(&gaps);
     // PowerPoint's single spacing is about 1.2 lines of the font size.
     // Exact spacing (points) is that many points per line of the first line's text.
     let line_height = match level.line_spacing {
@@ -755,7 +777,7 @@ fn text_block_element(txbody: &str, list: &inh::ListStyle, body: &inh::BodyProps
     let inner = [x + ins[0], y + ins[1], (cx - ins[0] - ins[2]).max(cx * 0.2), (cy - ins[1] - ins[3]).max(cy * 0.2)];
 
     Some(SlideElement::TextBlock {
-        id: format!("el_{}", uuid::Uuid::new_v4()),
+        id: new_id(),
         transform: ctx.geo.transform(inner, rot),
         block: crate::core::models::TextBlock {
             runs,
@@ -827,19 +849,24 @@ fn picture_element(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, rid
             // A Windows or Enhanced Metafile (clip art, drawn figures, pasted charts and tables)
             // can't be shown as a picture: its drawing becomes elements instead.
             if crate::storage::wmf::is_wmf(&bytes) || crate::storage::emf::is_emf(&bytes) {
-                return metafile_group(&bytes, rect, rot, ctx, src, clear.as_deref());
+                return metafile_group(&bytes, rect, rot, ctx, src, clear.as_deref(), recolor.as_ref());
             }
-            let bytes = clear.as_deref().and_then(|c| without_color(&bytes, c)).unwrap_or(bytes);
-            let bytes = recolor.as_ref().and_then(|r| {
+            // A see-through colour and a recolour are both applied to one decoded picture.
+            let drawn = (clear.is_some() || recolor.is_some()).then(|| {
                 let mut img = image::load_from_memory(&bytes).ok()?.to_rgba8();
-                r.apply(&mut img);
-                encode_picture(img)
-            }).unwrap_or(bytes);
-            store_media(key, &bytes, ctx)?
+                if let Some(c) = &clear {
+                    clear_color(&mut img, c);
+                }
+                if let Some(r) = &recolor {
+                    r.apply(&mut img);
+                }
+                encode_picture(img, is_jpeg(&bytes))
+            }).flatten();
+            store_media(key, drawn.as_deref().unwrap_or(&bytes), ctx)?
         }
     };
     let crop = src.map(|[l, t, r, b]| crate::core::models::CropRect { x: l, y: t, w: (1.0 - l - r).clamp(0.01, 1.0), h: (1.0 - t - b).clamp(0.01, 1.0) });
-    Some(SlideElement::Image { id: format!("el_{}", uuid::Uuid::new_v4()), transform: ctx.geo.transform(rect, rot), file_path, crop, mask_shape: None, alt_text: None, fit: Some("stretch".into()) })
+    Some(SlideElement::Image { id: new_id(), transform: ctx.geo.transform(rect, rot), file_path, crop, mask_shape: None, alt_text: None, fit: Some("stretch".into()) })
 }
 
 /// A picture's "set transparent colour" (`<a:clrChange>` to a see-through colour): the colour
@@ -856,54 +883,89 @@ fn transparent_color(pic_inner: &str, ctx: &Ctx) -> Option<String> {
     child(change, "a:clrFrom").and_then(|(_, _, i)| pal.first_color(i, None))
 }
 
-/// A raster picture with the pixels of `color` (give or take rounding) made transparent, as PNG.
-fn without_color(bytes: &[u8], color: &str) -> Option<Vec<u8>> {
-    let img = image::load_from_memory(bytes).ok()?;
-    let mut rgba = img.to_rgba8();
+/// Makes every pixel of (about) `color` (`#rrggbb`) see-through.
+fn clear_color(img: &mut image::RgbaImage, color: &str) {
     let hex = color.trim_start_matches('#');
     let c = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok().map(i32::from);
-    let (r, g, b) = (c(0)?, c(2)?, c(4)?);
-    for p in rgba.pixels_mut() {
+    let (Some(r), Some(g), Some(b)) = (c(0), c(2), c(4)) else { return };
+    for p in img.pixels_mut() {
         if (i32::from(p[0]) - r).abs() <= 2 && (i32::from(p[1]) - g).abs() <= 2 && (i32::from(p[2]) - b).abs() <= 2 {
             p[3] = 0;
         }
     }
-    let mut out = Cursor::new(Vec::new());
-    image::DynamicImage::ImageRgba8(rgba).write_to(&mut out, image::ImageFormat::Png).ok()?;
-    Some(out.into_inner())
+}
+
+/// A picture's average colour as `#rrggbb`, from every pixel on a grid about `steps` x `steps`
+/// across it (1: every pixel).
+pub(crate) fn average_hex(img: &image::RgbImage, steps: u32) -> String {
+    let (w, h) = img.dimensions();
+    let (sx, sy) = if steps <= 1 { (1, 1) } else { ((w / steps).max(1) as usize, (h / steps).max(1) as usize) };
+    let (mut sum, mut n) = ([0u64; 3], 0u64);
+    for y in (0..h).step_by(sy) {
+        for x in (0..w).step_by(sx) {
+            let p = img.get_pixel(x, y);
+            (0..3).for_each(|i| sum[i] += p[i] as u64);
+            n += 1;
+        }
+    }
+    let n = n.max(1);
+    format!("#{:02x}{:02x}{:02x}", sum[0] / n, sum[1] / n, sum[2] / n)
+}
+
+/// Whether picture bytes are a JPEG (a photograph, as a rule).
+pub(crate) fn is_jpeg(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0xFF, 0xD8, 0xFF])
 }
 
 /// A shape whose own fill is a picture (`<p:spPr><a:blipFill>`): the picture stretched over the
 /// shape's box and clipped to its outline (a polygon following the geometry; a shape that can't be
 /// one polygon, such as a donut, shows the whole box). Its outline and text are drawn as usual.
 fn picture_filled_shape(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, shape_inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) -> Option<SlideElement> {
-    let (_, sppr, _) = next_tag(shape_inner, "p:spPr")?;
-    let (_, _, fill) = children(sppr).into_iter().find(|(n, _, _)| *n == "a:blipFill")?;
+    // The fill comes from the first of the shape, its layout's placeholder and its master's that
+    // states one, or a theme fill style one names (as extract_shape_style reads it); a picture fill
+    // is resolved against the part it's written in.
+    let own = (next_tag(shape_inner, "p:spPr").map_or("", |(_, c, _)| c), next_tag(shape_inner, "p:style").map_or("", |(_, c, _)| c), part_path);
+    let mut chain = vec![own];
+    chain.extend(ctx.inh.shape_parts_in(Ph::of_shape(shape_inner).as_ref()));
+    let (fill, part_path) = chain.into_iter().find_map(|(sppr, style, part)| {
+        if let Some((name, _, inner)) = children(sppr).into_iter().find(|(n, _, _)| matches!(*n, "a:noFill" | "a:solidFill" | "a:gradFill" | "a:pattFill" | "a:blipFill")) {
+            return Some((name == "a:blipFill").then_some((inner, part)));
+        }
+        let (a, _, _) = next_tag(style, "a:fillRef")?;
+        let idx = extract_attr(a, "idx").and_then(|v| v.parse::<usize>().ok()).filter(|i| *i > 0)?;
+        let theme_fill = if idx >= 1001 { ctx.theme.bg_fills.get(idx - 1001) } else { ctx.theme.fills.get(idx - 1) }?;
+        let (name, _, inner) = children(theme_fill).into_iter().next()?;
+        Some((name == "a:blipFill").then_some((inner, ctx.theme.path.as_str())))
+    }).flatten()?;
     let rid = next_tag(fill, "a:blip").and_then(|(a, _, _)| extract_attr(a, "r:embed"))?.to_string();
     let (rect, rot) = shape_rect(shape_inner, ctx, remap)?;
-    let mut el = match next_tag(fill, "a:tile").map(|(a, _, _)| a) {
-        // A texture: tiled over the shape's box, at the canvas's resolution.
-        Some(tile) => {
-            let media_path = embedded_path(archive, part_path, &rid)?;
-            let key = format!("{media_path}#tile:{tile}#{}x{}", rect[2].round(), rect[3].round());
-            let cached = ctx.media.borrow().get(&key).cloned();
-            let file_path = match cached {
-                Some(done) => done,
-                None => {
-                    let bytes = read_picture_bytes(archive, &media_path).ok()?;
-                    let src = image::load_from_memory(&bytes).ok()?.to_rgba8();
-                    let out = tile_picture(&src, image_dpi(&bytes), tile, [rect[2], rect[3]], [0.0, 0.0, rect[2], rect[3]], 1920.0 / ctx.geo.canvas_w);
-                    store_media(key, &encode_picture(out)?, ctx)?
-                }
-            };
-            SlideElement::Image { id: new_id(), transform: ctx.geo.transform(rect, rot), file_path, crop: None, mask_shape: None, alt_text: None, fit: Some("stretch".into()) }
-        }
+    // A texture is tiled over the shape's box at the canvas's resolution (recoloured as its blip
+    // says); one this can't decode, or an untiled picture, is drawn stretched.
+    let tiled = next_tag(fill, "a:tile").map(|(a, _, _)| a).and_then(|tile| {
+        let recolor = next_tag(fill, "a:blip").and_then(|(_, b, _)| Recolor::of(b, ctx, None));
+        drawn_picture(archive, part_path, &rid, Some(tile), recolor.as_ref(), [rect[2], rect[3]], [0.0, 0.0, rect[2], rect[3]], ctx)
+    });
+    let mut el = match tiled {
+        Some(file_path) => SlideElement::Image { id: new_id(), transform: ctx.geo.transform(rect, rot), file_path, crop: None, mask_shape: None, alt_text: None, fit: Some("stretch".into()) },
         None => picture_element(archive, part_path, &rid, rect, rot, fill, ctx)?,
     };
     if let SlideElement::Image { mask_shape, .. } = &mut el {
         *mask_shape = geometry_clip(shape_inner, ctx, rect);
     }
     Some(el)
+}
+
+/// The pictures of a slide's `<p:controls>`: each control's own, taken from its
+/// `mc:AlternateContent`'s Fallback (else its Choice) only -- a writer may give both a copy.
+fn control_pics(controls: &str) -> Vec<(&str, &str, &str)> {
+    children(controls).into_iter().flat_map(|(name, _, inner)| {
+        let part = if name == "mc:AlternateContent" {
+            child(inner, "mc:Fallback").or_else(|| child(inner, "mc:Choice")).map_or("", |(_, _, i)| i)
+        } else {
+            inner
+        };
+        find_pics(part)
+    }).collect()
 }
 
 /// Every `<p:pic>` in some markup, outermost first, in document order (bounded by the markup).
@@ -940,7 +1002,7 @@ fn ole_preview(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, inner: 
 
 /// `Shape`/`Line`'s `stroke_width` is a percent of the shape's own box (its shorter side) -- both
 /// `shape_library.ts` and `line_tool.ts` draw into a fixed `0 0 100 100` viewBox.
-fn emu_to_relative_stroke(width_emu: f64, box_w_emu: f64, box_h_emu: f64) -> f64 {
+pub(crate) fn emu_to_relative_stroke(width_emu: f64, box_w_emu: f64, box_h_emu: f64) -> f64 {
     let base = box_w_emu.min(box_h_emu);
     if base <= 0.0 {
         return 0.0;
@@ -1105,14 +1167,14 @@ pub(crate) fn cell_edges(rect: [f64; 4], sides: &[Option<(String, f64)>; 4], geo
     let [x, y, w, h] = rect;
     if sides.iter().all(|s| s.is_some() && *s == sides[0]) {
         let (color, width) = sides[0].clone().expect("checked");
-        return vec![SlideElement::Shape { id: format!("el_{}", uuid::Uuid::new_v4()), transform: geo.transform(rect, 0.0), shape_kind: "path".into(), fill_color: "none".into(), stroke_color: Some(color), stroke_width: geo_stroke(width, geo), path: Some("M 0 0 L 100 0 L 100 100 L 0 100 Z".into()) }];
+        return vec![SlideElement::Shape { id: new_id(), transform: geo.transform(rect, 0.0), shape_kind: "path".into(), fill_color: "none".into(), stroke_color: Some(color), stroke_width: geo_stroke(width, geo), path: Some("M 0 0 L 100 0 L 100 100 L 0 100 Z".into()) }];
     }
     let ends = [((x, y), (x + w, y)), ((x + w, y), (x + w, y + h)), ((x, y + h), (x + w, y + h)), ((x, y), (x, y + h))];
     sides.iter().zip(ends).filter_map(|(side, ((x1, y1), (x2, y2)))| {
         let (color, width) = side.clone()?;
         let horizontal = y1 == y2;
         Some(SlideElement::Line {
-            id: format!("el_{}", uuid::Uuid::new_v4()),
+            id: new_id(),
             transform: geo.transform([x1, y1, x2 - x1, y2 - y1], 0.0),
             line_kind: "straight".into(),
             color,
@@ -1142,15 +1204,16 @@ fn extract_autoshape_element(shape_inner: &str, ctx: &Ctx, remap: Option<&GroupR
     let (rect, rot) = shape_rect(shape_inner, ctx, remap)?;
     let transform = ctx.geo.transform(rect, rot);
     let flips = xfrm_flips(shape_inner);
-    let geometry = match shape_geometry(shape_inner, ctx) {
-        GeomSource::Custom(cust) => pptx_geom::custom(cust, rect[2], rect[3], flips),
+    let source = shape_geometry(shape_inner, ctx);
+    let geometry = match source {
+        GeomSource::Custom(cust) => evaluated(&source, rect[2], rect[3], flips, || Some(pptx_geom::custom(cust, rect[2], rect[3], flips)))?,
         GeomSource::Preset(prst, av) => match prst {
             "rect" | "flowChartProcess" | "ellipse" | "flowChartConnector" => {
                 let stroke_width = if style.stroke_color.is_some() { emu_to_relative_stroke(style.stroke_width_emu, rect[2], rect[3]) } else { 0.0 };
-                let shape_kind = if prst.contains("ect") || prst == "flowChartProcess" { "rect" } else { "ellipse" };
+                let shape_kind = if matches!(prst, "rect" | "flowChartProcess") { "rect" } else { "ellipse" };
                 return Some(SlideElement::Shape { id: new_id(), transform, shape_kind: shape_kind.into(), fill_color: style.fill_color, stroke_color: style.stroke_color, stroke_width, path: None });
             }
-            _ => match pptx_geom::preset(prst, av, rect[2], rect[3], flips) {
+            _ => match evaluated(&source, rect[2], rect[3], flips, || pptx_geom::preset(prst, av, rect[2], rect[3], flips)) {
                 Some(g) => g,
                 None => {
                     let stroke_width = if style.stroke_color.is_some() { emu_to_relative_stroke(style.stroke_width_emu, rect[2], rect[3]) } else { 0.0 };
@@ -1162,7 +1225,21 @@ fn extract_autoshape_element(shape_inner: &str, ctx: &Ctx, remap: Option<&GroupR
     geometry_element(&geometry, &style, transform, ctx)
 }
 
-fn new_id() -> String {
+/// One block's paragraph spacing from each paragraph's (space before, space after, text length):
+/// the length-weighted mean of the gaps between paragraphs (space before the first and after the
+/// last don't count), to a tenth of a point.
+pub(crate) fn paragraph_gaps(gaps: &[(f64, f64, usize)]) -> (f64, f64) {
+    let mean = |v: Vec<(f64, usize)>| {
+        let total: usize = v.iter().map(|(_, w)| *w).sum();
+        if total == 0 { 0.0 } else { (v.iter().map(|(g, w)| g * *w as f64).sum::<f64>() / total as f64 * 10.0).round() / 10.0 }
+    };
+    let before = mean(gaps.iter().skip(1).map(|(b, _, w)| (*b, *w)).collect());
+    let after = mean(gaps.iter().take(gaps.len().saturating_sub(1)).map(|(_, a, w)| (*a, *w)).collect());
+    (before, after)
+}
+
+/// A fresh element id (every importer's elements use this one form).
+pub(crate) fn new_id() -> String {
     format!("el_{}", uuid::Uuid::new_v4())
 }
 
@@ -1261,7 +1338,7 @@ fn extract_line_element(inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) -> O
     let color = style.stroke_color.clone()?;
     let (rect, rot) = shape_rect(inner, ctx, remap)?;
     Some(SlideElement::Line {
-        id: format!("el_{}", uuid::Uuid::new_v4()),
+        id: new_id(),
         transform: ctx.geo.transform(rect, rot),
         line_kind: line_kind.to_string(),
         color,
@@ -1272,15 +1349,13 @@ fn extract_line_element(inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) -> O
     })
 }
 
-/// A Windows Metafile picture as a group of ordinary elements (`wmf`): each path a `Shape` (or a
-/// `Line` when open), each string a `TextBlock`, each bitmap an `Image`, laid out over the
-/// picture's own rectangle. `None` when the metafile draws nothing this can read.
 /// A Windows or Enhanced Metafile picture drawn as elements (see `metafile_group`), for importers
-/// other than this one: `rect` in EMU on a slide mapped by `geo`, bitmaps stored through `media`.
-pub(crate) fn metafile_elements(bytes: &[u8], rect: [f64; 4], geo: Geo, media: &RefCell<HashMap<String, String>>, media_dir: &Path) -> Option<SlideElement> {
+/// other than this one: `rect` in EMU on a slide mapped by `geo`, turned `rot` degrees, bitmaps
+/// stored through `media`.
+pub(crate) fn metafile_elements(bytes: &[u8], rect: [f64; 4], rot: f64, geo: Geo, media: &RefCell<HashMap<String, String>>, media_dir: &Path) -> Option<SlideElement> {
     let (theme, inherited) = (Theme::default(), Inherited::default());
     let ctx = Ctx { geo, theme: &theme, map: ClrMap::default(), inh: &inherited, media, media_dir, table_styles: "", bg_fill: None };
-    metafile_group(bytes, rect, 0.0, &ctx, None, None)
+    metafile_group(bytes, rect, rot, &ctx, None, None, None)
 }
 
 /// A DrawingML chart part drawn as elements (see `pptx_chart`), for importers other than this
@@ -1295,7 +1370,12 @@ pub(crate) fn chart_elements(chart_xml: &str, rect: [f64; 4], geo: Geo, media: &
     chart::chart_group(chart_xml, rect, &ctx)
 }
 
-fn metafile_group(bytes: &[u8], rect: [f64; 4], rot: f64, ctx: &Ctx, crop: Option<[f64; 4]>, clear: Option<&str>) -> Option<SlideElement> {
+/// A Windows Metafile picture as a group of ordinary elements (`wmf`): each path a `Shape` (or a
+/// `Line` when open), each string a `TextBlock`, each bitmap an `Image`, laid out over the
+/// picture's own rectangle, the group turned as the picture is. `None` when the metafile draws
+/// nothing this can read.
+#[allow(clippy::too_many_arguments)]
+fn metafile_group(bytes: &[u8], rect: [f64; 4], rot: f64, ctx: &Ctx, crop: Option<[f64; 4]>, clear: Option<&str>, recolor: Option<&Recolor>) -> Option<SlideElement> {
     use crate::storage::wmf::WmfItem;
     let wmf = if crate::storage::emf::is_emf(bytes) { crate::storage::emf::parse(bytes)? } else { crate::storage::wmf::parse(bytes)? };
     let (mut fx, mut fy, mut fw, mut fh) = wmf.frame;
@@ -1306,10 +1386,11 @@ fn metafile_group(bytes: &[u8], rect: [f64; 4], rot: f64, ctx: &Ctx, crop: Optio
         }
     }
     // The picture's transparent colour paints nothing.
-    let keep = |c: Option<String>| c.filter(|c| clear.is_none_or(|k| !c.eq_ignore_ascii_case(k)));
+    // A colour the picture makes see-through is dropped; the rest are recoloured as it says.
+    let keep = |c: Option<String>| c.filter(|c| clear.is_none_or(|k| !c.eq_ignore_ascii_case(k))).map(|c| recolor.map_or(c.clone(), |r| r.hex(&c)));
     let (sx, sy) = (rect[2] / fw, rect[3] / fh);
     let at = |(x, y): (f64, f64)| (rect[0] + (x - fx) * sx, rect[1] + (y - fy) * sy);
-    let id = || format!("el_{}", uuid::Uuid::new_v4());
+    let id = new_id;
     // Path data in a box: points relative to the box, as 0..100.
     let local = |b: [f64; 4], (x, y): (f64, f64)| ((x - b[0]) / b[2] * 100.0, (y - b[1]) / b[3] * 100.0);
     let bbox = |pts: &mut dyn Iterator<Item = (f64, f64)>| {
@@ -1325,7 +1406,7 @@ fn metafile_group(bytes: &[u8], rect: [f64; 4], rot: f64, ctx: &Ctx, crop: Optio
     for item in wmf.items {
         match item {
             WmfItem::Path { subpaths, closed, fill, stroke } => {
-                let (fill, stroke) = (keep(fill), stroke.filter(|(c, _)| keep(Some(c.clone())).is_some()));
+                let (fill, stroke) = (keep(fill), stroke.and_then(|(c, w)| Some((keep(Some(c))?, w))));
                 let abs: Vec<Vec<(f64, f64)>> = subpaths.iter().map(|s| s.iter().map(|p| at(*p)).collect()).collect();
                 let b = bbox(&mut abs.iter().flatten().copied());
                 let mut d = PathData::default();
@@ -1350,7 +1431,7 @@ fn metafile_group(bytes: &[u8], rect: [f64; 4], rot: f64, ctx: &Ctx, crop: Optio
                 }
             }
             WmfItem::Arc { center, rx, ry, from, to, large, closed, pie, fill, stroke } => {
-                let (fill, stroke) = (keep(fill), stroke.filter(|(c, _)| keep(Some(c.clone())).is_some()));
+                let (fill, stroke) = (keep(fill), stroke.and_then(|(c, w)| Some((keep(Some(c))?, w))));
                 let (c, f, t) = (at(center), at(from), at(to));
                 let (rx, ry) = (rx * sx, ry * sy);
                 let b = [c.0 - rx, c.1 - ry, (2.0 * rx).max(1.0), (2.0 * ry).max(1.0)];
@@ -1410,18 +1491,21 @@ fn metafile_group(bytes: &[u8], rect: [f64; 4], rot: f64, ctx: &Ctx, crop: Optio
                 });
             }
             WmfItem::Bitmap { x, y, w, h, bmp } => {
-                let png = image::load_from_memory_with_format(&bmp, image::ImageFormat::Bmp).ok().and_then(|img| {
-                    let mut out = Cursor::new(Vec::new());
-                    img.write_to(&mut out, image::ImageFormat::Png).ok()?;
-                    Some(out.into_inner())
+                // Keyed by content: a master's metafile logo is drawn on every slide, decoded and
+                // stored once.
+                let key = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); bmp.hash(&mut h); format!("wmf-bitmap:{:x}:{}:{}:{}", h.finish(), bmp.len(), clear.unwrap_or(""), recolor.map(Recolor::key).unwrap_or_default()) };
+                let stored = ctx.media.borrow().get(&key).cloned();
+                let file_path = stored.or_else(|| {
+                    let mut img = image::load_from_memory_with_format(&bmp, image::ImageFormat::Bmp).ok()?.to_rgba8();
+                    if let Some(c) = clear {
+                        clear_color(&mut img, c);
+                    }
+                    if let Some(r) = recolor {
+                        r.apply(&mut img);
+                    }
+                    store_media(key, &encode_picture(img, false)?, ctx)
                 });
-                let png = match (png, clear) {
-                    (Some(png), Some(c)) => Some(without_color(&png, c).unwrap_or(png)),
-                    (png, _) => png,
-                };
-                // Keyed by content: a master's metafile logo is drawn on every slide, stored once.
-                let key = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); bmp.hash(&mut h); format!("wmf-bitmap:{:x}:{}:{}", h.finish(), bmp.len(), clear.unwrap_or("")) };
-                if let Some(file_path) = png.and_then(|png| store_media(key, &png, ctx)) {
+                if let Some(file_path) = file_path {
                     let (x0, y0) = at((x, y));
                     children.push(SlideElement::Image { id: id(), transform: ctx.geo.transform([x0, y0, w * sx, h * sy], 0.0), file_path, crop: None, mask_shape: None, alt_text: None, fit: Some("stretch".into()) });
                 }
@@ -1434,9 +1518,9 @@ fn metafile_group(bytes: &[u8], rect: [f64; 4], rot: f64, ctx: &Ctx, crop: Optio
     for (z, c) in children.iter_mut().enumerate() {
         c.transform_mut().z_index = z as i32;
     }
-    // The group's own box is the picture's; rotation of the whole picture isn't applied to its parts.
-    let _ = rot;
-    Some(SlideElement::Group { id: id(), transform: ctx.geo.transform(rect, 0.0), children })
+    // The group's box is the picture's, turned as the picture is: the renderer turns a group's box
+    // with its children inside it.
+    Some(SlideElement::Group { id: id(), transform: ctx.geo.transform(rect, rot), children })
 }
 
 /// One part of a table style (`wholeTbl`, `firstRow`, `band1H`, ...), or a cell's own `<a:tcPr>`.
@@ -1458,7 +1542,8 @@ impl CellLook {
             fill: self.fill.clone().or_else(|| base.fill.clone()),
             text_color: self.text_color.clone().or_else(|| base.text_color.clone()),
             bold: self.bold.or(base.bold),
-            borders: std::array::from_fn(|i| self.borders[i].clone().or_else(|| base.borders[i].clone())),
+            // Borders don't merge: each part's apply over the region it covers (see `sides`).
+            borders: Default::default(),
         }
     }
 
@@ -1528,6 +1613,18 @@ fn table_style<'a>(list: &'a str, id: &str) -> Option<&'a str> {
         .map(|(_, _, i)| i)
 }
 
+/// One of PowerPoint's built-in table styles by id, from an index built once.
+fn builtin_table_style(id: &str) -> Option<&'static str> {
+    static INDEX: std::sync::OnceLock<HashMap<&'static str, &'static str>> = std::sync::OnceLock::new();
+    INDEX.get_or_init(|| {
+        children(next_tag(BUILTIN_TABLE_STYLES, "a:tblStyleLst").map(|(_, i, _)| i).unwrap_or(""))
+            .into_iter()
+            .filter(|(n, _, _)| *n == "a:tblStyle")
+            .filter_map(|(_, a, i)| Some((extract_attr(a, "styleId")?, i)))
+            .collect()
+    }).get(id).copied()
+}
+
 /// About how tall a text body wraps to at `width` EMU: each paragraph word-wrapped by its runs'
 /// fonts (theme fonts resolved through the deck's theme), in lines 1.2 of its size apart.
 fn estimated_text_height(txbody: &str, width: f64, ctx: &Ctx) -> f64 {
@@ -1587,10 +1684,12 @@ fn extract_table_element(gf_inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) 
 
     let (tbl_pr_attrs, tbl_pr) = child(tbl, "a:tblPr").map(|(_, a, i)| (a, i)).unwrap_or(("", ""));
     let on = |k: &str| extract_attr(tbl_pr_attrs, k) == Some("1");
-    let style_id = child(tbl_pr, "a:tableStyleId").map(|(_, _, i)| i.trim().to_string());
+    // The table's own style, else the deck's default (`<a:tblStyleLst def>`), as LibreOffice applies it.
+    let style_id = child(tbl_pr, "a:tableStyleId").map(|(_, _, i)| i.trim().to_string())
+        .or_else(|| next_tag(ctx.table_styles, "a:tblStyleLst").and_then(|(a, _, _)| extract_attr(a, "def")).map(str::to_string));
     // The deck's own definition, else PowerPoint's built-in one: decks refer to built-in styles by
     // id without always writing them out.
-    let style_xml = style_id.as_deref().and_then(|id| table_style(ctx.table_styles, id).or_else(|| table_style(BUILTIN_TABLE_STYLES, id))).unwrap_or("");
+    let style_xml = style_id.as_deref().and_then(|id| table_style(ctx.table_styles, id).or_else(|| builtin_table_style(id))).unwrap_or("");
     let part = |name: &str| child(style_xml, name).map(|(_, _, i)| style_part(i, ctx)).unwrap_or_default();
     let (whole, first_row, last_row, first_col, last_col, band1h, band1v) =
         (part("a:wholeTbl"), part("a:firstRow"), part("a:lastRow"), part("a:firstCol"), part("a:lastCol"), part("a:band1H"), part("a:band1V"));
@@ -1618,7 +1717,7 @@ fn extract_table_element(gf_inner: &str, ctx: &Ctx, remap: Option<&GroupRemap>) 
     let row_y: Vec<f64> = std::iter::once(0.0).chain(rows.iter().scan(0.0, |acc, (h, _)| { *acc += h; Some(*acc) })).collect();
     let (nrows, ncols) = (rows.len(), cols.len());
 
-    let id = || format!("el_{}", uuid::Uuid::new_v4());
+    let id = new_id;
     let mut children_out = Vec::new();
     let mut edges = Vec::new();
     for (r, (_, row)) in rows.iter().enumerate() {
@@ -1784,7 +1883,7 @@ fn extract_smartart(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, in
     if children.is_empty() {
         return Ok(None);
     }
-    Ok(Some(SlideElement::Group { id: format!("el_{}", uuid::Uuid::new_v4()), transform: ctx.geo.transform(rect, 0.0), children }))
+    Ok(Some(SlideElement::Group { id: new_id(), transform: ctx.geo.transform(rect, 0.0), children }))
 }
 
 /// A diagram saved without its drawing (other programs write only the data): its content laid out
@@ -1866,7 +1965,9 @@ fn smartart_outline(data_xml: &str, layout: &str, rect: [f64; 4], ctx: &Ctx) -> 
         }
     };
     let rows = n.div_ceil(cols);
-    let gap = rect[2].min(rect[3]) * 0.03;
+    // A small gap between boxes, never more than a fifth of the room each row or column has (many
+    // items in one line would otherwise leave the boxes negative).
+    let gap = (rect[2].min(rect[3]) * 0.03).min(rect[2] / cols as f64 * 0.2).min(rect[3] / rows as f64 * 0.2);
     let (bw, bh) = ((rect[2] - gap * (cols - 1) as f64) / cols as f64, (rect[3] - gap * (rows - 1) as f64) / rows as f64);
     let fill = pal.color("a:schemeClr", r#"val="accent1""#, "", None).unwrap_or_else(|| "#4472c4".into());
     let ink = pal.color("a:schemeClr", r#"val="lt1""#, "", None).unwrap_or_else(|| "#ffffff".into());
@@ -1958,7 +2059,7 @@ fn extract_group_element(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &st
         h: (max_y - min_y).clamp(0.0, 1.0),
         ..Default::default()
     };
-    Ok(Some(SlideElement::Group { id: format!("el_{}", uuid::Uuid::new_v4()), transform, children }))
+    Ok(Some(SlideElement::Group { id: new_id(), transform, children }))
 }
 
 /// Walks a shape tree (a slide's, a layout's, a master's, or a group's) in document order --
@@ -1973,6 +2074,21 @@ fn extract_shapes_in_scope(
     remap: Option<&GroupRemap>,
     decorations_only: bool,
 ) -> Result<Vec<SlideElement>, Box<dyn std::error::Error>> {
+    // Nesting is bounded: groups within groups, fallbacks and SmartArt drawings (one can name
+    // itself) stop drawing past a depth no real deck reaches, rather than overflow the stack.
+    const MAX_DEPTH: usize = 32;
+    thread_local!(static DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
+    struct Level;
+    impl Drop for Level {
+        fn drop(&mut self) {
+            DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        }
+    }
+    if DEPTH.with(|d| d.get()) >= MAX_DEPTH {
+        return Ok(Vec::new());
+    }
+    DEPTH.with(|d| d.set(d.get() + 1));
+    let _level = Level;
     let mut elements = Vec::new();
     for (name, attrs, inner) in children(scope_xml) {
         if decorations_only && Ph::of_shape(inner).is_some() {
@@ -2052,7 +2168,11 @@ fn background_from_fill(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str
             let opacity = next_tag(blip_inner, "a:alphaModFix").and_then(|(a, _, _)| extract_attr(a, "amt")?.parse::<f64>().ok()).map_or(1.0, |v| (v / 100_000.0).clamp(0.0, 1.0));
             let recolor = Recolor::of(blip_inner, ctx, ph);
             let tile = next_tag(inner, "a:tile").map(|(a, _, _)| a);
-            let drawn = if tile.is_some() || recolor.is_some() { background_picture(archive, part_path, &rid, tile, recolor.as_ref(), ctx) } else { None };
+            let drawn = if tile.is_some() || recolor.is_some() { {
+                // The whole canvas, the first tile aligned on the slide (not the pillarbox).
+                let geo = ctx.geo;
+                drawn_picture(archive, part_path, &rid, tile, recolor.as_ref(), [geo.canvas_w, geo.canvas_h], [geo.x_off, geo.y_off, geo.canvas_w - 2.0 * geo.x_off, geo.canvas_h - 2.0 * geo.y_off], ctx)
+            } } else { None };
             drawn.or_else(|| extract_embedded_image(archive, part_path, &rid, ctx)).map(|file_path| SlideBackground::Image { file_path, opacity })
         }
         _ => None,
@@ -2112,40 +2232,54 @@ impl Recolor {
         format!("{self:?}")
     }
 
+    /// One colour (by its luminance) as this recolour makes it.
+    fn rgb(&self, [r, g, b]: [u8; 3]) -> [u8; 3] {
+        let lum = (0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64) / 255.0;
+        let c = match self {
+            Recolor::Grayscale => [lum * 255.0; 3],
+            Recolor::Duotone(a, b) => [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * lum),
+        };
+        c.map(|v| v.round().clamp(0.0, 255.0) as u8)
+    }
+
     fn apply(&self, img: &mut image::RgbaImage) {
         for p in img.pixels_mut() {
-            let lum = (0.299 * p[0] as f64 + 0.587 * p[1] as f64 + 0.114 * p[2] as f64) / 255.0;
-            let c = match self {
-                Recolor::Grayscale => [lum * 255.0; 3],
-                Recolor::Duotone(a, b) => [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * lum),
-            };
-            for k in 0..3 {
-                p[k] = c[k].round().clamp(0.0, 255.0) as u8;
-            }
+            let [r, g, b] = self.rgb([p[0], p[1], p[2]]);
+            (p[0], p[1], p[2]) = (r, g, b);
         }
+    }
+
+    /// A `#rrggbb[aa]` colour recoloured (its alpha kept); anything else as it is.
+    fn hex(&self, color: &str) -> String {
+        let h = color.trim_start_matches('#');
+        let v = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok());
+        let (Some(r), Some(g), Some(b)) = (v(0), v(2), v(4)) else { return color.to_string() };
+        let [r, g, b] = self.rgb([r, g, b]);
+        format!("#{r:02x}{g:02x}{b:02x}{}", h.get(6..8).unwrap_or(""))
     }
 }
 
-/// Encodes a drawn picture: JPEG when it's opaque (photos, textures), else PNG.
-pub(crate) fn encode_picture(img: image::RgbaImage) -> Option<Vec<u8>> {
+/// A drawn picture as file bytes: a JPEG (quality 90) for an opaque one made from a photograph
+/// (`photo`, its source a JPEG), else a lossless PNG -- diagrams, text and line art keep their edges.
+pub(crate) fn encode_picture(img: image::RgbaImage, photo: bool) -> Option<Vec<u8>> {
     let mut encoded = Cursor::new(Vec::new());
-    if img.pixels().all(|p| p[3] == 255) {
-        image::DynamicImage::ImageRgba8(img).to_rgb8().write_to(&mut encoded, image::ImageFormat::Jpeg).ok()?;
+    if photo && img.pixels().all(|p| p[3] == 255) {
+        let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 90).encode_image(&rgb).ok()?;
     } else {
         img.write_to(&mut encoded, image::ImageFormat::Png).ok()?;
     }
     Some(encoded.into_inner())
 }
 
-/// A background picture that needs drawing at import: recoloured, and/or tiled (`<a:tile>`)
-/// into a picture the size of this app's canvas -- what the slide shows, so it needs nothing new
-/// to render. As PowerPoint (and LibreOffice) tile: each tile is the picture's own size (from its
-/// DPI, else 96 dpi) scaled by `sx`/`sy`, the first one placed by `algn` on the slide and moved by
-/// `tx`/`ty` (EMU), every other one mirrored as `flip` says. `None` (show it as it is) for a picture
+/// A picture that needs drawing at import -- a background's or a shape's fill: recoloured, and/or
+/// tiled (`<a:tile>`) into a picture `size` EMU big, the first tile placed within `area` (see
+/// `tile_picture`), so it needs nothing new to render. `None` (show it as it is) for a picture
 /// that can't be decoded, such as a metafile.
-fn background_picture(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, rid: &str, tile: Option<&str>, recolor: Option<&Recolor>, ctx: &Ctx) -> Option<String> {
+#[allow(clippy::too_many_arguments)]
+fn drawn_picture(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, rid: &str, tile: Option<&str>, recolor: Option<&Recolor>, size: [f64; 2], area: [f64; 4], ctx: &Ctx) -> Option<String> {
     let media_path = embedded_path(archive, part_path, rid)?;
-    let key = format!("{media_path}#tile:{}#{}", tile.unwrap_or(""), recolor.map(Recolor::key).unwrap_or_default());
+    let key = format!("{media_path}#tile:{}#{}#{}x{}:{:?}", tile.unwrap_or(""), recolor.map(Recolor::key).unwrap_or_default(), size[0].round(), size[1].round(), area.map(f64::round));
     if let Some(done) = ctx.media.borrow().get(&key) {
         return Some(done.clone());
     }
@@ -2154,11 +2288,10 @@ fn background_picture(archive: &mut ZipArchive<Cursor<&[u8]>>, part_path: &str, 
     if let Some(r) = recolor {
         r.apply(&mut src);
     }
-    let Some(tile) = tile else { return store_media(key, &encode_picture(src)?, ctx) };
-    let geo = ctx.geo;
-    // The whole canvas, the first tile aligned on the slide (not the pillarbox).
-    let out = tile_picture(&src, image_dpi(&bytes), tile, [geo.canvas_w, geo.canvas_h], [geo.x_off, geo.y_off, geo.canvas_w - 2.0 * geo.x_off, geo.canvas_h - 2.0 * geo.y_off], 1920.0 / geo.canvas_w);
-    store_media(key, &encode_picture(out)?, ctx)
+    let photo = is_jpeg(&bytes);
+    let Some(tile) = tile else { return store_media(key, &encode_picture(src, photo)?, ctx) };
+    let out = tile_picture(&src, image_dpi(&bytes), tile, size, area, 1920.0 / ctx.geo.canvas_w);
+    store_media(key, &encode_picture(out, photo)?, ctx)
 }
 
 /// `src` tiled over a box `size` EMU big (`<a:tile>`, as PowerPoint and LibreOffice tile): each tile
@@ -2171,11 +2304,12 @@ pub(crate) fn tile_picture(src: &image::RgbaImage, dpi: Option<(f64, f64)>, tile
     let (sx, sy) = (num("sx", 100_000.0).abs() / 100_000.0, num("sy", 100_000.0).abs() / 100_000.0);
     // Bounded: a box is drawn at most 1920 x 1920 pixels.
     let (out_w, out_h) = ((size[0] * scale).round().clamp(1.0, 1920.0) as u32, (size[1] * scale).round().clamp(1.0, 1920.0) as u32);
-    // A tile may be bigger than the box (only part of it shows); past a bound it is sampled from
-    // the picture as it is rather than resized first.
+    // A tile may be bigger than the box (only part of it shows); one bigger than about twice the
+    // box's pixels is sampled from the picture as it is rather than resized first, so memory stays
+    // in proportion to what is drawn.
     let tile_w = (src.width() as f64 / dpi_x * 914_400.0 * sx * scale).round().clamp(1.0, 100_000.0) as u32;
     let tile_h = (src.height() as f64 / dpi_y * 914_400.0 * sy * scale).round().clamp(1.0, 100_000.0) as u32;
-    let resized = (tile_w <= 4096 && tile_h <= 4096).then(|| image::imageops::resize(src, tile_w, tile_h, image::imageops::FilterType::Triangle));
+    let resized = ((tile_w as u64) * (tile_h as u64) <= 2 * (out_w as u64) * (out_h as u64)).then(|| image::imageops::resize(src, tile_w, tile_h, image::imageops::FilterType::Triangle));
     let pixel = |u: u32, v: u32| match &resized {
         Some(t) => *t.get_pixel(u, v),
         None => *src.get_pixel((u as u64 * src.width() as u64 / tile_w as u64) as u32, (v as u64 * src.height() as u64 / tile_h as u64) as u32),

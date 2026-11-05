@@ -238,6 +238,33 @@ describe("Lyrics plugin: Christian-music filter (iTunes genres)", () => {
     expect(hits.map((h: any) => h.faith)).toEqual(["christian", "unknown", "unknown"]);
   });
 
+  test("names like \"constructor\", \"Feather\" and \"AC/DC\" stay names; titles match only as whole words", () => {
+    expect(Genius.artistNames("Feather Rose")).toEqual(["feather rose"]);
+    expect(Genius.artistNames("Featherstone ft. Crowder")).toEqual(["featherstone", "crowder"]);
+    expect(Genius.artistNames("AC/DC")).toEqual(["ac dc"]);
+    expect(Genius.artistNames("Bethel Music / Jenn Johnson")).toEqual(["bethel music", "jenn johnson"]);
+    expect(Genius.artistNames("Bethel Music/Jenn Johnson")).toEqual(["bethel music", "jenn johnson"]);
+    expect(Genius.artistNames("Hillsong+Brooke Ligertwood")).toEqual(["hillsong", "brooke ligertwood"]);
+    // An artist named after a built-in object property is a key like any other (it hung the search).
+    const records = Genius.parseItunesSongs(itunesSongs([["Something", "Constructor", "Rock"], ["X", "toString", "Pop"]]));
+    const hits = Genius.classifyHits([hit("Song", "Constructor"), hit("Song", "toString"), hit("Song", "valueOf")], records, {});
+    expect(hits.map((h: any) => h.faith)).toEqual(["other", "other", "unknown"]);
+    expect(Genius.artistsToLookUp([hit("Song", "hasOwnProperty")], [], 5)).toEqual(["hasownproperty"]);
+    // Titles: whole words from the start, never an empty title.
+    expect(Genius.sameTitle("way maker", "way maker live session")).toBe(true);
+    expect(Genius.sameTitle("holy", "holy forever")).toBe(true);
+    expect(Genius.sameTitle("holy", "holyland")).toBe(false);
+    expect(Genius.sameTitle("go", "go tell it")).toBe(false);
+    expect(Genius.sameTitle("", "anything")).toBe(false);
+    // An all-parenthetical hit title doesn't borrow another song's verdict.
+    const [h] = Genius.classifyHits([hit("(Interlude)", "Some Band")], Genius.parseItunesSongs(itunesSongs([["Hymn", "Some Band", "Christian"]])), {});
+    expect(h.genre).toBe("Christian"); // the artist's genre, from their other songs -- not a title match
+    // Artists already looked up aren't asked again.
+    const skip = Object.create(null);
+    skip["dennis brown"] = "Reggae";
+    expect(Genius.artistsToLookUp([hit("A", "Dennis Brown"), hit("B", "Sons of Korah")], [], 5, skip)).toEqual(["sons of korah"]);
+  });
+
   test("the primary artist's genre comes before a featured one's", () => {
     const records = Genius.parseItunesSongs(itunesSongs([["Other Song", "Kirk Franklin", "Gospel"], ["Another", "Bono", "Rock"]]));
     const [h] = Genius.classifyHits([hit("Lean On Me", "Kirk Franklin (Ft. Bono)")], records, {});

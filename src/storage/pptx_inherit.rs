@@ -279,7 +279,7 @@ pub fn with_alpha(c: &str, a: f64) -> String {
 
 /// `#rrggbbaa` -> (`#rrggbb`, opacity); anything else is opaque.
 pub fn split_alpha(c: &str) -> (&str, f64) {
-    if c.len() == 9 && c.starts_with('#') {
+    if c.len() == 9 && c.starts_with('#') && c.is_ascii() {
         let a = u8::from_str_radix(&c[7..9], 16).map(|v| v as f64 / 255.0).unwrap_or(1.0);
         (&c[..7], a)
     } else {
@@ -614,6 +614,8 @@ pub struct PartPh {
     /// fall back to these when it states none of its own.
     pub sp_pr: String,
     pub style: String,
+    /// The layout or master part it is in (a picture fill's relationships are that part's).
+    pub part: String,
 }
 
 pub fn shape_xfrm(shape_inner: &str) -> Option<[f64; 4]> {
@@ -631,8 +633,8 @@ pub fn shape_text_styles(shape_inner: &str) -> (ListStyle, BodyProps) {
     (list, props)
 }
 
-/// The placeholders in a layout's or master's shape tree.
-pub fn part_placeholders(part_xml: &str) -> Vec<PartPh> {
+/// The placeholders in a layout's or master's shape tree (the part at `part_path`).
+pub fn part_placeholders(part_xml: &str, part_path: &str) -> Vec<PartPh> {
     let Some((_, tree, _)) = next_tag(part_xml, "p:spTree") else { return Vec::new() };
     children(tree)
         .into_iter()
@@ -641,7 +643,7 @@ pub fn part_placeholders(part_xml: &str) -> Vec<PartPh> {
             let ph = Ph::of_shape(inner)?;
             let (list, body) = shape_text_styles(inner);
             let part = |tag: &str| next_tag(inner, tag).map(|(_, c, _)| c.to_string()).unwrap_or_default();
-            Some(PartPh { ph, xfrm: shape_xfrm(inner), list, body, sp_pr: part("p:spPr"), style: part("p:style") })
+            Some(PartPh { ph, xfrm: shape_xfrm(inner), list, body, sp_pr: part("p:spPr"), style: part("p:style"), part: part_path.to_string() })
         })
         .collect()
 }
@@ -672,8 +674,13 @@ impl Inherited {
     /// The `(spPr, style)` contents a placeholder inherits its shape properties from, nearest
     /// first (layout, then master); empty for a shape that isn't a placeholder.
     pub fn shape_parts(&self, ph: Option<&Ph>) -> Vec<(&str, &str)> {
+        self.shape_parts_in(ph).into_iter().map(|(sp_pr, style, _)| (sp_pr, style)).collect()
+    }
+
+    /// As `shape_parts`, with the part each comes from.
+    pub fn shape_parts_in(&self, ph: Option<&Ph>) -> Vec<(&str, &str, &str)> {
         let Some(ph) = ph else { return Vec::new() };
-        [self.layout_ph(ph), self.master_ph(ph)].into_iter().flatten().map(|p| (p.sp_pr.as_str(), p.style.as_str())).collect()
+        [self.layout_ph(ph), self.master_ph(ph)].into_iter().flatten().map(|p| (p.sp_pr.as_str(), p.style.as_str(), p.part.as_str())).collect()
     }
 
     /// The position, paragraph levels and body properties a shape inherits, before its own.

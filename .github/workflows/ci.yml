@@ -31,9 +31,9 @@
 #
 # Both test jobs run inside a D-Bus session with an unlocked GNOME Keyring.
 # The test servers themselves keep their secrets in a file of their own
-# (OS_NEXT_TEST_KEYRING_FILE, src/storage/keyring.rs) so they never touch a
-# developer's real keyring; only a couple of unit tests exercise the real
-# Secret Service backend, under throwaway names.
+# (--test-keyring-file, src/storage/keyring.rs; core_tests sets it in-process)
+# so they never touch a developer's real keyring; only a couple of library unit
+# tests exercise the real Secret Service backend, under throwaway names.
 #
 # Until 2026-10-21 this triggered on `master`, which isn't this repo's default
 # branch -- so it had never actually run.

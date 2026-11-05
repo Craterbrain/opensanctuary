@@ -34,17 +34,56 @@ mod storage;
 
 /// Points every keyring call in this test binary at one throwaway file instead of the OS keyring
 /// of the machine running the tests, where the real app keeps entries of the same names (a plugin's
-/// API keys, the licensed-passage key, the TLS key). Set in-process, not through the environment
-/// (src/storage/keyring.rs, `use_test_keyring_file`); the file lives in cargo's `target/tmp`, one
-/// per run. Idempotent; `base_app_state`, `open_db` and `open_db_with_dirs` call it.
+/// API keys, the licensed-passage key, the TLS key). Set in-process (src/storage/keyring.rs,
+/// `use_test_keyring_file`); the file lives in cargo's `target/tmp`, one per run, and the files of
+/// earlier runs are cleared. Runs when the test binary loads (`ISOLATE_KEYRING_AT_LOAD`), before any
+/// test -- so a test that reaches the keyring some other way than these helpers is covered too.
+/// Idempotent; `base_app_state`, `open_db` and `open_db_with_dirs` still call it.
 fn isolate_keyring() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("core_tests_keyring_{}.json", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        os_next::storage::keyring::use_test_keyring_file(path);
+        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+        // Files of earlier runs whose process is gone -- never one still running alongside (two
+        // `cargo test`s, an IDE runner, nextest's process per test).
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let Some(rest) = name.strip_prefix("core_tests_keyring_") else { continue };
+                let pid: Option<u32> = rest.split(|c: char| !c.is_ascii_digit()).next().and_then(|p| p.parse().ok());
+                if pid.is_some_and(|pid| pid != std::process::id() && !process_alive(pid)) {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+        os_next::storage::keyring::use_test_keyring_file(dir.join(format!("core_tests_keyring_{}.json", std::process::id())));
     });
 }
+
+/// Whether a process is still running (Linux: its /proc entry; elsewhere assumed running, so
+/// nothing is removed).
+fn process_alive(pid: u32) -> bool {
+    if cfg!(target_os = "linux") {
+        std::path::Path::new(&format!("/proc/{pid}")).exists()
+    } else {
+        true
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "freebsd", target_os = "macos", windows)))]
+compile_error!("core_tests isolates the keyring with a load-time constructor; add this platform's section to ISOLATE_KEYRING_AT_LOAD");
+
+/// `isolate_keyring` run as the test binary loads, before the harness starts any test (an
+/// initializer in the platform's load-time constructor section, as the `ctor` crate does).
+#[used]
+#[cfg_attr(any(target_os = "linux", target_os = "android", target_os = "freebsd"), link_section = ".init_array")]
+#[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
+#[cfg_attr(windows, link_section = ".CRT$XCU")]
+static ISOLATE_KEYRING_AT_LOAD: extern "C" fn() = {
+    extern "C" fn isolate_at_load() {
+        isolate_keyring();
+    }
+    isolate_at_load
+};
 
 /// `Database::new` for this test binary. A library on disk reaches the keyring for its
 /// licensed-passage key (sealing, reading or purging a passage), so open one only through this
@@ -170,4 +209,13 @@ fn test_doc(name: &str) -> Option<std::path::PathBuf> {
         .unwrap_or_else(|_| std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("Documents/OpenSanctuary-test-docs"));
     let path = dir.join(name);
     if path.exists() { Some(path) } else { eprintln!("skipping: {} not present ($OS_TEST_DOCS)", path.display()); None }
+}
+
+#[test]
+fn the_keyring_is_isolated_before_any_helper_runs() {
+    // Asked without touching any keyring: the load-time initializer has set this run's file (no
+    // helper is called here, and the test doesn't write, so a missing initializer can't reach the
+    // real keyring through it).
+    let expected = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("core_tests_keyring_{}.json", std::process::id()));
+    assert_eq!(os_next::storage::keyring::test_keyring_file(), Some(expected.as_path()));
 }

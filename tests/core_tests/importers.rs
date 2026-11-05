@@ -1861,14 +1861,16 @@ fn test_odp_import_reconstructs_a_table_with_a_merged_cell_padded_out() {
   <draw:page draw:name="page1">
     <draw:frame svg:x="1cm" svg:y="1cm" svg:width="8cm" svg:height="3cm">
       <table:table>
-        <table:table-column/><table:table-column/>
+        <table:table-column/><table:table-column/><table:table-column/>
         <table:table-row>
           <table:table-cell table:number-columns-spanned="2"><text:p>Spans both</text:p></table:table-cell>
           <table:covered-table-cell/>
+          <table:table-cell><text:p>After</text:p></table:table-cell>
         </table:table-row>
         <table:table-row>
           <table:table-cell><text:p>A</text:p></table:table-cell>
           <table:table-cell><text:p>B</text:p></table:table-cell>
+          <table:table-cell><text:p>C</text:p></table:table-cell>
         </table:table-row>
       </table:table>
     </draw:frame>
@@ -1887,6 +1889,9 @@ fn test_odp_import_reconstructs_a_table_with_a_merged_cell_padded_out() {
     let (span, a, b) = (text_at("Spans both"), text_at("A"), text_at("B"));
     assert!(span.w > a.w + b.w * 0.5, "the merged cell is about as wide as both: {span:?} {a:?} {b:?}");
     assert!(a.y > span.y && (a.y - b.y).abs() < 1e-9 && b.x > a.x);
+    // The cell after the covered one sits in the third column, above C.
+    let (after, c) = (text_at("After"), text_at("C"));
+    assert!((after.x - c.x).abs() < 1e-9, "{after:?} {c:?}");
 }
 
 #[test]
@@ -3224,4 +3229,26 @@ fn test_pptx_import_table_cell_borders_are_drawn_side_by_side() {
     assert_eq!(lines[0].2, "#ff0000");
     // The second states all four alike: one outlined box.
     assert_eq!(children.iter().filter(|c| matches!(c, SlideElement::Shape { stroke_color: Some(s), fill_color, .. } if s == "#ff0000" && fill_color == "none")).count(), 1, "{children:?}");
+}
+
+#[test]
+fn test_pptx_import_survives_groups_nested_far_past_any_real_deck() {
+    use std::io::{Cursor, Write};
+    use zip::write::FileOptions;
+    use zip::ZipWriter;
+
+    const NS: &str = r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main""#;
+    let depth = 500;
+    let open = r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="1" name="g"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>"#.repeat(depth);
+    let close = "</p:grpSp>".repeat(depth);
+    let slide = format!(r#"<p:sld {NS}><p:cSld><p:spTree>{open}{close}</p:spTree></p:cSld></p:sld>"#);
+    let mut zw = ZipWriter::new(Cursor::new(Vec::new()));
+    zw.start_file("ppt/slides/slide1.xml", FileOptions::<()>::default()).unwrap();
+    zw.write_all(slide.as_bytes()).unwrap();
+    let media_dir = tempfile::tempdir().unwrap();
+    // On a thread with a modest stack, as a server worker has: it must return, not overflow.
+    let bytes = zw.finish().unwrap().into_inner();
+    let dir = media_dir.path().to_path_buf();
+    let done = std::thread::Builder::new().stack_size(2 * 1024 * 1024).spawn(move || PptxImporter::import_pptx_bytes(&bytes, "stem", &dir).map(|p| p.slides.len()).ok()).unwrap().join();
+    assert_eq!(done.ok().flatten(), Some(1));
 }

@@ -156,13 +156,16 @@ export function renderTextBlockDOM(
         if (i > 0 && before > 0) para.style.paddingTop = `${before}pt`;
         if (i < paragraphs.length - 1 && after > 0) para.style.paddingBottom = `${after}pt`;
         // An empty paragraph still takes a line of its own size.
-        const shown = runs.some((r) => r.text.length > 0) ? runs : lineStyle ? [{ ...lineStyle, text: '\u200b' }] : [];
+        const placeholder = !runs.some((r) => r.text.length > 0);
+        const shown = !placeholder ? runs : lineStyle ? [{ ...lineStyle, text: '\u200b' }] : [];
         if (hanging && shown.length > 1) {
           // The lead (indent and bullet) hangs: the rest of the paragraph is a box beside it, so
           // its wrapped lines start where its text does. Laid out by CSS, no measuring needed.
           para.style.display = 'flex';
           para.style.alignItems = 'baseline';
           const lead = createRunSpan(shown[0]!, block.autofit, scale);
+          // Marked so an edit reads it back as the paragraph's lead, even when it's empty.
+          lead.dataset.lead = '1';
           lead.style.flex = 'none';
           lead.style.whiteSpace = 'pre';
           const rest = document.createElement('span');
@@ -171,7 +174,12 @@ export function renderTextBlockDOM(
           for (const run of shown.slice(1)) rest.appendChild(createRunSpan(run, block.autofit, scale));
           para.append(lead, rest);
         } else {
-          for (const run of shown) para.appendChild(createRunSpan(run, block.autofit, scale));
+          for (const run of shown) {
+            const span = createRunSpan(run, block.autofit, scale);
+            // The stand-in that gives an empty paragraph its line isn't text (see reconcileTextBlockFromDOM).
+            if (placeholder) span.dataset.placeholder = '1';
+            para.appendChild(span);
+          }
         }
         textInner.appendChild(para);
       });

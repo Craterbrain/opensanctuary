@@ -242,16 +242,18 @@ fn path(g: &Guides, attrs: &str, inner: &str, w: f64, h: f64, flip: (bool, bool)
             }
             "arcTo" => {
                 let v = |k: &str| extract_attr(a, k).map(|t| g.get(t)).unwrap_or(0.0);
-                let (wr, hr) = (v("wR") * sx, v("hR") * sy);
+                let (path_wr, path_hr) = (v("wR"), v("hR"));
+                let (wr, hr) = (path_wr * sx, path_hr * sy);
                 let (st, sw) = (v("stAng") / 60_000.0, v("swAng") / 60_000.0);
                 if wr <= 0.0 || hr <= 0.0 || sw == 0.0 {
                     continue;
                 }
                 // DrawingML's angles are where a ray from the centre meets the ellipse, not the
-                // ellipse's parameter: convert before placing points on it.
+                // ellipse's parameter: convert before placing points on it -- in the path's own
+                // coordinates (the spec's), so a path stretched into its shape keeps its arcs.
                 let on = |deg: f64| {
                     let r = deg.to_radians();
-                    let t = (r.sin() * wr).atan2(r.cos() * hr);
+                    let t = (r.sin() * path_wr).atan2(r.cos() * path_hr);
                     (wr * t.cos(), hr * t.sin())
                 };
                 let s = on(st);

@@ -49,17 +49,20 @@ describe("E2E Live Test: Per-Run Rich Text Selection Splitting", () => {
     );
     expect(editingId).not.toBeNull();
 
-    const before = await page.evaluate(() => {
+    // The element being edited, by id: the slide can hold more than one text box.
+    const runsOf = (id: string) => page.evaluate((id) => {
       const state = (window as any).getCanvasSlideEditorDebugState();
-      return state.activeSlideElements[0].block.runs.map((r: any) => r.text).join('');
-    });
+      return state.activeSlideElements.find((e: any) => e.id === id).block.runs;
+    }, id);
+    const before = (await runsOf(editingId!)).map((r: any) => r.text).join('');
     expect(before.length).toBeGreaterThan(0);
 
     // Select the word "sweet" within the single run's text node via a real
     // browser Range/Selection, then apply bold — exercising applyStyleToSelection
     // against actual DOM Range semantics (not a mock).
-    const selectionMade = await page.evaluate((wordToSelect: string) => {
-      const node = document.querySelector('.editor-slide-canvas-stage .slide-canvas-element.slide-element-text-content') as HTMLElement | null;
+    const selectionMade = await page.evaluate(({ wordToSelect, id }: { wordToSelect: string; id: string }) => {
+      // Inside the text box being edited -- the style applies only to a selection there.
+      const node = document.querySelector(`.editor-slide-canvas-stage [data-element-id="${id}"].slide-element-text-content`) as HTMLElement | null;
       if (!node) return false;
       const span = node.querySelector('span');
       const textNode = span?.firstChild;
@@ -74,16 +77,13 @@ describe("E2E Live Test: Per-Run Rich Text Selection Splitting", () => {
       sel?.removeAllRanges();
       sel?.addRange(range);
       return true;
-    }, 'sweet');
+    }, { wordToSelect: 'sweet', id: editingId! });
     expect(selectionMade).toBe(true);
 
     await page.evaluate(() => (window as any).__debugApplyTextStyle({ bold: true }));
-    await page.waitForFunction(() => (window as any).getCanvasSlideEditorDebugState().activeSlideElements[0].block.runs.some((r: any) => r.bold), null, { timeout: 10000 });
+    await page.waitForFunction((id) => (window as any).getCanvasSlideEditorDebugState().activeSlideElements.find((e: any) => e.id === id).block.runs.some((r: any) => r.bold), editingId, { timeout: 10000 });
 
-    const after = await page.evaluate(() => {
-      const state = (window as any).getCanvasSlideEditorDebugState();
-      return state.activeSlideElements[0].block.runs;
-    });
+    const after = await runsOf(editingId!);
 
     // Lossless: concatenating all runs' text reproduces the original string.
     const concatenated = after.map((r: any) => r.text).join('');

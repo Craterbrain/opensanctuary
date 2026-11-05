@@ -1,6 +1,6 @@
 # Client discovery & console pairing
 
-_Last edited: 2026-11-03_
+_Last edited: 2026-11-04_
 
 This covers two related things for **permanent display clients** — the
 Roku and Android TV apps, as opposed to someone opening `live.html` in a
@@ -194,10 +194,13 @@ moves with the data folder) and its key lives in `tls_private_key:<id>`; with
 no keyring, the owner-only fallback file is `tls_private_key.pem` next to that
 install's database. On upgrade an install adopts the old shared key once, only
 if it still matches its own certificate, and leaves the shared entry alone for
-older builds. Test servers set `OS_NEXT_TLS_KEY_STORE=file`, which keeps the
-key in that file, and `OS_NEXT_TEST_KEYRING_FILE`, which sends every other
-secret (plugin API keys, the licensed-passage key) to a file in the test's data
-folder: no test touches the OS keyring.
+older builds. `OS_NEXT_TLS_KEY_STORE=file` keeps the key (and the
+licensed-passage key) in owner-only files instead of the keyring, for headless
+installs. Test servers are started with the hidden `--test-keyring-file` flag,
+which sends every secret (the TLS key, plugin API keys, the licensed-passage key)
+to one file in the test's data folder, and the core test binary does the same
+in-process; only a couple of library unit tests (in `src/storage/keyring.rs` and
+`src/network/tls.rs`) use the real Secret Service, under throwaway names.
 
 ### Critical Invariant: Zero-Auth Open Access for Web *Displays*
 
