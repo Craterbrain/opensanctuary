@@ -178,6 +178,7 @@ pub(super) fn keep_off_hidden(state: &mut ShowState) {
     let moved = |item: &ScheduleItem, pos: usize| is_hidden_at(item, pos).then(|| first_visible_from(item, pos + 1).or_else(|| prev_visible_before(item, pos))).flatten();
     if let Some(next) = state.live_item.as_ref().and_then(|i| moved(i, state.live_slide_index)) {
         state.live_slide_index = next;
+        update_section_jump_cursor(state);
     }
     if let Some(next) = state.staged_item.as_ref().and_then(|i| moved(i, state.staged_slide_index)) {
         state.staged_slide_index = next;

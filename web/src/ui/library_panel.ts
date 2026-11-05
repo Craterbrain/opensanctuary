@@ -1448,19 +1448,11 @@ function alreadyPreviewing(item: LibraryItem, tabName: string): boolean {
   if (!ctx || item !== lastPreviewedItem || ctx.getSelectedLibraryItem() !== item) return false;
   const staged = ctx.getCurrentSnapshot()?.state.staged_item;
   if (!staged || !item.id) return false;
-  // The staged copy of a library item is `sched_<kind>_<its id>` (to_schedule_item): the same
-  // item, not just one with the same title (a schedule's own copy, or another arrangement),
-  // nor an item of another kind whose id happens to end the same way.
-  return (STAGED_ID_KINDS[tabName] ?? []).some(kind => staged.id === `sched_${kind}_${item.id}`);
+  // The staged copy of a library item has its kind and ends in `_<its id>` (to_schedule_item):
+  // the same item, not just one with the same title (a schedule's own copy, or another
+  // arrangement), nor an item of another kind whose id happens to end the same way.
+  return staged.item_type === STAGEABLE_TAB_TYPES[tabName] && staged.id.endsWith(`_${item.id}`);
 }
-
-/** The `sched_<kind>_` prefixes the server gives a staged item from each tab (models.rs). */
-const STAGED_ID_KINDS: Record<string, string[]> = {
-  songs: ['song'],
-  scriptures: ['scrip', 'lic'],
-  presentations: ['pres'],
-  media: ['media']
-};
 
 export function selectAndPreviewItem(item: LibraryItem, tabName: string) {
   if (!ctx) return;
