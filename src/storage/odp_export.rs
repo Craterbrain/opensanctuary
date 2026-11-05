@@ -468,7 +468,11 @@ fn odf_solid_fill(fill: &str) -> (String, f64) {
     let Some(at) = fill.find('#') else { return (fill.to_string(), 1.0) };
     let hex: String = fill[at + 1..].chars().take_while(|c| c.is_ascii_hexdigit()).collect();
     match hex.len() {
-        8 => (format!("#{}", &hex[..6]), u8::from_str_radix(&hex[6..], 16).map(|a| a as f64 / 255.0).unwrap_or(1.0)),
+        8 => {
+            let full = format!("#{hex}");
+            let (color, alpha) = crate::storage::pptx_inherit::split_alpha(&full);
+            (color.to_string(), alpha)
+        }
         6 => (format!("#{hex}"), 1.0),
         _ => (fill.to_string(), 1.0),
     }

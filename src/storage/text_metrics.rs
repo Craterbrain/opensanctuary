@@ -17,7 +17,10 @@ const HELVETICA: [u16; 95] = [
 fn family_factor(family: &str) -> Option<f64> {
     let first = family.split(',').next().unwrap_or("").trim().trim_matches(|c| c == '\'' || c == '"').to_ascii_lowercase();
     let has = |names: &[&str]| names.iter().any(|n| first.contains(n));
-    if has(&["mono", "courier", "consolas", "menlo", "code"]) {
+    // Fixed pitch by name: whole words only ("Fira Code", "DejaVu Sans Mono", but not "Encode Sans"
+    // or "Monotype Corsiva").
+    let words: Vec<&str> = first.split(|c: char| !c.is_ascii_alphanumeric()).collect();
+    if words.iter().any(|w| matches!(*w, "mono" | "monospace" | "monospaced" | "code" | "courier" | "consolas" | "menlo" | "inconsolata" | "typewriter")) {
         return None;
     }
     Some(if has(&["calibri", "carlito", "candara", "corbel"]) {
@@ -99,6 +102,8 @@ mod tests {
         assert!((text_width_em("Hill", "Arial", false) - (0.722 + 0.222 * 3.0)).abs() < 1e-9);
         assert!(text_width_em("Hill", "'Carlito', 'Calibri', sans-serif", false) < text_width_em("Hill", "Arial", false));
         assert!((text_width_em("abc", "Courier New", true) - 1.8).abs() < 1e-9);
+        assert!((text_width_em("abc", "Fira Code", false) - 1.8).abs() < 1e-9);
+        assert!(text_width_em("iii", "Encode Sans", false) < 1.0 && text_width_em("iii", "Monotype Corsiva", false) < 1.0);
     }
 
     #[test]

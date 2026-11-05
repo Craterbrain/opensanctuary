@@ -20,7 +20,9 @@ export function scalePath(d: string, w: number, h: number): string {
       const scaled = cmd.toUpperCase() === 'A'
         ? [at(0) * w / 100, at(1) * h / 100, at(2), at(3), at(4), at(5) * w / 100, at(6) * h / 100]
         : g.map((v, k) => (k % 2 === 0 ? v * w / 100 : v * h / 100));
-      out.push(`${cmd} ${scaled.map((v) => +v.toFixed(2)).join(' ')}`);
+      // Pairs after a moveto's first are linetos (SVG's rule): "M 50 50 80 50" moves, then draws.
+      const shown = i > 0 && cmd === 'M' ? 'L' : i > 0 && cmd === 'm' ? 'l' : cmd;
+      out.push(`${shown} ${scaled.map((v) => +v.toFixed(2)).join(' ')}`);
     }
   };
   for (const t of tokens) {

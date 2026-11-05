@@ -76,6 +76,9 @@ fn cp1252(bytes: &[u8]) -> String {
 }
 
 /// Reads a metafile. `None` when it isn't one, or draws nothing this understands.
+/// The most drawing items one metafile yields (a hostile file of tiny records stops here), as for EMF.
+const MAX_ITEMS: usize = 20_000;
+
 pub fn parse(bytes: &[u8]) -> Option<Wmf> {
     let mut at = 0usize;
     let mut placeable: Option<(f64, f64, f64, f64)> = None;
@@ -91,12 +94,14 @@ pub fn parse(bytes: &[u8]) -> Option<Wmf> {
     at += header_words * 2;
 
     let mut objects: Vec<Option<Obj>> = Vec::new();
+    // Emptied slots, lowest first: a new object takes the lowest free one (as Windows numbers them).
+    let mut free: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     let mut dc = Dc { pen: Some(("#000000".into(), 1.0)), brush: Some("#ffffff".into()), font: (12.0, 400, false, "Arial".into(), 0.0), text_color: "#000000".into(), text_align: 0, pos: (0.0, 0.0), win_org: (0.0, 0.0), win_ext: None };
     let mut saved: Vec<Dc> = Vec::new();
     let mut items = Vec::new();
     let mut first_window: Option<((f64, f64), (f64, f64))> = None;
 
-    while at + 6 <= bytes.len() {
+    while at + 6 <= bytes.len() && items.len() < MAX_ITEMS {
         let size_words = u32le(bytes, at)? as usize;
         let func = u16le(bytes, at + 4)?;
         if size_words < 3 || func == 0 {
@@ -124,9 +129,11 @@ pub fn parse(bytes: &[u8]) -> Option<Wmf> {
                     }
                     _ => Obj::Other,
                 };
-                match objects.iter().position(Option::is_none) {
+                // (Handles are 16-bit: there are never more slots than that.)
+                match free.pop_first() {
                     Some(slot) => objects[slot] = Some(obj),
-                    None => objects.push(Some(obj)),
+                    None if objects.len() <= u16::MAX as usize => objects.push(Some(obj)),
+                    None => {}
                 }
             }
             0x012D => {
@@ -140,11 +147,15 @@ pub fn parse(bytes: &[u8]) -> Option<Wmf> {
                 }
             }
             0x01F0 => {
-                if let Some(slot) = u16le(p, 0).and_then(|k| objects.get_mut(k as usize)) {
-                    *slot = None;
+                if let Some(k) = u16le(p, 0).map(usize::from) {
+                    if let Some(slot @ Some(_)) = objects.get_mut(k) {
+                        *slot = None;
+                        free.insert(k);
+                    }
                 }
             }
-            0x001E => saved.push(dc.clone()),
+            0x001E if saved.len() < 1024 => saved.push(dc.clone()),
+            0x001E => {}
             0x0127 => {
                 // RestoreDC(-n) pops n levels.
                 let n = i(0).unwrap_or(-1.0).abs().max(1.0) as usize;
@@ -207,10 +218,16 @@ pub fn parse(bytes: &[u8]) -> Option<Wmf> {
             }
             0x0817 | 0x081A | 0x0830 => {
                 // Arc/Pie/Chord: yEnd, xEnd, yStart, xStart, bottom, right, top, left; counter-clockwise.
-                let (ye, xe, ys, xs, b, r, t, l) = (i(0)?, i(1)?, i(2)?, i(3)?, i(4)?, i(5)?, i(6)?, i(7)?);
+                // A record too short to hold them is skipped, not the whole picture.
+                let (Some(ye), Some(xe), Some(ys), Some(xs), Some(b), Some(r), Some(t), Some(l)) = (i(0), i(1), i(2), i(3), i(4), i(5), i(6), i(7)) else {
+                    at += size_words * 2;
+                    continue;
+                };
                 let (cx, cy, rx, ry) = ((l + r) / 2.0, (t + b) / 2.0, (r - l).abs() / 2.0, (b - t).abs() / 2.0);
+                // Where each radial meets the ellipse, by its parametric angle (x = cx + rx cos t,
+                // y = cy + ry sin t), which differs from the radial's own on a box that isn't square.
                 let on = |x: f64, y: f64| {
-                    let a = (y - cy).atan2(x - cx);
+                    let a = ((y - cy) * rx.max(f64::EPSILON)).atan2((x - cx) * ry.max(f64::EPSILON));
                     ((cx + rx * a.cos(), cy + ry * a.sin()), a)
                 };
                 let ((from, a0), (to, a1)) = (on(xs, ys), on(xe, ye));

@@ -5,6 +5,8 @@ describe("path data in an element's 0..100 box", () => {
   test("points scale per axis; arc radii scale, arc flags don't", () => {
     expect(scalePath("M 0 0 L 100 50 C 10 20 30 40 50 60 Z", 200, 10)).toBe("M 0 0 L 200 5 C 20 2 60 4 100 6 Z");
     expect(scalePath("M 0 50 A 50 50 0 1 0 100 50", 300, 100)).toBe("M 0 50 A 150 50 0 1 0 300 50");
+    // A moveto's extra pairs are linetos: a pie wedge goes out from its centre to the rim.
+    expect(scalePath("M 50 50 100 50 A 50 50 0 0 1 50 100 Z", 200, 100)).toBe("M 100 50 L 200 50 A 100 50 0 0 1 100 100 Z");
   });
   test("repeated coordinates after one command are all scaled", () => {
     expect(scalePath("M 0 0 L 50 0 50 100 100 100", 10, 10)).toBe("M 0 0 L 5 0 L 5 10 L 10 10");
