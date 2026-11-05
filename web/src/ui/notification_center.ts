@@ -128,7 +128,12 @@ function fromServer(raw: any): Notice | null {
 /** Linux: when the host says an installed update is waiting for a restart, the console pops up the question (updates here are
  * always started by the operator, so asking is not a surprise). Set by main.ts; without it the notice is an ordinary toast. */
 let restartPrompt: (() => void) | null = null;
-export function setRestartPrompt(fn: () => void): void { restartPrompt = fn; }
+/** Sets what asks "restart now?", returning what was there (so a test can put it back). */
+export function setRestartPrompt(fn: (() => void) | null): (() => void) | null {
+  const previous = restartPrompt;
+  restartPrompt = fn;
+  return previous;
+}
 
 /** A file was opened from the desktop (double-click, "Open with"): the console takes it from the host's waiting list. Set by app_ui.ts. */
 let openFilePrompt: (() => void) | null = null;

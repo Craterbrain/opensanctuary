@@ -29,6 +29,9 @@ struct Args {
     #[arg(long, value_name = "KEY", hide = true, help = "TESTING ONLY: treat this minisign public key as the release key for plugin signing (see testdata/signing/README.md)")]
     test_release_key: Option<String>,
 
+    #[arg(long, value_name = "FILE", hide = true, help = "TESTING ONLY: keep every secret in this JSON file instead of the OS keyring (the e2e test servers use it)")]
+    test_keyring_file: Option<std::path::PathBuf>,
+
     #[arg(long, value_name = "FOLDER", help = "Write the SHA-256 of every file in a plugin folder into its plugin.json (`files`), ready to be signed with minisign, then exit")]
     hash_plugin: Option<String>,
 
@@ -77,11 +80,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    if let Some(path) = std::env::var_os(os_next::storage::keyring::TEST_KEYRING_FILE_ENV).filter(|v| !v.is_empty()) {
-        tracing::warn!("Secrets go to the test keyring file {} instead of the OS keyring (test runs only)", std::path::Path::new(&path).display());
-    }
-
     let args = Args::parse();
+
+    if let Some(path) = &args.test_keyring_file {
+        // Only for what the test servers are: headless, their data in a temporary folder. A real
+        // install started with this (a copied service file, a wrapper script) refuses to run rather
+        // than keep its secrets in a plain file.
+        let in_temp = std::path::absolute(path).is_ok_and(|p| p.starts_with(std::env::temp_dir()));
+        if !args.headless || !in_temp {
+            eprintln!("--test-keyring-file is for test servers only: it needs --headless and a file under {}", std::env::temp_dir().display());
+            std::process::exit(2);
+        }
+        tracing::warn!("--test-keyring-file: secrets go to {} instead of the OS keyring; this is not a normal run", path.display());
+        os_next::storage::keyring::use_test_keyring_file(path.clone());
+    }
 
     // The key that vouches for the app's own plugins and the plugin revocation list. Only a test run may change it.
     let plugin_release_key = match &args.test_release_key {

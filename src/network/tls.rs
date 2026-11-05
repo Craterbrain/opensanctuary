@@ -34,8 +34,8 @@ const LEGACY_SHARED_KEYRING_ACCOUNT: &str = "tls_private_key";
 /// `tls_private_key:<id>`.
 const SETTING_KEY_TLS_KEY_ID: &str = "tlsKeyId";
 /// `OS_NEXT_TLS_KEY_STORE=file` keeps the private key in an owner-only file next to the database
-/// instead of the OS keyring. The e2e test servers set it, so test runs never write to the
-/// developer's real keyring.
+/// instead of the OS keyring (a headless install). Test servers don't need it: their
+/// `--test-keyring-file` already keeps every secret out of the developer's real keyring.
 const ENV_TLS_KEY_STORE: &str = "OS_NEXT_TLS_KEY_STORE";
 const KEY_FILE_NAME: &str = "tls_private_key.pem";
 pub const DEFAULT_HTTPS_PORT: u16 = 8443;
@@ -113,7 +113,9 @@ impl TlsKeyStore {
             .flatten()
             .filter(|k| !k.trim().is_empty())
             .or_else(|| {
-                (service == TLS_KEYRING_SERVICE)
+                // The old shared file in the user's config folder -- never for a test server, whose
+                // secrets must not come from the real install's (its test keyring is the whole store).
+                (service == TLS_KEYRING_SERVICE && crate::storage::keyring::test_keyring_file().is_none())
                     .then(|| read_fallback_key_at(&crate::storage::paths::config_dir().join(KEY_FILE_NAME)))
                     .flatten()
             })

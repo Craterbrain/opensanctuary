@@ -27,7 +27,7 @@ const KEY_SERVICE: &str = "OpenSanctuary:System";
 const KEY_ACCOUNT: &str = "licensed-cache-key";
 const KEY_FILE: &str = ".licensed-cache.key";
 const SEAL_PREFIX: &[u8] = b"os1";
-/// Same switch the TLS key uses (src/network/tls.rs): tests and headless boxes keep secrets in a file.
+/// Same switch the TLS key uses (src/network/tls.rs): a headless box keeps secrets in a file.
 const ENV_FILE_STORE: &str = "OS_NEXT_TLS_KEY_STORE";
 
 /// What the host knows about a licensed passage besides its (sealed) text. The reference, version and

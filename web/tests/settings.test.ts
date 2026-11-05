@@ -4,10 +4,12 @@ import { api } from '../src/core/api_client.ts';
 import { __resetHostSessionTokenForTests } from '../src/core/host_session.ts';
 import { saveNetworkSettings, checkForUpdates, loadSettingsServerInfo, settingRowVisible } from '../src/ui/settings_dialog.ts';
 
-// bun runs every test file in one process: whatever a test swaps into the globals is put back
-// right after it, so no other file ever sees a stub.
+// bun runs every test file in one process: whatever a test swaps into the globals (or the
+// modules' shared state: the host-token cache, the restart prompt) is put back right after it, so
+// no other file ever sees a stub.
 const ORIGINAL = { fetch: globalThis.fetch, document: (globalThis as any).document, window: (globalThis as any).window, hadWindow: 'window' in globalThis };
 afterEach(() => {
+  __resetHostSessionTokenForTests();
   globalThis.fetch = ORIGINAL.fetch;
   (globalThis as any).document = ORIGINAL.document;
   if (ORIGINAL.hadWindow) (globalThis as any).window = ORIGINAL.window;
@@ -128,8 +130,12 @@ describe('Settings > About', () => {
       return body ? { ok: true, status: 200, json: async () => body } : { ok: false, status: 401, json: async () => ({}) }; // 401 ends the feed
     }) as any;
     let prompts = 0;
-    setRestartPrompt(() => { prompts++; });
-    await startNotificationFeed();
-    expect(prompts).toBe(1);
+    const previous = setRestartPrompt(() => { prompts++; });
+    try {
+      await startNotificationFeed();
+      expect(prompts).toBe(1);
+    } finally {
+      setRestartPrompt(previous);
+    }
   }, 15000);
 });

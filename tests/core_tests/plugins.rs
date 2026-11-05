@@ -1465,7 +1465,7 @@ async fn test_shared_keyring_namespaces_between_plugins() {
     assert_eq!(c.post(format!("{base}/api/plugins/kp_a/revoke")).header("x-host-token", host).send().await.unwrap().status(), ok);
     assert_eq!(call("get", Some(tok_a.clone()), S, "api_key", None).await.0, reqwest::StatusCode::UNAUTHORIZED);
 
-    // Cleanup of real keyring entries this test created.
+    // Clear what this test wrote (into this test binary's throwaway keyring file, see isolate_keyring).
     for (svc, acct) in [(S, "api_key"), (S, "legacy"), (S, "mine"), ("OpenSanctuary:Plugin:kp_b", "own")] {
         let _ = os_next::storage::KeyringService::delete_secret(svc, acct);
     }

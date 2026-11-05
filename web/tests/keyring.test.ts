@@ -9,12 +9,14 @@ import {
 describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
   let mockStore: Map<string, string>;
   let mockOwnership: Map<string, string>;
+  let mockCalls: { endpoint: string; token?: string }[] = [];
   let mockTransport: KeyringTransport;
   let client: KeyringClient;
 
   beforeEach(() => {
     mockStore = new Map<string, string>();
     mockOwnership = new Map<string, string>();
+    mockCalls = [];
     mockTransport = {
       post: async <T>(endpoint: string, data: any, headers?: Record<string, string>): Promise<T> => {
         if (endpoint === '/api/keyring/plugin/token') {
@@ -26,6 +28,7 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
         const { service, account, secret } = data;
         const key = `${service}::${account}`;
         const pluginToken = headers?.['X-Plugin-Token'];
+        mockCalls.push({ endpoint, token: pluginToken });
 
         let callerTag = 'host';
         if (pluginToken) {
@@ -365,11 +368,16 @@ describe('OS-Native Keyring Client (Linux & Windows Vault)', () => {
       await expect(client.acquirePluginToken('   ')).rejects.toThrow('Plugin name must not be empty');
 
       const vault = client.forPlugin('my_plugin');
+      mockCalls = [];
       expect(await vault.setApiKey('mine')).toBe(true);
       expect(await vault.getApiKey()).toBe('mine');
       expect(await vault.hasApiKey()).toBe(true);
       expect(await vault.deleteApiKey()).toBe(true);
       expect(await vault.getApiKey()).toBeNull();
+      // Every keyring call carried the plugin's own token (without it the server treats the caller as the host).
+      const keyringCalls = mockCalls.filter((c) => c.endpoint !== '/api/keyring/plugin/token');
+      expect(keyringCalls.length).toBeGreaterThanOrEqual(5);
+      expect(keyringCalls.every((c) => c.token === 'token_for_my_plugin')).toBe(true);
     });
 
     test('a refused read, check or delete is null/false; a refused write throws', async () => {
