@@ -171,21 +171,16 @@ if (resourceSearchInput) {
 let studioSlides: EditorSlide[] = [];
 let canvasSlideEditor: SlideEditor | null = null;
 // Set when editing an item that's a known member of the live Schedule (see
-// ctx-sched-edit / ctx-slide-edit below) — lets saveEditorItem additionally
-// push the active slide's edits live via BatchSlideEdit, on top of the normal
-// REST save to the library, so an operator sees the change immediately on
-// whatever's live/staged/scheduled rather than only in the catalog.
+// ctx-sched-edit / ctx-slide-edit below). Saving then replaces that schedule
+// item in place and leaves the library entry alone.
 let editingScheduleContext: { itemIndex: number; slideIndex?: number } | null = null;
-
-let lastApplyResult: { slides: EditorSlide[]; batchOps: any[]; hasChanges: boolean; activeIndex: number } | null = null;
 
 function getCanvasSlideEditor(): SlideEditor {
   if (!canvasSlideEditor) {
     const mount = document.getElementById('canvas-editor-mount');
     canvasSlideEditor = new SlideEditor({
       container: mount as HTMLElement,
-      onCancel: () => closeModal(createModal),
-      onApply: (result) => { lastApplyResult = result; }
+      onCancel: () => closeModal(createModal)
     });
   }
   return canvasSlideEditor;
@@ -243,16 +238,26 @@ function openSlideEditor(type = 'song') {
   if (createItemContent) createItemContent.value = '';
 
   editingScheduleContext = null;
+  setScheduleEditButtons(false);
   studioSlides = [buildBlankEditorSlide(type, 0)];
   closeBulkOverlay();
   if (createModal) showModal(createModal);
   getCanvasSlideEditor().open(studioSlides, 0, currentEditorType);
 }
 
+// An item opened from the schedule saves to the schedule only, so the library button is hidden.
+function setScheduleEditButtons(fromSchedule: boolean): void {
+  const lib = document.getElementById('btn-save-created-item');
+  const sched = document.getElementById('btn-save-to-schedule');
+  if (lib) lib.style.display = fromSchedule ? 'none' : '';
+  if (sched) sched.textContent = fromSchedule ? '📋 Update in Schedule' : '📋 Save to Schedule';
+}
+
 function editExistingItem(item: any, scheduleContext: { itemIndex: number; slideIndex?: number } | null = null) {
   if (!item) return;
   setEditingItemId(item.id);
   editingScheduleContext = scheduleContext;
+  setScheduleEditButtons(scheduleContext !== null);
 
   const isPres = item.slides && item.slides[0] && item.slides[0].content !== undefined;
   setCurrentEditorType(item.item_type ? item.item_type.toLowerCase() : (isPres ? 'presentation' : 'song'));
@@ -549,56 +554,12 @@ async function saveEditorItem(addToSchedule = false) {
   }
 
   const editor = getCanvasSlideEditor();
-  lastApplyResult = null;
   editor.apply();
-  // `editor.apply()` synchronously invokes the `onApply` callback registered when
-  // this editor was opened (line ~189), which reassigns `lastApplyResult` — but
-  // TypeScript's control-flow analysis can't see through that closure call, so it
-  // still thinks `lastApplyResult` is exactly `null` here. Re-assert the real
-  // declared type to read the value the callback actually set.
-  const applyResult = lastApplyResult as {
-    slides: EditorSlide[]; batchOps: any[]; hasChanges: boolean; activeIndex: number
-  } | null;
   studioSlides = editor.getAllSlides();
 
   if (!studioSlides.length) {
     showToast('Please add at least one slide.', 'warning');
     return;
-  }
-
-  // If this editor session is against a known live/staged/scheduled slot,
-  // push the active slide's edits live immediately via BatchSlideEdit, on top
-  // of the REST save below (which persists all slides to the library). This
-  // only covers the slide that was active when Save was clicked — matches
-  // SlideEditor's own history model, which tracks one slide's diff at a time.
-  if (editingScheduleContext && applyResult && applyResult.hasChanges && applyResult.batchOps.length > 0) {
-    sendCommand({
-      BatchSlideEdit: {
-        item_index: editingScheduleContext.itemIndex,
-        slide_index: editingScheduleContext.slideIndex ?? applyResult.activeIndex,
-        ops: applyResult.batchOps
-      }
-    });
-  }
-
-  // Hidden/shown is a slide-level flag the batch edit above doesn't carry, so push any change to
-  // the schedule's own copy of the item too (the REST save below only updates the library).
-  if (editingScheduleContext && currentSnapshot && currentSnapshot.schedule) {
-    const schedItem = currentSnapshot.schedule.items[editingScheduleContext.itemIndex];
-    const schedSlides = (schedItem && schedItem.slides) || [];
-    // Slides carry no id: each is matched to the schedule's copy by where it was when the editor
-    // opened (`source_index`), so moving slides around doesn't move a flag onto the wrong one.
-    // Slides added in the editor have no counterpart; a copied slide shares its original's
-    // position, so a position two slides claim is ambiguous and left alone.
-    const claims = new Map<number, number>();
-    for (const s of studioSlides) if (s.source_index !== undefined) claims.set(s.source_index, (claims.get(s.source_index) ?? 0) + 1);
-    for (const s of studioSlides) {
-      const at = s.source_index;
-      if (at === undefined || claims.get(at) !== 1 || at >= schedSlides.length) continue;
-      if (!!schedSlides[at]?.hidden !== !!s.hidden) {
-        sendCommand({ SetSlideHidden: { item_index: editingScheduleContext!.itemIndex, slide_index: at, hidden: !!s.hidden } });
-      }
-    }
   }
 
   const slides = studioSlides.map((s, idx) => ({
@@ -620,6 +581,17 @@ async function saveEditorItem(addToSchedule = false) {
     slide_document_version: 2,
     reference_label: s.reference_label || null
   }));
+
+  // An item edited from the schedule changes only the schedule's copy; the library entry is left alone.
+  if (scheduleItemIndex !== null && currentSnapshot && currentSnapshot.schedule) {
+    const current = currentSnapshot.schedule.items[scheduleItemIndex];
+    if (current) {
+      sendCommand({ ReplaceScheduleItem: { item_index: scheduleItemIndex, item: { ...current, title, author_or_ref: author || current.author_or_ref, slides, arrangement: [] } } });
+      closeModal(createModal);
+      showToast(`✓ Updated "${title}" in Schedule`, 'success');
+      return;
+    }
+  }
 
   const payload = {
     id: editingItemId || `item-${Date.now()}`,
@@ -709,12 +681,15 @@ async function saveEditorItem(addToSchedule = false) {
         console.warn('Error reloading catalog tab:', e);
       }
 
-      if (addToSchedule && scheduleItemIndex !== null) {
-        // The item is already in the schedule; adding it again made a duplicate. Swap the
-        // schedule's copy for the one just saved, in place (live/staged follow it).
-        sendCommand({ ReplaceScheduleItem: { item_index: scheduleItemIndex, item_type: editorType, item_id: savedItemId } });
-        showToast(`✓ Saved "${title}" to Library & updated in Schedule`, 'success');
-      } else if (addToSchedule) {
+      // The library is the source: a scheduled copy of this item takes on what was just saved.
+      const prefix = editorType === 'scripture' ? 'scrip' : (editorType === 'presentation' ? 'pres' : 'song');
+      currentSnapshot?.schedule?.items.forEach((it: any, idx: number) => {
+        if (it.id === `sched_${prefix}_${savedItemId}`) {
+          sendCommand({ ReplaceScheduleItem: { item_index: idx, item_type: editorType, item_id: savedItemId } });
+        }
+      });
+
+      if (addToSchedule) {
         sendCommand({ AddToSchedule: { item_type: editorType, item_id: savedItemId } });
         showToast(`✓ Saved "${title}" to Library & added to Schedule`, 'success');
       } else {
