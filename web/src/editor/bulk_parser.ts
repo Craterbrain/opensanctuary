@@ -294,10 +294,19 @@ function splitByParagraphs(text: string): BulkParsedSlide[] {
   const blocks = text.split(/\n\s*\n+/).map(b => b.trim()).filter(b => b.length > 0);
   const slides: BulkParsedSlide[] = [];
 
-  for (const blk of blocks) {
-    const lines = blk.split(/\r?\n/);
+  for (let i = 0; i < blocks.length; i++) {
+    let blk = blocks[i]!;
+    let lines = blk.split(/\r?\n/);
     const firstLine = (lines[0] ?? '').trim();
     const section = detectSectionHeader(firstLine);
+
+    // A tag alone in its paragraph belongs to the paragraph after it.
+    const next = blocks[i + 1];
+    if (section && lines.length === 1 && next && !detectSectionHeader(next.split(/\r?\n/)[0]!.trim())) {
+      blk = `${firstLine}\n${next}`;
+      lines = blk.split(/\r?\n/);
+      i++;
+    }
 
     if (section) {
       const body = lines.slice(1).join('\n').trim();

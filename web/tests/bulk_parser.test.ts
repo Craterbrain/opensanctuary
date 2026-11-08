@@ -305,3 +305,10 @@ CCLI Song # 12345
     });
   });
 });
+
+describe('splitTextToSlides: tag on its own paragraph', () => {
+  test('tag separated from its lyrics by a blank line attaches to the next block', () => {
+    const { slides } = splitTextToSlides('Verse 1\n\nLine a\nLine b\n\nChorus\n\nLine c', { editorType: 'song' });
+    expect(slides.map(s => [s.tag, s.text])).toEqual([['V1', 'Line a\nLine b'], ['C', 'Line c']]);
+  });
+});

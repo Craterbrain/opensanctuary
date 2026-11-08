@@ -362,7 +362,12 @@ function openBulkOverlay(): void {
   const textarea = document.getElementById('create-item-content') as HTMLTextAreaElement | null;
   if (textarea) {
     const cur = canvasSlideEditor ? canvasSlideEditor.getAllSlides() : studioSlides;
-    textarea.value = cur.map(s => s.text || '').join('\n\n');
+    // Keep each slide's section tag as a header line above its text so a
+    // round-trip through bulk paste doesn't strip tags.
+    textarea.value = cur.map(s => {
+      const header = (s.label || s.tag || '').trim();
+      return header ? `${header}\n${s.text || ''}`.trimEnd() : (s.text || '');
+    }).join('\n\n');
   }
   updateBulkSlideCountBadge();
 }
@@ -507,11 +512,17 @@ on('btn-insert-blank', 'click', () => insertTagIntoBulkEditor('---'));
 function insertTagIntoBulkEditor(tag: string) {
   const textarea = createItemContent;
   if (!textarea) return;
-  const tagStr = tag === '---' ? `\n\n---\n\n` : `\n\n${tag}\n`;
   const start = textarea.selectionStart ?? 0;
   const end = textarea.selectionEnd ?? 0;
-  textarea.value = textarea.value.substring(0, start) + tagStr + textarea.value.substring(end);
-  const newPos = start + tagStr.length;
+  // Exactly one blank line before the tag (none at the very start), and the tag
+  // sits directly above the text that follows it. Swallow surrounding blank
+  // lines so repeated inserts never leave a tag-only paragraph.
+  const before = textarea.value.substring(0, start).replace(/\s+$/, '');
+  const after = textarea.value.substring(end).replace(/^\s+/, '');
+  const lead = before ? '\n\n' : '';
+  const tagStr = tag === '---' ? `${lead}---\n\n` : `${lead}${tag}\n`;
+  textarea.value = before + tagStr + after;
+  const newPos = before.length + tagStr.length;
   textarea.setSelectionRange(newPos, newPos);
   textarea.focus();
   updateBulkSlideCountBadge();
@@ -521,6 +532,8 @@ async function saveEditorItem(addToSchedule = false) {
   // Read now: closing the editor (below, before AddToSchedule) resets currentEditorType to
   // 'song', so a scripture or presentation used to be scheduled as a song id that doesn't exist.
   const editorType = currentEditorType;
+  // Read now for the same reason: closing the editor clears the schedule context.
+  const wasEditingScheduleItem = editingScheduleContext !== null;
   const title = createItemTitle ? createItemTitle.value.trim() : '';
   const author = createItemAuthor ? createItemAuthor.value.trim() : '';
   const copyright = createItemCopyright ? createItemCopyright.value.trim() : '';
@@ -696,7 +709,11 @@ async function saveEditorItem(addToSchedule = false) {
         console.warn('Error reloading catalog tab:', e);
       }
 
-      if (addToSchedule) {
+      if (addToSchedule && wasEditingScheduleItem) {
+        // The item is already in the schedule; adding it again made a duplicate. Edits to the
+        // active slide and hidden flags were pushed to the schedule's copy above.
+        showToast(`✓ Saved "${title}" to Library & updated in Schedule`, 'success');
+      } else if (addToSchedule) {
         sendCommand({ AddToSchedule: { item_type: editorType, item_id: savedItemId } });
         showToast(`✓ Saved "${title}" to Library & added to Schedule`, 'success');
       } else {
