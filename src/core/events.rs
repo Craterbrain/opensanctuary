@@ -43,6 +43,10 @@ pub enum ShowEvent {
     ScheduleItemRemoved {
         index: usize,
     },
+    ScheduleItemReplaced {
+        index: usize,
+        item: ScheduleItem,
+    },
     /// The text of a licensed passage on the schedule was filled in. Stored without the text.
     LicensedPassageSet {
         item_id: String,
@@ -223,6 +227,9 @@ impl ShowEvent {
             }
             ShowEvent::ScheduleItemAdded { item, index } if licensed(item) => {
                 Cow::Owned(ShowEvent::ScheduleItemAdded { item: item.without_licensed_text(), index: *index })
+            }
+            ShowEvent::ScheduleItemReplaced { item, index } if licensed(item) => {
+                Cow::Owned(ShowEvent::ScheduleItemReplaced { item: item.without_licensed_text(), index: *index })
             }
             ShowEvent::ScheduleItemsMerged { first_index, second_index, merged_item } if licensed(merged_item) => {
                 Cow::Owned(ShowEvent::ScheduleItemsMerged {

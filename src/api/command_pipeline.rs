@@ -171,6 +171,18 @@ pub fn expand_shorthand(app: &AppState, value: Value) -> Value {
             }
         }
     }
+    if let Some(rep) = value.get("ReplaceScheduleItem") {
+        if let (Some(idx), Some(t), Some(id)) = (rep.get("item_index").and_then(Value::as_u64), rep.get("item_type").and_then(Value::as_str), rep.get("item_id").and_then(Value::as_str)) {
+            match item_for(app, t, id) {
+                Some(item) => {
+                    if let Ok(v) = serde_json::to_value(item) {
+                        return serde_json::json!({ "ReplaceScheduleItem": { "item_index": idx, "item": v } });
+                    }
+                }
+                None => tracing::error!("Item not found in DB for ReplaceScheduleItem: {} {}", t, id),
+            }
+        }
+    }
     if let Some(r) = value.get("ResolveLicensed") {
         match resolve_licensed(app, r) {
             Some(cmd) => return cmd,

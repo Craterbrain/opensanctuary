@@ -28,6 +28,16 @@ pub(super) fn plan_schedule_events(state: &ShowState, schedule: &Schedule, cmd: 
                 index,
             });
         }
+        ShowCommand::ReplaceScheduleItem { item_index, item } => {
+            if let Some(old) = schedule.items.get(*item_index) {
+                if !old.is_section_header && !item.is_section_header {
+                    events.push(ShowEvent::ScheduleItemReplaced {
+                        index: *item_index,
+                        item: item.clone(),
+                    });
+                }
+            }
+        }
         ShowCommand::AddScheduleHeader { title, index } => {
             let idx = index.unwrap_or(schedule.items.len());
             let header_item = ScheduleItem {
@@ -211,6 +221,37 @@ pub(super) fn apply_schedule_event(state: &mut ShowState, schedule: &mut Schedul
                 schedule.items.push(item);
             }
             schedule.is_modified = true;
+        }
+        ShowEvent::ScheduleItemReplaced { item, index } => {
+            if let Some(old) = schedule.items.get(*index) {
+                let mut new_item = item.clone();
+                for slide in &mut new_item.slides {
+                    slide.synthesize_v2_if_needed();
+                }
+                // What the operator chose for this slot survives the library copy being swapped in.
+                new_item.is_expanded = old.is_expanded;
+                if old.theme_name.is_some() {
+                    new_item.theme_name = old.theme_name.clone();
+                    new_item.background = old.background.clone();
+                }
+                let old_id = old.id.clone();
+                schedule.items[*index] = new_item.clone();
+                schedule.is_modified = true;
+                if let Some(staged) = state.staged_item.as_mut() {
+                    if staged.id == old_id {
+                        *staged = new_item.clone();
+                        let len = effective_arrangement(staged).len();
+                        state.staged_slide_index = state.staged_slide_index.min(len.saturating_sub(1));
+                    }
+                }
+                if let Some(live) = state.live_item.as_mut() {
+                    if live.id == old_id {
+                        *live = new_item;
+                        let len = effective_arrangement(live).len();
+                        state.live_slide_index = state.live_slide_index.min(len.saturating_sub(1));
+                    }
+                }
+            }
         }
         ShowEvent::ScheduleItemRemoved { index } => {
             if *index < schedule.items.len() {

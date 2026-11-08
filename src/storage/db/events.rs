@@ -19,6 +19,7 @@ impl Database {
             crate::core::events::ShowEvent::TransitionChanged { .. } => "TransitionChanged",
             crate::core::events::ShowEvent::ScheduleItemAdded { .. } => "ScheduleItemAdded",
             crate::core::events::ShowEvent::ScheduleItemRemoved { .. } => "ScheduleItemRemoved",
+            crate::core::events::ShowEvent::ScheduleItemReplaced { .. } => "ScheduleItemReplaced",
             crate::core::events::ShowEvent::ScheduleReordered { .. } => "ScheduleReordered",
             crate::core::events::ShowEvent::ScheduleSlidesReordered { .. } => "ScheduleSlidesReordered",
             crate::core::events::ShowEvent::ScheduleSlideDuplicated { .. } => "ScheduleSlideDuplicated",

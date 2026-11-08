@@ -123,6 +123,7 @@ impl ShowEngine {
             | ShowCommand::SetTransition(_) => overlays::plan_overlay_events(&state, &schedule, cmd),
 
             ShowCommand::AddToSchedule(_)
+            | ShowCommand::ReplaceScheduleItem { .. }
             | ShowCommand::AddScheduleHeader { .. }
             | ShowCommand::RemoveFromSchedule(_)
             | ShowCommand::ReorderSchedule { .. }
@@ -222,6 +223,7 @@ impl ShowEngine {
             | ShowEvent::TransitionChanged { .. } => overlays::apply_overlay_event(state, schedule, event),
 
             ShowEvent::ScheduleItemAdded { .. }
+            | ShowEvent::ScheduleItemReplaced { .. }
             | ShowEvent::ScheduleItemRemoved { .. }
             | ShowEvent::ScheduleItemsMerged { .. }
             | ShowEvent::ScheduleReordered { .. }

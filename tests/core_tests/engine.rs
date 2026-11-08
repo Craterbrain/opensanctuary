@@ -2032,3 +2032,35 @@ fn test_hidden_flag_serde_is_backward_compatible() {
     assert!(json.contains("\"hidden\":true"));
     assert!(serde_json::from_str::<Slide>(&json).unwrap().hidden);
 }
+
+#[test]
+fn test_replace_schedule_item_updates_in_place_and_follows_live() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    let song = |text: &[&str]| Song {
+        id: "song_1".to_string(),
+        title: "Song".to_string(),
+        author: "A".to_string(), alternate_title: None, public_domain_override: None,
+        copyright: None,
+        ccli_number: None,
+        slides: text.iter().map(|t| Slide { text: t.to_string(), ..Default::default() }).collect(),
+        theme_name: None,
+    };
+    engine.execute_command(ShowCommand::AddToSchedule(song(&["a", "b", "c"]).to_schedule_item()));
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(0), slide_index: Some(2) });
+
+    let mut edited = song(&["a", "B edited"]).to_schedule_item();
+    edited.title = "Song (edited)".to_string();
+    engine.execute_command(ShowCommand::ReplaceScheduleItem { item_index: 0, item: edited });
+
+    let snap = engine.snapshot();
+    assert_eq!(snap.schedule.items.len(), 1);
+    assert_eq!(snap.schedule.items[0].title, "Song (edited)");
+    assert_eq!(snap.schedule.items[0].slides.len(), 2);
+    let live = snap.state.live_item.expect("still live");
+    assert_eq!(live.title, "Song (edited)");
+    assert_eq!(snap.state.live_slide_index, 1, "clamped into the shorter item");
+
+    // An out-of-range index is ignored.
+    engine.execute_command(ShowCommand::ReplaceScheduleItem { item_index: 5, item: song(&["x"]).to_schedule_item() });
+    assert_eq!(engine.snapshot().schedule.items.len(), 1);
+}

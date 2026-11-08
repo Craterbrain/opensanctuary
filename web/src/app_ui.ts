@@ -533,7 +533,7 @@ async function saveEditorItem(addToSchedule = false) {
   // 'song', so a scripture or presentation used to be scheduled as a song id that doesn't exist.
   const editorType = currentEditorType;
   // Read now for the same reason: closing the editor clears the schedule context.
-  const wasEditingScheduleItem = editingScheduleContext !== null;
+  const scheduleItemIndex = editingScheduleContext ? editingScheduleContext.itemIndex : null;
   const title = createItemTitle ? createItemTitle.value.trim() : '';
   const author = createItemAuthor ? createItemAuthor.value.trim() : '';
   const copyright = createItemCopyright ? createItemCopyright.value.trim() : '';
@@ -709,9 +709,10 @@ async function saveEditorItem(addToSchedule = false) {
         console.warn('Error reloading catalog tab:', e);
       }
 
-      if (addToSchedule && wasEditingScheduleItem) {
-        // The item is already in the schedule; adding it again made a duplicate. Edits to the
-        // active slide and hidden flags were pushed to the schedule's copy above.
+      if (addToSchedule && scheduleItemIndex !== null) {
+        // The item is already in the schedule; adding it again made a duplicate. Swap the
+        // schedule's copy for the one just saved, in place (live/staged follow it).
+        sendCommand({ ReplaceScheduleItem: { item_index: scheduleItemIndex, item_type: editorType, item_id: savedItemId } });
         showToast(`✓ Saved "${title}" to Library & updated in Schedule`, 'success');
       } else if (addToSchedule) {
         sendCommand({ AddToSchedule: { item_type: editorType, item_id: savedItemId } });
