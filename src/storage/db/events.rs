@@ -38,6 +38,7 @@ impl Database {
             crate::core::events::ShowEvent::ScheduleLoaded { replay: false, .. } => "ScheduleOpened",
             crate::core::events::ShowEvent::ScheduleCleared => "ScheduleCleared",
             crate::core::events::ShowEvent::ScheduleTitleSet { .. } => "ScheduleTitleSet",
+            crate::core::events::ShowEvent::SelectionSet { .. } => "SelectionSet",
             _ => "MediaControlEvent",
         };
         conn.execute(
@@ -120,9 +121,12 @@ impl Database {
 
     /// Keeps the event log from growing for ever: stores `snapshot` (the engine as it stood after event
     /// `snapshot.sequence_number`) as where a replay starts, and drops the events it already holds -- all
-    /// but what the CCLI report reads (`get_ccli_usage_report`): every `ItemWentLive`, and a replay marker
-    /// right before one, its schedule emptied (the marker's type is all the report reads). Returns how
-    /// many rows went.
+    /// but what the CCLI report reads (`get_ccli_usage_report`), cut down to that:
+    /// - an `ItemWentLive` where the live item changes (one going live again on the item already up, a
+    ///   jump to another of its slides, is never a use), its item reduced to what the report reads;
+    /// - a replay marker right before one of those, its schedule emptied (only its type is read).
+    ///
+    /// Returns how many rows went.
     pub fn compact_event_log(&self, snapshot: &EngineSnapshot) -> Result<usize> {
         let seq = snapshot.sequence_number as i64;
         // Licensed text is never stored (see core::events).
@@ -149,9 +153,63 @@ impl Database {
                       AND sequence_number + 1 IN (SELECT sequence_number FROM event_log WHERE event_type = 'ItemWentLive'))",
             [seq],
         )?;
+        let mut removed = removed;
+        {
+            // Oldest first, so "the item already up" is the one kept before it.
+            let mut stmt = tx.prepare("SELECT sequence_number, payload FROM event_log WHERE sequence_number <= ?1 AND event_type = 'ItemWentLive' ORDER BY sequence_number ASC")?;
+            let rows: Vec<(i64, String)> = stmt.query_map([seq], |r| Ok((r.get(0)?, r.get(1)?)))?.flatten().collect();
+            drop(stmt);
+            let mut live: Option<Option<String>> = None;
+            for (row_seq, payload) in rows {
+                let Ok(crate::core::events::ShowEvent::ItemWentLive { item, slide_index }) = serde_json::from_str(&payload) else { continue };
+                let id = item.as_ref().map(|i| crate::core::engine::slot_id_base(&i.id).to_string());
+                if live.as_ref() == Some(&id) {
+                    removed += tx.execute("DELETE FROM event_log WHERE sequence_number = ?1", [row_seq])?;
+                    continue;
+                }
+                live = Some(id);
+                let slim = crate::core::events::ShowEvent::ItemWentLive { item: item.map(|i| reported_part(&i)), slide_index };
+                let slim = serde_json::to_string(&slim).unwrap_or(payload.clone());
+                if slim != payload {
+                    tx.execute("UPDATE event_log SET payload = ?2 WHERE sequence_number = ?1", (row_seq, slim))?;
+                }
+            }
+        }
+        // A marker whose `ItemWentLive` just went with it marks nothing.
+        removed += tx.execute(
+            "DELETE FROM event_log WHERE sequence_number <= ?1 AND event_type IN ('ScheduleReplayed', 'ScheduleLoaded') \
+             AND sequence_number + 1 NOT IN (SELECT sequence_number FROM event_log WHERE event_type = 'ItemWentLive')",
+            [seq],
+        )?;
         tx.execute("UPDATE event_log SET payload = ?2 WHERE sequence_number <= ?1 AND event_type = 'ScheduleReplayed'", (seq, marker(true)))?;
         tx.execute("UPDATE event_log SET payload = ?2 WHERE sequence_number <= ?1 AND event_type = 'ScheduleLoaded'", (seq, marker(false)))?;
         tx.commit()?;
         Ok(removed)
     }
 }
+
+/// The part of a live item the CCLI report reads (`get_ccli_usage_report`): what it is, its title and
+/// author, and the first slide's CCLI metadata. Nothing else of an old `ItemWentLive` is ever needed again.
+fn reported_part(item: &crate::core::models::ScheduleItem) -> crate::core::models::ScheduleItem {
+    let ccli = item.slides.iter().find_map(|s| s.ccli_metadata.clone());
+    crate::core::models::ScheduleItem {
+        id: item.id.clone(),
+        title: item.title.clone(),
+        subtitle: None,
+        notes: None,
+        item_type: item.item_type.clone(),
+        author_or_ref: item.author_or_ref.clone(),
+        slides: ccli
+            .map(|m| vec![crate::core::models::Slide { ccli_metadata: Some(m), ..Default::default() }])
+            .unwrap_or_default(),
+        background: None,
+        theme_name: None,
+        is_expanded: false,
+        is_section_header: item.is_section_header,
+        arrangement: Vec::new(),
+        default_slide_duration_seconds: None,
+        slideshow_loop: false,
+        licensed: None,
+    }
+}
+

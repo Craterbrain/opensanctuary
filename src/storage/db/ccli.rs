@@ -85,7 +85,9 @@ impl Database {
                 Some(crate::core::events::ShowEvent::ItemWentLive { item, .. }) => item,
                 _ => continue,
             };
-            let id = item.as_ref().map(|i| i.id.clone());
+            // By library item, not slot: two scheduled copies of a song (`sched_song_12`, `sched_song_12~2`)
+            // played back to back are one use.
+            let id = item.as_ref().map(|i| crate::core::engine::slot_id_base(&i.id).to_string());
             let replay = last_replay_seq == Some(seq - 1)
                 || legacy_load.is_some_and(|(load_seq, load_ts)| load_seq == seq - 1 && ts - load_ts <= LEGACY_REPLAY_WINDOW_MS);
             if let Some(item) = item {
@@ -254,6 +256,15 @@ mod tests {
             timestamp_ms: ts as u64,
             event: ShowEvent::ScheduleLoaded { schedule: Default::default(), replay },
         }
+    }
+
+    #[test]
+    fn two_scheduled_copies_of_a_song_played_back_to_back_are_one_use() {
+        let db = Database::in_memory().expect("must open test db");
+        db.save_event(&went_live(1, 1_000, song_item("sched_song_12", "Reprise", None))).unwrap();
+        db.save_event(&went_live(2, 2_000, song_item("sched_song_12~2", "Reprise", None))).unwrap();
+        let report = db.get_ccli_usage_report(0, 10_000).unwrap();
+        assert_eq!(report.iter().find(|r| r.title == "Reprise").map(|r| r.use_count), Some(1));
     }
 
     #[test]

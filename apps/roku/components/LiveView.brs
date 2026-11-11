@@ -191,17 +191,36 @@ sub syncDedicatedMedia(mp as Object)
         if elapsedSec > 0 then targetTime = mp.current_time + elapsedSec
     end if
 
+    ' A looping video's target wraps at its length, and its drift is measured the short way round
+    ' the loop (wrapLoopDrift in web/src/core/video_sync.ts): otherwise every poll after the first
+    ' loop would seek past the end.
+    duration = m.bgVideo.duration
+    looping = isLooping and duration <> invalid and duration > 0
+    if looping then targetTime = targetTime - Int(targetTime / duration) * duration
+
     if isPlaying
         if m.bgVideo.state = "paused" or m.bgVideo.state = "stopped" or m.bgVideo.state = "none" or m.bgVideo.state = "finished" or m.bgVideo.state = "stopping"
             m.bgVideo.seek = targetTime
             m.bgVideo.control = "play"
         else
-            drift = Abs(m.bgVideo.position - targetTime)
-            if drift > m.driftToleranceSec then m.bgVideo.seek = targetTime
+            if Abs(loopDrift(m.bgVideo.position - targetTime, duration, looping)) > m.driftToleranceSec then m.bgVideo.seek = targetTime
         end if
     else
         m.bgVideo.control = "pause"
-        drift = Abs(m.bgVideo.position - targetTime)
-        if drift > m.driftToleranceSec then m.bgVideo.seek = targetTime
+        if Abs(loopDrift(m.bgVideo.position - targetTime, duration, looping)) > m.driftToleranceSec then m.bgVideo.seek = targetTime
     end if
 end sub
+
+' The drift `d`, around the loop when `looping`: within half a loop either way.
+function loopDrift(d as Float, duration as Dynamic, looping as Boolean) as Float
+    if not looping then return d
+    half = duration / 2.0
+    while d > half
+        d = d - duration
+    end while
+    while d < -half
+        d = d + duration
+    end while
+    return d
+end function
+

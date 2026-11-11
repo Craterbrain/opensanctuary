@@ -15,6 +15,7 @@ mod history;
 mod licensed;
 
 pub use live::{effective_arrangement, resolve_slide_at, resolve_background_at, reconcile_arrangement};
+pub use schedule_ops::slot_id_base;
 
 pub const CURRENT_PROTOCOL_VERSION: u32 = 2;
 
@@ -157,6 +158,7 @@ impl ShowEngine {
 
             ShowCommand::AddToSchedule(_)
             | ShowCommand::ReplaceScheduleItem { .. }
+            | ShowCommand::ReplaceScheduledCopies { .. }
             | ShowCommand::AddScheduleHeader { .. }
             | ShowCommand::RemoveFromSchedule(_)
             | ShowCommand::ReorderSchedule { .. }
@@ -224,6 +226,7 @@ impl ShowEngine {
                 | ShowEvent::LiveSlideChanged { .. }
                 | ShowEvent::ItemStaged { .. }
                 | ShowEvent::StagedSlideChanged { .. }
+                | ShowEvent::SelectionSet { .. }
                 | ShowEvent::BlackoutToggled { .. }
                 | ShowEvent::ClearTextToggled { .. }
                 | ShowEvent::LogoToggled { .. }
@@ -266,7 +269,8 @@ impl ShowEngine {
             | ShowEvent::ArrangementSet { .. }
             | ShowEvent::ScheduleLoaded { .. }
             | ShowEvent::ScheduleCleared
-            | ShowEvent::ScheduleTitleSet { .. } => schedule_ops::apply_schedule_event(state, schedule, event),
+            | ShowEvent::ScheduleTitleSet { .. }
+            | ShowEvent::SelectionSet { .. } => schedule_ops::apply_schedule_event(state, schedule, event),
 
             ShowEvent::LicensedPassageSet { .. } => licensed::apply_licensed_event(state, schedule, event),
 

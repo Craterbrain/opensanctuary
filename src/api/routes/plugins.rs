@@ -1223,20 +1223,33 @@ async fn blocking_with_timeout<T: Send + 'static>(limit: std::time::Duration, f:
 
 /// Moves a file: a rename, or when that can't (another drive) a copy and then removing the original.
 /// A copy goes to `<dest>.part` first (which the media folder scan ignores) and becomes `dest` only once
-/// complete, so a failed copy never leaves half a file in the library folder. `abandoned` is set when the
-/// caller has given up waiting: a copy still running then is thrown away instead of being put in place.
-fn move_file(src: &std::path::Path, dest: &std::path::Path, abandoned: &std::sync::atomic::AtomicBool) -> std::io::Result<()> {
-    if std::fs::rename(src, dest).is_ok() {
-        return Ok(());
-    }
+/// complete, so a failed copy never leaves half a file in the library folder. `move_state` is shared with a
+/// caller that may give up waiting (`MoveState::give_up`): the file is put in place, or thrown away, under
+/// its lock, so the two always agree on which happened.
+fn move_file(src: &std::path::Path, dest: &std::path::Path, move_state: &MoveState) -> std::io::Result<()> {
     let mut partial = dest.as_os_str().to_owned();
     partial.push(".part");
     let partial = std::path::PathBuf::from(partial);
+    let renamed = {
+        let mut st = move_state.0.lock().unwrap_or_else(|e| e.into_inner());
+        if st.abandoned {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "gave up waiting for the move"));
+        }
+        let ok = std::fs::rename(src, dest).is_ok();
+        st.done = ok;
+        ok
+    };
+    if renamed {
+        return Ok(());
+    }
     let copied = std::fs::copy(src, &partial).and_then(|_| {
-        if abandoned.load(std::sync::atomic::Ordering::SeqCst) {
+        let mut st = move_state.0.lock().unwrap_or_else(|e| e.into_inner());
+        if st.abandoned {
             return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "gave up waiting for the copy"));
         }
-        std::fs::rename(&partial, dest)
+        std::fs::rename(&partial, dest)?;
+        st.done = true;
+        Ok(())
     });
     if let Err(e) = copied {
         let _ = std::fs::remove_file(&partial);
@@ -1244,6 +1257,27 @@ fn move_file(src: &std::path::Path, dest: &std::path::Path, abandoned: &std::syn
     }
     let _ = std::fs::remove_file(src);
     Ok(())
+}
+
+#[derive(Default)]
+struct MoveFlags {
+    /// The caller stopped waiting: don't put the file in place.
+    abandoned: bool,
+    /// The file is in place.
+    done: bool,
+}
+
+/// What a running `move_file` and the request waiting for it agree on.
+#[derive(Default)]
+struct MoveState(std::sync::Mutex<MoveFlags>);
+
+impl MoveState {
+    /// The waiting side gives up. True when the move had already finished (it counts after all).
+    fn give_up(&self) -> bool {
+        let mut st = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        st.abandoned = !st.done;
+        st.done
+    }
 }
 
 const VIDEO_EXTS: [&str; 6] = ["mp4", "webm", "mkv", "mov", "m4v", "avi"];
@@ -1313,15 +1347,14 @@ pub(super) async fn plugin_add_media(State(app): State<AppState>, headers: Heade
     }
     // A video can be gigabytes and, across filesystems, is copied: off the async worker, with a time limit.
     let (src2, dest2) = (src.clone(), dest.clone());
-    let abandoned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let abandoned2 = abandoned.clone();
-    let moved = blocking_with_timeout(PLUGIN_IO_TIMEOUT, move || move_file(&src2, &dest2, &abandoned2)).await;
-    if moved.is_err() {
-        abandoned.store(true, std::sync::atomic::Ordering::SeqCst);
+    let move_state = std::sync::Arc::new(MoveState::default());
+    let state2 = move_state.clone();
+    match blocking_with_timeout(PLUGIN_IO_TIMEOUT, move || move_file(&src2, &dest2, &state2)).await {
+        Ok(moved) => moved.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("couldn't move the file: {e}")))?,
+        // Timed out: unless it finished in the meantime, the move is called off and leaves nothing.
+        Err(e) if !move_state.give_up() => return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &format!("couldn't move the file: {e}"))),
+        Err(_) => {}
     }
-    moved
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("couldn't move the file: {e}")))?
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("couldn't move the file: {e}")))?;
     let file_name = dest.file_name().and_then(|f| f.to_str()).unwrap_or(name).to_string();
 
     let clean_id: String = req.id.as_deref().unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).take(64).collect();
@@ -1909,11 +1942,18 @@ mod blocking_io_tests {
         std::fs::create_dir_all(&d).unwrap();
         let (a, b) = (d.join("a.mp4"), d.join("b.mp4"));
         std::fs::write(&a, b"video").unwrap();
-        let keep_going = std::sync::atomic::AtomicBool::new(false);
-        move_file(&a, &b, &keep_going).unwrap();
+        let st = MoveState::default();
+        move_file(&a, &b, &st).unwrap();
         assert!(!a.exists());
         assert_eq!(std::fs::read(&b).unwrap(), b"video");
-        assert!(move_file(&a, &d.join("c.mp4"), &keep_going).is_err(), "a missing source is an error");
+        assert!(st.give_up(), "giving up after it finished: it counts");
+        assert!(move_file(&a, &d.join("c.mp4"), &MoveState::default()).is_err(), "a missing source is an error");
         assert!(!d.join("c.mp4.part").exists(), "a failed move leaves nothing behind");
+        // Given up before it could finish: nothing is put in place.
+        std::fs::write(&a, b"video").unwrap();
+        let abandoned = MoveState::default();
+        assert!(!abandoned.give_up());
+        assert!(move_file(&a, &d.join("e.mp4"), &abandoned).is_err());
+        assert!(!d.join("e.mp4").exists() && a.exists());
     }
 }

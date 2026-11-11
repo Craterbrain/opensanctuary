@@ -2308,3 +2308,43 @@ fn test_undo_leaves_untouched_live_item_and_its_media_playback_alone() {
     assert_eq!(snap.state.live_item.as_ref().unwrap().id, "sched_song_a");
     assert_eq!(snap.state.selected_item_index, Some(1), "the selection the replay arrived at (the staged item)");
 }
+
+#[test]
+fn test_undo_puts_back_the_selection_even_when_it_was_on_neither_the_live_nor_the_staged_item() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    for id in ["a", "b", "c"] {
+        engine.execute_command(ShowCommand::AddToSchedule(labelled_song(id, &[("V1", "x")]).to_schedule_item()));
+    }
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(0), slide_index: None });
+    engine.execute_command(ShowCommand::StageItem { item_index: Some(2), slide_index: None });
+    // A library preview: staged, but not in the schedule, so the selection stays on "c".
+    engine.execute_command(ShowCommand::StageItemDirect(labelled_song("lib", &[("V1", "y")]).to_schedule_item()));
+    assert_eq!(engine.snapshot().state.selected_item_index, Some(2));
+
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(1), slide_index: None });
+    let events = engine.execute_command(ShowCommand::Undo);
+    let snap = engine.snapshot();
+    assert_eq!(snap.state.live_item.as_ref().unwrap().id, "sched_song_a");
+    assert_eq!(snap.state.selected_item_index, Some(2), "not moved to the live item");
+    assert!(events.iter().any(|e| matches!(e.event, ShowEvent::SelectionSet { index: Some(2) })));
+}
+
+#[test]
+fn test_saving_a_library_item_refreshes_every_scheduled_copy_and_keeps_a_slots_theme() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    let song = labelled_song("a", &[("V1", "old")]);
+    engine.execute_command(ShowCommand::AddToSchedule(song.to_schedule_item()));
+    engine.execute_command(ShowCommand::AddToSchedule(labelled_song("b", &[("V1", "b")]).to_schedule_item()));
+    engine.execute_command(ShowCommand::AddToSchedule(song.to_schedule_item()));
+    engine.execute_command(ShowCommand::SetItemTheme { item_index: 2, theme_name: "Dark".to_string(), background: Some("#111111".to_string()) });
+
+    let saved = labelled_song("a", &[("V1", "new"), ("V2", "added")]).to_schedule_item();
+    engine.execute_command(ShowCommand::ReplaceScheduledCopies { item: saved });
+    let items = engine.snapshot().schedule.items;
+    assert_eq!(items[0].slides[1].text, "added");
+    assert_eq!(items[1].slides[0].text, "b", "another song is left alone");
+    assert_eq!((items[2].id.as_str(), items[2].slides[1].text.as_str()), ("sched_song_a~2", "added"));
+    assert_eq!(items[2].theme_name.as_deref(), Some("Dark"));
+    assert!(items[2].slides.iter().all(|s| s.background.as_deref() == Some("#111111")), "the slot's theme is on the new slides too");
+    assert!(items[0].slides.iter().all(|s| s.background.is_none()));
+}

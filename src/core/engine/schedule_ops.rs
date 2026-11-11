@@ -4,8 +4,9 @@ use crate::core::models::{identity_arrangement, ArrangementEntry, Schedule, Sche
 
 use super::live::effective_arrangement;
 
-/// A slot id without its `~N` copy suffix (see `unique_slot_id`).
-fn slot_id_base(id: &str) -> &str {
+/// A slot id without its `~N` copy suffix (see `unique_slot_id`): the id every scheduled copy of one
+/// library item shares.
+pub fn slot_id_base(id: &str) -> &str {
     match id.rsplit_once('~') {
         Some((base, n)) if !base.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => base,
         _ => id,
@@ -70,6 +71,27 @@ fn resolved_play_sequence(item: &ScheduleItem) -> Vec<(Slide, Option<String>)> {
         .collect()
 }
 
+/// `item` as it should replace the slot's `old` item: what the operator chose for the slot stays.
+/// - An item that arrives in its slides' own order (the editor, the library copy) has no opinion on the
+///   play order, so the slot's arrangement is carried over.
+/// - A themed slot keeps its theme. Applying one writes it into every slide's background, which outranks
+///   the item's, so slides coming from elsewhere (the library copy, with a theme of its own or none) get
+///   it written in again. The editor's own save keeps the slot's theme name and its slides as edited.
+fn replacement_for(old: &ScheduleItem, item: &ScheduleItem) -> ScheduleItem {
+    let mut item = item.clone();
+    if item.arrangement.is_empty() || item.arrangement == identity_arrangement(&item.slides) {
+        if let Some(arrangement) = carried_arrangement(old, &item) {
+            item.arrangement = arrangement;
+        }
+    }
+    if old.theme_name.is_some() && item.theme_name != old.theme_name {
+        for slide in &mut item.slides {
+            slide.background = old.background.clone();
+        }
+    }
+    item
+}
+
 pub(super) fn plan_schedule_events(state: &ShowState, schedule: &Schedule, cmd: &ShowCommand) -> Vec<ShowEvent> {
     let mut events = Vec::new();
     match cmd {
@@ -79,6 +101,15 @@ pub(super) fn plan_schedule_events(state: &ShowState, schedule: &Schedule, cmd: 
                 item: item.clone(),
                 index,
             });
+        }
+        ShowCommand::ReplaceScheduledCopies { item } => {
+            // Every copy of this library item, wherever it is: the engine owns the slot id scheme.
+            let base = slot_id_base(&item.id);
+            for (index, old) in schedule.items.iter().enumerate() {
+                if !old.is_section_header && !item.is_section_header && slot_id_base(&old.id) == base {
+                    events.push(ShowEvent::ScheduleItemReplaced { index, item: replacement_for(old, item) });
+                }
+            }
         }
         ShowCommand::ReplaceScheduleItem { item_index, item, expected_id } => {
             // The sender's index is from the snapshot it had when its editor opened, and the schedule
@@ -92,15 +123,7 @@ pub(super) fn plan_schedule_events(state: &ShowState, schedule: &Schedule, cmd: 
             };
             if let Some((index, old)) = index.and_then(|i| Some((i, schedule.items.get(i)?))) {
                 if !old.is_section_header && !item.is_section_header {
-                    let mut item = item.clone();
-                    // An item that arrives in its slides' own order (the editor, the library copy) has no
-                    // opinion on the play order: what the operator arranged for this slot stays.
-                    if item.arrangement.is_empty() || item.arrangement == identity_arrangement(&item.slides) {
-                        if let Some(arrangement) = carried_arrangement(old, &item) {
-                            item.arrangement = arrangement;
-                        }
-                    }
-                    events.push(ShowEvent::ScheduleItemReplaced { index, item });
+                    events.push(ShowEvent::ScheduleItemReplaced { index, item: replacement_for(old, item) });
                 }
             }
         }
@@ -596,6 +619,9 @@ pub(super) fn apply_schedule_event(state: &mut ShowState, schedule: &mut Schedul
         ShowEvent::ScheduleTitleSet { title } => {
             schedule.title = title.clone();
             schedule.is_modified = true;
+        }
+        ShowEvent::SelectionSet { index } => {
+            state.selected_item_index = index.filter(|i| *i < schedule.items.len());
         }
         _ => unreachable!("apply_schedule_event called with a non-schedule event"),
     }

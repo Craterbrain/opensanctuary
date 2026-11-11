@@ -252,13 +252,10 @@ impl Database {
                 continue;
             }
             // The H.264 original of a video already converted (`convert_video_in_background`) stays on
-            // disk for whatever still names it, but it's the same video: not a second library item.
-            if ext != "webm" {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    if existing_paths.contains(&format!("/media/videos/{stem}.webm").to_lowercase()) {
-                        continue;
-                    }
-                }
+            // disk for whatever still names it, but it's the same video: not a second library item, nor
+            // another conversion -- also after the library item is deleted. Its conversion beside it says so.
+            if ext != "webm" && path.with_extension("webm").is_file() {
+                continue;
             }
 
             // Derive a clean, human-readable display name from filename

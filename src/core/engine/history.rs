@@ -29,30 +29,32 @@ impl ShowEngine {
         onto.write().unwrap_or_else(|e| e.into_inner()).push(state.sequence_number);
 
         // `ScheduleLoaded` first: the CCLI usage report tells a replayed `ItemWentLive` from a real
-        // one by the replay `ScheduleLoaded` right before it. It takes the selection from the schedule it
-        // carries, so that is the one the replay arrived at.
-        replay_schedule.selected_item_index = replay_state.selected_item_index;
+        // one by the replay `ScheduleLoaded` right before it.
         let position = |item: &Option<ScheduleItem>| {
             item.as_ref().and_then(|i| replay_schedule.items.iter().position(|s| s.id == i.id))
         };
-        let staged_holds_selection = replay_state.selected_item_index.is_some()
-            && position(&replay_state.staged_item) == replay_state.selected_item_index;
+        let (live_pos, staged_pos) = (position(&replay_state.live_item), position(&replay_state.staged_item));
+        replay_schedule.selected_item_index = replay_state.selected_item_index;
         let mut events = vec![ShowEvent::ScheduleLoaded { schedule: replay_schedule, replay: true }];
+        // Where the events below leave the selection: each new live/staged item moves it to its own slot.
+        let mut selection = replay_state.selected_item_index;
         // The live and staged items are touched only when the step actually changes them: a new
         // `ItemWentLive` drops the media playback state, which would restart a playing video for an
         // undo that had nothing to do with it.
-        let live_changed = replay_state.live_item != state.live_item;
-        if live_changed {
+        if replay_state.live_item != state.live_item {
+            selection = live_pos.or(selection);
             events.push(ShowEvent::ItemWentLive { item: replay_state.live_item, slide_index: replay_state.live_slide_index });
         } else if replay_state.live_slide_index != state.live_slide_index {
             events.push(ShowEvent::LiveSlideChanged { slide_index: replay_state.live_slide_index });
         }
-        // `ItemWentLive` moves the selection to the live item; restaging an unchanged staged item puts
-        // it back when that's where the replay had it.
-        if replay_state.staged_item != state.staged_item || (live_changed && staged_holds_selection) {
+        if replay_state.staged_item != state.staged_item {
+            selection = staged_pos.or(selection);
             events.push(ShowEvent::ItemStaged { item: replay_state.staged_item, slide_index: replay_state.staged_slide_index });
         } else if replay_state.staged_slide_index != state.staged_slide_index {
             events.push(ShowEvent::StagedSlideChanged { slide_index: replay_state.staged_slide_index });
+        }
+        if selection != replay_state.selected_item_index {
+            events.push(ShowEvent::SelectionSet { index: replay_state.selected_item_index });
         }
         if replay_state.is_blackout != state.is_blackout {
             events.push(ShowEvent::BlackoutToggled { is_blackout: replay_state.is_blackout });

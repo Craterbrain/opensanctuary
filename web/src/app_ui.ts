@@ -611,20 +611,24 @@ async function saveEditorItem(addToSchedule = false) {
     reference_label: s.reference_label || null
   }));
 
-  // An item edited from the schedule changes only the schedule's copy; the library entry is left alone.
-  if (scheduleItemIndex !== null && currentSnapshot && currentSnapshot.schedule) {
-    // Found by id: the schedule may have been reordered while the editor was open.
-    const items = currentSnapshot.schedule.items;
-    const foundAt = scheduleItemId ? items.findIndex((it: any) => it.id === scheduleItemId) : -1;
-    const itemIndex = foundAt >= 0 ? foundAt : scheduleItemIndex;
-    const current = items[itemIndex];
-    if (current) {
-      // No arrangement of its own: the engine carries the slot's play order over to the edited slides.
-      sendCommand({ ReplaceScheduleItem: { item_index: itemIndex, expected_id: scheduleItemId ?? null, item: { ...current, title, author_or_ref: author || current.author_or_ref, slides, arrangement: [] } } });
-      closeModal(createModal);
-      showToast(`✓ Updated "${title}" in Schedule`, 'success');
+  // An item edited from the schedule changes only the schedule's copy; the library entry is left alone --
+  // never saved to the library instead, whatever became of the schedule item.
+  if (scheduleItemIndex !== null) {
+    // Found by id: the schedule may have been reordered while the editor was open. Only an editor opened
+    // without one (no id known) goes by the index it opened with.
+    const items = currentSnapshot?.schedule?.items ?? [];
+    const itemIndex = scheduleItemId ? items.findIndex((it: any) => it.id === scheduleItemId) : scheduleItemIndex;
+    const current = itemIndex >= 0 ? items[itemIndex] : undefined;
+    if (!current) {
+      // Left open, so what was typed isn't lost: it can be copied, or the editor reopened from the library.
+      showToast(`"${title}" is no longer in the schedule (removed while it was being edited), so it couldn't be updated.`, 'warning');
       return;
     }
+    // No arrangement of its own: the engine carries the slot's play order over to the edited slides.
+    sendCommand({ ReplaceScheduleItem: { item_index: itemIndex, expected_id: scheduleItemId ?? null, item: { ...current, title, author_or_ref: author || current.author_or_ref, slides, arrangement: [] } } });
+    closeModal(createModal);
+    showToast(`✓ Updated "${title}" in Schedule`, 'success');
+    return;
   }
 
   const payload = {
@@ -717,15 +721,8 @@ async function saveEditorItem(addToSchedule = false) {
       }
 
       // The library is the source: a scheduled copy of this item takes on what was just saved.
-      // Every copy: the engine ids a second copy of the same item `<id>~2`, and so on.
-      const prefix = editorType === 'scripture' ? 'scrip' : (editorType === 'presentation' ? 'pres' : 'song');
-      const schedId = `sched_${prefix}_${savedItemId}`;
-      currentSnapshot?.schedule?.items.forEach((it: any, idx: number) => {
-        const id = String(it.id);
-        if (id === schedId || (id.startsWith(schedId) && /^~\d+$/.test(id.slice(schedId.length)))) {
-          sendCommand({ ReplaceScheduleItem: { item_index: idx, item_type: editorType, item_id: savedItemId, expected_id: it.id } });
-        }
-      });
+      // Every scheduled copy, found by the engine (it owns the slot id scheme).
+      sendCommand({ ReplaceScheduledCopies: { item_type: editorType, item_id: savedItemId } });
 
       if (addToSchedule) {
         sendCommand({ AddToSchedule: { item_type: editorType, item_id: savedItemId } });

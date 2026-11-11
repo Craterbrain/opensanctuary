@@ -948,7 +948,8 @@ fn test_compacted_event_log_restores_the_same_show_and_keeps_the_ccli_report() {
     let run = |engine: &ShowEngine, cmd: ShowCommand| for env in engine.execute_command(cmd) { db.save_event(&env).unwrap(); };
     run(&first, ShowCommand::LoadSchedule(Schedule { items: vec![song("a", "Song A"), song("b", "Song B"), song("c", "Song C")], ..Schedule::default() }));
     run(&first, ShowCommand::GoLive { item_index: Some(0), slide_index: None }); // A: a use, right after opening
-    run(&first, ShowCommand::NextSlide);
+    run(&first, ShowCommand::GoLive { item_index: Some(0), slide_index: Some(1) }); // a jump within A: not a use
+    run(&first, ShowCommand::GoLive { item_index: Some(0), slide_index: Some(0) });
     run(&first, ShowCommand::NextItem); // B
     run(&first, ShowCommand::Undo); // back on A: a replay, not a use
     run(&first, ShowCommand::Redo); // B again: a replay too
@@ -980,6 +981,21 @@ fn test_compacted_event_log_restores_the_same_show_and_keeps_the_ccli_report() {
     assert!(base.sequence_number > 0);
     db.compact_event_log(&base).unwrap();
     assert!(rows(&db) < rows_before, "the folded-in events are gone");
+    // What's left of the folded-in part is one small row per change of live item.
+    let kept: Vec<(String, String)> = {
+        let conn = db.conn();
+        let mut stmt = conn.prepare("SELECT event_type, payload FROM event_log WHERE sequence_number <= ?1 ORDER BY sequence_number").unwrap();
+        stmt.query_map([base.sequence_number as i64], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().flatten().collect()
+    };
+    let live_ids: Vec<String> = kept.iter().filter(|(t, _)| t == "ItemWentLive").map(|(_, p)| {
+        let ev: ShowEvent = serde_json::from_str(p).unwrap();
+        let ShowEvent::ItemWentLive { item: Some(item), .. } = ev else { panic!("{p}") };
+        assert_eq!(item.slides.len(), 1, "only the slide carrying the CCLI metadata");
+        assert_eq!(item.slides[0].text, "");
+        item.id
+    }).collect();
+    assert!(live_ids.windows(2).all(|w| w[0] != w[1]), "{live_ids:?}");
+    assert!(kept.iter().all(|(t, _)| t == "ItemWentLive" || t == "ScheduleReplayed"), "{:?}", kept.iter().map(|(t, _)| t).collect::<Vec<_>>());
     assert_eq!(report(&db), before, "the CCLI report reads the same");
 
     // The next start replays from the snapshot and arrives at the same show, and Undo still works.
@@ -1014,4 +1030,10 @@ fn test_video_scan_skips_a_converted_original_and_unfinished_conversions() {
     let mut paths: Vec<String> = db.get_media().unwrap().into_iter().map(|m| m.file_path).collect();
     paths.sort();
     assert_eq!(paths, ["/media/videos/other.mp4", "/media/videos/sunrise.webm"]);
+
+    // The converted video deleted from the library (its files stay): it comes back once, as its conversion.
+    db.delete_media("m1").unwrap();
+    assert_eq!(db.sync_media_videos_folder(dir.path()).unwrap(), 1);
+    let sunrise: Vec<String> = db.get_media().unwrap().into_iter().map(|m| m.file_path).filter(|p| p.contains("sunrise")).collect();
+    assert_eq!(sunrise, ["/media/videos/sunrise.webm"]);
 }

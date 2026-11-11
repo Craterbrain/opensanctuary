@@ -126,6 +126,11 @@ pub enum ShowEvent {
     ScheduleTitleSet {
         title: String,
     },
+    /// The selected schedule item set outright (Undo/Redo putting back the one the replay arrived at,
+    /// which the `ItemWentLive`/`ItemStaged` before it moved to their own items).
+    SelectionSet {
+        index: Option<usize>,
+    },
 
     // Media Playback Controls
     MediaScheduledStart { target_pts: f64, start_at_epoch_ms: u64 },
