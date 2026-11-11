@@ -114,6 +114,15 @@ pub(super) async fn delete_bible(
     }
 }
 
+/// Runs an import on the blocking pool. Unzipping and parsing a large deck or song database, converting its
+/// pictures and writing it all to SQLite takes seconds: on an async worker that would stall every other
+/// request and WebSocket the worker serves (the live output among them) for as long.
+async fn off_runtime(work: impl FnOnce() -> (StatusCode, Json<serde_json::Value>) + Send + 'static) -> (StatusCode, Json<serde_json::Value>) {
+    tokio::task::spawn_blocking(work).await.unwrap_or_else(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "success": false, "message": format!("The import failed unexpectedly: {e}") })))
+    })
+}
+
 #[derive(Deserialize, Default)]
 pub struct OpenLpImportReq {
     pub path: Option<String>,
@@ -122,10 +131,11 @@ pub struct OpenLpImportReq {
 }
 
 /// Import OpenLP SQLite databases (songs.sqlite or *.sqlite bibles) or auto-detect local OpenLP installation
-pub(super) async fn import_openlp(
-    State(app): State<AppState>,
-    Json(req): Json<OpenLpImportReq>,
-) -> impl IntoResponse {
+pub(super) async fn import_openlp(State(app): State<AppState>, Json(req): Json<OpenLpImportReq>) -> impl IntoResponse {
+    off_runtime(move || import_openlp_blocking(app, req)).await
+}
+
+fn import_openlp_blocking(app: AppState, req: OpenLpImportReq) -> (StatusCode, Json<serde_json::Value>) {
     let media_dir = app.media_dir.join("images");
     // 1. If payload contains base64 data or path, process the uploaded file
     if req.file_data_base64.is_some() || req.path.is_some() {
@@ -247,10 +257,11 @@ pub struct PptxImportReq {
 /// Import a PowerPoint `.pptx` file's slide text into the Presentations library.
 /// Text-only fidelity (no layout/background/speaker-notes reconstruction) — see
 /// `PptxImporter::import_pptx_bytes` doc comment for why.
-pub(super) async fn import_pptx(
-    State(app): State<AppState>,
-    Json(req): Json<PptxImportReq>,
-) -> impl IntoResponse {
+pub(super) async fn import_pptx(State(app): State<AppState>, Json(req): Json<PptxImportReq>) -> impl IntoResponse {
+    off_runtime(move || import_pptx_blocking(app, req)).await
+}
+
+fn import_pptx_blocking(app: AppState, req: PptxImportReq) -> (StatusCode, Json<serde_json::Value>) {
     use base64::Engine;
     let bytes = match base64::engine::general_purpose::STANDARD.decode(req.file_data_base64.trim()) {
         Ok(b) => b,
@@ -286,10 +297,11 @@ pub struct OdpImportReq {
 /// Import an OpenDocument Presentation `.odp` file into the Presentations library, as one
 /// positioned element per shape (text boxes, inline images) -- see
 /// `OdpImporter::import_odp_bytes` doc comment for exactly what is and isn't reconstructed.
-pub(super) async fn import_odp(
-    State(app): State<AppState>,
-    Json(req): Json<OdpImportReq>,
-) -> impl IntoResponse {
+pub(super) async fn import_odp(State(app): State<AppState>, Json(req): Json<OdpImportReq>) -> impl IntoResponse {
+    off_runtime(move || import_odp_blocking(app, req)).await
+}
+
+fn import_odp_blocking(app: AppState, req: OdpImportReq) -> (StatusCode, Json<serde_json::Value>) {
     use base64::Engine;
     let bytes = match base64::engine::general_purpose::STANDARD.decode(req.file_data_base64.trim()) {
         Ok(b) => b,
@@ -400,10 +412,11 @@ fn clear_missing_backgrounds(slides: &mut [crate::core::models::Slide], media_di
 
 /// Import an EasyWorship presentation package (`.ewpx`) into the Presentations library. A package holds no pictures, so a slide whose
 /// background picture isn't in the library gets the deck's theme background (the chosen theme, or the default presentation theme).
-pub(super) async fn import_ewpx(
-    State(app): State<AppState>,
-    Json(req): Json<EwpxImportReq>,
-) -> impl IntoResponse {
+pub(super) async fn import_ewpx(State(app): State<AppState>, Json(req): Json<EwpxImportReq>) -> impl IntoResponse {
+    off_runtime(move || import_ewpx_blocking(app, req)).await
+}
+
+fn import_ewpx_blocking(app: AppState, req: EwpxImportReq) -> (StatusCode, Json<serde_json::Value>) {
     use base64::Engine;
     let fail = |code: StatusCode, msg: String| (code, Json(serde_json::json!({ "success": false, "message": msg })));
     let bytes = match base64::engine::general_purpose::STANDARD.decode(req.file_data_base64.trim()) {
@@ -473,10 +486,11 @@ pub struct FreeShowShowImportReq {
 }
 
 /// Import a FreeShow `.show` or JSON file into the library (Songs or Presentations).
-pub(super) async fn import_freeshow_show(
-    State(app): State<AppState>,
-    Json(req): Json<FreeShowShowImportReq>,
-) -> impl IntoResponse {
+pub(super) async fn import_freeshow_show(State(app): State<AppState>, Json(req): Json<FreeShowShowImportReq>) -> impl IntoResponse {
+    off_runtime(move || import_freeshow_show_blocking(app, req)).await
+}
+
+fn import_freeshow_show_blocking(app: AppState, req: FreeShowShowImportReq) -> (StatusCode, Json<serde_json::Value>) {
     use base64::Engine;
     let bytes = match base64::engine::general_purpose::STANDARD.decode(req.file_data_base64.trim()) {
         Ok(b) => b,

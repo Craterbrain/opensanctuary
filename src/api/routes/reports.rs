@@ -30,6 +30,37 @@ const CCLI_KEYRING_ACCOUNT: &str = "credentials";
 pub(super) struct CcliReportQuery {
     pub start: i64,
     pub end: i64,
+    /// The console's offset from UTC in minutes (east positive), so the report's dates are the church's own
+    /// days even on a server whose clock has no time zone set (a service, a container). Absent: the
+    /// server's own time zone.
+    #[serde(default)]
+    pub tz_offset_min: Option<i32>,
+}
+
+impl CcliReportQuery {
+    fn zone(&self) -> ReportZone {
+        self.tz_offset_min
+            .and_then(|m| chrono::FixedOffset::east_opt(m.checked_mul(60)?))
+            .map_or(ReportZone::Server, ReportZone::Console)
+    }
+}
+
+/// Whose calendar the report's dates are written in (see `CcliReportQuery::tz_offset_min`).
+#[derive(Clone, Copy)]
+enum ReportZone {
+    Server,
+    Console(chrono::FixedOffset),
+}
+
+impl ReportZone {
+    /// The day of `ms` in this zone: a Sunday evening service is Sunday, not (as in UTC, for a church west
+    /// of Greenwich) the Monday after.
+    fn day(self, ms: i64) -> String {
+        match self {
+            ReportZone::Server => format_report_date_in(ms, &chrono::Local),
+            ReportZone::Console(offset) => format_report_date_in(ms, &offset),
+        }
+    }
 }
 
 /// GET /api/reports/ccli-usage
@@ -71,7 +102,7 @@ pub(super) async fn get_ccli_csv(
         .db
         .get_ccli_usage_report(q.start, q.end)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let csv = build_ccli_csv_text(&rows);
+    let csv = build_ccli_csv_text(&rows, q.zone());
 
     axum::http::Response::builder()
         .status(StatusCode::OK)
@@ -87,7 +118,7 @@ pub(super) async fn get_ccli_csv(
 /// Builds the CSV text both `get_ccli_csv` (download) and
 /// `post_open_ccli_assist` (baked into the upload-assist window below) use
 /// -- one shared place for the column shape so the two never drift apart.
-fn build_ccli_csv_text(rows: &[CcliUsageRow]) -> String {
+fn build_ccli_csv_text(rows: &[CcliUsageRow], zone: ReportZone) -> String {
     let mut csv = String::from("Title,Author,CCLI Song Number,Times Used,First Used,Last Used\n");
     for row in rows.iter().filter(|r| !r.is_public_domain) {
         csv.push_str(&format!(
@@ -96,8 +127,8 @@ fn build_ccli_csv_text(rows: &[CcliUsageRow]) -> String {
             csv_field(&row.author),
             csv_field(row.ccli_number.as_deref().unwrap_or("")),
             row.use_count,
-            format_report_date(row.first_used_ms),
-            format_report_date(row.last_used_ms),
+            zone.day(row.first_used_ms),
+            zone.day(row.last_used_ms),
         ));
     }
     csv
@@ -124,9 +155,12 @@ fn csv_field(s: &str) -> String {
     }
 }
 
-fn format_report_date(ms: i64) -> String {
+fn format_report_date_in<Tz: chrono::TimeZone>(ms: i64, tz: &Tz) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
     chrono::DateTime::from_timestamp_millis(ms)
-        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .map(|dt| dt.with_timezone(tz).format("%Y-%m-%d").to_string())
         .unwrap_or_default()
 }
 
@@ -257,11 +291,11 @@ pub(super) async fn post_open_ccli_assist(
         .db
         .get_ccli_usage_report(q.start, q.end)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))))?;
-    let csv = build_ccli_csv_text(&rows);
+    let csv = build_ccli_csv_text(&rows, q.zone());
 
     // The autofill is best effort (it was written without ever seeing the live site). So the same CSV is also saved as a plain file and
     // its path is handed back: when the upload box isn't filled in, the operator chooses this file in the page's own Browse dialog.
-    let csv_path = write_assist_csv(&app.data_dir, q.start, q.end, &csv).ok();
+    let csv_path = write_assist_csv(&app.data_dir, q.start, q.end, q.zone(), &csv).ok();
 
     let (username, password) = KeyringService::get_secret(CCLI_KEYRING_SERVICE, CCLI_KEYRING_ACCOUNT)
         .ok()
@@ -284,8 +318,9 @@ pub(super) async fn post_open_ccli_assist(
 }
 
 /// Saves the report's CSV under `<data dir>/ccli-reports/` (named for the dates it covers) and returns where it went.
-fn write_assist_csv(data_dir: &std::path::Path, start_ms: i64, end_ms: i64, csv: &str) -> std::io::Result<std::path::PathBuf> {
-    let day = |ms: i64| chrono::DateTime::from_timestamp_millis(ms).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "report".to_string());
+/// The dates in the name are in the same calendar as the rows inside it.
+fn write_assist_csv(data_dir: &std::path::Path, start_ms: i64, end_ms: i64, zone: ReportZone, csv: &str) -> std::io::Result<std::path::PathBuf> {
+    let day = |ms: i64| Some(zone.day(ms)).filter(|d| !d.is_empty()).unwrap_or_else(|| "report".to_string());
     let dir = data_dir.join("ccli-reports");
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("ccli-usage-{}_to_{}.csv", day(start_ms), day(end_ms)));
@@ -323,16 +358,40 @@ mod tests {
             row("Copyrighted Song", Some("1234567"), false),
             row("Amazing Grace", None, true),
         ];
-        let csv = build_ccli_csv_text(&rows);
+        let csv = build_ccli_csv_text(&rows, ReportZone::Server);
         assert!(csv.contains("Copyrighted Song"));
         assert!(!csv.contains("Amazing Grace"), "public domain rows must never reach the CSV CCLI actually sees");
         assert!(csv.starts_with("Title,Author,CCLI Song Number,Times Used,First Used,Last Used\n"));
     }
 
     #[test]
+    fn the_consoles_time_zone_decides_the_dates_and_the_file_name() {
+        // Sunday 8 Nov 2026, 21:30 in Chicago (UTC-6) = 03:30 UTC on Monday the 9th.
+        let ms = 1_794_195_000_000;
+        let q = CcliReportQuery { start: ms, end: ms, tz_offset_min: Some(-360) };
+        assert_eq!(q.zone().day(ms), "2026-11-08");
+        let dir = std::env::temp_dir().join(format!("os-ccli-{}", uuid::Uuid::new_v4()));
+        let p = write_assist_csv(&dir, ms, ms, q.zone(), "x").unwrap();
+        assert_eq!(p.file_name().unwrap().to_string_lossy(), "ccli-usage-2026-11-08_to_2026-11-08.csv");
+        let _ = std::fs::remove_dir_all(&dir);
+        // A nonsense offset falls back to the server's own zone instead of failing the report.
+        assert!(matches!(CcliReportQuery { start: 0, end: 0, tz_offset_min: Some(100_000) }.zone(), ReportZone::Server));
+    }
+
+    #[test]
+    fn report_dates_are_the_churchs_own_day() {
+        // 2026-11-09 03:30 UTC is still Sunday 8 November, 21:30, in Chicago (UTC-6).
+        let ms = 1_794_195_000_000;
+        let chicago = chrono::FixedOffset::west_opt(6 * 3600).unwrap();
+        assert_eq!(format_report_date_in(ms, &chrono::Utc), "2026-11-09");
+        assert_eq!(format_report_date_in(ms, &chicago), "2026-11-08");
+    }
+
+    #[test]
     fn the_assist_csv_is_also_saved_as_a_file_named_for_its_dates() {
         let dir = std::env::temp_dir().join(format!("os-ccli-{}", uuid::Uuid::new_v4()));
-        let p = write_assist_csv(&dir, 1_700_000_000_000, 1_700_900_000_000, "Title,Author\nX,Y\n").unwrap();
+        let utc = ReportZone::Console(chrono::FixedOffset::east_opt(0).unwrap());
+        let p = write_assist_csv(&dir, 1_700_000_000_000, 1_700_900_000_000, utc, "Title,Author\nX,Y\n").unwrap();
         assert_eq!(p.file_name().unwrap().to_string_lossy(), "ccli-usage-2023-11-14_to_2023-11-25.csv");
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "Title,Author\nX,Y\n");
         let _ = std::fs::remove_dir_all(&dir);
@@ -341,7 +400,7 @@ mod tests {
     #[test]
     fn csv_text_quotes_fields_containing_commas() {
         let rows = vec![row("Title, With Comma", Some("1"), false)];
-        let csv = build_ccli_csv_text(&rows);
+        let csv = build_ccli_csv_text(&rows, ReportZone::Server);
         assert!(csv.contains("\"Title, With Comma\""));
     }
 

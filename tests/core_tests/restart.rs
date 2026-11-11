@@ -23,3 +23,22 @@ async fn status_says_whether_a_restart_is_needed_and_the_route_refuses_when_it_i
     assert_eq!(j["ok"], false);
     assert!(j["error"].as_str().unwrap().contains("already the installed version"));
 }
+
+#[tokio::test]
+async fn adopting_a_legacy_library_takes_only_the_one_the_server_found() {
+    let s = start().await;
+    let http = reqwest::Client::new();
+    // A folder with a real-looking library.db, but not the one /api/server-info offered.
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(elsewhere.path().join("library.db"), b"SQLite format 3\0 not really").unwrap();
+    let r = http
+        .post(s.url("/api/system/adopt-legacy-library"))
+        .header("x-host-token", &s.token)
+        .json(&serde_json::json!({ "legacy_dir": elsewhere.path() }))
+        .send()
+        .await
+        .unwrap();
+    let j: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(j["ok"], false, "{j}");
+    assert!(j.get("restart_required").is_none());
+}

@@ -165,6 +165,10 @@ pub struct JobState {
     pub status: &'static str, // running | exited | failed | cancelled | timeout
     pub exit_code: Option<i32>,
     finished_at: Option<Instant>,
+    /// `release` was called while the process still ran: its folder goes once the process has exited
+    /// (deleting it earlier leaves a still-running tool writing into a folder that's gone, or Windows
+    /// refusing to delete files it holds open).
+    released: bool,
 }
 
 pub struct Job {
@@ -181,8 +185,29 @@ fn registry() -> &'static Mutex<HashMap<String, Arc<Job>>> {
     REG.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// The plugin's own job by id. A released one is gone as far as the plugin is concerned, even while it
+/// stays in the registry until its process has stopped (see `release`).
 pub fn job_for(plugin_id: &str, job_id: &str) -> Option<Arc<Job>> {
-    registry().lock().unwrap_or_else(|e| e.into_inner()).get(job_id).filter(|j| j.plugin_id == plugin_id).cloned()
+    registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(job_id)
+        .filter(|j| j.plugin_id == plugin_id && !j.state.lock().unwrap_or_else(|e| e.into_inner()).released)
+        .cloned()
+}
+
+/// Deletes a job folder off the async workers: a finished download can be gigabytes of video.
+fn remove_dir_in_background(dir: PathBuf) {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn_blocking(move || {
+                let _ = std::fs::remove_dir_all(&dir);
+            });
+        }
+        Err(_) => {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
 }
 
 fn push_line(job: &Job, mut line: String) {
@@ -326,7 +351,7 @@ pub fn start(
         plugin_id: plugin_id.to_string(),
         command: command_id.to_string(),
         output_dir: output_dir.clone(),
-        state: Mutex::new(JobState { lines: VecDeque::new(), first_index: 0, status: "running", exit_code: None, finished_at: None }),
+        state: Mutex::new(JobState { lines: VecDeque::new(), first_index: 0, status: "running", exit_code: None, finished_at: None, released: false }),
         cancel: tokio::sync::Notify::new(),
     });
     registry().lock().unwrap_or_else(|e| e.into_inner()).insert(id, job.clone());
@@ -334,10 +359,18 @@ pub fn start(
     let runner = job.clone();
     tokio::spawn(async move {
         let finish = |status: &'static str, code: Option<i32>| {
-            let mut st = runner.state.lock().unwrap_or_else(|e| e.into_inner());
-            st.status = status;
-            st.exit_code = code;
-            st.finished_at = Some(Instant::now());
+            let released = {
+                let mut st = runner.state.lock().unwrap_or_else(|e| e.into_inner());
+                st.status = status;
+                st.exit_code = code;
+                st.finished_at = Some(Instant::now());
+                st.released
+            };
+            // Released while it ran: now that it has stopped, it's forgotten and its folder goes.
+            if released {
+                registry().lock().unwrap_or_else(|e| e.into_inner()).remove(&runner.id);
+                remove_dir_in_background(runner.output_dir.clone());
+            }
         };
         let mut cmd = Command::new(&program);
         cmd.args(&argv)
@@ -346,6 +379,9 @@ pub fn start(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // Its own process group, so stopping the job stops what the tool started too (yt-dlp runs ffmpeg).
+        #[cfg(unix)]
+        cmd.process_group(0);
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -353,13 +389,18 @@ pub fn start(
                 return finish("failed", None);
             }
         };
+        // Whatever ends the job -- the tool exiting, a cancel, the time limit, or this task being dropped
+        // as the server shuts down -- what the tool started stops with it.
+        let mut tree = ProcessTree(child.id());
         let out_task = child.stdout.take().map(|s| tokio::spawn(read_capped_lines(s, runner.clone())));
         let err_task = child.stderr.take().map(|s| tokio::spawn(read_capped_lines(s, runner.clone())));
         let outcome = tokio::select! {
             r = child.wait() => r.map(|s| ("exited", s.code())).map_err(|e| e.to_string()),
-            _ = runner.cancel.notified() => { let _ = child.kill().await; Ok(("cancelled", None)) }
-            _ = tokio::time::sleep(JOB_TIMEOUT) => { let _ = child.kill().await; Ok(("timeout", None)) }
+            _ = runner.cancel.notified() => Ok(("cancelled", None)),
+            _ = tokio::time::sleep(JOB_TIMEOUT) => Ok(("timeout", None)),
         };
+        tree.kill();
+        let _ = child.kill().await;
         // Let the readers drain what the process wrote before it died.
         for t in [out_task, err_task].into_iter().flatten() {
             let _ = tokio::time::timeout(Duration::from_secs(5), t).await;
@@ -375,28 +416,61 @@ pub fn start(
     Ok(job)
 }
 
+/// A job's tool and every process it started: its whole process group on Unix (it leads one, see
+/// `start`), its process tree on Windows. A plain kill (or `kill_on_drop`) stops only the tool itself and
+/// leaves, say, the ffmpeg it launched running on -- after the job is reported over, or after the server
+/// itself has quit. Killed by `kill`, or when dropped.
+struct ProcessTree(Option<u32>);
+
+impl ProcessTree {
+    fn kill(&mut self) {
+        let Some(pid) = self.0.take() else { return };
+        // The group outlives its leader while any member runs (its id isn't reused until then), so this
+        // also finds what a tool that already exited left behind.
+        #[cfg(unix)]
+        let _ = std::process::Command::new("kill").args(["-KILL", &format!("-{pid}")]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill")
+                .args(["/T", "/F", "/PID", &pid.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW: no console flashing up on the projection machine
+                .status();
+        }
+    }
+}
+
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
 pub fn cancel(job: &Job) {
     job.cancel.notify_one();
 }
 
-/// Forgets a job and deletes its folder.
+/// Forgets a job and deletes its folder. A job still running is stopped first and stays in the registry
+/// until it has (see `JobState::released`): until then it still counts against the plugin's running jobs,
+/// and the stray-folder sweep in `prune` still knows its folder.
 pub fn release(plugin_id: &str, job_id: &str) -> bool {
-    let removed = {
-        let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
-        match reg.get(job_id) {
-            Some(j) if j.plugin_id == plugin_id => reg.remove(job_id),
-            _ => None,
-        }
-    };
-    match removed {
-        Some(j) => {
-            // A job still running is stopped first.
-            j.cancel.notify_one();
-            let _ = std::fs::remove_dir_all(&j.output_dir);
-            true
-        }
-        None => false,
+    let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
+    let Some(j) = reg.get(job_id).filter(|j| j.plugin_id == plugin_id).cloned() else { return false };
+    let mut st = j.state.lock().unwrap_or_else(|e| e.into_inner());
+    if st.released {
+        return false;
     }
+    if st.status == "running" {
+        st.released = true;
+        j.cancel.notify_one();
+    } else {
+        drop(st);
+        reg.remove(job_id);
+        remove_dir_in_background(j.output_dir.clone());
+    }
+    true
 }
 
 /// Output since `since` (an absolute line index), plus status; the finished job's files too.
@@ -505,6 +579,17 @@ mod tests {
         assert_eq!(expand(&t, &params(serde_json::json!({ "name": "-x" })), out, None).unwrap(), ["--label=-x"]);
     }
 
+    /// Job folders are deleted in the background (`remove_dir_in_background`).
+    async fn wait_gone(dir: &Path) {
+        for _ in 0..100 {
+            if !dir.exists() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("{dir:?} is still there");
+    }
+
     async fn wait_done(job: &Job) {
         for _ in 0..200 {
             if job.state.lock().unwrap().status != "running" {
@@ -538,7 +623,69 @@ mod tests {
         assert!(!release("someone-else", &job.id));
         let out_dir = job.output_dir.clone();
         assert!(release("plug", &job.id));
-        assert!(!out_dir.exists());
+        assert!(job_for("plug", &job.id).is_none());
+        assert!(!release("plug", &job.id), "only once");
+        wait_gone(&out_dir).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancel_also_stops_what_the_tool_started() {
+        let dir = tempfile::tempdir().unwrap();
+        // The tool starts a helper of its own (as yt-dlp starts ffmpeg) that would outlive a plain kill.
+        let job = start(dir.path(), "tree", "go", PathBuf::from("/bin/sh"), |out| {
+            let pid_file = out.join("helper.pid");
+            Ok(vec!["-c".into(), format!("sleep 30 & echo $! > '{}'; wait", pid_file.display())])
+        })
+        .unwrap();
+        let pid_file = job.output_dir.join("helper.pid");
+        for _ in 0..100 {
+            if std::fs::read_to_string(&pid_file).is_ok_and(|p| !p.trim().is_empty()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let helper = std::fs::read_to_string(&pid_file).unwrap().trim().to_string();
+        cancel(&job);
+        wait_done(&job).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let alive = std::process::Command::new("kill").args(["-0", &helper]).stderr(Stdio::null()).status().unwrap().success();
+        assert!(!alive, "the helper process {helper} is still running");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn releasing_a_running_job_deletes_its_folder_once_the_process_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let sleeper = || start(dir.path(), "rel", "go", PathBuf::from("/bin/sh"), |_| Ok(vec!["-c".into(), "sleep 30".into()]));
+        let job = sleeper().unwrap();
+        let _other = sleeper().unwrap();
+        let folder = job.output_dir.clone();
+        assert!(release("rel", &job.id));
+        assert!(job_for("rel", &job.id).is_none(), "released: the plugin can't reach it any more");
+        // Still running until it's been stopped: it still takes its slot, and its folder is known.
+        assert!(job.state.lock().unwrap().status != "running" || sleeper().is_err());
+        wait_done(&job).await;
+        wait_gone(&folder).await;
+        assert!(!registry().lock().unwrap().contains_key(&job.id), "forgotten once it has stopped");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_helper_left_running_by_a_tool_that_exited_is_stopped_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let job = start(dir.path(), "left", "go", PathBuf::from("/bin/sh"), |out| {
+            let pid_file = out.join("helper.pid");
+            // Exits at once, leaving a helper behind (stdout closed so the job isn't held open by it).
+            Ok(vec!["-c".into(), format!("sleep 30 >/dev/null 2>&1 & echo $! > '{}'", pid_file.display())])
+        })
+        .unwrap();
+        wait_done(&job).await;
+        assert_eq!(job.state.lock().unwrap().status, "exited");
+        let helper = std::fs::read_to_string(job.output_dir.join("helper.pid")).unwrap().trim().to_string();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let alive = std::process::Command::new("kill").args(["-0", &helper]).stderr(Stdio::null()).status().unwrap().success();
+        assert!(!alive, "the helper process {helper} is still running");
     }
 
     #[cfg(unix)]

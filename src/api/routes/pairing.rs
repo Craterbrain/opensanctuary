@@ -281,13 +281,18 @@ pub(super) async fn get_pairing_status_handler(
 ) -> impl IntoResponse {
     match app.db.get_paired_device(&query.device_id) {
         Ok(Some(dev)) => {
-            let _ = app.db.touch_paired_device(&query.device_id);
             let token_owed = app
                 .pending_pairing_token_delivery
                 .lock()
                 .ok()
                 .map(|mut pending| pending.remove(&query.device_id))
                 .unwrap_or(false);
+            // "Last seen" means the device itself was heard from. Anyone on the LAN can poll this with a
+            // device's id, so only the poll that collects the device's token counts; after that the device
+            // is seen through its own authenticated requests.
+            if token_owed {
+                let _ = app.db.touch_paired_device(&query.device_id);
+            }
             Json(serde_json::json!({
                 "paired": true,
                 "device_id": dev.id,

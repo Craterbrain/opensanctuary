@@ -100,7 +100,6 @@ setInterval(refreshLiveThemes, 20000);
 clock.startPeriodicSync(15000);
 
 let mediaSyncChannel: BroadcastChannel | null = null;
-let liveWs: WebSocket | null = null;
 let liveWsClient: EngineWebSocketClient | null = null;
 
 class TimecodeSyncEngine {
@@ -330,22 +329,14 @@ class TimecodeSyncEngine {
     if (this._lastReportedReadyVersion === syncVersion) return;
     this._lastReportedReadyVersion = syncVersion;
 
+    // Same-browser windows only. The server has no buffer-ready command, and the frame this used to send
+    // it carried no credential either: it was refused every time.
     if (mediaSyncChannel) {
       mediaSyncChannel.postMessage({
         type: 'MEDIA_BUFFER_READY',
         targetPts: targetPts,
         syncVersion: syncVersion
       });
-    }
-
-    if (liveWs && liveWs.readyState === WebSocket.OPEN) {
-      liveWs.send(JSON.stringify({
-        MediaBufferReady: {
-          client_id: 'foh_projection_screen',
-          target_pts: targetPts,
-          sync_version: syncVersion
-        }
-      }));
     }
   }
 }
@@ -1011,14 +1002,12 @@ function connect() {
 
   liveWsClient = createEngineWebSocket({
     onOpen: () => {
-      liveWs = liveWsClient?.getRawSocket() || null;
       isDisconnectBlackout = false;
       if (!isStateBlackout) {
         fadeInFromBlack(0.3);
       }
     },
     onClose: () => {
-      liveWs = liveWsClient?.getRawSocket() || null;
       isDisconnectBlackout = true;
       fadeToBlack(0.5);
       timecodeSyncer.setMasterState(null, false);
@@ -1033,7 +1022,6 @@ function connect() {
       renderSnapshot(snapshot);
     },
   });
-  liveWs = liveWsClient.getRawSocket();
 }
 
 if (videoBgEl) {

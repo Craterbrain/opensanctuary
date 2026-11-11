@@ -564,6 +564,12 @@ async fn test_client_pairing_lifecycle_and_zero_auth_displays() {
     assert_eq!(status_again_json["paired"], true);
     assert_eq!(status_again_json["token"], serde_json::Value::Null);
 
+    // 6c. And it doesn't count as the device having been seen: anyone on the LAN can make that poll.
+    let seen_before = db.get_paired_device("tv-sanctuary-1").unwrap().unwrap().last_seen;
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await; // last_seen is in milliseconds
+    client.get(format!("http://{}/api/pairing/status?device_id=tv-sanctuary-1", addr)).send().await.unwrap();
+    assert_eq!(db.get_paired_device("tv-sanctuary-1").unwrap().unwrap().last_seen, seen_before);
+
     // 7. Verify token endpoint
     let verify_resp = client.post(format!("http://{}/api/pairing/verify", addr))
         .json(&serde_json::json!({ "token": dev_token }))
