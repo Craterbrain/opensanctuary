@@ -8,7 +8,14 @@ import type { LibraryItem } from './models.ts';
 import type { ShowCommand } from './models.ts';
 import { hostTokenHeader, resolveHostSessionToken } from './host_session.ts';
 
+/** This console's offset from UTC in minutes, east positive (the CCLI report writes its dates in the
+ * church's own calendar, even on a server whose clock has no time zone set). */
+function consoleUtcOffsetMinutes(): number {
+  return -new Date().getTimezoneOffset();
+}
+
 /** Mirrors `ReleaseInfo` in `src/network/updater.rs`. */
+
 export interface ReleaseInfo {
   version: string;
   asset_name: string;
@@ -263,7 +270,7 @@ export const api = {
     ccliUsage: async (startMs: number, endMs: number) => {
       await resolveHostSessionToken();
       return api.get<{ ok: boolean; rows?: any[]; error?: string }>(
-        `/api/reports/ccli-usage?start=${startMs}&end=${endMs}`,
+        `/api/reports/ccli-usage?start=${startMs}&end=${endMs}&tz_offset_min=${consoleUtcOffsetMinutes()}`,
         { headers: hostTokenHeader() }
       );
     },
@@ -273,7 +280,7 @@ export const api = {
     // need but this one does.
     downloadCcliCsv: async (startMs: number, endMs: number): Promise<void> => {
       await resolveHostSessionToken();
-      const res = await fetch(`/api/reports/ccli-csv?start=${startMs}&end=${endMs}`, { headers: hostTokenHeader() });
+      const res = await fetch(`/api/reports/ccli-csv?start=${startMs}&end=${endMs}&tz_offset_min=${consoleUtcOffsetMinutes()}`, { headers: hostTokenHeader() });
       if (!res.ok) {
         throw new Error(await res.text());
       }
@@ -293,7 +300,7 @@ export const api = {
     openCcliAssist: async (startMs: number, endMs: number) => {
       await resolveHostSessionToken();
       return api.post<{ ok: boolean; csv_path?: string | null; error?: string }>(
-        `/api/reports/ccli-open-assist?start=${startMs}&end=${endMs}`,
+        `/api/reports/ccli-open-assist?start=${startMs}&end=${endMs}&tz_offset_min=${consoleUtcOffsetMinutes()}`,
         {},
         { headers: hostTokenHeader() }
       );
