@@ -1222,11 +1222,27 @@ async fn blocking_with_timeout<T: Send + 'static>(limit: std::time::Duration, f:
 }
 
 /// Moves a file: a rename, or when that can't (another drive) a copy and then removing the original.
-fn move_file(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
-    if std::fs::rename(src, dest).is_err() {
-        std::fs::copy(src, dest)?;
-        let _ = std::fs::remove_file(src);
+/// A copy goes to `<dest>.part` first (which the media folder scan ignores) and becomes `dest` only once
+/// complete, so a failed copy never leaves half a file in the library folder. `abandoned` is set when the
+/// caller has given up waiting: a copy still running then is thrown away instead of being put in place.
+fn move_file(src: &std::path::Path, dest: &std::path::Path, abandoned: &std::sync::atomic::AtomicBool) -> std::io::Result<()> {
+    if std::fs::rename(src, dest).is_ok() {
+        return Ok(());
     }
+    let mut partial = dest.as_os_str().to_owned();
+    partial.push(".part");
+    let partial = std::path::PathBuf::from(partial);
+    let copied = std::fs::copy(src, &partial).and_then(|_| {
+        if abandoned.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "gave up waiting for the copy"));
+        }
+        std::fs::rename(&partial, dest)
+    });
+    if let Err(e) = copied {
+        let _ = std::fs::remove_file(&partial);
+        return Err(e);
+    }
+    let _ = std::fs::remove_file(src);
     Ok(())
 }
 
@@ -1297,14 +1313,21 @@ pub(super) async fn plugin_add_media(State(app): State<AppState>, headers: Heade
     }
     // A video can be gigabytes and, across filesystems, is copied: off the async worker, with a time limit.
     let (src2, dest2) = (src.clone(), dest.clone());
-    blocking_with_timeout(PLUGIN_IO_TIMEOUT, move || move_file(&src2, &dest2))
-        .await
+    let abandoned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let abandoned2 = abandoned.clone();
+    let moved = blocking_with_timeout(PLUGIN_IO_TIMEOUT, move || move_file(&src2, &dest2, &abandoned2)).await;
+    if moved.is_err() {
+        abandoned.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    moved
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("couldn't move the file: {e}")))?
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("couldn't move the file: {e}")))?;
     let file_name = dest.file_name().and_then(|f| f.to_str()).unwrap_or(name).to_string();
 
     let clean_id: String = req.id.as_deref().unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).take(64).collect();
-    let id = if clean_id.is_empty() { format!("plugin_{}_{}", caller.plugin_id, uuid::Uuid::new_v4().simple()) } else { format!("plugin_{}_{}", caller.plugin_id, clean_id) };
+    // Always unique, as for library.addMediaUrl: adding the same id twice (a video downloaded again) adds a
+    // second item rather than silently replacing the first and leaving its file behind.
+    let id = if clean_id.is_empty() { format!("plugin_{}_{}", caller.plugin_id, uuid::Uuid::new_v4().simple()) } else { format!("plugin_{}_{}_{}", caller.plugin_id, clean_id, uuid::Uuid::new_v4().simple()) };
     let mut item = crate::core::models::MediaItem::new(&title, &format!("/media/{sub}/{file_name}"), media_type);
     item.id = id;
     item.duration_seconds = req.duration.filter(|d| d.is_finite() && *d > 0.0 && *d < 1.0e6);
@@ -1320,20 +1343,7 @@ pub(super) async fn plugin_add_media(State(app): State<AppState>, headers: Heade
     // H.264 -> VP9 for native playback, in the background (the same convenience the media folder
     // scan gives files dropped in by hand); the item's path is updated when it finishes.
     if req.media_type == "video" {
-        let (db, disk_path, mut for_update) = (app.db.clone(), dest.clone(), item.clone());
-        tokio::spawn(async move {
-            if crate::storage::transcode::needs_transcode(&disk_path).await {
-                match crate::storage::transcode::transcode_h264_to_vp9(&disk_path, |_| {}).await {
-                    Ok(new_path) => {
-                        if let Some(f) = new_path.file_name().and_then(|f| f.to_str()) {
-                            for_update.file_path = format!("/media/videos/{f}");
-                            let _ = db.insert_media(&for_update);
-                        }
-                    }
-                    Err(e) => tracing::warn!("transcode skipped for {:?}: {}", disk_path, e),
-                }
-            }
-        });
+        app.db.convert_video_in_background(&item.id, dest.clone());
     }
     Ok(Json(serde_json::json!({ "success": true, "id": item.id, "item": item })))
 }
@@ -1899,9 +1909,11 @@ mod blocking_io_tests {
         std::fs::create_dir_all(&d).unwrap();
         let (a, b) = (d.join("a.mp4"), d.join("b.mp4"));
         std::fs::write(&a, b"video").unwrap();
-        move_file(&a, &b).unwrap();
+        let keep_going = std::sync::atomic::AtomicBool::new(false);
+        move_file(&a, &b, &keep_going).unwrap();
         assert!(!a.exists());
         assert_eq!(std::fs::read(&b).unwrap(), b"video");
-        assert!(move_file(&a, &d.join("c.mp4")).is_err(), "a missing source is an error");
+        assert!(move_file(&a, &d.join("c.mp4"), &keep_going).is_err(), "a missing source is an error");
+        assert!(!d.join("c.mp4.part").exists(), "a failed move leaves nothing behind");
     }
 }

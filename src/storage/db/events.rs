@@ -1,4 +1,7 @@
-use rusqlite::Result;
+use rusqlite::{OptionalExtension, Result};
+
+use crate::core::engine::EngineSnapshot;
+use crate::core::models::{Schedule, ShowState};
 
 use super::Database;
 
@@ -29,7 +32,10 @@ impl Database {
             crate::core::events::ShowEvent::ScheduleItemThemeSet { .. } => "ScheduleItemThemeSet",
             crate::core::events::ShowEvent::SlideBackgroundSet { .. } => "SlideBackgroundSet",
             crate::core::events::ShowEvent::GlobalThemeSet { .. } => "GlobalThemeSet",
-            crate::core::events::ShowEvent::ScheduleLoaded { .. } => "ScheduleLoaded",
+            // Told apart in the stored type, for the CCLI report (`get_ccli_usage_report`), which reads
+            // only these columns. "ScheduleLoaded" rows are from before the distinction.
+            crate::core::events::ShowEvent::ScheduleLoaded { replay: true, .. } => "ScheduleReplayed",
+            crate::core::events::ShowEvent::ScheduleLoaded { replay: false, .. } => "ScheduleOpened",
             crate::core::events::ShowEvent::ScheduleCleared => "ScheduleCleared",
             crate::core::events::ShowEvent::ScheduleTitleSet { .. } => "ScheduleTitleSet",
             _ => "MediaControlEvent",
@@ -46,14 +52,23 @@ impl Database {
 
     pub fn get_max_event_sequence(&self) -> Result<u64> {
         let conn = self.conn();
-        let mut stmt = conn.prepare_cached("SELECT COALESCE(MAX(sequence_number), 0) FROM event_log")?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT MAX(COALESCE((SELECT MAX(sequence_number) FROM event_log), 0), \
+                        COALESCE((SELECT sequence_number FROM engine_snapshot WHERE id = 1), 0))",
+        )?;
         let max_seq: i64 = stmt.query_row([], |row| row.get(0))?;
         Ok(max_seq.max(0) as u64)
     }
 
+    /// The events to replay on top of `load_engine_snapshot` (all of them, when there is none). Older
+    /// rows a compaction kept for the CCLI report are already in the snapshot and are left out.
     pub fn load_events(&self) -> Result<Vec<crate::core::events::EventEnvelope>> {
         let conn = self.conn();
-        let mut stmt = conn.prepare_cached("SELECT sequence_number, payload, timestamp_ms FROM event_log ORDER BY sequence_number ASC")?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT sequence_number, payload, timestamp_ms FROM event_log \
+             WHERE sequence_number > COALESCE((SELECT sequence_number FROM engine_snapshot WHERE id = 1), 0) \
+             ORDER BY sequence_number ASC",
+        )?;
         let event_iter = stmt.query_map([], |row| {
             // u64 no longer has FromSql in rusqlite 0.40; see the insert above.
             let seq: u64 = row.get::<_, i64>(0)? as u64;
@@ -78,5 +93,65 @@ impl Database {
             events.push(env);
         }
         Ok(events)
+    }
+
+    pub fn load_engine_snapshot(&self) -> Result<Option<EngineSnapshot>> {
+        let conn = self.conn();
+        let row = conn
+            .query_row("SELECT sequence_number, state, schedule FROM engine_snapshot WHERE id = 1", [], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+            })
+            .optional()?;
+        let Some((seq, state, schedule)) = row else { return Ok(None) };
+        match (serde_json::from_str(&state), serde_json::from_str(&schedule)) {
+            (Ok(state), Ok(schedule)) => Ok(Some(EngineSnapshot { sequence_number: seq.max(0) as u64, state, schedule })),
+            (state, schedule) => {
+                // The events it stands for are gone, so this can't be rebuilt; start from a clean engine.
+                tracing::warn!(
+                    "engine snapshot #{} is unreadable ({:?} / {:?}); starting from its later events only",
+                    seq,
+                    state.err(),
+                    schedule.err()
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// Keeps the event log from growing for ever: stores `snapshot` (the engine as it stood after event
+    /// `snapshot.sequence_number`) as where a replay starts, and drops the events it already holds -- all
+    /// but what the CCLI report reads (`get_ccli_usage_report`): every `ItemWentLive`, and a replay marker
+    /// right before one, its schedule emptied (the marker's type is all the report reads). Returns how
+    /// many rows went.
+    pub fn compact_event_log(&self, snapshot: &EngineSnapshot) -> Result<usize> {
+        let seq = snapshot.sequence_number as i64;
+        // Licensed text is never stored (see core::events).
+        let state = ShowState {
+            live_item: snapshot.state.live_item.as_ref().map(|i| i.without_licensed_text()),
+            staged_item: snapshot.state.staged_item.as_ref().map(|i| i.without_licensed_text()),
+            ..snapshot.state.clone()
+        };
+        let state_json = serde_json::to_string(&state).unwrap_or_default();
+        let schedule_json = serde_json::to_string(&snapshot.schedule.without_licensed_text()).unwrap_or_default();
+        let marker = |replay: bool| {
+            serde_json::to_string(&crate::core::events::ShowEvent::ScheduleLoaded { schedule: Schedule::default(), replay }).unwrap_or_default()
+        };
+
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT OR REPLACE INTO engine_snapshot (id, sequence_number, state, schedule) VALUES (1, ?1, ?2, ?3)",
+            (seq, state_json, schedule_json),
+        )?;
+        let removed = tx.execute(
+            "DELETE FROM event_log WHERE sequence_number <= ?1 AND event_type <> 'ItemWentLive' \
+             AND NOT (event_type IN ('ScheduleReplayed', 'ScheduleLoaded') \
+                      AND sequence_number + 1 IN (SELECT sequence_number FROM event_log WHERE event_type = 'ItemWentLive'))",
+            [seq],
+        )?;
+        tx.execute("UPDATE event_log SET payload = ?2 WHERE sequence_number <= ?1 AND event_type = 'ScheduleReplayed'", (seq, marker(true)))?;
+        tx.execute("UPDATE event_log SET payload = ?2 WHERE sequence_number <= ?1 AND event_type = 'ScheduleLoaded'", (seq, marker(false)))?;
+        tx.commit()?;
+        Ok(removed)
     }
 }

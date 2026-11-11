@@ -196,13 +196,27 @@ pub async fn fetch_bytes(allowed: &[String], url: &str, headers: &[(String, Stri
     fetch_bytes_with(&|u| check_url(allowed, u), url, headers, max_bytes).await
 }
 
+/// The caller's headers that go with a request to `hop`. On the first URL's own origin, all of them. Past a
+/// redirect to another origin, only ones that carry nothing secret: an `Authorization` header or an API key
+/// (YouVersion's app key, any `x-api-key`) was meant for the host it was given for -- a browser drops them
+/// the same way -- and presigned storage links refuse a request that carries one.
+fn headers_for_hop<'a>(first: &reqwest::Url, hop: &reqwest::Url, headers: &'a [(String, String)]) -> Vec<&'a (String, String)> {
+    const SAFE_CROSS_ORIGIN: [&str; 4] = ["accept", "accept-language", "accept-encoding", "range"];
+    let same_origin = first.origin() == hop.origin();
+    headers
+        .iter()
+        .filter(|(k, _)| same_origin || SAFE_CROSS_ORIGIN.iter().any(|safe| k.eq_ignore_ascii_case(safe)))
+        .collect()
+}
+
 async fn fetch_bytes_with(
     check: &(dyn Fn(&reqwest::Url) -> Result<(String, u16), String> + Send + Sync),
     url: &str,
     headers: &[(String, String)],
     max_bytes: usize,
 ) -> Result<FetchedBytes, String> {
-    let mut current = reqwest::Url::parse(url.trim()).map_err(|e| format!("bad URL: {e}"))?;
+    let first = reqwest::Url::parse(url.trim()).map_err(|e| format!("bad URL: {e}"))?;
+    let mut current = first.clone();
     for _ in 0..=MAX_REDIRECTS {
         let (host, port) = check(&current)?;
         let addr = resolve_public(&host, port).await?;
@@ -218,7 +232,7 @@ async fn fetch_bytes_with(
             .build()
             .map_err(|e| e.to_string())?;
         let mut req = client.get(current.clone());
-        for (k, v) in headers {
+        for (k, v) in headers_for_hop(&first, &current, headers) {
             req = req.header(k.as_str(), v.as_str());
         }
         let mut resp = req.send().await.map_err(|e| format!("request failed: {}", e.without_url()))?;
@@ -270,6 +284,17 @@ mod tests {
     }
     fn url(s: &str) -> reqwest::Url {
         reqwest::Url::parse(s).unwrap()
+    }
+
+    #[test]
+    fn credentials_stay_with_the_origin_they_were_given_for() {
+        let h = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
+        let sent = h(&[("Authorization", "Bearer t"), ("x-yvp-app-key", "k"), ("X-Api-Key", "k2"), ("Accept", "application/json"), ("Range", "bytes=0-")]);
+        let first = url("https://api.example.org/v1/thing");
+        let names = |hop: &str| headers_for_hop(&first, &url(hop), &sent).iter().map(|(k, _)| k.to_ascii_lowercase()).collect::<Vec<_>>();
+        assert_eq!(names("https://api.example.org/v2/elsewhere").len(), 5, "same origin: everything");
+        assert_eq!(names("https://cdn.example.net/file?sig=abc"), ["accept", "range"], "another host: nothing secret");
+        assert_eq!(names("https://api.example.org:8443/x"), ["accept", "range"], "another port is another origin");
     }
 
     #[test]

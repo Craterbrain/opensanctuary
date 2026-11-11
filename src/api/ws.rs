@@ -479,7 +479,10 @@ fn redact_ws_envelope(value: &serde_json::Value) -> String {
 async fn handle_socket(socket: WebSocket, app_state: AppState) {
     let (mut sender, mut receiver) = socket.split();
 
-    // 1. Send initial StateSnapshot directly (as raw JSON)
+    // 1. Send initial StateSnapshot directly (as raw JSON). Subscribed first: a broadcast sent
+    // between the two would otherwise reach neither, and if it was the one carrying a changed
+    // schedule (later ones send `schedule: null`) this client would keep the old one.
+    let mut rx = app_state.tx.subscribe();
     let snapshot = app_state.engine.snapshot();
     if let Ok(json_str) = serde_json::to_string(&snapshot) {
         let _ = sender.send(Message::Text(json_str.into())).await;
@@ -488,8 +491,8 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
     // 2. Spawn task to broadcast updates to this client. Also carries direct,
     // this-connection-only replies (e.g. a "console_locked" rejection) that
     // don't belong on the shared broadcast -- see the `direct_tx` send below.
-    let mut rx = app_state.tx.subscribe();
     let (direct_tx, mut direct_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let resync_app = app_state.clone();
     let mut send_task = tokio::spawn(async move {
         let mut ping = tokio::time::interval(WS_PING_INTERVAL);
         ping.tick().await;
@@ -507,7 +510,16 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                                 break;
                             }
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        // A client too slow for the channel has lost broadcasts, maybe the one with
+                        // the schedule in it. Drop what is still queued (all of it older than now)
+                        // and start it again from a full snapshot, as on connect.
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            rx = rx.resubscribe();
+                            let Ok(json_str) = serde_json::to_string(&resync_app.engine.snapshot()) else { continue };
+                            if sender.send(Message::Text(json_str.into())).await.is_err() {
+                                break;
+                            }
+                        }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }

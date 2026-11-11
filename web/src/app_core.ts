@@ -2320,7 +2320,9 @@ if (btnLiveVideoStop) {
     stopMediaSyncHeartbeat();
     if (btnLiveVideoPlay) btnLiveVideoPlay.textContent = '▶ Play';
     broadcastLocalMediaSync('stop', 0, false, isLiveVideoLooping);
-    sendCommand('MediaStop');
+    // The engine has no separate Stop: a pause at 0:00 is one, and it's what every other screen
+    // (TVs, Roku, remote browsers) and any display connecting later follow.
+    sendCommand({ MediaPause: { current_time: 0 } });
   });
 }
 
@@ -2371,7 +2373,10 @@ let isUserSeeking = false;
 let wasPlayingBeforeScrub = false;
 
 if (liveVideoSeek) {
+  // Pointer, mouse and touch events all start (and end) one drag: only the first of each counts.
+  // A second start would find the video it just paused and forget it was playing.
   const onSeekStart = () => {
+    if (isUserSeeking) return;
     isUserSeeking = true;
     wasPlayingBeforeScrub = liveVideoEl ? !liveVideoEl.paused : false;
     if (liveVideoEl && !liveVideoEl.paused) {
@@ -2386,7 +2391,7 @@ if (liveVideoSeek) {
 
   // Preroll scrub lock while dragging
   liveVideoSeek.addEventListener('input', () => {
-    isUserSeeking = true;
+    onSeekStart(); // keyboard seeking has no pointerdown
     if (liveVideoEl && !liveVideoEl.paused) {
       liveVideoEl.pause();
     }
@@ -2403,6 +2408,7 @@ if (liveVideoSeek) {
 
   // When seek head is released after scrubbing -> resume after 300ms buffer sync runway!
   const onSeekRelease = () => {
+    if (!isUserSeeking) return;
     isUserSeeking = false;
 
     if (liveVideoEl && liveVideoEl.duration && !isNaN(liveVideoEl.duration)) {
@@ -2457,7 +2463,8 @@ if (liveVideoEl) {
       if (canvasBlackoutEl) {
         canvasBlackoutEl.classList.add('fading-black');
       }
-      sendCommand('ToggleBlackout');
+      // There's only a toggle: one sent while already blacked out would bring the screen back.
+      if (!currentSnapshot?.state?.is_blackout) sendCommand('ToggleBlackout');
     }
   });
 }

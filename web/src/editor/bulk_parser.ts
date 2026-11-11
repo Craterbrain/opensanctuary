@@ -88,7 +88,8 @@ export function stripChordsAndAnnotations(text: string): string {
     const trimmed = rawLine.trim();
 
     // Check if line is a standalone chord line or performance cue
-    if (isChordLine(trimmed) || isCueLine(trimmed)) {
+    // A section header is kept even where it reads like a cue ("Interlude").
+    if (isChordLine(trimmed) || (isCueLine(trimmed) && !detectSectionHeader(trimmed))) {
       continue;
     }
 
@@ -134,8 +135,9 @@ export function extractSongMetadata(text: string): { cleanedText: string; metada
       continue;
     }
 
-    // Author / Writer / Music / Lyrics detection
-    const authorMatch = line.match(/^(?:Words\s+(?:&|and)\s+Music\s+by|Music\s+(?:&|and)\s+Words\s+by|Words\s+by|Music\s+by|Written\s+by|Author\s*:?|Words\s*:|Music\s*:|Lyrics\s*(?:by)?\s*:?)\s+(.+)/i);
+    // Author / Writer / Music / Lyrics detection. A bare "Author" or "Lyrics" needs its colon: without
+    // one it's a line of the song ("Author of salvation").
+    const authorMatch = line.match(/^(?:(?:Words\s+(?:&|and)\s+Music|Music\s+(?:&|and)\s+Words|Words|Music|Written|Lyrics)\s+by\s*:?\s+|(?:Author|Words|Music|Lyrics)\s*:\s*)(.+)/i);
     if (authorMatch) {
       const authorVal = (authorMatch[1] ?? '').trim();
       metadata.author = metadata.author ? `${metadata.author}, ${authorVal}` : authorVal;

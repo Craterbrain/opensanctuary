@@ -62,7 +62,15 @@ pub enum ShowCommand {
     /// changes back to the schedule). Keeps its position, expansion and theme choice, and follows it into
     /// the live/staged slot. The frontend sends `{"ReplaceScheduleItem":{"item_index","item_type","item_id"}}`
     /// and the REST/WS layer fills in `item` from the library, as it does for AddToSchedule.
-    ReplaceScheduleItem { item_index: usize, item: ScheduleItem },
+    /// `expected_id` is the id of the schedule item the sender means: its `item_index` may be stale (the
+    /// schedule reordered while its editor was open), so when the item at that index isn't the expected
+    /// one, the one with that id is replaced instead -- or nothing, if it has been removed.
+    ReplaceScheduleItem {
+        item_index: usize,
+        item: ScheduleItem,
+        #[serde(default)]
+        expected_id: Option<String>,
+    },
     /// Puts the text of a licensed passage into the schedule item that stands for it (the item holds a reference
     /// and a placeholder until the passage is looked up). Only the REST/WS layer builds this, from the
     /// `ResolveLicensed` shorthand; the text is never stored (see `ShowEvent::without_licensed_text`).

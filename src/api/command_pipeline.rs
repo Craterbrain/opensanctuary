@@ -176,7 +176,8 @@ pub fn expand_shorthand(app: &AppState, value: Value) -> Value {
             match item_for(app, t, id) {
                 Some(item) => {
                     if let Ok(v) = serde_json::to_value(item) {
-                        return serde_json::json!({ "ReplaceScheduleItem": { "item_index": idx, "item": v } });
+                        let expected_id = rep.get("expected_id").cloned().unwrap_or(Value::Null);
+                        return serde_json::json!({ "ReplaceScheduleItem": { "item_index": idx, "item": v, "expected_id": expected_id } });
                     }
                 }
                 None => tracing::error!("Item not found in DB for ReplaceScheduleItem: {} {}", t, id),

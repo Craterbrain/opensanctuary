@@ -2050,7 +2050,7 @@ fn test_replace_schedule_item_updates_in_place_and_follows_live() {
 
     let mut edited = song(&["a", "B edited"]).to_schedule_item();
     edited.title = "Song (edited)".to_string();
-    engine.execute_command(ShowCommand::ReplaceScheduleItem { item_index: 0, item: edited });
+    engine.execute_command(ShowCommand::ReplaceScheduleItem { item_index: 0, item: edited, expected_id: None });
 
     let snap = engine.snapshot();
     assert_eq!(snap.schedule.items.len(), 1);
@@ -2061,6 +2061,250 @@ fn test_replace_schedule_item_updates_in_place_and_follows_live() {
     assert_eq!(snap.state.live_slide_index, 1, "clamped into the shorter item");
 
     // An out-of-range index is ignored.
-    engine.execute_command(ShowCommand::ReplaceScheduleItem { item_index: 5, item: song(&["x"]).to_schedule_item() });
+    engine.execute_command(ShowCommand::ReplaceScheduleItem { item_index: 5, item: song(&["x"]).to_schedule_item(), expected_id: None });
     assert_eq!(engine.snapshot().schedule.items.len(), 1);
+}
+
+/// A song with one slide per `(label, text)`, as the library hands it to the schedule.
+fn labelled_song(id: &str, slides: &[(&str, &str)]) -> Song {
+    Song {
+        id: id.to_string(),
+        title: format!("Song {id}"),
+        author: "A".to_string(), alternate_title: None, public_domain_override: None,
+        copyright: None,
+        ccli_number: None,
+        slides: slides.iter().map(|(label, text)| Slide { text: text.to_string(), label: Some(label.to_string()), ..Default::default() }).collect(),
+        theme_name: None,
+    }
+}
+
+#[test]
+fn test_same_song_scheduled_twice_gets_its_own_slot_ids() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    let a = labelled_song("a", &[("V1", "a1"), ("V2", "a2")]);
+    let b = labelled_song("b", &[("V1", "b1")]);
+    for song in [&a, &b, &a, &a] {
+        engine.execute_command(ShowCommand::AddToSchedule(song.to_schedule_item()));
+    }
+    let ids: Vec<String> = engine.snapshot().schedule.items.iter().map(|i| i.id.clone()).collect();
+    assert_eq!(ids, ["sched_song_a", "sched_song_b", "sched_song_a~2", "sched_song_a~3"]);
+
+    // Going live on the second copy selects the second copy, so Next walks on from there.
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(2), slide_index: None });
+    assert_eq!(engine.snapshot().state.selected_item_index, Some(2));
+    engine.execute_command(ShowCommand::NextItem);
+    let snap = engine.snapshot();
+    assert_eq!(snap.state.selected_item_index, Some(3));
+    assert_eq!(snap.state.live_item.as_ref().unwrap().id, "sched_song_a~3");
+
+    // Replacing the first copy from the library leaves the live third copy alone, and each slot keeps its id.
+    let edited = labelled_song("a", &[("V1", "edited")]).to_schedule_item();
+    engine.execute_command(ShowCommand::ReplaceScheduleItem { item_index: 0, item: edited.clone(), expected_id: None });
+    let snap = engine.snapshot();
+    assert_eq!(snap.schedule.items[0].slides.len(), 1);
+    assert_eq!(snap.state.live_item.as_ref().unwrap().slides.len(), 2, "the live copy wasn't the one replaced");
+    engine.execute_command(ShowCommand::ReplaceScheduleItem { item_index: 3, item: edited, expected_id: None });
+    let snap = engine.snapshot();
+    assert_eq!(snap.schedule.items[3].id, "sched_song_a~3");
+    assert_eq!(snap.state.live_item.as_ref().unwrap().slides.len(), 1, "the live copy follows its own slot");
+
+    // A freed suffix is reused, and a different item swapped into a slot brings its own (unique) id.
+    engine.execute_command(ShowCommand::RemoveFromSchedule(2));
+    engine.execute_command(ShowCommand::AddToSchedule(a.to_schedule_item()));
+    engine.execute_command(ShowCommand::ReplaceScheduleItem { item_index: 1, item: a.to_schedule_item(), expected_id: None });
+    let ids: Vec<String> = engine.snapshot().schedule.items.iter().map(|i| i.id.clone()).collect();
+    assert_eq!(ids, ["sched_song_a", "sched_song_a~4", "sched_song_a~3", "sched_song_a~2"]);
+}
+
+#[test]
+fn test_loaded_schedule_with_duplicate_ids_is_made_unique() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    let item = labelled_song("a", &[("V1", "a1")]).to_schedule_item();
+    let mut third = item.clone();
+    third.id = "sched_song_a~2".to_string();
+    let schedule = Schedule { items: vec![item.clone(), item.clone(), third, item], ..Schedule::default() };
+    engine.execute_command(ShowCommand::LoadSchedule(schedule));
+    let ids: Vec<String> = engine.snapshot().schedule.items.iter().map(|i| i.id.clone()).collect();
+    assert_eq!(ids, ["sched_song_a", "sched_song_a~2", "sched_song_a~3", "sched_song_a~4"]);
+}
+
+#[test]
+fn test_selection_stays_on_its_item_when_items_above_it_come_and_go() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    for id in ["a", "b", "c"] {
+        engine.execute_command(ShowCommand::AddToSchedule(labelled_song(id, &[("V1", "x")]).to_schedule_item()));
+    }
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(1), slide_index: None });
+    assert_eq!(engine.snapshot().state.selected_item_index, Some(1));
+
+    // A header dropped in above the live item: the selection follows the item down ...
+    engine.execute_command(ShowCommand::AddScheduleHeader { title: "Worship".to_string(), index: Some(0) });
+    assert_eq!(engine.snapshot().state.selected_item_index, Some(2));
+    // ... one below it changes nothing ...
+    engine.execute_command(ShowCommand::AddScheduleHeader { title: "Sermon".to_string(), index: Some(3) });
+    assert_eq!(engine.snapshot().state.selected_item_index, Some(2));
+    // ... and Next goes to the item after the live one, not back onto it.
+    engine.execute_command(ShowCommand::NextItem);
+    assert_eq!(engine.snapshot().state.live_item.as_ref().unwrap().id, "sched_song_c");
+    engine.execute_command(ShowCommand::PrevItem);
+    assert_eq!(engine.snapshot().state.live_item.as_ref().unwrap().id, "sched_song_b");
+
+    // Removing an item above it: the selection follows the item up.
+    engine.execute_command(ShowCommand::RemoveFromSchedule(0));
+    let snap = engine.snapshot();
+    assert_eq!(snap.state.selected_item_index, Some(1));
+    assert_eq!(snap.schedule.items[1].id, "sched_song_b");
+    // Removing one below it changes nothing.
+    engine.execute_command(ShowCommand::RemoveFromSchedule(3));
+    assert_eq!(engine.snapshot().state.selected_item_index, Some(1));
+}
+
+#[test]
+fn test_replace_schedule_item_follows_expected_id_after_a_reorder() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    for id in ["a", "b", "c"] {
+        engine.execute_command(ShowCommand::AddToSchedule(labelled_song(id, &[("V1", "x")]).to_schedule_item()));
+    }
+    // The editor opened on "a" at index 0; meanwhile another console moved it to the end.
+    engine.execute_command(ShowCommand::ReorderSchedule { from: 0, to: 2 });
+    let mut edited = labelled_song("a", &[("V1", "edited")]).to_schedule_item();
+    edited.title = "Edited".to_string();
+    engine.execute_command(ShowCommand::ReplaceScheduleItem { item_index: 0, item: edited.clone(), expected_id: Some("sched_song_a".to_string()) });
+    let titles: Vec<String> = engine.snapshot().schedule.items.iter().map(|i| i.title.clone()).collect();
+    assert_eq!(titles, ["Song b", "Song c", "Edited"]);
+
+    // The item was removed while the editor was open: the save lands nowhere.
+    engine.execute_command(ShowCommand::RemoveFromSchedule(2));
+    let events = engine.execute_command(ShowCommand::ReplaceScheduleItem { item_index: 0, item: edited, expected_id: Some("sched_song_a".to_string()) });
+    assert!(events.is_empty());
+    let titles: Vec<String> = engine.snapshot().schedule.items.iter().map(|i| i.title.clone()).collect();
+    assert_eq!(titles, ["Song b", "Song c"]);
+
+    // The shorthand's JSON without the field still parses.
+    let cmd: ShowCommand = serde_json::from_value(serde_json::json!({
+        "ReplaceScheduleItem": { "item_index": 0, "item": labelled_song("b", &[("V1", "y")]).to_schedule_item() }
+    })).unwrap();
+    assert!(matches!(cmd, ShowCommand::ReplaceScheduleItem { expected_id: None, .. }));
+}
+
+#[test]
+fn test_replace_schedule_item_keeps_the_slots_arrangement() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    let song = labelled_song("a", &[("V1", "v1"), ("C", "chorus"), ("V2", "v2")]);
+    engine.execute_command(ShowCommand::AddToSchedule(song.to_schedule_item()));
+    let entry = |section: &str, source: usize| ArrangementEntry { section_id: section.to_string(), source_slide_index: source, background_override: None };
+    let mut chorus_with_bg = entry("C", 1);
+    chorus_with_bg.background_override = Some("#102030".to_string());
+    engine.execute_command(ShowCommand::SetArrangement {
+        item_index: Some(0),
+        arrangement: vec![entry("V1", 0), entry("C", 1), entry("V2", 2), chorus_with_bg.clone()],
+    });
+
+    // The editor saves a typo fix plus a new bridge in front of verse 2, with no arrangement of its own.
+    let mut edited = labelled_song("a", &[("V1", "v1 fixed"), ("C", "chorus"), ("B", "bridge"), ("V2", "v2")]).to_schedule_item();
+    edited.arrangement = Vec::new();
+    engine.execute_command(ShowCommand::ReplaceScheduleItem { item_index: 0, item: edited, expected_id: None });
+    let item = engine.snapshot().schedule.items[0].clone();
+    assert_eq!(item.slides[0].text, "v1 fixed");
+    assert_eq!(
+        item.arrangement,
+        vec![entry("V1", 0), entry("C", 1), entry("V2", 3), chorus_with_bg, entry("B", 2)],
+        "the order survives, verse 2 is found at its new index, the new slide plays last"
+    );
+
+    // An item still in its authored order just takes the new slides.
+    engine.execute_command(ShowCommand::AddToSchedule(labelled_song("b", &[("V1", "x"), ("V2", "y")]).to_schedule_item()));
+    engine.execute_command(ShowCommand::ReplaceScheduleItem { item_index: 1, item: labelled_song("b", &[("V2", "y")]).to_schedule_item(), expected_id: None });
+    let item = engine.snapshot().schedule.items[1].clone();
+    assert_eq!(os_next::engine::effective_arrangement(&item).into_owned(), vec![entry("V2", 0)]);
+}
+
+#[test]
+fn test_undo_reaches_back_past_what_the_event_log_still_holds() {
+    // A log of 6: by the time of the undo, the events that built the schedule have been dropped.
+    let engine = ShowEngine::new(Arc::new(EventLog::new(6)));
+    for id in ["a", "b", "c"] {
+        engine.execute_command(ShowCommand::AddToSchedule(labelled_song(id, &[("V1", "x"), ("V2", "y")]).to_schedule_item()));
+    }
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(1), slide_index: None });
+    for _ in 0..4 {
+        engine.execute_command(ShowCommand::ToggleBlackout);
+    }
+    engine.execute_command(ShowCommand::RemoveFromSchedule(2));
+    assert_eq!(engine.snapshot().schedule.items.len(), 2);
+
+    engine.execute_command(ShowCommand::Undo);
+    let snap = engine.snapshot();
+    let ids: Vec<&str> = snap.schedule.items.iter().map(|i| i.id.as_str()).collect();
+    assert_eq!(ids, ["sched_song_a", "sched_song_b", "sched_song_c"], "the whole schedule, not just what the log could rebuild");
+    assert_eq!(snap.state.live_item.as_ref().unwrap().id, "sched_song_b");
+    assert_eq!(snap.state.selected_item_index, Some(1));
+
+    engine.execute_command(ShowCommand::Redo);
+    assert_eq!(engine.snapshot().schedule.items.len(), 2);
+
+    // A step older than the log reaches is refused rather than rebuilt wrong: undo everything there is.
+    for _ in 0..20 {
+        engine.execute_command(ShowCommand::Undo);
+    }
+    let snap = engine.snapshot();
+    assert!(snap.schedule.items.len() >= 2, "never a schedule missing the items the log forgot");
+    assert_eq!(snap.state.live_item.as_ref().unwrap().id, "sched_song_b");
+}
+
+#[test]
+fn test_undo_after_restart_with_more_events_than_the_log_holds() {
+    let recorder = Arc::new(EventLog::new(100));
+    let before = ShowEngine::new(recorder.clone());
+    for id in ["a", "b", "c"] {
+        before.execute_command(ShowCommand::AddToSchedule(labelled_song(id, &[("V1", "x")]).to_schedule_item()));
+    }
+    for _ in 0..6 {
+        before.execute_command(ShowCommand::ToggleLogo);
+    }
+
+    let log = Arc::new(EventLog::with_initial_sequence(4, recorder.current_sequence()));
+    let engine = ShowEngine::new(log);
+    engine.restore_from_events(recorder.all_events());
+    assert_eq!(engine.snapshot().schedule.items.len(), 3);
+
+    engine.execute_command(ShowCommand::RemoveFromSchedule(0));
+    engine.execute_command(ShowCommand::Undo);
+    assert_eq!(engine.snapshot().schedule.items.len(), 3, "the undo starts from the restored state, not an empty one");
+}
+
+#[test]
+fn test_undo_leaves_untouched_live_item_and_its_media_playback_alone() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    for id in ["a", "b"] {
+        engine.execute_command(ShowCommand::AddToSchedule(labelled_song(id, &[("V1", "x"), ("V2", "y")]).to_schedule_item()));
+    }
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(0), slide_index: None });
+    engine.execute_command(ShowCommand::StageItem { item_index: Some(1), slide_index: None });
+    engine.execute_command(ShowCommand::MediaScheduledStart { target_pts: 0.0, start_at_epoch_ms: 1789000000 });
+    assert!(engine.snapshot().state.media_playback.is_some());
+
+    // Undoing something unrelated to the live item must not restart its video.
+    engine.execute_command(ShowCommand::ToggleBlackout);
+    let events = engine.execute_command(ShowCommand::Undo);
+    assert!(!events.iter().any(|e| matches!(e.event, ShowEvent::ItemWentLive { .. } | ShowEvent::ItemStaged { .. })));
+    let snap = engine.snapshot();
+    assert!(!snap.state.is_blackout);
+    assert!(snap.state.media_playback.is_some());
+    assert_eq!(snap.state.selected_item_index, Some(1), "still on the staged item");
+
+    // Undoing a slide change moves the slide, without a new ItemWentLive either.
+    engine.execute_command(ShowCommand::NextSlide);
+    assert_eq!(engine.snapshot().state.live_slide_index, 1);
+    let events = engine.execute_command(ShowCommand::Undo);
+    assert!(events.iter().any(|e| matches!(e.event, ShowEvent::LiveSlideChanged { slide_index: 0 })));
+    assert!(!events.iter().any(|e| matches!(e.event, ShowEvent::ItemWentLive { .. })));
+    assert!(engine.snapshot().state.media_playback.is_some());
+
+    // Undoing a change of live item does bring the old one back.
+    engine.execute_command(ShowCommand::GoLive { item_index: Some(1), slide_index: None });
+    engine.execute_command(ShowCommand::Undo);
+    let snap = engine.snapshot();
+    assert_eq!(snap.state.live_item.as_ref().unwrap().id, "sched_song_a");
+    assert_eq!(snap.state.selected_item_index, Some(1), "the selection the replay arrived at (the staged item)");
 }

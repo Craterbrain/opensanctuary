@@ -43,16 +43,24 @@ impl Database {
     /// Counts, per song, the times it was *put up* (docs/CCLI_REPORTING.md) in `[start_ms, end_ms]`,
     /// grouped by CCLI number (or title). Adding a song to a schedule and never presenting it doesn't
     /// count. Neither does every `ItemWentLive` event: the engine also emits one when the operator jumps
-    /// to another slide of the song already live, and when Undo/Redo replays the log (a `ScheduleLoaded`
-    /// immediately followed by `ItemWentLive` in the same command) -- counting those over-reported every
-    /// song a church used. So a use is the live item *changing to* that song, outside a replay; the scan
-    /// starts before the window so the song already up when it opens isn't counted again.
+    /// to another slide of the song already live, and when Undo/Redo replays the log (a replay
+    /// `ScheduleLoaded`, stored as "ScheduleReplayed", immediately followed by `ItemWentLive` in the same
+    /// command) -- counting those over-reported every song a church used. So a use is the live item
+    /// *changing to* that song, outside a replay; the scan starts before the window so the song already up
+    /// when it opens isn't counted again.
+    ///
+    /// Rows stored before replays had their own type are all "ScheduleLoaded", replay or file opened alike.
+    /// For those an `ItemWentLive` right after one is a replay only when both came from the same command
+    /// (`LEGACY_REPLAY_WINDOW_MS`): going live straight after opening a schedule is a real use.
     pub fn get_ccli_usage_report(&self, start_ms: i64, end_ms: i64) -> Result<Vec<CcliUsageRow>> {
+        /// One command's events are appended in a single loop, well under this apart; an operator's
+        /// next click after opening a schedule is never this quick.
+        const LEGACY_REPLAY_WINDOW_MS: i64 = 100;
         let conn = self.conn();
         let mut stmt = conn.prepare_cached(
             "SELECT sequence_number, event_type, CASE WHEN event_type = 'ItemWentLive' THEN payload END, timestamp_ms \
              FROM event_log \
-             WHERE event_type IN ('ItemWentLive', 'ScheduleLoaded') AND timestamp_ms <= ?1 \
+             WHERE event_type IN ('ItemWentLive', 'ScheduleReplayed', 'ScheduleLoaded') AND timestamp_ms <= ?1 \
              ORDER BY sequence_number ASC",
         )?;
         let rows = stmt.query_map([end_ms], |row| {
@@ -61,10 +69,16 @@ impl Database {
 
         let mut uses: Vec<(crate::core::models::ScheduleItem, i64)> = Vec::new();
         let mut live_id: Option<String> = None;
-        let mut last_load_seq: Option<i64> = None;
+        // The sequence number of the last replay marker seen.
+        let mut last_replay_seq: Option<i64> = None;
+        let mut legacy_load: Option<(i64, i64)> = None;
         for (seq, event_type, payload, ts) in rows.flatten() {
+            if event_type == "ScheduleReplayed" {
+                last_replay_seq = Some(seq);
+                continue;
+            }
             if event_type == "ScheduleLoaded" {
-                last_load_seq = Some(seq);
+                legacy_load = Some((seq, ts));
                 continue;
             }
             let item = match payload.and_then(|p| serde_json::from_str::<crate::core::events::ShowEvent>(&p).ok()) {
@@ -72,7 +86,8 @@ impl Database {
                 _ => continue,
             };
             let id = item.as_ref().map(|i| i.id.clone());
-            let replay = last_load_seq == Some(seq - 1);
+            let replay = last_replay_seq == Some(seq - 1)
+                || legacy_load.is_some_and(|(load_seq, load_ts)| load_seq == seq - 1 && ts - load_ts <= LEGACY_REPLAY_WINDOW_MS);
             if let Some(item) = item {
                 if !replay && id != live_id && ts >= start_ms && item.item_type == "song" {
                     uses.push((item, ts));
@@ -230,5 +245,54 @@ mod tests {
         db.save_event(&went_live(7, 20_000, copyrighted.clone())).expect("save 7");
         db.save_event(&went_live(8, 30_000, copyrighted.clone())).expect("save 8 (same song, later slide)");
         assert!(db.get_ccli_usage_report(25_000, 40_000).unwrap().is_empty());
+    }
+
+    fn schedule_loaded(seq: u64, ts: i64, replay: bool) -> EventEnvelope {
+        EventEnvelope {
+            sequence_number: seq,
+            event_id: format!("evt-{}", seq),
+            timestamp_ms: ts as u64,
+            event: ShowEvent::ScheduleLoaded { schedule: Default::default(), replay },
+        }
+    }
+
+    #[test]
+    fn going_live_right_after_opening_a_schedule_is_a_use_but_a_replay_is_not() {
+        let db = Database::in_memory().expect("must open test db");
+        let a = song_item("a", "Song A", None);
+        let b = song_item("b", "Song B", None);
+        // A schedule opened from a file, and the first song put up as the very next event.
+        db.save_event(&schedule_loaded(1, 1_000, false)).unwrap();
+        db.save_event(&went_live(2, 1_000, a.clone())).unwrap();
+        // Song B up, then an undo putting Song A back: not another use of A.
+        db.save_event(&went_live(3, 5_000, b.clone())).unwrap();
+        db.save_event(&schedule_loaded(4, 6_000, true)).unwrap();
+        db.save_event(&went_live(5, 6_000, a.clone())).unwrap();
+        let report = db.get_ccli_usage_report(0, 10_000).unwrap();
+        let uses = |t: &str| report.iter().find(|r| r.title == t).map(|r| r.use_count);
+        assert_eq!(uses("Song A"), Some(1));
+        assert_eq!(uses("Song B"), Some(1));
+    }
+
+    #[test]
+    fn legacy_rows_tell_a_replay_from_a_real_use_by_whether_they_came_from_one_command() {
+        let db = Database::in_memory().expect("must open test db");
+        let conn = db.conn();
+        let row = |seq: i64, ty: &str, payload: String, ts: i64| {
+            conn.execute("INSERT INTO event_log (sequence_number, event_type, payload, timestamp_ms) VALUES (?1, ?2, ?3, ?4)", (seq, ty, payload, ts)).unwrap();
+        };
+        let live = |item: &ScheduleItem| serde_json::to_string(&ShowEvent::ItemWentLive { item: Some(item.clone()), slide_index: 0 }).unwrap();
+        let a = song_item("a", "Song A", None);
+        let b = song_item("b", "Song B", None);
+        // Opened, then Song A put up by the operator two seconds later: a use.
+        row(1, "ScheduleLoaded", "{}".into(), 1_000);
+        row(2, "ItemWentLive", live(&a), 3_000);
+        row(3, "ItemWentLive", live(&b), 5_000);
+        // An old-style undo: the reload and Song A coming back in the same instant.
+        row(4, "ScheduleLoaded", "{}".into(), 6_000);
+        row(5, "ItemWentLive", live(&a), 6_001);
+        drop(conn);
+        let report = db.get_ccli_usage_report(0, 10_000).unwrap();
+        assert_eq!(report.iter().find(|r| r.title == "Song A").map(|r| r.use_count), Some(1));
     }
 }

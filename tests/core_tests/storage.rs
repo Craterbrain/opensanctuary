@@ -929,3 +929,89 @@ mod scriptures_json {
         same_as_get_scriptures(&db);
     }
 }
+
+#[test]
+fn test_compacted_event_log_restores_the_same_show_and_keeps_the_ccli_report() {
+    use os_next::models::CcliMetadata;
+    let db = Database::in_memory().unwrap();
+    let song = |id: &str, title: &str| ScheduleItem {
+        item_type: "song".into(),
+        slides: ["v1", "c1"].iter().map(|t| Slide {
+            text: t.to_string(),
+            ccli_metadata: Some(CcliMetadata { song_title: Some(title.into()), ccli_number: Some(format!("{id}000")), ..Default::default() }),
+            ..Default::default()
+        }).collect(),
+        ..item(id, title)
+    };
+    // A small in-memory log, so most of this service falls out of it.
+    let first = ShowEngine::new(Arc::new(EventLog::new(6)));
+    let run = |engine: &ShowEngine, cmd: ShowCommand| for env in engine.execute_command(cmd) { db.save_event(&env).unwrap(); };
+    run(&first, ShowCommand::LoadSchedule(Schedule { items: vec![song("a", "Song A"), song("b", "Song B"), song("c", "Song C")], ..Schedule::default() }));
+    run(&first, ShowCommand::GoLive { item_index: Some(0), slide_index: None }); // A: a use, right after opening
+    run(&first, ShowCommand::NextSlide);
+    run(&first, ShowCommand::NextItem); // B
+    run(&first, ShowCommand::Undo); // back on A: a replay, not a use
+    run(&first, ShowCommand::Redo); // B again: a replay too
+    for _ in 0..4 {
+        run(&first, ShowCommand::ToggleBlackout);
+    }
+    run(&first, ShowCommand::NextItem); // C
+    run(&first, ShowCommand::RemoveFromSchedule(0));
+    let report = |db: &Database| {
+        let mut r: Vec<(String, u32)> = db.get_ccli_usage_report(0, i64::MAX).unwrap().into_iter().map(|r| (r.title, r.use_count)).collect();
+        r.sort();
+        r
+    };
+    let before = report(&db);
+    assert_eq!(before, [("Song A".to_string(), 1), ("Song B".to_string(), 1), ("Song C".to_string(), 1)]);
+    let rows = |db: &Database| db.conn().query_row("SELECT COUNT(*) FROM event_log", [], |r| r.get::<_, i64>(0)).unwrap();
+    let rows_before = rows(&db);
+
+    // A restart, as main.rs does it: restore, then fold what the in-memory log no longer holds into the snapshot.
+    let restart = |db: &Database| {
+        let engine = ShowEngine::new(Arc::new(EventLog::with_initial_sequence(6, db.get_max_event_sequence().unwrap())));
+        engine.restore_from_snapshot(db.load_engine_snapshot().unwrap(), db.load_events().unwrap());
+        engine
+    };
+    let second = restart(&db);
+    assert_eq!(second.snapshot().schedule, first.snapshot().schedule);
+    assert_eq!(second.snapshot().state.live_item, first.snapshot().state.live_item);
+    let base = second.replay_base();
+    assert!(base.sequence_number > 0);
+    db.compact_event_log(&base).unwrap();
+    assert!(rows(&db) < rows_before, "the folded-in events are gone");
+    assert_eq!(report(&db), before, "the CCLI report reads the same");
+
+    // The next start replays from the snapshot and arrives at the same show, and Undo still works.
+    let third = restart(&db);
+    let snap = third.snapshot();
+    assert_eq!(snap.schedule, first.snapshot().schedule);
+    assert_eq!(snap.state.live_item, first.snapshot().state.live_item);
+    assert_eq!(snap.state.selected_item_index, first.snapshot().state.selected_item_index);
+    assert_eq!(snap.sequence_number, first.snapshot().sequence_number);
+    third.execute_command(ShowCommand::RemoveFromSchedule(0));
+    third.execute_command(ShowCommand::Undo);
+    assert_eq!(third.snapshot().schedule.items.len(), 2);
+
+    // A song put up after the compaction is counted on top of what was kept.
+    run(&third, ShowCommand::PrevItem);
+    assert_eq!(report(&db)[1], ("Song B".to_string(), 2));
+}
+
+#[test]
+fn test_video_scan_skips_a_converted_original_and_unfinished_conversions() {
+    let db = Database::in_memory().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("sunrise.mp4"), b"h264").unwrap();
+    std::fs::write(dir.path().join("sunrise.webm"), b"vp9").unwrap();
+    std::fs::write(dir.path().join("sunset.webm.part"), b"half written").unwrap();
+    std::fs::write(dir.path().join("other.mp4"), b"h264").unwrap();
+    let mut converted = os_next::core::models::MediaItem::new("Sunrise", "/media/videos/sunrise.webm", os_next::core::models::MediaType::Video);
+    converted.id = "m1".to_string();
+    db.insert_media(&converted).unwrap();
+
+    assert_eq!(db.sync_media_videos_folder(dir.path()).unwrap(), 1, "only other.mp4 is new");
+    let mut paths: Vec<String> = db.get_media().unwrap().into_iter().map(|m| m.file_path).collect();
+    paths.sort();
+    assert_eq!(paths, ["/media/videos/other.mp4", "/media/videos/sunrise.webm"]);
+}

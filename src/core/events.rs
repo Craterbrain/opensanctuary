@@ -116,6 +116,11 @@ pub enum ShowEvent {
     },
     ScheduleLoaded {
         schedule: Schedule,
+        /// Undo/Redo putting back an earlier schedule, as opposed to one opened from a file. The
+        /// `ItemWentLive` that follows a replay restores what was live then and isn't a new use of the
+        /// song (the CCLI report, `get_ccli_usage_report`). Stored rows from before the flag lack it.
+        #[serde(default)]
+        replay: bool,
     },
     ScheduleCleared,
     ScheduleTitleSet {
@@ -238,8 +243,8 @@ impl ShowEvent {
                     merged_item: merged_item.without_licensed_text(),
                 })
             }
-            ShowEvent::ScheduleLoaded { schedule } if schedule.has_licensed() => {
-                Cow::Owned(ShowEvent::ScheduleLoaded { schedule: schedule.without_licensed_text() })
+            ShowEvent::ScheduleLoaded { schedule, replay } if schedule.has_licensed() => {
+                Cow::Owned(ShowEvent::ScheduleLoaded { schedule: schedule.without_licensed_text(), replay: *replay })
             }
             ShowEvent::LicensedPassageSet { item_id, verses } if !verses.is_empty() => {
                 Cow::Owned(ShowEvent::LicensedPassageSet { item_id: item_id.clone(), verses: Vec::new() })

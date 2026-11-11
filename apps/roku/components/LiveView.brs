@@ -47,7 +47,8 @@ function cssHexToRokuColor(value as Dynamic) as String
 end function
 
 ' liveObj: the "live" object from /api/display-state, or invalid when nothing is live.
-' mediaPlayback: the "media_playback" object, or invalid.
+' mediaPlayback: the "media_playback" object, or invalid; MainScene adds the payload's
+' "server_time_ms" (the server's clock as it answered) to it.
 sub applyState(liveObj as Dynamic, mediaPlayback as Dynamic, isBlackout as Boolean, isClearText as Boolean, isLogo as Boolean, alertMessage as Dynamic)
     m.blackoutOverlay.visible = isBlackout
     m.logoOverlay.visible = (not isBlackout) and isLogo
@@ -71,8 +72,12 @@ sub applyState(liveObj as Dynamic, mediaPlayback as Dynamic, isBlackout as Boole
 
     renderBackground(liveObj.background_kind, liveObj.background_value)
 
-    if mediaPlayback <> invalid and liveObj.background_kind = "video"
-        syncDedicatedMedia(mediaPlayback)
+    if liveObj.background_kind = "video"
+        if mediaPlayback <> invalid
+            syncDedicatedMedia(mediaPlayback)
+        else
+            playAmbientLoop()
+        end if
     end if
 
     slideText = ""
@@ -141,6 +146,17 @@ sub renderBackground(kind as String, value as Dynamic)
     end if
 end sub
 
+' A slide's video background with no dedicated media state: a silent loop, as on the web
+' output. Setting the Video node's content doesn't start it, so it has to be told to play.
+sub playAmbientLoop()
+    m.bgVideo.loop = true
+    m.bgVideo.mute = true
+    state = m.bgVideo.state
+    if state <> "playing" and state <> "buffering"
+        m.bgVideo.control = "play"
+    end if
+end sub
+
 ' Drives the background Video node from server-authoritative dedicated-media state —
 ' the same protocol every client (web, Android TV, Roku) now shares (see
 ' MediaPlaybackState in src/core/models.rs). `current_time`/`timestamp_ms` are a
@@ -156,8 +172,14 @@ sub syncDedicatedMedia(mp as Object)
     m.bgVideo.loop = isLooping
     m.bgVideo.mute = isMuted
 
-    dt = CreateObject("roDateTime")
-    nowMs = (dt.AsSeconds() * 1000.0) + dt.GetMilliseconds()
+    ' "Now" is the server's clock, so a Roku whose clock is off still lands on the same frame as
+    ' every other screen. Epoch milliseconds need 64-bit integer arithmetic: a single-precision
+    ' Float holds them only to the nearest ~2 minutes.
+    nowMs = mp.server_time_ms
+    if nowMs = invalid
+        dt = CreateObject("roDateTime")
+        nowMs = dt.AsSeconds() * 1000& + dt.GetMilliseconds()
+    end if
 
     targetTime = mp.current_time
     if isPlaying

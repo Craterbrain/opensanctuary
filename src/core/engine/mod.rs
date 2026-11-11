@@ -32,10 +32,32 @@ pub struct StateSnapshot {
     pub schedule: Schedule,
 }
 
+/// The engine state a replay starts from instead of event #1: stored by
+/// `Database::compact_event_log`, restored by `ShowEngine::restore_from_snapshot`.
+pub struct EngineSnapshot {
+    /// The last event already folded into `state`/`schedule`.
+    pub sequence_number: u64,
+    pub state: ShowState,
+    pub schedule: Schedule,
+}
+
+/// Where an Undo/Redo replay starts: the state and schedule as they stood after every event the
+/// event log's bounded history no longer holds. `sequence_number` is the last of those events (0
+/// while nothing has been dropped), and so the earliest point a replay can reach.
+#[derive(Default)]
+struct ReplayBase {
+    state: ShowState,
+    schedule: Schedule,
+    sequence_number: u64,
+}
+
 pub struct ShowEngine {
     state: RwLock<ShowState>,
     schedule: RwLock<Schedule>,
     event_log: Arc<EventLog>,
+    /// Never held while taking the `state`/`schedule` locks (`plan_history_events` takes it the
+    /// other way round, under their read guards).
+    replay_base: RwLock<ReplayBase>,
     undo_seq_stack: RwLock<Vec<u64>>,
     redo_seq_stack: RwLock<Vec<u64>>,
 }
@@ -46,6 +68,7 @@ impl ShowEngine {
             state: RwLock::new(ShowState::default()),
             schedule: RwLock::new(Schedule::default()),
             event_log,
+            replay_base: RwLock::new(ReplayBase::default()),
             undo_seq_stack: RwLock::new(Vec::new()),
             redo_seq_stack: RwLock::new(Vec::new()),
         }
@@ -78,8 +101,18 @@ impl ShowEngine {
         let mut envelopes = Vec::new();
 
         for event in events {
-            // 1. Append to event log and generate sequence envelope
-            let envelope = self.event_log.append(event);
+            // 1. Append to event log and generate sequence envelope. An event the full log drops to
+            // make room moves into the replay base, under its lock so drops are folded in order.
+            let envelope = {
+                let mut base = self.replay_base.write().unwrap_or_else(|e| e.into_inner());
+                let (envelope, evicted) = self.event_log.append_evicting(event);
+                if let Some(old) = evicted {
+                    let base = &mut *base;
+                    Self::apply_event(&mut base.state, &mut base.schedule, &old.event);
+                    base.sequence_number = old.sequence_number;
+                }
+                envelope
+            };
 
             // 2. Mutate state & schedule via deterministic reducer + update state sequence metadata in a single write lock
             {
@@ -275,17 +308,66 @@ impl ShowEngine {
     }
 
     pub fn restore_from_events(&self, events: Vec<crate::core::events::EventEnvelope>) {
-        if events.is_empty() {
+        self.restore_from_snapshot(None, events);
+    }
+
+    /// Restores the engine to `snapshot` (the state after its event `sequence_number`, or a clean
+    /// engine) followed by `events`, the ones after it.
+    pub fn restore_from_snapshot(&self, snapshot: Option<EngineSnapshot>, events: Vec<crate::core::events::EventEnvelope>) {
+        if snapshot.is_none() && events.is_empty() {
             return;
         }
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
         let mut schedule = self.schedule.write().unwrap_or_else(|e| e.into_inner());
-        for env in &events {
+        if let Some(snapshot) = snapshot {
+            *state = snapshot.state.clone();
+            *schedule = snapshot.schedule.clone();
+            state.sequence_number = snapshot.sequence_number;
+            *self.replay_base.write().unwrap_or_else(|e| e.into_inner()) = ReplayBase {
+                state: snapshot.state,
+                schedule: snapshot.schedule,
+                sequence_number: snapshot.sequence_number,
+            };
+        }
+        // The log keeps only the newest `capacity` of these; the replay base is everything before.
+        let kept_from = events.len().saturating_sub(self.event_log.capacity());
+        for (i, env) in events.iter().enumerate() {
+            if i == kept_from && i > 0 {
+                *self.replay_base.write().unwrap_or_else(|e| e.into_inner()) = ReplayBase {
+                    state: state.clone(),
+                    schedule: schedule.clone(),
+                    sequence_number: events[i - 1].sequence_number,
+                };
+            }
             Self::apply_event(&mut state, &mut schedule, &env.event);
             state.sequence_number = env.sequence_number;
             state.last_event_id = env.event_id.clone();
             state.server_time_ms = env.timestamp_ms;
         }
         self.event_log.load_history(&events);
+    }
+
+    /// Where the earliest possible Undo replay starts: everything before the events the log still holds.
+    /// What `Database::compact_event_log` stores, so the next start needn't replay those events again.
+    pub fn replay_base(&self) -> EngineSnapshot {
+        let base = self.replay_base.read().unwrap_or_else(|e| e.into_inner());
+        EngineSnapshot { sequence_number: base.sequence_number, state: base.state.clone(), schedule: base.schedule.clone() }
+    }
+
+    /// The state and schedule as they stood right after event `target`, rebuilt from the replay base
+    /// and the events still in the log. `None` when `target` is older than the log reaches.
+    fn replay_to(&self, target: u64) -> Option<(ShowState, Schedule)> {
+        let base = self.replay_base.read().unwrap_or_else(|e| e.into_inner());
+        if target < base.sequence_number {
+            return None;
+        }
+        let mut state = base.state.clone();
+        let mut schedule = base.schedule.clone();
+        for env in self.event_log.all_events() {
+            if env.sequence_number <= target {
+                Self::apply_event(&mut state, &mut schedule, &env.event);
+            }
+        }
+        Some((state, schedule))
     }
 }
