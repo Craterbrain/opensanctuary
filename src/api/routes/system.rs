@@ -159,13 +159,22 @@ pub(super) async fn post_adopt_legacy_library(
     Json(req): Json<AdoptLegacyLibraryReq>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     require_host_token(&headers, &app)?;
-    let legacy_path = std::path::PathBuf::from(&req.legacy_dir);
-    if !legacy_path.join("library.db").is_file() {
+    // Only the library this server itself found (what `/api/server-info` offered), never an arbitrary folder
+    // that happens to hold a `library.db`: that would let the request point the app at any database at all.
+    let Some(detected) = crate::storage::paths::detect_legacy_portable_library(&app.data_dir) else {
         return Ok(Json(serde_json::json!({
             "ok": false,
             "error": "No library.db found at that location anymore.",
         })));
+    };
+    let requested = std::fs::canonicalize(&req.legacy_dir).unwrap_or_else(|_| std::path::PathBuf::from(&req.legacy_dir));
+    if requested != detected {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": "That isn't the earlier library this computer found, so it can't be used from here.",
+        })));
     }
+    let legacy_path = detected;
     match crate::storage::paths::write_install_config(&legacy_path) {
         Ok(()) => Ok(Json(serde_json::json!({ "ok": true, "restart_required": true }))),
         Err(e) => Ok(Json(serde_json::json!({ "ok": false, "error": e.to_string() }))),

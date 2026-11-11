@@ -165,6 +165,10 @@ pub struct JobState {
     pub status: &'static str, // running | exited | failed | cancelled | timeout
     pub exit_code: Option<i32>,
     finished_at: Option<Instant>,
+    /// `release` was called while the process still ran: its folder goes once the process has exited
+    /// (deleting it earlier leaves a still-running tool writing into a folder that's gone, or Windows
+    /// refusing to delete files it holds open).
+    released: bool,
 }
 
 pub struct Job {
@@ -326,7 +330,7 @@ pub fn start(
         plugin_id: plugin_id.to_string(),
         command: command_id.to_string(),
         output_dir: output_dir.clone(),
-        state: Mutex::new(JobState { lines: VecDeque::new(), first_index: 0, status: "running", exit_code: None, finished_at: None }),
+        state: Mutex::new(JobState { lines: VecDeque::new(), first_index: 0, status: "running", exit_code: None, finished_at: None, released: false }),
         cancel: tokio::sync::Notify::new(),
     });
     registry().lock().unwrap_or_else(|e| e.into_inner()).insert(id, job.clone());
@@ -338,6 +342,9 @@ pub fn start(
             st.status = status;
             st.exit_code = code;
             st.finished_at = Some(Instant::now());
+            if st.released {
+                let _ = std::fs::remove_dir_all(&runner.output_dir);
+            }
         };
         let mut cmd = Command::new(&program);
         cmd.args(&argv)
@@ -346,6 +353,9 @@ pub fn start(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // Its own process group, so stopping the job stops what the tool started too (yt-dlp runs ffmpeg).
+        #[cfg(unix)]
+        cmd.process_group(0);
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -357,8 +367,8 @@ pub fn start(
         let err_task = child.stderr.take().map(|s| tokio::spawn(read_capped_lines(s, runner.clone())));
         let outcome = tokio::select! {
             r = child.wait() => r.map(|s| ("exited", s.code())).map_err(|e| e.to_string()),
-            _ = runner.cancel.notified() => { let _ = child.kill().await; Ok(("cancelled", None)) }
-            _ = tokio::time::sleep(JOB_TIMEOUT) => { let _ = child.kill().await; Ok(("timeout", None)) }
+            _ = runner.cancel.notified() => { kill_tree(&mut child).await; Ok(("cancelled", None)) }
+            _ = tokio::time::sleep(JOB_TIMEOUT) => { kill_tree(&mut child).await; Ok(("timeout", None)) }
         };
         // Let the readers drain what the process wrote before it died.
         for t in [out_task, err_task].into_iter().flatten() {
@@ -373,6 +383,19 @@ pub fn start(
         }
     });
     Ok(job)
+}
+
+/// Stops `child` and every process it started: its whole process group on Unix (it leads one, see
+/// `start`), its process tree on Windows. A plain kill would stop only the tool itself and leave, say, the
+/// ffmpeg it launched running on with the job reported cancelled.
+async fn kill_tree(child: &mut tokio::process::Child) {
+    if let Some(pid) = child.id() {
+        #[cfg(unix)]
+        let _ = Command::new("kill").args(["-KILL", &format!("-{pid}")]).stdout(Stdio::null()).stderr(Stdio::null()).status().await;
+        #[cfg(windows)]
+        let _ = Command::new("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null()).status().await;
+    }
+    let _ = child.kill().await;
 }
 
 pub fn cancel(job: &Job) {
@@ -390,9 +413,14 @@ pub fn release(plugin_id: &str, job_id: &str) -> bool {
     };
     match removed {
         Some(j) => {
-            // A job still running is stopped first.
-            j.cancel.notify_one();
-            let _ = std::fs::remove_dir_all(&j.output_dir);
+            // A job still running is stopped first, and its folder goes when it has (see `JobState::released`).
+            let mut st = j.state.lock().unwrap_or_else(|e| e.into_inner());
+            if st.status == "running" {
+                st.released = true;
+                j.cancel.notify_one();
+            } else {
+                let _ = std::fs::remove_dir_all(&j.output_dir);
+            }
             true
         }
         None => false,
@@ -542,6 +570,42 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancel_also_stops_what_the_tool_started() {
+        let dir = tempfile::tempdir().unwrap();
+        // The tool starts a helper of its own (as yt-dlp starts ffmpeg) that would outlive a plain kill.
+        let job = start(dir.path(), "tree", "go", PathBuf::from("/bin/sh"), |out| {
+            let pid_file = out.join("helper.pid");
+            Ok(vec!["-c".into(), format!("sleep 30 & echo $! > '{}'; wait", pid_file.display())])
+        })
+        .unwrap();
+        let pid_file = job.output_dir.join("helper.pid");
+        for _ in 0..100 {
+            if std::fs::read_to_string(&pid_file).is_ok_and(|p| !p.trim().is_empty()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let helper = std::fs::read_to_string(&pid_file).unwrap().trim().to_string();
+        cancel(&job);
+        wait_done(&job).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let alive = std::process::Command::new("kill").args(["-0", &helper]).status().unwrap().success();
+        assert!(!alive, "the helper process {helper} is still running");
+    }
+
+    #[tokio::test]
+    async fn releasing_a_running_job_deletes_its_folder_once_the_process_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let job = start(dir.path(), "rel", "go", PathBuf::from("/bin/sh"), |_| Ok(vec!["-c".into(), "sleep 30".into()])).unwrap();
+        let folder = job.output_dir.clone();
+        assert!(release("rel", &job.id));
+        assert!(job.state.lock().unwrap().released);
+        wait_done(&job).await;
+        assert!(!folder.exists());
+    }
+
     #[tokio::test]
     async fn cancel_stops_a_running_job_and_the_per_plugin_limit_holds() {
         let dir = tempfile::tempdir().unwrap();

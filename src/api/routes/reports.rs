@@ -124,9 +124,18 @@ fn csv_field(s: &str) -> String {
     }
 }
 
+/// The day of `ms` on this computer's clock, which is the church's: a Sunday evening service is Sunday,
+/// not (as in UTC, for a church west of Greenwich) the Monday after.
 fn format_report_date(ms: i64) -> String {
+    format_report_date_in(ms, &chrono::Local)
+}
+
+fn format_report_date_in<Tz: chrono::TimeZone>(ms: i64, tz: &Tz) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
     chrono::DateTime::from_timestamp_millis(ms)
-        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .map(|dt| dt.with_timezone(tz).format("%Y-%m-%d").to_string())
         .unwrap_or_default()
 }
 
@@ -327,6 +336,15 @@ mod tests {
         assert!(csv.contains("Copyrighted Song"));
         assert!(!csv.contains("Amazing Grace"), "public domain rows must never reach the CSV CCLI actually sees");
         assert!(csv.starts_with("Title,Author,CCLI Song Number,Times Used,First Used,Last Used\n"));
+    }
+
+    #[test]
+    fn report_dates_are_the_churchs_own_day() {
+        // 2026-11-09 03:30 UTC is still Sunday 8 November, 21:30, in Chicago (UTC-6).
+        let ms = 1_794_195_000_000;
+        let chicago = chrono::FixedOffset::west_opt(6 * 3600).unwrap();
+        assert_eq!(format_report_date_in(ms, &chrono::Utc), "2026-11-09");
+        assert_eq!(format_report_date_in(ms, &chicago), "2026-11-08");
     }
 
     #[test]

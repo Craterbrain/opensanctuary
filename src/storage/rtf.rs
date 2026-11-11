@@ -186,6 +186,10 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
     let mut i = 0usize;
 
     let mut char_stack: Vec<CharState> = vec![CharState::default()];
+    // `\ucN`: how many fallback characters follow each `\uN` (1 unless a document says otherwise), scoped
+    // to the group like character formatting.
+    let mut uc_skip: usize = 1;
+    let mut uc_stack: Vec<usize> = Vec::new();
     let mut dest_stack: Vec<Dest> = vec![Dest::Normal];
     let mut current_state = CharState::default();
 
@@ -218,6 +222,7 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
         match bytes[i] {
             b'{' => {
                 char_stack.push(current_state.clone());
+                uc_stack.push(uc_skip);
                 let mut new_dest = dest;
                 let mut j = i + 1;
                 let is_star = if rtf[j..].starts_with("\\*") {
@@ -279,6 +284,9 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
                 if let Some(prev) = char_stack.pop() {
                     current_state = prev;
                 }
+                if let Some(prev) = uc_stack.pop() {
+                    uc_skip = prev;
+                }
                 dest_stack.pop();
                 if dest_stack.is_empty() {
                     dest_stack.push(Dest::Normal);
@@ -330,17 +338,22 @@ pub fn parse_rtf(rtf: &str) -> RtfDocument {
                             end += 1;
                         }
 
+                        if word == "uc" {
+                            uc_skip = param.unwrap_or(1).max(0) as usize;
+                            i = end;
+                            continue;
+                        }
                         if word == "u" {
                             // \uN unicode escape: N is a signed decimal codepoint, followed by
-                            // exactly one ASCII fallback character (default \ucN skip count = 1)
-                            // for readers that don't understand \u.
+                            // `\ucN` (default 1) fallback characters for readers that don't
+                            // understand \u -- skipped here.
                             if let Some(n) = param {
                                 let code = if n < 0 { n + 65536 } else { n };
                                 if let Some(ch) = char::from_u32(code as u32) {
                                     push_char(dest, ch, &mut current_text, &mut ft_current_name, &mut custom_bullet, &mut in_bullet, &mut bullet_emitted_for_para, &mut has_bullets, &mut alignment, &pending_alignment);
                                 }
                             }
-                            i = (end + 1).min(bytes.len());
+                            i = skip_unicode_fallback(rtf, end, uc_skip);
                             continue;
                         }
 
@@ -546,6 +559,42 @@ fn push_char(
     }
 }
 
+/// The position after the `count` fallback characters that follow a `\uN` escape at `from`. One fallback
+/// character is one plain character, one `\'hh` byte escape, or one other control word or symbol; the
+/// fallback never reaches past the end of its group, so a brace stops it.
+fn skip_unicode_fallback(rtf: &str, mut from: usize, count: usize) -> usize {
+    let bytes = rtf.as_bytes();
+    for _ in 0..count {
+        match bytes.get(from) {
+            None | Some(b'{') | Some(b'}') => break,
+            Some(b'\\') => match bytes.get(from + 1) {
+                Some(b'\'') => from = (from + 4).min(bytes.len()),
+                Some(c) if c.is_ascii_alphabetic() => {
+                    let mut p = from + 1;
+                    while p < bytes.len() && bytes[p].is_ascii_alphabetic() {
+                        p += 1;
+                    }
+                    if p < bytes.len() && bytes[p] == b'-' {
+                        p += 1;
+                    }
+                    while p < bytes.len() && bytes[p].is_ascii_digit() {
+                        p += 1;
+                    }
+                    if p < bytes.len() && bytes[p] == b' ' {
+                        p += 1;
+                    }
+                    from = p;
+                }
+                Some(_) => from = (from + 2).min(bytes.len()),
+                None => from += 1,
+            },
+            // A whole character, never half of a multi-byte one.
+            Some(_) => from += rtf[from..].chars().next().map_or(1, char::len_utf8),
+        }
+    }
+    from
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -629,6 +678,23 @@ mod tests {
         let rtf = format!("{{\\rtf1 It{}?s working}}", escape);
         let doc = parse_rtf(&rtf);
         assert_eq!(doc.plain_text(), "It\u{2019}s working");
+    }
+
+    #[test]
+    fn a_unicode_escapes_fallback_is_skipped_whatever_form_it_takes() {
+        let u = |n: u32| format!("{}{}{}", '\\', 'u', n);
+        // A byte escape as the fallback (what EasyWorship writes): all four characters of it go.
+        let doc = parse_rtf(&format!("{{\\rtf1 It{}\\'92s working}}", u(8217)));
+        assert_eq!(doc.plain_text(), "It\u{2019}s working");
+        // \uc2: two fallback characters, and the count holds only inside its group.
+        let doc = parse_rtf(&format!("{{\\rtf1 {{\\uc2 a{}??b}} c{}?d}}", u(233), u(233)));
+        assert_eq!(doc.plain_text(), "a\u{e9}b c\u{e9}d");
+        // \uc0: nothing follows to skip.
+        let doc = parse_rtf(&format!("{{\\rtf1\\uc0 x{}y}}", u(233)));
+        assert_eq!(doc.plain_text(), "x\u{e9}y");
+        // The fallback stops at the end of its group.
+        let doc = parse_rtf(&format!("{{\\rtf1 {{x{}}}y}}", u(233)));
+        assert_eq!(doc.plain_text(), "x\u{e9}y");
     }
 
     #[test]
