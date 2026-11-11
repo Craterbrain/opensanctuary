@@ -103,7 +103,7 @@ fn the_event_log_never_gets_the_text() {
     db.save_event(&env(1, ShowEvent::ScheduleItemAdded { item: item.clone(), index: 0 })).unwrap();
     db.save_event(&env(2, ShowEvent::ItemWentLive { item: Some(item.clone()), slide_index: 0 })).unwrap();
     db.save_event(&env(3, ShowEvent::ItemStaged { item: Some(item.clone()), slide_index: 1 })).unwrap();
-    db.save_event(&env(4, ShowEvent::ScheduleLoaded { schedule: s.clone() })).unwrap();
+    db.save_event(&env(4, ShowEvent::ScheduleLoaded { schedule: s.clone(), replay: false })).unwrap();
     let raw: Vec<String> = {
         let conn = db.conn();
         let mut stmt = conn.prepare("SELECT payload FROM event_log ORDER BY sequence_number").unwrap();

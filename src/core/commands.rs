@@ -58,6 +58,24 @@ pub enum ShowCommand {
 
     // Schedule Manipulation
     AddToSchedule(ScheduleItem),
+    /// Swaps the schedule item at `item_index` for `item` in place (the editor saving a schedule item's
+    /// changes back to the schedule). Keeps its position, expansion and theme choice, and follows it into
+    /// the live/staged slot. The frontend sends `{"ReplaceScheduleItem":{"item_index","item_type","item_id"}}`
+    /// and the REST/WS layer fills in `item` from the library, as it does for AddToSchedule.
+    /// `expected_id` is the id of the schedule item the sender means: its `item_index` may be stale (the
+    /// schedule reordered while its editor was open), so when the item at that index isn't the expected
+    /// one, the one with that id is replaced instead -- or nothing, if it has been removed.
+    ReplaceScheduleItem {
+        item_index: usize,
+        item: ScheduleItem,
+        #[serde(default)]
+        expected_id: Option<String>,
+    },
+    /// Replaces every scheduled copy of a library item (each slot whose id, without its `~N` copy suffix,
+    /// is `item`'s) with `item`, as `ReplaceScheduleItem` does one: the library item was just saved. The
+    /// frontend sends `{"ReplaceScheduledCopies":{"item_type","item_id"}}` and the REST/WS layer fills in
+    /// `item` from the library.
+    ReplaceScheduledCopies { item: ScheduleItem },
     /// Puts the text of a licensed passage into the schedule item that stands for it (the item holds a reference
     /// and a placeholder until the passage is looked up). Only the REST/WS layer builds this, from the
     /// `ResolveLicensed` shorthand; the text is never stored (see `ShowEvent::without_licensed_text`).

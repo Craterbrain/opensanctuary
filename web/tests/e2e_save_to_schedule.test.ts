@@ -47,4 +47,29 @@ describe("E2E: the slide editor's Save to Schedule, for every item type", () => 
       expect(lib.some((x: any) => (x.title ?? x.reference) === title)).toBe(true);
     }, 30000);
   }
+
+  // An item edited from the schedule changes only the schedule's copy, in place; an edit made in
+  // the library flows into the scheduled copy.
+  test("schedule edits stay in the schedule, library edits update the schedule", async () => {
+    const songs = async () => (await (await fetch(`${base}/api/songs`)).json()) as any[];
+    const state = async () => (await (await fetch(`${base}/api/state`)).json()).schedule.items as any[];
+    const libBefore = (await songs()).filter((x) => x.title === "Test Hymn");
+    expect(libBefore.length).toBe(1);
+    const count = (await state()).length;
+    const idx = (await scheduled()).indexOf("song:Test Hymn");
+    expect(idx).toBeGreaterThanOrEqual(0);
+
+    await page.locator("#schedule-items-list .schedule-item").nth(idx).click({ button: "right" });
+    await page.click("#ctx-sched-edit");
+    await page.waitForSelector("#create-item-title", { state: "visible" });
+    await page.fill("#create-item-title", "Test Hymn (service)");
+    await page.click("#btn-save-to-schedule");
+
+    const items = await pollUntil(state, (l) => l.some((x) => x.title === "Test Hymn (service)"), 8000, "schedule item updated");
+    expect(items.length).toBe(count);
+    expect(items[idx].title).toBe("Test Hymn (service)");
+    const libAfter = await songs();
+    expect(libAfter.filter((x) => x.title === "Test Hymn").length).toBe(1);
+    expect(libAfter.some((x) => x.title === "Test Hymn (service)")).toBe(false);
+  }, 30000);
 });

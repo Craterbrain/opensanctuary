@@ -1,6 +1,6 @@
 # CCLI usage reporting
 
-_Last edited: 2026-10-29 07:01_
+_Last edited: 2026-11-11 12:12_
 
 CCLI requires churches to periodically report which copyrighted songs were
 actually used in services, for royalty distribution. The CSV export,
@@ -27,12 +27,30 @@ doesn't count, since that's exactly what distinguishes `ItemWentLive` from
 
 A use is the live item **changing to** a song, not every `ItemWentLive`: the
 engine also emits one when the operator jumps to another slide of the song
-that's already up, and when Undo/Redo replays the log (a `ScheduleLoaded`
-immediately followed by `ItemWentLive` in the same command). Until
-2026-10-21 each of those counted as another use, so every song a church
-presented was over-reported. Going back to a song later in the service does
-count again — it was put up again. The scan starts before the report window,
-so a song already up when the window opens isn't counted for still being up.
+that's already up, and when Undo/Redo replays the log (a replay
+`ScheduleLoaded`, stored with the type `ScheduleReplayed`, immediately followed
+by `ItemWentLive` in the same command). Until 2026-10-21 each of those counted
+as another use, so every song a church presented was over-reported. Going back
+to a song later in the service does count again — it was put up again. The scan
+starts before the report window, so a song already up when the window opens
+isn't counted for still being up.
+
+Until 2026-11-11 every `ScheduleLoaded` was stored under that one type, a
+schedule opened from a file as well as an Undo replay, and the report took any
+`ItemWentLive` right after one for a replay — so the first song put up straight
+after opening a schedule wasn't counted. New rows store a file being opened as
+`ScheduleOpened`, which the report ignores. For the older rows an
+`ItemWentLive` right after a `ScheduleLoaded` is a replay only when the two are
+within 100 ms of each other (one command's events are; an operator's next click
+isn't).
+
+### Retention
+
+The event log doesn't grow for ever: at startup, the events older than the
+engine's in-memory history (the last 2000) are folded into a stored engine
+snapshot (`engine_snapshot`, see `Database::compact_event_log`) and deleted —
+except every `ItemWentLive` and the replay marker right before one, which are
+all this report reads. Reports over any past window are unchanged by it.
 
 ## Public domain / out-of-copyright songs — **implemented**
 

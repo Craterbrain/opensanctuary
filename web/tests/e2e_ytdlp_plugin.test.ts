@@ -127,7 +127,8 @@ describe("E2E Live Test: Video Downloader plugin (yt-dlp) downloads through the 
     }
     expect(await frame.locator("#status").innerText()).toStartWith("Completed");
     const media = await (await fetch(`http://127.0.0.1:${PORT}/api/media`)).json();
-    const item = media.find((m: any) => m.id === "plugin_ytdlp_ytdlp_zz9");
+    // The plugin's id, made unique by the host (adding the same video again makes a second item).
+    const item = media.find((m: any) => String(m.id).startsWith("plugin_ytdlp_ytdlp_zz9_"));
     expect(item?.name).toBe("E2E Clip");
     expect(item?.file_path).toBe("/media/videos/E2E Clip [zz9].webm");
     expect(item?.duration_seconds).toBe(3.5);

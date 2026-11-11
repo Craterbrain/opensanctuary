@@ -968,8 +968,10 @@ echo "{\"id\":\"abc123\",\"title\":\"Fake Title\",\"duration\":12.5,\"thumbnail\
     let r = add("Fake Title [abc123].webm", "video", &job, token.clone()).await;
     assert_eq!(r.status(), reqwest::StatusCode::OK);
     let added = json(r).await;
-    assert_eq!(added["id"], "plugin_ytdlp_ytdlp_abc123");
-    let item = db.get_media_by_id("plugin_ytdlp_ytdlp_abc123").unwrap().expect("media item stored");
+    // The plugin's id, made unique: adding the same video again makes a second item, never replaces the first.
+    let id = added["id"].as_str().unwrap().to_string();
+    assert!(id.starts_with("plugin_ytdlp_ytdlp_abc123_"), "{id}");
+    let item = db.get_media_by_id(&id).unwrap().expect("media item stored");
     assert_eq!((item.name.as_str(), item.file_path.as_str(), item.duration_seconds), ("Fake Title", "/media/videos/Fake Title [abc123].webm", Some(12.5)));
     assert_eq!(std::fs::read(media_dir.join("videos/Fake Title [abc123].webm")).unwrap(), b"\x1a\x45\xdf\xa3fake webm bytes");
     assert!(!data_dir.join("plugin-jobs/ytdlp").join(&job).join("Fake Title [abc123].webm").exists(), "the file was moved, not copied");

@@ -6,7 +6,7 @@
 
 import type { StateSnapshot, ShowCommand } from './core/models.ts';
 import type { ScheduleItem } from './core/models.ts';
-import { resolveSlideAt, escapeHtml } from './core/presentation_helpers.ts';
+import { resolveSlideAt, resolveBackgroundAt, extractImageUrl, escapeHtml, DEFAULT_THEMES } from './core/presentation_helpers.ts';
 import { createEngineWebSocket, type EngineWebSocketClient } from './core/ws_client.ts';
 import { resolveNextPresentationPreview } from './core/presentation_sequence.ts';
 import { swipeCommand, getItemTypeIcon, getTagClass } from './core/remote_helpers.ts';
@@ -158,18 +158,21 @@ export function vibrate(ms = 20) {
 }
 
 // --- Helper to render background on preview card ---
-export function applyPreviewBackground(card: HTMLElement | null, slide: any) {
+/** The CSS background for a preview card showing `item` at play position `playPos`: the same cascade the
+ * live output resolves (an arrangement override, the slide's, the item's, its theme's, the global one). A
+ * stored image background is already a servable path (`/media/images/x.jpg`), used as it is. */
+export function previewBackgroundCss(item: any, playPos: number, globalBackground?: string | null, globalTheme?: string | null): string {
+  if (!item) return '#000000';
+  const bg = resolveBackgroundAt(item, playPos, DEFAULT_THEMES, { background_value: globalBackground ?? null }, globalTheme ?? null, '#000000');
+  if (bg.startsWith('#') || bg.startsWith('rgb') || bg.includes('gradient(')) return bg;
+  const image = extractImageUrl(bg);
+  // Anything else (a video, a camera feed, an animated pattern) has no still to show.
+  return image ? `url("${encodeURI(image)}") center/cover no-repeat #000000` : '#000000';
+}
+
+export function applyPreviewBackground(card: HTMLElement | null, item: any, playPos: number, state: { global_background?: string | null; global_theme?: string | null } = {}) {
   if (!card) return;
-  if (!slide || !slide.background) {
-    card.style.background = '#000000';
-    return;
-  }
-  const bg = String(slide.background).trim();
-  if (bg.startsWith('#') || bg.startsWith('rgb') || bg.includes('gradient')) {
-    card.style.background = bg;
-  } else {
-    card.style.background = `url('/media/${encodeURIComponent(bg)}') center/cover no-repeat #000000`;
-  }
+  card.style.background = previewBackgroundCss(item, playPos, state.global_background, state.global_theme);
 }
 
 // --- Command Dispatch ---
@@ -300,13 +303,13 @@ export function renderSnapshot(snapshot: StateSnapshot) {
       miniPreviewTag.textContent = '📄 CLEAR TEXT ACTIVE';
       miniPreviewTag.style.color = 'var(--clear-orange)';
       miniPreviewText.textContent = '(Text Cleared - Background Only)';
-      applyPreviewBackground(miniPreviewCard, liveSlide);
+      applyPreviewBackground(miniPreviewCard, liveItem, livePlayPos, state);
     } else if (liveSlide) {
       miniPreviewCard.style.borderColor = 'var(--live-green-glow)';
       miniPreviewTag.textContent = liveSlide.label || `SLIDE ${livePlayPos + 1}`;
       miniPreviewTag.style.color = 'var(--accent-cyan)';
       miniPreviewText.textContent = liveSlide.text || `[${liveSlide.label || 'Slide'}]`;
-      applyPreviewBackground(miniPreviewCard, liveSlide);
+      applyPreviewBackground(miniPreviewCard, liveItem, livePlayPos, state);
     } else {
       miniPreviewCard.style.background = '#000000';
       miniPreviewCard.style.borderColor = 'var(--border-highlight)';

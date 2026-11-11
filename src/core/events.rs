@@ -43,6 +43,10 @@ pub enum ShowEvent {
     ScheduleItemRemoved {
         index: usize,
     },
+    ScheduleItemReplaced {
+        index: usize,
+        item: ScheduleItem,
+    },
     /// The text of a licensed passage on the schedule was filled in. Stored without the text.
     LicensedPassageSet {
         item_id: String,
@@ -112,10 +116,20 @@ pub enum ShowEvent {
     },
     ScheduleLoaded {
         schedule: Schedule,
+        /// Undo/Redo putting back an earlier schedule, as opposed to one opened from a file. The
+        /// `ItemWentLive` that follows a replay restores what was live then and isn't a new use of the
+        /// song (the CCLI report, `get_ccli_usage_report`). Stored rows from before the flag lack it.
+        #[serde(default)]
+        replay: bool,
     },
     ScheduleCleared,
     ScheduleTitleSet {
         title: String,
+    },
+    /// The selected schedule item set outright (Undo/Redo putting back the one the replay arrived at,
+    /// which the `ItemWentLive`/`ItemStaged` before it moved to their own items).
+    SelectionSet {
+        index: Option<usize>,
     },
 
     // Media Playback Controls
@@ -224,6 +238,9 @@ impl ShowEvent {
             ShowEvent::ScheduleItemAdded { item, index } if licensed(item) => {
                 Cow::Owned(ShowEvent::ScheduleItemAdded { item: item.without_licensed_text(), index: *index })
             }
+            ShowEvent::ScheduleItemReplaced { item, index } if licensed(item) => {
+                Cow::Owned(ShowEvent::ScheduleItemReplaced { item: item.without_licensed_text(), index: *index })
+            }
             ShowEvent::ScheduleItemsMerged { first_index, second_index, merged_item } if licensed(merged_item) => {
                 Cow::Owned(ShowEvent::ScheduleItemsMerged {
                     first_index: *first_index,
@@ -231,8 +248,8 @@ impl ShowEvent {
                     merged_item: merged_item.without_licensed_text(),
                 })
             }
-            ShowEvent::ScheduleLoaded { schedule } if schedule.has_licensed() => {
-                Cow::Owned(ShowEvent::ScheduleLoaded { schedule: schedule.without_licensed_text() })
+            ShowEvent::ScheduleLoaded { schedule, replay } if schedule.has_licensed() => {
+                Cow::Owned(ShowEvent::ScheduleLoaded { schedule: schedule.without_licensed_text(), replay: *replay })
             }
             ShowEvent::LicensedPassageSet { item_id, verses } if !verses.is_empty() => {
                 Cow::Owned(ShowEvent::LicensedPassageSet { item_id: item_id.clone(), verses: Vec::new() })

@@ -309,7 +309,7 @@ class MainActivity : AppCompatActivity() {
                 if (player.playbackState != Player.STATE_READY || duration == C.TIME_UNSET || duration <= 0) continue
 
                 val expectedMs = expectedBgPositionMs(duration)
-                val decision = computeVideoSyncDecision(expectedMs, player.currentPosition)
+                val decision = computeVideoSyncDecision(expectedMs, player.currentPosition, if (bgLoop) duration else null)
                 when (decision.tier) {
                     SyncTier.SEEK -> {
                         player.seekTo(decision.targetTimeMs ?: expectedMs)

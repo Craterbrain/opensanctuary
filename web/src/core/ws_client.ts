@@ -98,7 +98,12 @@ export class EngineWebSocketClient {
 
     try {
       const url = this.resolveUrl();
-      this.ws = new WebSocket(url);
+      const ws = new WebSocket(url);
+      this.ws = ws;
+      // A socket that has been replaced by another (a reconnect after the network came back, say)
+      // may still report closing or failing late: that says nothing about the current one, and must
+      // neither show "disconnected" nor start another reconnect. (After `disconnect()` there is none.)
+      const isCurrent = () => this.ws === ws || this.ws === null;
 
       this.ws.onopen = () => {
         this.setStatus('connected');
@@ -113,6 +118,7 @@ export class EngineWebSocketClient {
       };
 
       this.ws.onerror = (err: Event) => {
+        if (!isCurrent()) return;
         if (this.options.onError) {
           this.options.onError(err instanceof Event ? err : undefined);
         }
@@ -124,6 +130,7 @@ export class EngineWebSocketClient {
       };
 
       this.ws.onclose = (event: CloseEvent) => {
+        if (!isCurrent()) return;
         this.setStatus('disconnected');
         if (this.options.onClose) {
           this.options.onClose(event);

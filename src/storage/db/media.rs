@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection, Result};
 
 use crate::core::models::MediaItem;
@@ -85,6 +85,38 @@ impl Database {
         }
 
         Ok(())
+    }
+
+    /// Converts library item `id`'s H.264 video at `disk_path` to VP9 in the background, for native
+    /// playback, then points the item at the `.webm`. The item is read again when the conversion ends,
+    /// not copied now: a rename or a deletion in the meantime stands. A deleted item takes its
+    /// conversion with it. Does nothing outside a Tokio runtime (plain `#[test]`s).
+    pub fn convert_video_in_background(&self, id: &str, disk_path: PathBuf) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else { return };
+        let (db, id) = (self.clone(), id.to_string());
+        handle.spawn(async move {
+            if !crate::storage::transcode::needs_transcode(&disk_path).await {
+                return;
+            }
+            let new_path = match crate::storage::transcode::transcode_h264_to_vp9(&disk_path, |_pct| {}).await {
+                Ok(p) => p,
+                Err(e) => return tracing::warn!("background transcode skipped for {:?}: {}", disk_path, e),
+            };
+            let (Some(old_name), Some(new_name)) = (disk_path.file_name().and_then(|f| f.to_str()), new_path.file_name().and_then(|f| f.to_str())) else { return };
+            match db.get_media_by_id(&id) {
+                Ok(Some(mut current)) if current.file_path.ends_with(&format!("/{old_name}")) => {
+                    current.file_path = format!("{}/{new_name}", current.file_path.rsplit_once('/').map_or("/media/videos", |(dir, _)| dir));
+                    if let Err(e) = db.insert_media(&current) {
+                        tracing::warn!("transcode succeeded but failed to update DB record for {:?}: {}", disk_path, e);
+                    }
+                }
+                // Deleted, or pointed at another file, while it was converting: the conversion isn't wanted.
+                Ok(_) => {
+                    let _ = tokio::fs::remove_file(&new_path).await;
+                }
+                Err(e) => tracing::warn!("transcode of {:?} finished but its library item couldn't be read: {}", disk_path, e),
+            }
+        });
     }
 
     pub fn delete_media(&self, id: &str) -> Result<()> {
@@ -219,6 +251,12 @@ impl Database {
             if existing_paths.contains(&servable_path.to_lowercase()) {
                 continue;
             }
+            // The H.264 original of a video already converted (`convert_video_in_background`) stays on
+            // disk for whatever still names it, but it's the same video: not a second library item, nor
+            // another conversion -- also after the library item is deleted. Its conversion beside it says so.
+            if ext != "webm" && path.with_extension("webm").is_file() {
+                continue;
+            }
 
             // Derive a clean, human-readable display name from filename
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(filename);
@@ -247,32 +285,9 @@ impl Database {
 
             if self.insert_media(&item).is_ok() {
                 added_count += 1;
-
-                // Convert H.264 drop-ins to VP9 in the background (same
-                // reasoning as ytdlp_import.rs) without blocking this scan,
-                // which runs synchronously on every GET /api/media. Only
-                // spawned when a Tokio runtime is actually active -- this fn
-                // is also exercised from plain `#[test]`s with no runtime.
-                if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    let db_clone = self.clone();
-                    let disk_path = path.clone();
-                    let mut item_for_transcode = item.clone();
-                    handle.spawn(async move {
-                        if crate::storage::transcode::needs_transcode(&disk_path).await {
-                            match crate::storage::transcode::transcode_h264_to_vp9(&disk_path, |_pct| {}).await {
-                                Ok(new_path) => {
-                                    if let Some(filename) = new_path.file_name().and_then(|f| f.to_str()) {
-                                        item_for_transcode.file_path = format!("/media/videos/{}", filename);
-                                        if let Err(e) = db_clone.insert_media(&item_for_transcode) {
-                                            tracing::warn!("transcode succeeded but failed to update DB record for {:?}: {} (transcoded file at {:?} is now orphaned)", disk_path, e, new_path);
-                                        }
-                                    }
-                                }
-                                Err(e) => tracing::warn!("background transcode skipped for {:?}: {}", disk_path, e),
-                            }
-                        }
-                    });
-                }
+                // H.264 drop-ins become VP9 (same reasoning as ytdlp_import.rs), in the background: this
+                // scan runs synchronously on every GET /api/media.
+                self.convert_video_in_background(&item.id, path.clone());
             }
         }
 

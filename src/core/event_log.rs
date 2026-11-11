@@ -50,7 +50,18 @@ impl EventLog {
         }
     }
 
+    /// How many events the in-memory history holds before the oldest is dropped.
+    pub fn capacity(&self) -> usize {
+        self.max_history
+    }
+
     pub fn append(&self, event: ShowEvent) -> EventEnvelope {
+        self.append_evicting(event).0
+    }
+
+    /// As `append`, also handing back the event the full history dropped to make room (if any), so
+    /// the caller can fold it into whatever it replays the history on top of.
+    pub fn append_evicting(&self, event: ShowEvent) -> (EventEnvelope, Option<EventEnvelope>) {
         let mut seq_guard = self.sequence_counter.write().unwrap_or_else(|e| e.into_inner());
         *seq_guard += 1;
         let sequence_number = *seq_guard;
@@ -62,20 +73,19 @@ impl EventLog {
             event,
         };
 
-        {
+        let evicted = {
             let mut hist = self.history.write().unwrap_or_else(|e| e.into_inner());
-            if hist.len() >= self.max_history {
-                hist.pop_front();
-            }
+            let evicted = if hist.len() >= self.max_history { hist.pop_front() } else { None };
             hist.push_back(envelope.clone());
-        }
+            evicted
+        };
 
         // Broadcast to all active subscribers only if receivers exist
         if self.broadcaster.receiver_count() > 0 {
             let _ = self.broadcaster.send(envelope.clone());
         }
 
-        envelope
+        (envelope, evicted)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<EventEnvelope> {

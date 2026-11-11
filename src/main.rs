@@ -195,10 +195,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_log = Arc::new(EventLog::with_initial_sequence(2000, max_seq));
     let engine = Arc::new(ShowEngine::new(event_log));
     if max_seq > 0 {
+        let snapshot = db.load_engine_snapshot().unwrap_or_else(|e| {
+            tracing::warn!("Could not read the engine snapshot: {}", e);
+            None
+        });
+        let snapshot_seq = snapshot.as_ref().map_or(0, |s| s.sequence_number);
         if let Ok(events) = db.load_events() {
-            if !events.is_empty() {
-                engine.restore_from_events(events);
-                tracing::info!("Restored schedule and state from event_log (resuming at sequence #{})", max_seq);
+            engine.restore_from_snapshot(snapshot, events);
+            tracing::info!("Restored schedule and state from event_log (resuming at sequence #{})", max_seq);
+            // What the in-memory log no longer holds needn't be replayed next time: fold it into the snapshot.
+            let base = engine.replay_base();
+            if base.sequence_number > snapshot_seq {
+                match db.compact_event_log(&base) {
+                    Ok(n) => tracing::info!("Compacted event_log: {} event(s) up to #{} folded into the snapshot", n, base.sequence_number),
+                    Err(e) => tracing::warn!("Could not compact event_log: {}", e),
+                }
             }
         }
     } else {

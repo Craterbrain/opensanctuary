@@ -199,6 +199,10 @@ struct Prepared {
     stdin_token: Option<String>,
     /// Output file to follow instead of the child's pipes (Windows: the elevated process can't be piped).
     log_file: Option<std::path::PathBuf>,
+    /// A folder of this run's own (Windows: the script, its log and the token file), removed when the run
+    /// ends however it ends -- the elevated script deletes the token itself, but never runs at all when
+    /// the Administrator prompt is refused, and the token mustn't stay on disk.
+    temp_dir: Option<std::path::PathBuf>,
 }
 
 #[cfg(unix)]
@@ -231,7 +235,7 @@ fn build_command(domain: &str, port: u16, dry_run: bool, token: &str) -> Result<
     if dry_run {
         cmd.arg("--dry-run");
     }
-    Ok(Prepared { cmd, stdin_token: Some(token.to_string()), log_file: None })
+    Ok(Prepared { cmd, stdin_token: Some(token.to_string()), log_file: None, temp_dir: None })
 }
 
 #[cfg(unix)]
@@ -294,11 +298,21 @@ fn build_command(domain: &str, port: u16, dry_run: bool, token: &str) -> Result<
     let mut cmd = Command::new("powershell");
     cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &encode_ps(&outer)]);
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    Ok(Prepared { cmd, stdin_token: None, log_file: Some(log_path) })
+    Ok(Prepared { cmd, stdin_token: None, log_file: Some(log_path), temp_dir: Some(dir) })
 }
 
 async fn run(task_id: String, prepared: Prepared, secret: String) {
-    let Prepared { mut cmd, stdin_token, log_file } = prepared;
+    let Prepared { mut cmd, stdin_token, log_file, temp_dir } = prepared;
+    // Removes `temp_dir` on every way out of this function, an early return included.
+    struct RemoveOnDrop(Option<std::path::PathBuf>);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            if let Some(dir) = self.0.take() {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+    let _temp_dir = RemoveOnDrop(temp_dir);
     cmd.stdin(if stdin_token.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -453,7 +467,7 @@ mod tests {
         let mut cmd = Command::new("sh");
         // Reads the "token" from stdin like the real script does, prints it, writes to stderr, fails.
         cmd.arg("-c").arg("read t; echo got $t; echo oops 1>&2; exit 3");
-        run(id.clone(), Prepared { cmd, stdin_token: Some("sekrit".to_string()), log_file: None }, "sekrit".to_string()).await;
+        run(id.clone(), Prepared { cmd, stdin_token: Some("sekrit".to_string()), log_file: None, temp_dir: None }, "sekrit".to_string()).await;
         let p = get_progress(&id, 0).unwrap();
         assert!(p.is_complete);
         assert_eq!(p.status, "failed");
@@ -461,6 +475,25 @@ mod tests {
         assert!(p.lines.contains(&"got ********".to_string()), "{:?}", p.lines);
         assert!(p.lines.contains(&"oops".to_string()));
         assert!(!p.lines.iter().any(|l| l.contains("sekrit")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_runs_temp_folder_and_its_token_file_go_even_when_the_script_never_ran() {
+        let id = "lhs_test_cleanup".to_string();
+        registry().lock().unwrap().insert(
+            id.clone(),
+            Task { lines: Vec::new(), dropped: 0, status: "running", exit_code: None, error: None },
+        );
+        let dir = std::env::temp_dir().join(format!("lhs-cleanup-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("token.txt"), "sekrit").unwrap();
+        // As on Windows when the Administrator prompt is refused: the wrapper exits 126, the script never starts.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("exit 126");
+        run(id.clone(), Prepared { cmd, stdin_token: None, log_file: None, temp_dir: Some(dir.clone()) }, "sekrit".to_string()).await;
+        assert_eq!(get_progress(&id, 0).unwrap().error.as_deref(), Some("Administrator permission was not granted."));
+        assert!(!dir.exists(), "the token file is gone with its folder");
     }
 
     #[tokio::test]

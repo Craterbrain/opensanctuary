@@ -88,7 +88,8 @@ export function stripChordsAndAnnotations(text: string): string {
     const trimmed = rawLine.trim();
 
     // Check if line is a standalone chord line or performance cue
-    if (isChordLine(trimmed) || isCueLine(trimmed)) {
+    // A section header is kept even where it reads like a cue ("Interlude").
+    if (isChordLine(trimmed) || (isCueLine(trimmed) && !detectSectionHeader(trimmed))) {
       continue;
     }
 
@@ -134,8 +135,9 @@ export function extractSongMetadata(text: string): { cleanedText: string; metada
       continue;
     }
 
-    // Author / Writer / Music / Lyrics detection
-    const authorMatch = line.match(/^(?:Words\s+(?:&|and)\s+Music\s+by|Music\s+(?:&|and)\s+Words\s+by|Words\s+by|Music\s+by|Written\s+by|Author\s*:?|Words\s*:|Music\s*:|Lyrics\s*(?:by)?\s*:?)\s+(.+)/i);
+    // Author / Writer / Music / Lyrics detection. A bare "Author" or "Lyrics" needs its colon: without
+    // one it's a line of the song ("Author of salvation").
+    const authorMatch = line.match(/^(?:(?:Words\s+(?:&|and)\s+Music|Music\s+(?:&|and)\s+Words|Words|Music|Written|Lyrics)\s+by\s*:?\s+|(?:Author|Words|Music|Lyrics)\s*:\s*)(.+)/i);
     if (authorMatch) {
       const authorVal = (authorMatch[1] ?? '').trim();
       metadata.author = metadata.author ? `${metadata.author}, ${authorVal}` : authorVal;
@@ -294,10 +296,19 @@ function splitByParagraphs(text: string): BulkParsedSlide[] {
   const blocks = text.split(/\n\s*\n+/).map(b => b.trim()).filter(b => b.length > 0);
   const slides: BulkParsedSlide[] = [];
 
-  for (const blk of blocks) {
-    const lines = blk.split(/\r?\n/);
+  for (let i = 0; i < blocks.length; i++) {
+    let blk = blocks[i]!;
+    let lines = blk.split(/\r?\n/);
     const firstLine = (lines[0] ?? '').trim();
     const section = detectSectionHeader(firstLine);
+
+    // A tag alone in its paragraph belongs to the paragraph after it.
+    const next = blocks[i + 1];
+    if (section && lines.length === 1 && next && !detectSectionHeader(next.split(/\r?\n/)[0]!.trim())) {
+      blk = `${firstLine}\n${next}`;
+      lines = blk.split(/\r?\n/);
+      i++;
+    }
 
     if (section) {
       const body = lines.slice(1).join('\n').trim();

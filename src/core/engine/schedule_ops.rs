@@ -1,8 +1,61 @@
 use crate::core::commands::ShowCommand;
 use crate::core::events::ShowEvent;
-use crate::core::models::{Schedule, ScheduleItem, ShowState, Slide};
+use crate::core::models::{identity_arrangement, ArrangementEntry, Schedule, ScheduleItem, ShowState, Slide};
 
 use super::live::effective_arrangement;
+
+/// A slot id without its `~N` copy suffix (see `unique_slot_id`): the id every scheduled copy of one
+/// library item shares.
+pub fn slot_id_base(id: &str) -> &str {
+    match id.rsplit_once('~') {
+        Some((base, n)) if !base.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => base,
+        _ => id,
+    }
+}
+
+/// A library item's schedule id comes from its library id (`sched_song_12`), so the same song scheduled
+/// twice would share one id -- and everything that finds a slot by id (the selection following the live
+/// item, the live/staged copies following an edit) would land on the first copy. The first copy keeps
+/// the plain id; a later one takes the smallest free `~N` suffix (`sched_song_12~2`).
+fn unique_slot_id(id: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(id) {
+        return id.to_string();
+    }
+    let base = slot_id_base(id);
+    (2u32..).map(|n| format!("{base}~{n}")).find(|candidate| !taken(candidate)).unwrap_or_else(|| id.to_string())
+}
+
+/// The play order `new` (an edited copy of the slot's `old` item) takes over from `old`, or `None` when
+/// `old` was still in its authored order and there is nothing to keep. Each entry finds its slide again
+/// by section id (tag, else label, else position) -- the nth "Chorus" stays the nth "Chorus" -- an entry
+/// whose slide is gone is dropped, and a slide that wasn't there before plays at the end.
+fn carried_arrangement(old: &ScheduleItem, new: &ScheduleItem) -> Option<Vec<ArrangementEntry>> {
+    let old_sections = identity_arrangement(&old.slides);
+    if old.arrangement.is_empty() || old.arrangement == old_sections {
+        return None;
+    }
+    let new_sections = identity_arrangement(&new.slides);
+    let nth_of = |sections: &[ArrangementEntry], idx: usize| {
+        sections[..idx].iter().filter(|e| e.section_id == sections[idx].section_id).count()
+    };
+    let mut arrangement: Vec<ArrangementEntry> = old
+        .arrangement
+        .iter()
+        .filter_map(|entry| {
+            let section = &old_sections.get(entry.source_slide_index)?.section_id;
+            let nth = nth_of(&old_sections, entry.source_slide_index);
+            let target = new_sections.iter().filter(|e| e.section_id == *section).nth(nth)?;
+            Some(ArrangementEntry { source_slide_index: target.source_slide_index, ..entry.clone() })
+        })
+        .collect();
+    for (idx, entry) in new_sections.iter().enumerate() {
+        let nth = nth_of(&new_sections, idx);
+        if old_sections.iter().filter(|e| e.section_id == entry.section_id).nth(nth).is_none() {
+            arrangement.push(entry.clone());
+        }
+    }
+    (!arrangement.is_empty()).then_some(arrangement)
+}
 
 /// Resolves an item's play-order slide sequence — each slide's content paired with
 /// any per-position background override — in a single pass over its arrangement,
@@ -18,6 +71,27 @@ fn resolved_play_sequence(item: &ScheduleItem) -> Vec<(Slide, Option<String>)> {
         .collect()
 }
 
+/// `item` as it should replace the slot's `old` item: what the operator chose for the slot stays.
+/// - An item that arrives in its slides' own order (the editor, the library copy) has no opinion on the
+///   play order, so the slot's arrangement is carried over.
+/// - A themed slot keeps its theme. Applying one writes it into every slide's background, which outranks
+///   the item's, so slides coming from elsewhere (the library copy, with a theme of its own or none) get
+///   it written in again. The editor's own save keeps the slot's theme name and its slides as edited.
+fn replacement_for(old: &ScheduleItem, item: &ScheduleItem) -> ScheduleItem {
+    let mut item = item.clone();
+    if item.arrangement.is_empty() || item.arrangement == identity_arrangement(&item.slides) {
+        if let Some(arrangement) = carried_arrangement(old, &item) {
+            item.arrangement = arrangement;
+        }
+    }
+    if old.theme_name.is_some() && item.theme_name != old.theme_name {
+        for slide in &mut item.slides {
+            slide.background = old.background.clone();
+        }
+    }
+    item
+}
+
 pub(super) fn plan_schedule_events(state: &ShowState, schedule: &Schedule, cmd: &ShowCommand) -> Vec<ShowEvent> {
     let mut events = Vec::new();
     match cmd {
@@ -27,6 +101,31 @@ pub(super) fn plan_schedule_events(state: &ShowState, schedule: &Schedule, cmd: 
                 item: item.clone(),
                 index,
             });
+        }
+        ShowCommand::ReplaceScheduledCopies { item } => {
+            // Every copy of this library item, wherever it is: the engine owns the slot id scheme.
+            let base = slot_id_base(&item.id);
+            for (index, old) in schedule.items.iter().enumerate() {
+                if !old.is_section_header && !item.is_section_header && slot_id_base(&old.id) == base {
+                    events.push(ShowEvent::ScheduleItemReplaced { index, item: replacement_for(old, item) });
+                }
+            }
+        }
+        ShowCommand::ReplaceScheduleItem { item_index, item, expected_id } => {
+            // The sender's index is from the snapshot it had when its editor opened, and the schedule
+            // may have been reordered since. When it says which item it means, that item is replaced
+            // wherever it is now -- and nothing is, if it is gone.
+            let index = match expected_id {
+                Some(id) if schedule.items.get(*item_index).is_none_or(|i| i.id != *id) => {
+                    schedule.items.iter().position(|i| i.id == *id)
+                }
+                _ => Some(*item_index),
+            };
+            if let Some((index, old)) = index.and_then(|i| Some((i, schedule.items.get(i)?))) {
+                if !old.is_section_header && !item.is_section_header {
+                    events.push(ShowEvent::ScheduleItemReplaced { index, item: replacement_for(old, item) });
+                }
+            }
         }
         ShowCommand::AddScheduleHeader { title, index } => {
             let idx = index.unwrap_or(schedule.items.len());
@@ -134,7 +233,7 @@ pub(super) fn plan_schedule_events(state: &ShowState, schedule: &Schedule, cmd: 
                     let mut resolved = resolved_play_sequence(earlier);
                     resolved.extend(resolved_play_sequence(later));
                     let (merged_slides, overrides): (Vec<Slide>, Vec<Option<String>>) = resolved.into_iter().unzip();
-                    let mut arrangement = crate::core::models::identity_arrangement(&merged_slides);
+                    let mut arrangement = identity_arrangement(&merged_slides);
                     for (entry, bg) in arrangement.iter_mut().zip(overrides.into_iter()) {
                         entry.background_override = bg;
                     }
@@ -191,6 +290,7 @@ pub(super) fn plan_schedule_events(state: &ShowState, schedule: &Schedule, cmd: 
             // schedule), and that one must keep the flag the replay worked out.
             events.push(ShowEvent::ScheduleLoaded {
                 schedule: Schedule { is_modified: false, ..sched.clone() },
+                replay: false,
             });
         },
         _ => unreachable!("plan_schedule_events called with a non-schedule command"),
@@ -205,18 +305,62 @@ pub(super) fn apply_schedule_event(state: &mut ShowState, schedule: &mut Schedul
             for slide in &mut item.slides {
                 slide.synthesize_v2_if_needed();
             }
-            if *index <= schedule.items.len() {
-                schedule.items.insert(*index, item);
-            } else {
-                schedule.items.push(item);
-            }
+            item.id = unique_slot_id(&item.id, |id| schedule.items.iter().any(|i| i.id == id));
+            let index = (*index).min(schedule.items.len());
+            schedule.items.insert(index, item);
             schedule.is_modified = true;
+            // The selection stays on its item when something (a header, say) lands above it.
+            if let Some(sel) = state.selected_item_index.filter(|sel| index <= *sel) {
+                state.selected_item_index = Some(sel + 1);
+            }
+        }
+        ShowEvent::ScheduleItemReplaced { item, index } => {
+            if let Some(old) = schedule.items.get(*index) {
+                let mut new_item = item.clone();
+                for slide in &mut new_item.slides {
+                    slide.synthesize_v2_if_needed();
+                }
+                // What the operator chose for this slot survives the library copy being swapped in.
+                new_item.is_expanded = old.is_expanded;
+                if old.theme_name.is_some() {
+                    new_item.theme_name = old.theme_name.clone();
+                    new_item.background = old.background.clone();
+                }
+                // The slot keeps its id when the item is still the same library item (so a second copy
+                // of a song stays the second copy); a different item brings its own, kept unique.
+                let old_id = old.id.clone();
+                new_item.id = if slot_id_base(&new_item.id) == slot_id_base(&old_id) {
+                    old_id.clone()
+                } else {
+                    unique_slot_id(&new_item.id, |id| schedule.items.iter().enumerate().any(|(i, it)| i != *index && it.id == id))
+                };
+                schedule.items[*index] = new_item.clone();
+                schedule.is_modified = true;
+                if let Some(staged) = state.staged_item.as_mut() {
+                    if staged.id == old_id {
+                        *staged = new_item.clone();
+                        let len = effective_arrangement(staged).len();
+                        state.staged_slide_index = state.staged_slide_index.min(len.saturating_sub(1));
+                    }
+                }
+                if let Some(live) = state.live_item.as_mut() {
+                    if live.id == old_id {
+                        *live = new_item;
+                        let len = effective_arrangement(live).len();
+                        state.live_slide_index = state.live_slide_index.min(len.saturating_sub(1));
+                    }
+                }
+            }
         }
         ShowEvent::ScheduleItemRemoved { index } => {
             if *index < schedule.items.len() {
                 schedule.items.remove(*index);
                 schedule.is_modified = true;
                 if let Some(sel) = state.selected_item_index {
+                    // The selection stays on its item when one above it goes. When the selected item
+                    // itself goes, the one that slides into its place is selected (the last, at the end).
+                    let sel = if *index < sel { sel - 1 } else { sel };
+                    state.selected_item_index = Some(sel);
                     if sel >= schedule.items.len() {
                         state.selected_item_index = if schedule.items.is_empty() {
                             None
@@ -275,11 +419,11 @@ pub(super) fn apply_schedule_event(state: &mut ShowState, schedule: &mut Schedul
                 if let Some(item) = schedule.items.get_mut(*idx) {
                     let len = effective_arrangement(item).len();
                     if *from < len && *to < len {
-                        let is_identity = item.arrangement.is_empty() || item.arrangement == crate::core::models::identity_arrangement(&item.slides);
+                        let is_identity = item.arrangement.is_empty() || item.arrangement == identity_arrangement(&item.slides);
                         if is_identity && *from < item.slides.len() && *to < item.slides.len() {
                             let slide = item.slides.remove(*from);
                             item.slides.insert(*to, slide);
-                            item.arrangement = crate::core::models::identity_arrangement(&item.slides);
+                            item.arrangement = identity_arrangement(&item.slides);
                         } else {
                             let entry = item.arrangement.remove(*from);
                             item.arrangement.insert(*to, entry);
@@ -318,11 +462,11 @@ pub(super) fn apply_schedule_event(state: &mut ShowState, schedule: &mut Schedul
             } else if let Some(ref mut staged) = state.staged_item {
                 let len = effective_arrangement(staged).len();
                 if *from < len && *to < len {
-                    let is_identity = staged.arrangement.is_empty() || staged.arrangement == crate::core::models::identity_arrangement(&staged.slides);
+                    let is_identity = staged.arrangement.is_empty() || staged.arrangement == identity_arrangement(&staged.slides);
                     if is_identity && *from < staged.slides.len() && *to < staged.slides.len() {
                         let slide = staged.slides.remove(*from);
                         staged.slides.insert(*to, slide);
-                        staged.arrangement = crate::core::models::identity_arrangement(&staged.slides);
+                        staged.arrangement = identity_arrangement(&staged.slides);
                     } else {
                         let entry = staged.arrangement.remove(*from);
                         staged.arrangement.insert(*to, entry);
@@ -349,11 +493,11 @@ pub(super) fn apply_schedule_event(state: &mut ShowState, schedule: &mut Schedul
             if let Some(item) = schedule.items.get_mut(*item_index) {
                 let len = effective_arrangement(item).len();
                 if *slide_index < len {
-                    let is_identity = item.arrangement.is_empty() || item.arrangement == crate::core::models::identity_arrangement(&item.slides);
+                    let is_identity = item.arrangement.is_empty() || item.arrangement == identity_arrangement(&item.slides);
                     if is_identity && *slide_index < item.slides.len() {
                         if let Some(slide) = item.slides.get(*slide_index).cloned() {
                             item.slides.insert(slide_index + 1, slide);
-                            item.arrangement = crate::core::models::identity_arrangement(&item.slides);
+                            item.arrangement = identity_arrangement(&item.slides);
                         }
                     } else {
                         let entry = item.arrangement[*slide_index].clone();
@@ -377,10 +521,10 @@ pub(super) fn apply_schedule_event(state: &mut ShowState, schedule: &mut Schedul
             if let Some(item) = schedule.items.get_mut(*item_index) {
                 let len = effective_arrangement(item).len();
                 if *slide_index < len && len > 1 {
-                    let is_identity = item.arrangement.is_empty() || item.arrangement == crate::core::models::identity_arrangement(&item.slides);
+                    let is_identity = item.arrangement.is_empty() || item.arrangement == identity_arrangement(&item.slides);
                     if is_identity && *slide_index < item.slides.len() {
                         item.slides.remove(*slide_index);
-                        item.arrangement = crate::core::models::identity_arrangement(&item.slides);
+                        item.arrangement = identity_arrangement(&item.slides);
                     } else {
                         item.arrangement.remove(*slide_index);
                     }
@@ -449,12 +593,20 @@ pub(super) fn apply_schedule_event(state: &mut ShowState, schedule: &mut Schedul
                 }
             }
         }
-        ShowEvent::ScheduleLoaded { schedule: new_sched } => {
+        ShowEvent::ScheduleLoaded { schedule: new_sched, .. } => {
             // `new_sched.selected_item_index` is the deprecated on-Schedule field
             // (still populated by the EWSX/OpenLP/FreeShow importers) — funnel it
             // into ShowState, which is what the engine and clients actually use now.
             state.selected_item_index = new_sched.selected_item_index;
             *schedule = new_sched.clone();
+            // A file saved (or a log written) before slot ids were kept unique may hold the same id twice.
+            let mut seen = std::collections::HashSet::new();
+            for item in &mut schedule.items {
+                if seen.contains(&item.id) {
+                    item.id = unique_slot_id(&item.id, |id| seen.contains(id));
+                }
+                seen.insert(item.id.clone());
+            }
         }
         ShowEvent::ScheduleCleared => {
             *schedule = Schedule::default();
@@ -467,6 +619,9 @@ pub(super) fn apply_schedule_event(state: &mut ShowState, schedule: &mut Schedul
         ShowEvent::ScheduleTitleSet { title } => {
             schedule.title = title.clone();
             schedule.is_modified = true;
+        }
+        ShowEvent::SelectionSet { index } => {
+            state.selected_item_index = index.filter(|i| *i < schedule.items.len());
         }
         _ => unreachable!("apply_schedule_event called with a non-schedule event"),
     }

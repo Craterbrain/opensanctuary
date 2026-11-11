@@ -425,6 +425,15 @@ impl Database {
                 timestamp_ms INTEGER NOT NULL
             );
 
+            -- The engine as it stood after event #sequence_number: replay starts here, not at event #1
+            -- (see Database::compact_event_log). At most one row.
+            CREATE TABLE IF NOT EXISTS engine_snapshot (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                sequence_number INTEGER NOT NULL,
+                state JSON NOT NULL,
+                schedule JSON NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS keyring_metadata (
                 service TEXT NOT NULL,
                 account TEXT NOT NULL,

@@ -97,8 +97,12 @@ pub async fn needs_transcode(path: &Path) -> bool {
 }
 
 /// Transcodes `input` (expected H.264) to VP9/Opus in a sibling `.webm`
-/// file, deletes `input` on success, and returns the new path. Leaves
-/// `input` untouched on any failure (missing ffmpeg, encode error, etc.).
+/// file and returns the new path. `input` is kept: a schedule item or a saved
+/// schedule may still name it (the media folder scan doesn't register it again
+/// next to its conversion, see `sync_media_videos_folder`). The encode writes
+/// to `<name>.webm.part`, which the scan ignores, and only a finished file is
+/// renamed into place. A `.webm` of that name that already exists is never
+/// overwritten: the video is then left as it is.
 pub async fn transcode_h264_to_vp9(
     input: &Path,
     mut on_progress: impl FnMut(f32) + Send,
@@ -107,6 +111,12 @@ pub async fn transcode_h264_to_vp9(
     if output == input {
         return Err("input is already a .webm file".into());
     }
+    if output.exists() {
+        return Err(format!("{:?} already exists", output));
+    }
+    let mut partial = output.clone().into_os_string();
+    partial.push(".part");
+    let partial = PathBuf::from(partial);
 
     let duration = probe_duration_secs(input).await;
 
@@ -124,7 +134,8 @@ pub async fn transcode_h264_to_vp9(
         .arg("-b:a").arg("128k")
         .arg("-progress").arg("pipe:1")
         .arg("-nostats")
-        .arg(&output);
+        .arg("-f").arg("webm")
+        .arg(&partial);
     cmd.stdout(Stdio::piped()).stderr(Stdio::null());
 
     let mut child = cmd.spawn().map_err(|e| format!("failed to start ffmpeg: {e}"))?;
@@ -144,17 +155,25 @@ pub async fn transcode_h264_to_vp9(
         }
     }
 
-    let status = child.wait().await.map_err(|e| format!("ffmpeg wait failed: {e}"))?;
+    let status = match child.wait().await {
+        Ok(status) => status,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&partial).await;
+            return Err(format!("ffmpeg wait failed: {e}"));
+        }
+    };
     if !status.success() {
-        let _ = tokio::fs::remove_file(&output).await;
+        let _ = tokio::fs::remove_file(&partial).await;
         return Err("ffmpeg exited with an error".into());
     }
-
-    if let Err(e) = tokio::fs::remove_file(input).await {
-        tracing::warn!(
-            "transcode succeeded but failed to remove original H.264 file {:?}: {}",
-            input, e
-        );
+    if output.exists() {
+        // Something else took the name while this was encoding.
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err(format!("{:?} appeared while converting", output));
+    }
+    if let Err(e) = tokio::fs::rename(&partial, &output).await {
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err(format!("couldn't put the converted file in place: {e}"));
     }
 
     Ok(output)
@@ -176,6 +195,16 @@ mod tests {
         for codec in ["h264", "avc", "avc1", "H264", "AVC1"] {
             assert!(!is_native_codec(codec), "{codec} should need transcoding");
         }
+    }
+
+    #[tokio::test]
+    async fn an_existing_webm_of_the_same_name_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("clip.mp4");
+        std::fs::write(&input, b"whatever").unwrap();
+        std::fs::write(dir.path().join("clip.webm"), b"someone else's video").unwrap();
+        assert!(transcode_h264_to_vp9(&input, |_| {}).await.is_err());
+        assert_eq!(std::fs::read(dir.path().join("clip.webm")).unwrap(), b"someone else's video");
     }
 
     #[tokio::test]
@@ -234,8 +263,9 @@ mod tests {
             .await
             .expect("real transcode should succeed");
 
-        assert!(!input.exists(), "original H.264 file should be removed on success");
+        assert!(input.exists(), "the original stays: a schedule may still name it");
         assert!(output.exists());
+        assert!(!output.with_extension("webm.part").exists());
         assert_eq!(probe_video_codec(&output).await.as_deref(), Some("vp9"));
         assert!(last_progress > 0.0, "progress callback should have fired at least once");
     }

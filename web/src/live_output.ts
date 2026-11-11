@@ -26,6 +26,7 @@ import {
   DEFAULT_THEMES
 } from './core/presentation_helpers';
 import { clock } from './core/timesync';
+import { projectedMediaPosition, wrapLoopDrift } from './core/video_sync';
 import { lookupPatternClip } from './core/pattern_render';
 import { patternPhaseSec } from './core/background_patterns';
 import { createEngineWebSocket, EngineWebSocketClient } from './core/ws_client';
@@ -252,7 +253,9 @@ class TimecodeSyncEngine {
       }
     }
 
-    const delta = el.currentTime - targetTime;
+    // Around the loop for a looping video, so the wrap back to 0:00 isn't a full-loop "drift".
+    const loopDuration = this.masterState.isLooping && el.duration > 0 && !isNaN(el.duration) ? el.duration : 0;
+    const delta = loopDuration ? wrapLoopDrift(el.currentTime - targetTime, loopDuration) : el.currentTime - targetTime;
     const absDelta = Math.abs(delta);
 
     if (forceHardAlign || absDelta > 0.35) {
@@ -903,6 +906,8 @@ function renderSnapshot(snapshot: StateSnapshot) {
       }
     } else if (extractImageUrl(currentBg)) {
       const liveImgUrl = extractImageUrl(currentBg)!;
+      // The screen's own background is set to black below: a pattern coming back after this must be drawn again.
+      livePatternShown = '';
       teardownVideoRenderers();
       timecodeSyncer.setMasterState(null, false);
       if (videoBgEl) {
@@ -943,14 +948,27 @@ function renderSnapshot(snapshot: StateSnapshot) {
           audioBgEl.src = encodedAudio;
           audioBgEl.play().catch(() => {});
         }
-        if (state.media_playback) {
-          if (state.media_playback.is_playing) {
+        const mp = state.media_playback;
+        if (mp) {
+          audioBgEl.loop = mp.is_looping;
+          audioBgEl.muted = mp.is_muted;
+          if (audioBgEl.volume !== mp.volume) {
+            try { audioBgEl.volume = mp.volume; } catch (_) {}
+          }
+          // Compared with where the track should be *now*: `current_time` alone is where Play was
+          // pressed, and seeking back to it on every snapshot restarted the track at each alert,
+          // staged item or volume change.
+          const duration = audioBgEl.duration > 0 && !isNaN(audioBgEl.duration) ? audioBgEl.duration : undefined;
+          const target = projectedMediaPosition(mp, clock.getServerTimeMs(), duration);
+          const notStarted = mp.is_playing && !!mp.start_at_epoch_ms && clock.getServerTimeMs() < mp.start_at_epoch_ms;
+          if (mp.is_playing && !notStarted) {
             if (audioBgEl.paused) audioBgEl.play().catch(() => {});
-            if (Math.abs(audioBgEl.currentTime - state.media_playback.current_time) > 0.4) {
-              audioBgEl.currentTime = state.media_playback.current_time;
-            }
-          } else {
-            if (!audioBgEl.paused) audioBgEl.pause();
+          } else if (!audioBgEl.paused) {
+            audioBgEl.pause();
+          }
+          const drift = duration && mp.is_looping ? wrapLoopDrift(audioBgEl.currentTime - target, duration) : audioBgEl.currentTime - target;
+          if (Math.abs(drift) > 0.4) {
+            try { audioBgEl.currentTime = target; } catch (_) {}
           }
         }
       }

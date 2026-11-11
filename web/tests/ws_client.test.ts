@@ -168,4 +168,34 @@ describe('Unified WebSocket Client: EngineWebSocketClient', () => {
     expect(client.isConnected()).toBe(false);
     expect((client as any).reconnectTimer).toBeNull();
   });
+
+  test('a replaced socket closing late leaves the current connection alone', () => {
+    const sockets: any[] = [];
+    class FakeSocket {
+      static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
+      readyState = 0;
+      onopen: any; onclose: any; onerror: any; onmessage: any;
+      constructor(public url: string) { sockets.push(this); }
+      close() {}
+      send() {}
+    }
+    globalThis.WebSocket = FakeSocket as any;
+    const statuses: string[] = [];
+    let closes = 0;
+    const client = new EngineWebSocketClient({ url: 'ws://h/ws', autoReconnect: false, onStatusChange: (s: string) => statuses.push(s), onClose: () => { closes++; } } as any);
+    client.connect();
+    sockets[0].readyState = FakeSocket.CLOSED;
+    client.connect(); // the reconnect: a second socket replaces the first
+    sockets[1].readyState = FakeSocket.OPEN;
+    sockets[1].onopen();
+    sockets[0].onclose({ code: 1006 }); // the old one only now reports its close
+    sockets[0].onerror(new Event('error'));
+    expect(statuses[statuses.length - 1]).toBe('connected');
+    expect(closes).toBe(0);
+    // The current socket closing is still reported.
+    sockets[1].onclose({ code: 1006 });
+    expect(statuses[statuses.length - 1]).toBe('disconnected');
+    expect(closes).toBe(1);
+  });
 });
+

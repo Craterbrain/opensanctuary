@@ -305,3 +305,26 @@ CCLI Song # 12345
     });
   });
 });
+
+describe('splitTextToSlides: tag on its own paragraph', () => {
+  test('tag separated from its lyrics by a blank line attaches to the next block', () => {
+    const { slides } = splitTextToSlides('Verse 1\n\nLine a\nLine b\n\nChorus\n\nLine c', { editorType: 'song' });
+    expect(slides.map(s => [s.tag, s.text])).toEqual([['V1', 'Line a\nLine b'], ['C', 'Line c']]);
+  });
+
+  test('a lyric line starting with "Author" or "Lyrics" stays a lyric', () => {
+    const { cleanedText, metadata } = extractSongMetadata('Author of salvation\nLyrics of my heart\nAuthor: John Newton\nWords by William Cowper\nLyrics by: Fanny Crosby');
+    expect(cleanedText).toBe('Author of salvation\nLyrics of my heart');
+    expect(metadata.author).toBe('John Newton, William Cowper, Fanny Crosby');
+  });
+
+  test('section headers survive chord cleaning even where they read like a cue', () => {
+    expect(stripChordsAndAnnotations('Interlude\nla la\n[Instrumental]')).toBe('Interlude\nla la');
+  });
+
+  test('the spelled-out section names the bulk overlay writes convert back to the same tags', () => {
+    const text = ['Verse 1', 'v one', '', 'Chorus', 'chorus', '', 'Bridge 2', 'bridge', '', 'Ending', 'end', '', 'Interlude', 'hum'].join('\n');
+    const { slides } = splitTextToSlides(text, { editorType: 'song', extractMetadata: true, autoCleanChords: true });
+    expect(slides.map(s => [s.tag, s.text])).toEqual([['V1', 'v one'], ['C', 'chorus'], ['B2', 'bridge'], ['E', 'end'], ['Int', 'hum']]);
+  });
+});

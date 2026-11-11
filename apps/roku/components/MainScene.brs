@@ -71,6 +71,8 @@ sub onDisplayStateChanged()
     isLogo = (state.is_logo_override = true)
     alertMessage = state.alert_message
     mediaPlayback = state.media_playback
+    ' The server's clock as it answered, to project the playback position from (see LiveView).
+    if mediaPlayback <> invalid then mediaPlayback.server_time_ms = state.server_time_ms
     liveObj = state.live
 
     if m.displayMode = "foldback"

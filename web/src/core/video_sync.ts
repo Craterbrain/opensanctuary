@@ -59,7 +59,8 @@ export class VideoSyncController {
         }
 
         const actualVideoTime = this.video.currentTime;
-        const decision = computeVideoSyncDecision(expectedVideoTime, actualVideoTime, this.video.playbackRate);
+        const loopDuration = this.video.loop && this.video.duration > 0 ? this.video.duration : undefined;
+        const decision = computeVideoSyncDecision(expectedVideoTime, actualVideoTime, this.video.playbackRate, loopDuration);
 
         if (decision.tier === 3) {
             console.warn(`[VideoSync] Hard Seek applied. Drift: ${decision.driftMs.toFixed(1)}ms`);
@@ -86,14 +87,28 @@ export interface VideoSyncDecision {
 }
 
 /**
- * Pure 3-Tier Video Synchronization Decision Engine
+ * A looping video's drift taken the short way round the loop, in [-duration/2, duration/2).
+ * Just after the expected position wraps to 0:00 a player still finishing the last loop is
+ * a moment behind, not a whole loop ahead: a straight subtraction would hard-seek every
+ * screen at every wrap.
+ */
+export function wrapLoopDrift(driftSeconds: number, loopDurationSec: number): number {
+    const d = loopDurationSec;
+    return ((((driftSeconds + d / 2) % d) + d) % d) - d / 2;
+}
+
+/**
+ * Pure 3-Tier Video Synchronization Decision Engine. `loopDurationSec` is the video's
+ * duration when it loops: the drift is then measured around the loop (see `wrapLoopDrift`).
  */
 export function computeVideoSyncDecision(
     expectedTime: number,
     currentTime: number,
-    _currentRate: number = 1.0
+    _currentRate: number = 1.0,
+    loopDurationSec?: number
 ): VideoSyncDecision {
-    const driftSeconds = expectedTime - currentTime;
+    const rawDrift = expectedTime - currentTime;
+    const driftSeconds = loopDurationSec && loopDurationSec > 0 ? wrapLoopDrift(rawDrift, loopDurationSec) : rawDrift;
     const driftMs = driftSeconds * 1000.0;
     const absDrift = Math.abs(driftMs);
 
@@ -127,3 +142,18 @@ export function computeVideoSyncDecision(
     }
 }
 
+/**
+ * Where dedicated media should be now, in seconds. `current_time` is the position when it was last
+ * played, paused or sought, not a live position: a playing item has moved on since its start anchor.
+ * A start scheduled in the future hasn't begun yet. A looping item wraps at `durationSec` when known.
+ */
+export function projectedMediaPosition(
+    mp: { is_playing: boolean; current_time: number; timestamp_ms: number; start_at_epoch_ms?: number | null; is_looping: boolean },
+    nowMs: number,
+    durationSec?: number
+): number {
+    if (!mp.is_playing) return mp.current_time;
+    const anchor = mp.start_at_epoch_ms || mp.timestamp_ms;
+    const position = mp.current_time + Math.max(0, nowMs - anchor) / 1000;
+    return mp.is_looping && durationSec && durationSec > 0 ? position % durationSec : position;
+}

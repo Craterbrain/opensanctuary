@@ -1,6 +1,6 @@
 import { errorMessage } from './core/ui_utils.ts';
 import type { LibrarySlide, ScriptureVerse, Schedule, ScheduleItem } from './core/models.ts';
-import { SlideEditor, EditorSlide, projectTextFromElements, applyArchetypeToSlide, splitTextToSlides, stripChordsAndAnnotations, BulkSplitRule } from './editor/index';
+import { SlideEditor, EditorSlide, projectTextFromElements, applyArchetypeToSlide, splitTextToSlides, stripChordsAndAnnotations, detectSectionHeader, BulkSplitRule } from './editor/index';
 import { resolveKeyboardShortcut, buildPairingUrl, buildRemoteUrl, escapeHtml } from './core/presentation_helpers.ts';
 import { api } from './core/api_client.ts';
 import { SETTINGS_SCHEMA } from './core/settings_schema';
@@ -171,21 +171,22 @@ if (resourceSearchInput) {
 let studioSlides: EditorSlide[] = [];
 let canvasSlideEditor: SlideEditor | null = null;
 // Set when editing an item that's a known member of the live Schedule (see
-// ctx-sched-edit / ctx-slide-edit below) — lets saveEditorItem additionally
-// push the active slide's edits live via BatchSlideEdit, on top of the normal
-// REST save to the library, so an operator sees the change immediately on
-// whatever's live/staged/scheduled rather than only in the catalog.
-let editingScheduleContext: { itemIndex: number; slideIndex?: number } | null = null;
-
-let lastApplyResult: { slides: EditorSlide[]; batchOps: any[]; hasChanges: boolean; activeIndex: number } | null = null;
+// ctx-sched-edit / ctx-slide-edit below). Saving then replaces that schedule
+// item in place and leaves the library entry alone.
+// `itemId` is the schedule item's id when the editor opened: its index may be stale by the time it's saved.
+let editingScheduleContext: { itemIndex: number; slideIndex?: number; itemId?: string } | null = null;
+// The library item the editor opened on, for the fields the editor has no input for (a song's CCLI number,
+// theme, alternate title), which a save must carry through rather than reset.
+let editingOriginalItem: any = null;
+// The bulk-paste text as the overlay was opened with it: saving converts it only if it was edited.
+let bulkOverlaySeed: string | null = null;
 
 function getCanvasSlideEditor(): SlideEditor {
   if (!canvasSlideEditor) {
     const mount = document.getElementById('canvas-editor-mount');
     canvasSlideEditor = new SlideEditor({
       container: mount as HTMLElement,
-      onCancel: () => closeModal(createModal),
-      onApply: (result) => { lastApplyResult = result; }
+      onCancel: () => closeModal(createModal)
     });
   }
   return canvasSlideEditor;
@@ -243,16 +244,28 @@ function openSlideEditor(type = 'song') {
   if (createItemContent) createItemContent.value = '';
 
   editingScheduleContext = null;
+  editingOriginalItem = null;
+  setScheduleEditButtons(false);
   studioSlides = [buildBlankEditorSlide(type, 0)];
   closeBulkOverlay();
   if (createModal) showModal(createModal);
   getCanvasSlideEditor().open(studioSlides, 0, currentEditorType);
 }
 
+// An item opened from the schedule saves to the schedule only, so the library button is hidden.
+function setScheduleEditButtons(fromSchedule: boolean): void {
+  const lib = document.getElementById('btn-save-created-item');
+  const sched = document.getElementById('btn-save-to-schedule');
+  if (lib) lib.style.display = fromSchedule ? 'none' : '';
+  if (sched) sched.textContent = fromSchedule ? '📋 Update in Schedule' : '📋 Save to Schedule';
+}
+
 function editExistingItem(item: any, scheduleContext: { itemIndex: number; slideIndex?: number } | null = null) {
   if (!item) return;
   setEditingItemId(item.id);
-  editingScheduleContext = scheduleContext;
+  editingScheduleContext = scheduleContext ? { ...scheduleContext, itemId: item.id } : null;
+  editingOriginalItem = item;
+  setScheduleEditButtons(scheduleContext !== null);
 
   const isPres = item.slides && item.slides[0] && item.slides[0].content !== undefined;
   setCurrentEditorType(item.item_type ? item.item_type.toLowerCase() : (isPres ? 'presentation' : 'song'));
@@ -263,7 +276,7 @@ function editExistingItem(item: any, scheduleContext: { itemIndex: number; slide
 
   if (createItemTitle) createItemTitle.value = item.title || item.name || item.reference || '';
   if (createItemAuthor) createItemAuthor.value = item.author || item.version || '';
-  if (createItemCopyright) createItemCopyright.value = item.copyright || item.ccli_number || '';
+  if (createItemCopyright) createItemCopyright.value = item.copyright || '';
   if (createItemPublicDomain) createItemPublicDomain.checked = item.public_domain_override === true;
   if (createItemContent) createItemContent.value = '';
 
@@ -362,9 +375,27 @@ function openBulkOverlay(): void {
   const textarea = document.getElementById('create-item-content') as HTMLTextAreaElement | null;
   if (textarea) {
     const cur = canvasSlideEditor ? canvasSlideEditor.getAllSlides() : studioSlides;
-    textarea.value = cur.map(s => s.text || '').join('\n\n');
+    // Keep each slide's section tag as a header line above its text so a
+    // round-trip through bulk paste doesn't strip tags.
+    textarea.value = cur.map(s => {
+      const header = bulkHeaderFor(s);
+      return header ? `${header}\n${s.text || ''}`.trimEnd() : (s.text || '');
+    }).join('\n\n');
+    bulkOverlaySeed = textarea.value;
   }
   updateBulkSlideCountBadge();
+}
+
+// The header line that converting back reads as this slide's section: the section's spelled-out name
+// ("Chorus 2", never a bare "C" that chord cleaning would delete), from its tag or else its label. A
+// label converting back wouldn't recognise (e.g. "Verse 1 (1/2)") gets no line, rather than one that
+// comes back as a line of lyrics.
+function bulkHeaderFor(s: EditorSlide): string {
+  for (const candidate of [s.tag, s.label]) {
+    const section = candidate ? detectSectionHeader(candidate) : null;
+    if (section) return section.label;
+  }
+  return '';
 }
 
 function closeBulkOverlay(): void {
@@ -507,11 +538,17 @@ on('btn-insert-blank', 'click', () => insertTagIntoBulkEditor('---'));
 function insertTagIntoBulkEditor(tag: string) {
   const textarea = createItemContent;
   if (!textarea) return;
-  const tagStr = tag === '---' ? `\n\n---\n\n` : `\n\n${tag}\n`;
   const start = textarea.selectionStart ?? 0;
   const end = textarea.selectionEnd ?? 0;
-  textarea.value = textarea.value.substring(0, start) + tagStr + textarea.value.substring(end);
-  const newPos = start + tagStr.length;
+  // Exactly one blank line before the tag (none at the very start), and the tag
+  // sits directly above the text that follows it. Swallow surrounding blank
+  // lines so repeated inserts never leave a tag-only paragraph.
+  const before = textarea.value.substring(0, start).replace(/\s+$/, '');
+  const after = textarea.value.substring(end).replace(/^\s+/, '');
+  const lead = before ? '\n\n' : '';
+  const tagStr = tag === '---' ? `${lead}---\n\n` : `${lead}${tag}\n`;
+  textarea.value = before + tagStr + after;
+  const newPos = before.length + tagStr.length;
   textarea.setSelectionRange(newPos, newPos);
   textarea.focus();
   updateBulkSlideCountBadge();
@@ -521,6 +558,10 @@ async function saveEditorItem(addToSchedule = false) {
   // Read now: closing the editor (below, before AddToSchedule) resets currentEditorType to
   // 'song', so a scripture or presentation used to be scheduled as a song id that doesn't exist.
   const editorType = currentEditorType;
+  // Read now for the same reason: closing the editor clears the schedule context.
+  const scheduleItemIndex = editingScheduleContext ? editingScheduleContext.itemIndex : null;
+  const scheduleItemId = editingScheduleContext?.itemId;
+  const original = editingOriginalItem;
   const title = createItemTitle ? createItemTitle.value.trim() : '';
   const author = createItemAuthor ? createItemAuthor.value.trim() : '';
   const copyright = createItemCopyright ? createItemCopyright.value.trim() : '';
@@ -532,60 +573,22 @@ async function saveEditorItem(addToSchedule = false) {
   }
 
   if (isBulkOverlayOpen()) {
-    convertBulkTextToSlides();
+    // Unedited text would only rebuild the deck it was made from, losing what text can't carry
+    // (elements, backgrounds, notes).
+    if (createItemContent && createItemContent.value !== bulkOverlaySeed) {
+      convertBulkTextToSlides();
+    } else {
+      closeBulkOverlay();
+    }
   }
 
   const editor = getCanvasSlideEditor();
-  lastApplyResult = null;
   editor.apply();
-  // `editor.apply()` synchronously invokes the `onApply` callback registered when
-  // this editor was opened (line ~189), which reassigns `lastApplyResult` — but
-  // TypeScript's control-flow analysis can't see through that closure call, so it
-  // still thinks `lastApplyResult` is exactly `null` here. Re-assert the real
-  // declared type to read the value the callback actually set.
-  const applyResult = lastApplyResult as {
-    slides: EditorSlide[]; batchOps: any[]; hasChanges: boolean; activeIndex: number
-  } | null;
   studioSlides = editor.getAllSlides();
 
   if (!studioSlides.length) {
     showToast('Please add at least one slide.', 'warning');
     return;
-  }
-
-  // If this editor session is against a known live/staged/scheduled slot,
-  // push the active slide's edits live immediately via BatchSlideEdit, on top
-  // of the REST save below (which persists all slides to the library). This
-  // only covers the slide that was active when Save was clicked — matches
-  // SlideEditor's own history model, which tracks one slide's diff at a time.
-  if (editingScheduleContext && applyResult && applyResult.hasChanges && applyResult.batchOps.length > 0) {
-    sendCommand({
-      BatchSlideEdit: {
-        item_index: editingScheduleContext.itemIndex,
-        slide_index: editingScheduleContext.slideIndex ?? applyResult.activeIndex,
-        ops: applyResult.batchOps
-      }
-    });
-  }
-
-  // Hidden/shown is a slide-level flag the batch edit above doesn't carry, so push any change to
-  // the schedule's own copy of the item too (the REST save below only updates the library).
-  if (editingScheduleContext && currentSnapshot && currentSnapshot.schedule) {
-    const schedItem = currentSnapshot.schedule.items[editingScheduleContext.itemIndex];
-    const schedSlides = (schedItem && schedItem.slides) || [];
-    // Slides carry no id: each is matched to the schedule's copy by where it was when the editor
-    // opened (`source_index`), so moving slides around doesn't move a flag onto the wrong one.
-    // Slides added in the editor have no counterpart; a copied slide shares its original's
-    // position, so a position two slides claim is ambiguous and left alone.
-    const claims = new Map<number, number>();
-    for (const s of studioSlides) if (s.source_index !== undefined) claims.set(s.source_index, (claims.get(s.source_index) ?? 0) + 1);
-    for (const s of studioSlides) {
-      const at = s.source_index;
-      if (at === undefined || claims.get(at) !== 1 || at >= schedSlides.length) continue;
-      if (!!schedSlides[at]?.hidden !== !!s.hidden) {
-        sendCommand({ SetSlideHidden: { item_index: editingScheduleContext!.itemIndex, slide_index: at, hidden: !!s.hidden } });
-      }
-    }
   }
 
   const slides = studioSlides.map((s, idx) => ({
@@ -608,18 +611,39 @@ async function saveEditorItem(addToSchedule = false) {
     reference_label: s.reference_label || null
   }));
 
+  // An item edited from the schedule changes only the schedule's copy; the library entry is left alone --
+  // never saved to the library instead, whatever became of the schedule item.
+  if (scheduleItemIndex !== null) {
+    // Found by id: the schedule may have been reordered while the editor was open. Only an editor opened
+    // without one (no id known) goes by the index it opened with.
+    const items = currentSnapshot?.schedule?.items ?? [];
+    const itemIndex = scheduleItemId ? items.findIndex((it: any) => it.id === scheduleItemId) : scheduleItemIndex;
+    const current = itemIndex >= 0 ? items[itemIndex] : undefined;
+    if (!current) {
+      // Left open, so what was typed isn't lost: it can be copied, or the editor reopened from the library.
+      showToast(`"${title}" is no longer in the schedule (removed while it was being edited), so it couldn't be updated.`, 'warning');
+      return;
+    }
+    // No arrangement of its own: the engine carries the slot's play order over to the edited slides.
+    sendCommand({ ReplaceScheduleItem: { item_index: itemIndex, expected_id: scheduleItemId ?? null, item: { ...current, title, author_or_ref: author || current.author_or_ref, slides, arrangement: [] } } });
+    closeModal(createModal);
+    showToast(`✓ Updated "${title}" in Schedule`, 'success');
+    return;
+  }
+
   const payload = {
     id: editingItemId || `item-${Date.now()}`,
     title,
     author: author || 'Media Ministry',
-    alternate_title: null,
-    copyright: copyright || 'Public Domain',
-    ccli_number: null,
+    alternate_title: original?.alternate_title ?? null,
+    // A new song with no copyright is taken as public domain; an existing one keeps an empty field empty.
+    copyright: copyright || (original ? null : 'Public Domain'),
+    ccli_number: original?.ccli_number ?? null,
     public_domain_override: createItemPublicDomain?.checked ? true : null,
     key: null,
     tempo: null,
     verse_order: null,
-    theme_name: '',
+    theme_name: original?.theme_name ?? '',
     slides,
     modified_date: new Date().toISOString()
   };
@@ -695,6 +719,10 @@ async function saveEditorItem(addToSchedule = false) {
       } catch (e) {
         console.warn('Error reloading catalog tab:', e);
       }
+
+      // The library is the source: a scheduled copy of this item takes on what was just saved.
+      // Every scheduled copy, found by the engine (it owns the slot id scheme).
+      sendCommand({ ReplaceScheduledCopies: { item_type: editorType, item_id: savedItemId } });
 
       if (addToSchedule) {
         sendCommand({ AddToSchedule: { item_type: editorType, item_id: savedItemId } });
