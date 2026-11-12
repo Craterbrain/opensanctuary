@@ -1611,7 +1611,7 @@ fn test_set_item_theme_overrides_existing_per_slide_backgrounds() {
 
     engine.execute_command(ShowCommand::SetItemTheme {
         item_index: 0,
-        theme_name: "Sunset Horizon".to_string(),
+        theme_name: Some("Sunset Horizon".to_string()),
         background: Some("linear-gradient(160deg, #2d1b4e, #c74b50, #f5a25d)".to_string()),
     });
 
@@ -2336,7 +2336,7 @@ fn test_saving_a_library_item_refreshes_every_scheduled_copy_and_keeps_a_slots_t
     engine.execute_command(ShowCommand::AddToSchedule(song.to_schedule_item()));
     engine.execute_command(ShowCommand::AddToSchedule(labelled_song("b", &[("V1", "b")]).to_schedule_item()));
     engine.execute_command(ShowCommand::AddToSchedule(song.to_schedule_item()));
-    engine.execute_command(ShowCommand::SetItemTheme { item_index: 2, theme_name: "Dark".to_string(), background: Some("#111111".to_string()) });
+    engine.execute_command(ShowCommand::SetItemTheme { item_index: 2, theme_name: Some("Dark".to_string()), background: Some("#111111".to_string()) });
 
     let saved = labelled_song("a", &[("V1", "new"), ("V2", "added")]).to_schedule_item();
     engine.execute_command(ShowCommand::ReplaceScheduledCopies { item: saved });
@@ -2347,4 +2347,73 @@ fn test_saving_a_library_item_refreshes_every_scheduled_copy_and_keeps_a_slots_t
     assert_eq!(items[2].theme_name.as_deref(), Some("Dark"));
     assert!(items[2].slides.iter().all(|s| s.background.as_deref() == Some("#111111")), "the slot's theme is on the new slides too");
     assert!(items[0].slides.iter().all(|s| s.background.is_none()));
+}
+
+#[test]
+fn test_go_live_from_the_library_sends_the_added_item_live_whatever_is_in_preview() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    let a = labelled_song("a", &[("V1", "a")]);
+    engine.execute_command(ShowCommand::AddToSchedule(a.to_schedule_item()));
+    engine.execute_command(ShowCommand::AddToSchedule(labelled_song("b", &[("V1", "b")]).to_schedule_item()));
+    engine.execute_command(ShowCommand::StageItem { item_index: Some(1), slide_index: None });
+
+    // A second copy of "a", added and sent live in one step: that copy, not the staged "b" nor the first "a".
+    let events = engine.execute_command(ShowCommand::AddToScheduleAndGoLive(a.to_schedule_item()));
+    assert_eq!(events.len(), 2);
+    let snap = engine.snapshot();
+    assert_eq!(snap.schedule.items.len(), 3);
+    assert_eq!(snap.state.live_item.as_ref().unwrap().id, "sched_song_a~2");
+    assert_eq!(snap.state.selected_item_index, Some(2));
+    assert_eq!(snap.state.staged_item.as_ref().unwrap().id, "sched_song_b", "Preview is left alone");
+
+    // One step to undo, too.
+    engine.execute_command(ShowCommand::Undo);
+    let snap = engine.snapshot();
+    assert_eq!(snap.schedule.items.len(), 2);
+    assert!(snap.state.live_item.is_none());
+}
+
+#[test]
+fn test_undo_removal_undoes_only_that_removal() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    for id in ["a", "b", "c"] {
+        engine.execute_command(ShowCommand::AddToSchedule(labelled_song(id, &[("V1", "x")]).to_schedule_item()));
+    }
+    engine.execute_command(ShowCommand::RemoveFromSchedule(1));
+    // Nothing else since: the removal is undone.
+    engine.execute_command(ShowCommand::UndoRemoval { item_id: "sched_song_b".to_string() });
+    assert_eq!(engine.snapshot().schedule.items.len(), 3);
+
+    // Something else happened after the removal: refused, and that other change stands.
+    engine.execute_command(ShowCommand::RemoveFromSchedule(1));
+    engine.execute_command(ShowCommand::ToggleBlackout);
+    assert!(engine.execute_command(ShowCommand::UndoRemoval { item_id: "sched_song_b".to_string() }).is_empty());
+    let snap = engine.snapshot();
+    assert!(snap.state.is_blackout);
+    assert_eq!(snap.schedule.items.len(), 2);
+
+    // The wrong item named: refused too.
+    engine.execute_command(ShowCommand::RemoveFromSchedule(0));
+    assert!(engine.execute_command(ShowCommand::UndoRemoval { item_id: "sched_song_c".to_string() }).is_empty());
+    assert!(!engine.execute_command(ShowCommand::UndoRemoval { item_id: "sched_song_a".to_string() }).is_empty());
+    assert_eq!(engine.snapshot().schedule.items[0].id, "sched_song_a");
+}
+
+#[test]
+fn test_a_picture_set_on_a_slot_without_a_theme_survives_a_library_refresh() {
+    let engine = ShowEngine::new(Arc::new(EventLog::new(100)));
+    let song = labelled_song("a", &[("V1", "old")]);
+    engine.execute_command(ShowCommand::AddToSchedule(song.to_schedule_item()));
+    engine.execute_command(ShowCommand::SetItemTheme { item_index: 0, theme_name: None, background: Some("url('/media/images/sky.jpg')".to_string()) });
+    assert_eq!(engine.snapshot().schedule.items[0].theme_name, None, "no theme named \"\"");
+
+    engine.execute_command(ShowCommand::ReplaceScheduledCopies { item: labelled_song("a", &[("V1", "new")]).to_schedule_item() });
+    let item = engine.snapshot().schedule.items[0].clone();
+    assert_eq!(item.slides[0].text, "new");
+    assert_eq!(item.background.as_deref(), Some("url('/media/images/sky.jpg')"));
+    assert_eq!(item.slides[0].background.as_deref(), Some("url('/media/images/sky.jpg')"));
+
+    // An event stored when the theme name was a plain string still reads.
+    let old: ShowEvent = serde_json::from_str(r#"{"event_type":"ScheduleItemThemeSet","data":{"item_index":0,"theme_name":"Dark","background":null}}"#).unwrap();
+    assert!(matches!(old, ShowEvent::ScheduleItemThemeSet { theme_name: Some(ref t), .. } if t == "Dark"));
 }

@@ -2076,19 +2076,18 @@ fn extract_shapes_in_scope(
 ) -> Result<Vec<SlideElement>, Box<dyn std::error::Error>> {
     // Nesting is bounded: groups within groups, fallbacks and SmartArt drawings (one can name
     // itself) stop drawing past a depth no real deck reaches, rather than overflow the stack.
-    const MAX_DEPTH: usize = 32;
-    thread_local!(static DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
-    struct Level;
-    impl Drop for Level {
-        fn drop(&mut self) {
-            DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
-        }
-    }
-    if DEPTH.with(|d| d.get()) >= MAX_DEPTH {
-        return Ok(Vec::new());
-    }
-    DEPTH.with(|d| d.set(d.get() + 1));
-    let _level = Level;
+    thread_local!(static SHAPE_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
+    inh::nested(&SHAPE_DEPTH, 32, || Ok(Vec::new()), || extract_shapes_in_scope_here(archive, part_path, scope_xml, ctx, remap, decorations_only))
+}
+
+fn extract_shapes_in_scope_here(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    part_path: &str,
+    scope_xml: &str,
+    ctx: &Ctx,
+    remap: Option<&GroupRemap>,
+    decorations_only: bool,
+) -> Result<Vec<SlideElement>, Box<dyn std::error::Error>> {
     let mut elements = Vec::new();
     for (name, attrs, inner) in children(scope_xml) {
         if decorations_only && Ph::of_shape(inner).is_some() {

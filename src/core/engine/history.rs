@@ -13,8 +13,13 @@ impl ShowEngine {
     pub(super) fn plan_history_events(&self, state: &ShowState, cmd: &ShowCommand) -> Vec<ShowEvent> {
         // Undo steps back to the top of the undo stack and leaves where it came from on the redo
         // stack; Redo is the same move with the stacks swapped.
+        if let ShowCommand::UndoRemoval { item_id } = cmd {
+            if !self.last_change_removed(state, item_id) {
+                return Vec::new();
+            }
+        }
         let (from, onto) = match cmd {
-            ShowCommand::Undo => (&self.undo_seq_stack, &self.redo_seq_stack),
+            ShowCommand::Undo | ShowCommand::UndoRemoval { .. } => (&self.undo_seq_stack, &self.redo_seq_stack),
             ShowCommand::Redo => (&self.redo_seq_stack, &self.undo_seq_stack),
             _ => unreachable!("plan_history_events called with a non-history command"),
         };
@@ -80,5 +85,15 @@ impl ShowEngine {
             }
         }
         events
+    }
+
+    /// Whether the most recent change was one command whose only event removed schedule item `item_id`.
+    fn last_change_removed(&self, state: &ShowState, item_id: &str) -> bool {
+        let Some(&before) = self.undo_seq_stack.read().unwrap_or_else(|e| e.into_inner()).last() else { return false };
+        let since = self.event_log.get_events_since(before);
+        let [only] = since.as_slice() else { return false };
+        let ShowEvent::ScheduleItemRemoved { index } = only.event else { return false };
+        only.sequence_number == state.sequence_number
+            && self.replay_to(before).is_some_and(|(_, schedule)| schedule.items.get(index).is_some_and(|i| i.id == item_id))
     }
 }

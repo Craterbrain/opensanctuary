@@ -84,7 +84,8 @@ pub enum ShowEvent {
     },
     ScheduleItemThemeSet {
         item_index: usize,
-        theme_name: String,
+        /// Stored as a plain string before it could be absent; either reads back.
+        theme_name: Option<String>,
         background: Option<String>,
     },
     SlideBackgroundSet {

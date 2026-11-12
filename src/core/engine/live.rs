@@ -194,7 +194,7 @@ fn has_showable_content(item: &ScheduleItem) -> bool {
 /// The slide to open `item` on when `requested` is the wanted play position. An explicit
 /// request for a hidden slide is refused (`None`), while a default request (`explicit ==
 /// false`) moves on to the first visible slide, and is refused only when none exists.
-fn visible_start(item: &ScheduleItem, requested: usize, explicit: bool) -> Option<usize> {
+pub(super) fn visible_start(item: &ScheduleItem, requested: usize, explicit: bool) -> Option<usize> {
     if !is_hidden_at(item, requested) {
         return Some(requested);
     }

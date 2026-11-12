@@ -80,7 +80,7 @@ pub(super) fn apply_theme_event(state: &mut ShowState, schedule: &mut Schedule, 
         }
         ShowEvent::ScheduleItemThemeSet { item_index, theme_name, background } => {
             if let Some(item) = schedule.items.get_mut(*item_index) {
-                item.theme_name = Some(theme_name.clone());
+                item.theme_name = theme_name.clone();
                 item.background = background.clone();
                 // Per-slide `Slide::background` outranks the item-level background in
                 // the rendering cascade (see resolveSlideBackground in

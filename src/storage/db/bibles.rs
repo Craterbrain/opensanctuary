@@ -400,16 +400,24 @@ impl Database {
         Ok(())
     }
 
-    /// Replaces everything installed as Bible `version` with `items`, in one transaction: if writing the
-    /// new text fails (a full disk, say), the translation that was there is still there, untouched.
+    /// Replaces everything installed as Bible `version` with `items`. The old text goes only once the new
+    /// text is written: in the Bible's own database the swap is one transaction, so a failed write (a full
+    /// disk, say) leaves the translation as it was; only after that commits are rows of that version left
+    /// in any other Bible file (an older layout's, a renamed file's) removed, so none of them outlive it.
     pub fn replace_bible(&self, version: &str, items: &[ScriptureItem]) -> Result<()> {
-        let conn_arc = self.get_or_create_bible_conn(version)?;
-        let mut conn = conn_arc.lock().unwrap_or_else(|e| e.into_inner());
-        let tx = conn.transaction()?;
-        // Each Bible has its own database, so this is that Bible's text and nothing else.
-        tx.execute("DELETE FROM scriptures", [])?;
-        insert_scripture_rows(&tx, items)?;
-        tx.commit()
+        let target = self.get_or_create_bible_conn(version)?;
+        {
+            let mut conn = target.lock().unwrap_or_else(|e| e.into_inner());
+            let tx = conn.transaction()?;
+            tx.execute("DELETE FROM scriptures WHERE upper(version) = upper(?1)", params![version])?;
+            insert_scripture_rows(&tx, items)?;
+            tx.commit()?;
+        }
+        for other in self.get_all_bible_conns()?.into_iter().filter(|c| !Arc::ptr_eq(c, &target)) {
+            let conn = other.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute("DELETE FROM scriptures WHERE upper(version) = upper(?1)", params![version])?;
+        }
+        Ok(())
     }
 
     pub fn delete_scripture(&self, id: &str) -> Result<()> {
@@ -666,9 +674,19 @@ mod replace_tests {
         books.sort();
         assert_eq!(books, [("Exodus".to_string(), "old".to_string()), ("Genesis".to_string(), "old".to_string())]);
 
+        // Rows of that version in another Bible file (an older layout's) don't outlive the replacement.
+        {
+            let other = db.get_or_create_bible_conn("LEGACY").unwrap();
+            let mut c = other.lock().unwrap();
+            let tx = c.transaction().unwrap();
+            insert_scripture_rows(&tx, &[chapter("Leviticus", "stale")]).unwrap();
+            tx.commit().unwrap();
+        }
+        assert!(db.get_scriptures().unwrap().iter().any(|s| s.book == "Leviticus"));
+
         // And one that succeeds replaces the whole Bible, chapters it no longer has included.
         db.replace_bible("TST", &[chapter("Genesis", "new")]).unwrap();
-        let books: Vec<(String, String)> = db.get_scriptures_for_version("TST").unwrap().into_iter().map(|s| (s.book, s.verses[0].text.clone())).collect();
+        let books: Vec<(String, String)> = db.get_scriptures().unwrap().into_iter().filter(|s| s.version == "TST").map(|s| (s.book, s.verses[0].text.clone())).collect();
         assert_eq!(books, [("Genesis".to_string(), "new".to_string())]);
     }
 }

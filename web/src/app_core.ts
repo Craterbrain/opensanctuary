@@ -118,8 +118,8 @@ export let activeUndoPlaceholder: {
   title: string;
   createdAt: number;
   timer: ReturnType<typeof setTimeout> | null;
-  /** The engine's sequence number once the removal is applied: an Undo then undoes exactly it. */
-  seqAfterRemoval?: number;
+  /** The removed item's id: the engine undoes only that removal (`UndoRemoval`). */
+  itemId?: string;
 } | null = null;
 
 // Context Menu State
@@ -723,7 +723,7 @@ export function initWebSocket() {
     onSnapshot: (snapshot) => {
       currentSnapshot = snapshot;
       renderAll(snapshot);
-      sendPendingLibraryGoLive(snapshot);
+      reportPendingRestore(snapshot);
     },
     onCommandRejected: (reason, message) => {
       // "One console at a time, first one connected wins" (docs/CLIENT_PAIRING.md).
@@ -1173,22 +1173,36 @@ export function triggerUndoFromPlaceholder() {
     activeUndoPlaceholder.timer = null;
   }
   const restoredTitle = activeUndoPlaceholder ? activeUndoPlaceholder.title : 'item';
-  const seqAfterRemoval = activeUndoPlaceholder?.seqAfterRemoval;
+  const itemId = activeUndoPlaceholder?.itemId;
   activeUndoPlaceholder = null;
-  // Undo steps back over whatever happened last. If anything else has happened since the removal (on
-  // this console or another), that is what it would undo -- not the removal this placeholder promises.
-  // (Not arrived yet is fine: the Undo goes after the removal on the same connection.)
-  if (seqAfterRemoval !== undefined && (currentSnapshot?.sequence_number ?? 0) > seqAfterRemoval) {
-    showToast(`"${restoredTitle}" can't be restored from here: something else changed since. Edit → Undo steps back one change at a time.`, 'warning', 6000);
-  } else {
-    sendCommand('Undo');
-    showToast(`✓ Restored "${restoredTitle}"`, 'success');
-  }
+  if (!itemId) return;
+  // A plain Undo steps back over whatever happened last, which may by now be something else (on this
+  // console or another): the engine undoes only if the last change is still this removal. Whether it did
+  // shows in the schedule that comes back.
+  sendCommand({ UndoRemoval: { item_id: itemId } });
+  if (pendingRestore) clearTimeout(pendingRestore.timer);
+  const timer = setTimeout(() => {
+    if (pendingRestore?.timer !== timer) return;
+    pendingRestore = null;
+    showToast(`"${restoredTitle}" couldn't be restored from here: something else changed since. Edit → Undo steps back one change at a time.`, 'warning', 6000);
+  }, 3000);
+  pendingRestore = { itemId, title: restoredTitle, timer };
   const activeSched = (currentSnapshot && currentSnapshot.schedule) ? currentSnapshot.schedule : null;
   if (activeSched) {
     lastRenderedScheduleKey = '';
     renderSchedule(activeSched);
   }
+}
+
+/** A removal the placeholder asked the engine to undo, until the schedule shows the item back. */
+let pendingRestore: { itemId: string; title: string; timer: ReturnType<typeof setTimeout> } | null = null;
+
+function reportPendingRestore(snapshot: StateSnapshot): void {
+  const pending = pendingRestore;
+  if (!pending || !snapshot.schedule?.items.some((it) => it.id === pending.itemId)) return;
+  clearTimeout(pending.timer);
+  pendingRestore = null;
+  showToast(`✓ Restored "${pending.title}"`, 'success');
 }
 
 /**
@@ -1212,8 +1226,7 @@ function deleteScheduleItemByIndex(index: number, title?: string) {
     index: index,
     title: itemTitle,
     createdAt: Date.now(),
-    // RemoveFromSchedule is one event.
-    seqAfterRemoval: (currentSnapshot?.sequence_number ?? 0) + 1,
+    itemId: sched.items[index]?.id,
     timer: setTimeout(() => {
       clearActiveUndoPlaceholder();
     }, 1500)
@@ -1408,24 +1421,21 @@ export function deleteSelectedSlideOrItem(): boolean {
   if (arrangement.length > 1) {
     sendCommand({ RemoveItemSlide: { item_index: itemIdx, slide_index: playPos } });
 
-    // Optimistically update the local copy the way the engine will (ScheduleSlideRemoved): an item still
-    // in its authored order loses the slide itself, an arranged one only that play of it.
-    const inAuthoredOrder = arrangement.length === item.slides.length && arrangement.every((e, i) => e.source_slide_index === i);
-    if (inAuthoredOrder) {
-      item.slides.splice(entry.source_slide_index, 1);
-      item.arrangement = [];
-    } else {
-      item.arrangement = arrangement.filter((_, i) => i !== playPos);
-    }
+    // The local copy is updated ahead of the server only when it can't come out differently: an item with
+    // no arrangement of its own loses the slide itself, as the engine does (ScheduleSlideRemoved). An
+    // arranged one waits for the server, whose rule (an arrangement equal to the authored order, section
+    // ids and per-play backgrounds included, counts as none) this needn't copy.
     const remaining = arrangement.length - 1;
-    const follow = (copy: typeof item | null | undefined, index: number): number => {
-      if (!copy || copy.id !== item.id) return index;
-      copy.slides = item.slides.slice();
-      copy.arrangement = (item.arrangement || []).slice();
-      return index > playPos ? index - 1 : Math.min(index, remaining - 1);
-    };
-    snap.state.staged_slide_index = follow(snap.state.staged_item, snap.state.staged_slide_index);
-    snap.state.live_slide_index = follow(snap.state.live_item, snap.state.live_slide_index);
+    if (!item.arrangement || item.arrangement.length === 0) {
+      item.slides.splice(entry.source_slide_index, 1);
+      const follow = (copy: typeof item | null | undefined, index: number): number => {
+        if (!copy || copy.id !== item.id) return index;
+        copy.slides = item.slides.slice();
+        return index > playPos ? index - 1 : Math.min(index, remaining - 1);
+      };
+      snap.state.staged_slide_index = follow(snap.state.staged_item, snap.state.staged_slide_index);
+      snap.state.live_slide_index = follow(snap.state.live_item, snap.state.live_slide_index);
+    }
 
     const nextSlideIdx = Math.min(playPos, remaining - 1);
     activeSelectedSlide = {
@@ -3419,10 +3429,9 @@ on('ctx-sched-image', 'click', () => {
     openMediaImagePicker({
       currentImage: item.slides && item.slides[0] ? item.slides[0].background : null,
       onSelectSlide: (_filePath, cssBg) => {
-        // A picture isn't a theme: the item keeps its theme's name (and so its fonts); the picture becomes
-        // the background. (This read an undeclared `name` -- `window.name`, usually "".)
-        const themeName = item.theme_name || '';
-        item.theme_name = themeName;
+        // A picture isn't a theme: the item keeps its theme (and so its fonts), or none, as it had; the
+        // picture becomes the background. (This read an undeclared `name` -- `window.name`, usually "".)
+        const themeName = item.theme_name ?? null;
         if (item.slides) item.slides.forEach((s: LibrarySlide) => s.background = cssBg);
         sendCommand({
           SetItemTheme: {
@@ -3721,48 +3730,17 @@ on('ctx-lib-add-dual', 'click', () => {
   }
   hideAllContextMenus();
 });
-// "Go Live" on a library item: it's added to the schedule, then sent live by its own position once the
-// schedule holding it arrives. The add is asynchronous (a Bible passage is fetched first), and a GoLive
-// without an index sends whatever is in Preview -- often not this item at all.
-let pendingLibraryGoLive: { knownIds: Set<string>; timer: ReturnType<typeof setTimeout> } | null = null;
-
-function goLiveOnceAdded(add: () => unknown): void {
-  if (pendingLibraryGoLive) clearTimeout(pendingLibraryGoLive.timer);
-  const knownIds = new Set((currentSnapshot?.schedule?.items || []).map((it) => it.id));
-  const timer = setTimeout(() => {
-    if (pendingLibraryGoLive?.timer !== timer) return;
-    pendingLibraryGoLive = null;
-    showToast('The item didn\'t reach the schedule, so nothing was sent live.', 'warning');
-  }, 10000);
-  pendingLibraryGoLive = { knownIds, timer };
-  void add();
-}
-
-function sendPendingLibraryGoLive(snapshot: StateSnapshot): void {
-  const pending = pendingLibraryGoLive;
-  const items = snapshot.schedule?.items;
-  if (!pending || !items) return;
-  // The newest item that wasn't there before: what was just added.
-  for (let i = items.length - 1; i >= 0; i--) {
-    if (!pending.knownIds.has(items[i]!.id)) {
-      clearTimeout(pending.timer);
-      pendingLibraryGoLive = null;
-      sendCommand({ GoLive: { item_index: i, slide_index: null } });
-      return;
-    }
-  }
-}
-
+// "Go Live" on a library item: added and sent live as one command (`AddToScheduleAndGoLive`), so it is
+// this item that goes live -- never whatever is in Preview, or whatever else reached the schedule first.
 on('ctx-lib-golive', 'click', () => {
   if (currentContextMenuTarget) {
     if (currentContextMenuTarget.item) {
       if (currentContextMenuTarget.tab === 'scriptures' && isDualBibleMode) {
         const item = currentContextMenuTarget.item;
         const pVersion = (item.version || activeBibleVersion || 'Primary').toUpperCase();
-        goLiveOnceAdded(() => addDualScriptureToSchedule(item, pVersion, secondaryBibleVersion, item.verses, currentDualSecondaryVerses));
+        addDualScriptureToSchedule(item, pVersion, secondaryBibleVersion, item.verses, currentDualSecondaryVerses, true);
       } else {
-        const { tab, item } = currentContextMenuTarget;
-        goLiveOnceAdded(() => addItemToSchedule(tab, item.id));
+        addItemToSchedule(currentContextMenuTarget.tab, currentContextMenuTarget.item.id, true);
       }
     }
   }

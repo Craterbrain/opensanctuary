@@ -23,6 +23,11 @@ struct Env {
     view: [f64; 4],
     log: (f64, f64),
     depth: usize,
+    /// How deep the formula reading is, across every formula in the chain (`?fN` reads another one):
+    /// every nested step (a parenthesis, a function's arguments, a unary minus) goes through
+    /// `Parser::unary`, so this bounds the recursion a crafted `((((...` or `----...` would otherwise
+    /// drive into a stack overflow -- for one formula or a chain of them.
+    nest: usize,
 }
 
 impl Env {
@@ -55,7 +60,7 @@ impl Env {
         self.depth += 1;
         self.values.insert(i, 0.0);
         let f = self.equations[i].clone();
-        let v = Parser { s: f.as_bytes(), at: 0, env: self, nest: 0 }.expr();
+        let v = Parser { s: f.as_bytes(), at: 0, env: self }.expr();
         let v = if v.is_finite() { v } else { 0.0 };
         self.values.insert(i, v);
         self.depth -= 1;
@@ -80,10 +85,6 @@ struct Parser<'a, 'e> {
     s: &'a [u8],
     at: usize,
     env: &'e mut Env,
-    /// How deep the reading is: every nested step (a parenthesis, a function's arguments, a unary
-    /// minus) goes through `unary`, so this bounds the recursion a formula like `((((...` or `----...`
-    /// from a file would otherwise drive into a stack overflow.
-    nest: usize,
 }
 
 impl Parser<'_, '_> {
@@ -128,14 +129,14 @@ impl Parser<'_, '_> {
     }
     fn unary(&mut self) -> f64 {
         const MAX_NEST: usize = 128;
-        if self.nest >= MAX_NEST {
+        if self.env.nest >= MAX_NEST {
             // Nothing real nests this deep: the rest of the formula is dropped.
             self.at = self.s.len();
             return 0.0;
         }
-        self.nest += 1;
+        self.env.nest += 1;
         let v = self.unary_here();
-        self.nest -= 1;
+        self.env.nest -= 1;
         v
     }
     fn unary_here(&mut self) -> f64 {
@@ -352,7 +353,7 @@ pub fn enhanced(attrs: &str, inner: &str, w: f64, h: f64) -> Option<Geometry> {
         _ => [0.0, 0.0, log.0.max(1.0), log.1.max(1.0)],
     };
     let equations: Vec<String> = children(inner).into_iter().filter(|(n, _, _)| *n == "draw:equation").map(|(_, a, _)| crate::storage::xml_scan::decode_xml_entities(extract_attr(a, "draw:formula").unwrap_or("0"))).collect();
-    let mut env = Env { modifiers, equations, values: HashMap::new(), view, log, depth: 0 };
+    let mut env = Env { modifiers, equations, values: HashMap::new(), view, log, depth: 0, nest: 0 };
     let (sx, sy) = (100.0 / view[2], 100.0 / view[3]);
     let origin = (view[0], view[1]);
 
@@ -648,12 +649,12 @@ mod tests {
 
     #[test]
     fn formulas_read_like_libreoffice_writes_them() {
-        let mut env = Env { modifiers: vec![5400.0], equations: vec!["if(0-$0 ,0,if(21599999-$0 ,$0 ,21599999))".into(), "?f0 *sin(pi*(90)/180)+logwidth/2".into(), "max(min(3, -2), abs(-7))/(1+1)".into()], values: HashMap::new(), view: [0.0, 0.0, 21600.0, 21600.0], log: (1000.0, 500.0), depth: 0 };
+        let mut env = Env { modifiers: vec![5400.0], equations: vec!["if(0-$0 ,0,if(21599999-$0 ,$0 ,21599999))".into(), "?f0 *sin(pi*(90)/180)+logwidth/2".into(), "max(min(3, -2), abs(-7))/(1+1)".into()], values: HashMap::new(), view: [0.0, 0.0, 21600.0, 21600.0], log: (1000.0, 500.0), depth: 0, nest: 0 };
         assert_eq!(env.equation(0), 5400.0);
         assert!((env.equation(1) - 5900.0).abs() < 1e-6);
         assert_eq!(env.equation(2), 3.5);
         // A formula that refers to itself is 0, not a hang.
-        let mut env = Env { modifiers: vec![], equations: vec!["?f0 +1".into()], values: HashMap::new(), view: [0.0, 0.0, 1.0, 1.0], log: (1.0, 1.0), depth: 0 };
+        let mut env = Env { modifiers: vec![], equations: vec!["?f0 +1".into()], values: HashMap::new(), view: [0.0, 0.0, 1.0, 1.0], log: (1.0, 1.0), depth: 0, nest: 0 };
         assert_eq!(env.equation(0), 1.0);
     }
 
@@ -690,11 +691,23 @@ mod tests {
     #[test]
     fn a_formula_nested_absurdly_deep_reads_as_zero_instead_of_overflowing() {
         for formula in [format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000)), format!("{}1", "-".repeat(100_000)), format!("{}1", "abs(".repeat(50_000))] {
-            let mut env = Env { modifiers: vec![], equations: vec![formula], values: HashMap::new(), view: [0.0, 0.0, 1.0, 1.0], log: (1.0, 1.0), depth: 0 };
+            let mut env = Env { modifiers: vec![], equations: vec![formula], values: HashMap::new(), view: [0.0, 0.0, 1.0, 1.0], log: (1.0, 1.0), depth: 0, nest: 0 };
             assert_eq!(env.equation(0), 0.0);
         }
+        // A chain of formulas each nested just under the limit, every one naming the next: the limit holds
+        // for the chain as a whole (on a small stack, as on a server worker thread).
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let chain: Vec<String> = (0..64).map(|i| format!("{}?f{}{}", "(".repeat(127), i + 1, ")".repeat(127))).collect();
+                let mut env = Env { modifiers: vec![], equations: chain, values: HashMap::new(), view: [0.0, 0.0, 1.0, 1.0], log: (1.0, 1.0), depth: 0, nest: 0 };
+                assert_eq!(env.equation(0), 0.0);
+            })
+            .unwrap()
+            .join()
+            .expect("no stack overflow");
         // Real formulas, a few levels deep, still read.
-        let mut env = Env { modifiers: vec![], equations: vec!["((2+3)*-(-4))".into()], values: HashMap::new(), view: [0.0, 0.0, 1.0, 1.0], log: (1.0, 1.0), depth: 0 };
+        let mut env = Env { modifiers: vec![], equations: vec!["((2+3)*-(-4))".into()], values: HashMap::new(), view: [0.0, 0.0, 1.0, 1.0], log: (1.0, 1.0), depth: 0, nest: 0 };
         assert_eq!(env.equation(0), 20.0);
     }
 }
