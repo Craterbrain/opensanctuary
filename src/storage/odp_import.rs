@@ -500,8 +500,34 @@ fn shape_box(attrs: &str) -> Option<([f64; 4], f64)> {
 // Shapes
 // ---------------------------------------------------------------------------------------------
 
+/// Runs `f` one level of nesting deeper, or gives `R::default()` (nothing) past a depth no real file
+/// reaches: groups within groups, lists within lists and spans within spans are each read by recursion,
+/// and a crafted file nesting thousands deep would otherwise overflow the stack and abort the server
+/// (as `pptx_import`'s `MAX_DEPTH` guards the PowerPoint side). The depth is per thread, so imports on
+/// other threads don't count.
+fn nested<R: Default>(f: impl FnOnce() -> R) -> R {
+    const MAX_NESTING: usize = 32;
+    thread_local!(static DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
+    struct Level;
+    impl Drop for Level {
+        fn drop(&mut self) {
+            DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        }
+    }
+    if DEPTH.with(|d| d.get()) >= MAX_NESTING {
+        return R::default();
+    }
+    DEPTH.with(|d| d.set(d.get() + 1));
+    let _level = Level;
+    f()
+}
+
 /// The elements one page-level tag draws.
 fn shape_elements(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str, attrs: &str, inner: &str, ctx: &Ctx) -> Vec<SlideElement> {
+    nested(|| shape_elements_here(archive, name, attrs, inner, ctx))
+}
+
+fn shape_elements_here(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str, attrs: &str, inner: &str, ctx: &Ctx) -> Vec<SlideElement> {
     let mut out = Vec::new();
     // A shape kept out of view ("none") or only printed isn't on screen.
     if ["draw:display", "drawooo:display"].iter().any(|k| matches!(extract_attr(attrs, k), Some("none" | "printer"))) {
@@ -1447,6 +1473,10 @@ fn run_of(text: String, look: &RunLook, ctx: &Ctx) -> TextRun {
 /// A paragraph's inline content as runs: text, spans (nested), spaces (`text:s`), tabs, line
 /// breaks (kept inside a run), links, and fields (page number, footer).
 fn inline_runs(xml: &str, chains: &[&Style], ctx: &Ctx, out: &mut Vec<TextRun>) {
+    nested(|| inline_runs_here(xml, chains, ctx, out))
+}
+
+fn inline_runs_here(xml: &str, chains: &[&Style], ctx: &Ctx, out: &mut Vec<TextRun>) {
     // The text between elements, without any stray close tag or comment in it.
     let text_run = |between: &str, out: &mut Vec<TextRun>| {
         let mut plain = String::new();
@@ -1593,6 +1623,9 @@ fn text_block(body: &str, attrs: &str, rect: [f64; 4], rot: f64, ctx: &Ctx, cent
     // (`text:continue-numbering`, `text:continue-list`).
     let mut continuing: std::collections::HashSet<usize> = std::collections::HashSet::new();
     fn walk<'a>(xml: &'a str, depth: usize, list: Option<&'a str>, header: bool, cont: bool, out: &mut Vec<(&'a str, &'a str, usize, Option<&'a str>, bool)>, continuing: &mut std::collections::HashSet<usize>) {
+        nested(|| walk_here(xml, depth, list, header, cont, out, continuing))
+    }
+    fn walk_here<'a>(xml: &'a str, depth: usize, list: Option<&'a str>, header: bool, cont: bool, out: &mut Vec<(&'a str, &'a str, usize, Option<&'a str>, bool)>, continuing: &mut std::collections::HashSet<usize>) {
         for (n, a, i) in children(xml) {
             match n {
                 "text:p" | "text:h" => {

@@ -55,7 +55,7 @@ impl Env {
         self.depth += 1;
         self.values.insert(i, 0.0);
         let f = self.equations[i].clone();
-        let v = Parser { s: f.as_bytes(), at: 0, env: self }.expr();
+        let v = Parser { s: f.as_bytes(), at: 0, env: self, nest: 0 }.expr();
         let v = if v.is_finite() { v } else { 0.0 };
         self.values.insert(i, v);
         self.depth -= 1;
@@ -80,6 +80,10 @@ struct Parser<'a, 'e> {
     s: &'a [u8],
     at: usize,
     env: &'e mut Env,
+    /// How deep the reading is: every nested step (a parenthesis, a function's arguments, a unary
+    /// minus) goes through `unary`, so this bounds the recursion a formula like `((((...` or `----...`
+    /// from a file would otherwise drive into a stack overflow.
+    nest: usize,
 }
 
 impl Parser<'_, '_> {
@@ -123,6 +127,18 @@ impl Parser<'_, '_> {
         }
     }
     fn unary(&mut self) -> f64 {
+        const MAX_NEST: usize = 128;
+        if self.nest >= MAX_NEST {
+            // Nothing real nests this deep: the rest of the formula is dropped.
+            self.at = self.s.len();
+            return 0.0;
+        }
+        self.nest += 1;
+        let v = self.unary_here();
+        self.nest -= 1;
+        v
+    }
+    fn unary_here(&mut self) -> f64 {
         if self.eat(b'-') {
             -self.unary()
         } else if self.eat(b'+') {
@@ -669,5 +685,16 @@ mod tests {
         assert!(d.starts_with("M 0 50 L 0 50 C") || d.starts_with("M 0 50 C"), "{d}");
         let (d, _) = points_path("0,0 10,0 10,10", [0.0, 0.0, 10.0, 10.0], true).unwrap();
         assert_eq!(d, "M 0 0 L 100 0 L 100 100 Z");
+    }
+
+    #[test]
+    fn a_formula_nested_absurdly_deep_reads_as_zero_instead_of_overflowing() {
+        for formula in [format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000)), format!("{}1", "-".repeat(100_000)), format!("{}1", "abs(".repeat(50_000))] {
+            let mut env = Env { modifiers: vec![], equations: vec![formula], values: HashMap::new(), view: [0.0, 0.0, 1.0, 1.0], log: (1.0, 1.0), depth: 0 };
+            assert_eq!(env.equation(0), 0.0);
+        }
+        // Real formulas, a few levels deep, still read.
+        let mut env = Env { modifiers: vec![], equations: vec!["((2+3)*-(-4))".into()], values: HashMap::new(), view: [0.0, 0.0, 1.0, 1.0], log: (1.0, 1.0), depth: 0 };
+        assert_eq!(env.equation(0), 20.0);
     }
 }

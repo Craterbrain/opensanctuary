@@ -315,7 +315,9 @@ pub fn shade(color: &str, mode: FillMode) -> String {
         _ => return color.to_string(),
     };
     let hex = color.trim_start_matches('#');
-    if !color.starts_with('#') || (hex.len() != 6 && hex.len() != 8) {
+    // Hex digits only: the colour can come straight from a file, and slicing a non-ASCII string by bytes
+    // (`#ééé` is six bytes) would split a character and panic.
+    if !color.starts_with('#') || (hex.len() != 6 && hex.len() != 8) || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return color.to_string();
     }
     let c = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).map(|v| v as f64).unwrap_or(0.0);
@@ -367,5 +369,8 @@ mod tests {
         assert!(modes.contains(&(FillMode::Lighten, false)), "{modes:?}");
         assert!(modes.contains(&(FillMode::None, true)), "{modes:?}");
         assert_eq!(shade("#808080", FillMode::Darken), "#4d4d4d");
+        // Not a colour this can shade: given back as it came, never a panic.
+        assert_eq!(shade("#ééé", FillMode::Darken), "#ééé");
+        assert_eq!(shade("#zzzzzz", FillMode::Lighten), "#zzzzzz");
     }
 }

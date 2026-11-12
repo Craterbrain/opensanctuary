@@ -393,30 +393,23 @@ impl Database {
             let conn_arc = self.get_or_create_bible_conn(&version)?;
             let mut conn = conn_arc.lock().unwrap_or_else(|e| e.into_inner());
             let tx = conn.transaction()?;
-            {
-                let mut stmt = tx.prepare(
-                    "INSERT OR REPLACE INTO scriptures (id, book, chapter, verse_start, verse_end, version, reference, verses_json, theme_name)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                )?;
-                for scrip in v_items {
-                    let verses_json = serde_json::to_string(&scrip.verses).unwrap_or_else(|_| "[]".to_string());
-                    stmt.execute(params![
-                        scrip.id,
-                        scrip.book,
-                        scrip.chapter,
-                        scrip.verse_start,
-                        scrip.verse_end,
-                        scrip.version,
-                        scrip.reference,
-                        verses_json,
-                        scrip.theme_name
-                    ])?;
-                }
-            }
+            insert_scripture_rows(&tx, v_items)?;
             tx.commit()?;
         }
 
         Ok(())
+    }
+
+    /// Replaces everything installed as Bible `version` with `items`, in one transaction: if writing the
+    /// new text fails (a full disk, say), the translation that was there is still there, untouched.
+    pub fn replace_bible(&self, version: &str, items: &[ScriptureItem]) -> Result<()> {
+        let conn_arc = self.get_or_create_bible_conn(version)?;
+        let mut conn = conn_arc.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn.transaction()?;
+        // Each Bible has its own database, so this is that Bible's text and nothing else.
+        tx.execute("DELETE FROM scriptures", [])?;
+        insert_scripture_rows(&tx, items)?;
+        tx.commit()
     }
 
     pub fn delete_scripture(&self, id: &str) -> Result<()> {
@@ -613,5 +606,69 @@ impl Database {
         }
 
         Ok(removed)
+    }
+}
+
+fn insert_scripture_rows<'a>(tx: &rusqlite::Transaction<'_>, items: impl IntoIterator<Item = &'a ScriptureItem>) -> Result<()> {
+    let mut stmt = tx.prepare(
+        "INSERT OR REPLACE INTO scriptures (id, book, chapter, verse_start, verse_end, version, reference, verses_json, theme_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    )?;
+    for scrip in items {
+        let verses_json = serde_json::to_string(&scrip.verses).unwrap_or_else(|_| "[]".to_string());
+        stmt.execute(params![
+            scrip.id,
+            scrip.book,
+            scrip.chapter,
+            scrip.verse_start,
+            scrip.verse_end,
+            scrip.version,
+            scrip.reference,
+            verses_json,
+            scrip.theme_name
+        ])?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod replace_tests {
+    use super::*;
+    use crate::core::models::ScriptureVerse;
+
+    fn chapter(book: &str, text: &str) -> ScriptureItem {
+        ScriptureItem {
+            id: format!("scrip_{book}_1_TST"),
+            reference: format!("{book} 1"),
+            book: book.to_string(),
+            chapter: 1,
+            verse_start: 1,
+            verse_end: 1,
+            version: "TST".to_string(),
+            verses: vec![ScriptureVerse { verse_number: 1, text: text.to_string() }],
+            theme_name: None,
+        }
+    }
+
+    #[test]
+    fn a_failed_replacement_leaves_the_installed_bible_as_it_was() {
+        let db = Database::in_memory().unwrap();
+        db.insert_scriptures_batch(&[chapter("Genesis", "old"), chapter("Exodus", "old")]).unwrap();
+        // Writing the new text fails partway (standing in for a full disk).
+        db.get_or_create_bible_conn("TST")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .execute_batch("CREATE TRIGGER boom BEFORE INSERT ON scriptures WHEN NEW.book = 'Boom' BEGIN SELECT RAISE(ABORT, 'disk full'); END;")
+            .unwrap();
+        assert!(db.replace_bible("TST", &[chapter("Genesis", "new"), chapter("Boom", "x")]).is_err());
+        let mut books: Vec<(String, String)> = db.get_scriptures_for_version("TST").unwrap().into_iter().map(|s| (s.book, s.verses[0].text.clone())).collect();
+        books.sort();
+        assert_eq!(books, [("Exodus".to_string(), "old".to_string()), ("Genesis".to_string(), "old".to_string())]);
+
+        // And one that succeeds replaces the whole Bible, chapters it no longer has included.
+        db.replace_bible("TST", &[chapter("Genesis", "new")]).unwrap();
+        let books: Vec<(String, String)> = db.get_scriptures_for_version("TST").unwrap().into_iter().map(|s| (s.book, s.verses[0].text.clone())).collect();
+        assert_eq!(books, [("Genesis".to_string(), "new".to_string())]);
     }
 }

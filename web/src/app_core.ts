@@ -118,6 +118,8 @@ export let activeUndoPlaceholder: {
   title: string;
   createdAt: number;
   timer: ReturnType<typeof setTimeout> | null;
+  /** The engine's sequence number once the removal is applied: an Undo then undoes exactly it. */
+  seqAfterRemoval?: number;
 } | null = null;
 
 // Context Menu State
@@ -721,6 +723,7 @@ export function initWebSocket() {
     onSnapshot: (snapshot) => {
       currentSnapshot = snapshot;
       renderAll(snapshot);
+      sendPendingLibraryGoLive(snapshot);
     },
     onCommandRejected: (reason, message) => {
       // "One console at a time, first one connected wins" (docs/CLIENT_PAIRING.md).
@@ -1170,9 +1173,17 @@ export function triggerUndoFromPlaceholder() {
     activeUndoPlaceholder.timer = null;
   }
   const restoredTitle = activeUndoPlaceholder ? activeUndoPlaceholder.title : 'item';
+  const seqAfterRemoval = activeUndoPlaceholder?.seqAfterRemoval;
   activeUndoPlaceholder = null;
-  sendCommand('Undo');
-  showToast(`✓ Restored "${restoredTitle}"`, 'success');
+  // Undo steps back over whatever happened last. If anything else has happened since the removal (on
+  // this console or another), that is what it would undo -- not the removal this placeholder promises.
+  // (Not arrived yet is fine: the Undo goes after the removal on the same connection.)
+  if (seqAfterRemoval !== undefined && (currentSnapshot?.sequence_number ?? 0) > seqAfterRemoval) {
+    showToast(`"${restoredTitle}" can't be restored from here: something else changed since. Edit → Undo steps back one change at a time.`, 'warning', 6000);
+  } else {
+    sendCommand('Undo');
+    showToast(`✓ Restored "${restoredTitle}"`, 'success');
+  }
   const activeSched = (currentSnapshot && currentSnapshot.schedule) ? currentSnapshot.schedule : null;
   if (activeSched) {
     lastRenderedScheduleKey = '';
@@ -1201,6 +1212,8 @@ function deleteScheduleItemByIndex(index: number, title?: string) {
     index: index,
     title: itemTitle,
     createdAt: Date.now(),
+    // RemoveFromSchedule is one event.
+    seqAfterRemoval: (currentSnapshot?.sequence_number ?? 0) + 1,
     timer: setTimeout(() => {
       clearActiveUndoPlaceholder();
     }, 1500)
@@ -1383,32 +1396,38 @@ export function deleteSelectedSlideOrItem(): boolean {
   const item = sched.items[itemIdx];
   if (!item || !item.slides || item.slides.length === 0) return false;
 
-  const slideIdx = activeSelectedSlide.slideIndex;
-  if (slideIdx < 0 || slideIdx >= item.slides.length) return false;
+  // The selection is a play position (the decks list the arrangement, where a slide can repeat or move),
+  // and that is what RemoveItemSlide takes: one play of a repeated chorus goes, not the chorus itself.
+  const playPos = activeSelectedSlide.slideIndex;
+  const arrangement = effectiveArrangement(item);
+  const entry = arrangement[playPos];
+  const slideToDelete = resolveSlideAt(item, playPos);
+  if (!entry || !slideToDelete) return false;
+  const slideTag = getSlideBadge(slideToDelete, entry.source_slide_index);
 
-  const slideToDelete = item.slides[slideIdx];
-  if (!slideToDelete) return false;
-  const slideTag = getSlideBadge(slideToDelete, slideIdx);
+  if (arrangement.length > 1) {
+    sendCommand({ RemoveItemSlide: { item_index: itemIdx, slide_index: playPos } });
 
-  if (item.slides.length > 1) {
-    sendCommand({ RemoveItemSlide: { item_index: itemIdx, slide_index: slideIdx } });
-
-    // Optimistically update local schedule and state
-    item.slides.splice(slideIdx, 1);
-    if (snap.state.staged_item && snap.state.staged_item.id === item.id) {
-      snap.state.staged_item.slides = item.slides.slice();
-      if (snap.state.staged_slide_index >= item.slides.length) {
-        snap.state.staged_slide_index = Math.max(0, item.slides.length - 1);
-      }
+    // Optimistically update the local copy the way the engine will (ScheduleSlideRemoved): an item still
+    // in its authored order loses the slide itself, an arranged one only that play of it.
+    const inAuthoredOrder = arrangement.length === item.slides.length && arrangement.every((e, i) => e.source_slide_index === i);
+    if (inAuthoredOrder) {
+      item.slides.splice(entry.source_slide_index, 1);
+      item.arrangement = [];
+    } else {
+      item.arrangement = arrangement.filter((_, i) => i !== playPos);
     }
-    if (snap.state.live_item && snap.state.live_item.id === item.id) {
-      snap.state.live_item.slides = item.slides.slice();
-      if (snap.state.live_slide_index >= item.slides.length) {
-        snap.state.live_slide_index = Math.max(0, item.slides.length - 1);
-      }
-    }
+    const remaining = arrangement.length - 1;
+    const follow = (copy: typeof item | null | undefined, index: number): number => {
+      if (!copy || copy.id !== item.id) return index;
+      copy.slides = item.slides.slice();
+      copy.arrangement = (item.arrangement || []).slice();
+      return index > playPos ? index - 1 : Math.min(index, remaining - 1);
+    };
+    snap.state.staged_slide_index = follow(snap.state.staged_item, snap.state.staged_slide_index);
+    snap.state.live_slide_index = follow(snap.state.live_item, snap.state.live_slide_index);
 
-    const nextSlideIdx = Math.min(slideIdx, item.slides.length - 1);
+    const nextSlideIdx = Math.min(playPos, remaining - 1);
     activeSelectedSlide = {
       itemIndex: itemIdx,
       slideIndex: nextSlideIdx,
@@ -3400,12 +3419,15 @@ on('ctx-sched-image', 'click', () => {
     openMediaImagePicker({
       currentImage: item.slides && item.slides[0] ? item.slides[0].background : null,
       onSelectSlide: (_filePath, cssBg) => {
-        item.theme_name = name;
+        // A picture isn't a theme: the item keeps its theme's name (and so its fonts); the picture becomes
+        // the background. (This read an undeclared `name` -- `window.name`, usually "".)
+        const themeName = item.theme_name || '';
+        item.theme_name = themeName;
         if (item.slides) item.slides.forEach((s: LibrarySlide) => s.background = cssBg);
         sendCommand({
           SetItemTheme: {
             item_index: itemIdx,
-            theme_name: name,
+            theme_name: themeName,
             background: cssBg
           }
         });
@@ -3597,8 +3619,7 @@ on('ctx-slide-hide', 'click', () => {
     if (itemIdx !== null && itemIdx !== undefined && itemIdx >= 0 && playPos !== undefined && playPos !== null) {
       // The cards list play positions (an arrangement can repeat or reorder slides); hiding is a
       // property of the underlying slide.
-      const arr = target.item ? effectiveArrangement(target.item) : [];
-      const sourceIdx = arr[playPos] ? arr[playPos].source_slide_index : playPos;
+      const sourceIdx = sourceSlideIndex(target.item, playPos);
       const hidden = !(target.slide && target.slide.hidden);
       sendCommand({ SetSlideHidden: { item_index: itemIdx, slide_index: sourceIdx, hidden } });
       showToast(hidden ? '✓ Slide hidden. It is skipped when presenting.' : '✓ Slide shown again', 'success');
@@ -3606,6 +3627,12 @@ on('ctx-slide-hide', 'click', () => {
   }
   hideAllContextMenus();
 });
+/** The slide a deck card at play position `playPos` shows (its index in `item.slides`). */
+function sourceSlideIndex(item: Parameters<typeof effectiveArrangement>[0], playPos: number): number {
+  const entry = effectiveArrangement(item)[playPos];
+  return entry ? entry.source_slide_index : playPos;
+}
+
 on('ctx-slide-duplicate', 'click', () => {
   if (currentContextMenuTarget) {
     const target = currentContextMenuTarget;
@@ -3636,7 +3663,8 @@ on('ctx-slide-duration', 'click', () => {
         const trimmed = input.trim();
         const seconds = trimmed === '' ? null : parseFloat(trimmed);
         if (seconds === null || (!isNaN(seconds) && seconds > 0)) {
-          sendCommand({ SetSlideDuration: { item_index: itemIdx, slide_index: slideIdx, duration_seconds: seconds } });
+          // Like hiding, a duration belongs to the underlying slide, not to the card's play position.
+          sendCommand({ SetSlideDuration: { item_index: itemIdx, slide_index: sourceSlideIndex(target.item, slideIdx), duration_seconds: seconds } });
           showToast(seconds === null ? '✓ Cleared slide duration override' : `✓ Slide duration set to ${seconds}s`, 'success');
         } else {
           showToast('Enter a positive number of seconds, or leave blank to clear', 'warning');
@@ -3693,17 +3721,49 @@ on('ctx-lib-add-dual', 'click', () => {
   }
   hideAllContextMenus();
 });
+// "Go Live" on a library item: it's added to the schedule, then sent live by its own position once the
+// schedule holding it arrives. The add is asynchronous (a Bible passage is fetched first), and a GoLive
+// without an index sends whatever is in Preview -- often not this item at all.
+let pendingLibraryGoLive: { knownIds: Set<string>; timer: ReturnType<typeof setTimeout> } | null = null;
+
+function goLiveOnceAdded(add: () => unknown): void {
+  if (pendingLibraryGoLive) clearTimeout(pendingLibraryGoLive.timer);
+  const knownIds = new Set((currentSnapshot?.schedule?.items || []).map((it) => it.id));
+  const timer = setTimeout(() => {
+    if (pendingLibraryGoLive?.timer !== timer) return;
+    pendingLibraryGoLive = null;
+    showToast('The item didn\'t reach the schedule, so nothing was sent live.', 'warning');
+  }, 10000);
+  pendingLibraryGoLive = { knownIds, timer };
+  void add();
+}
+
+function sendPendingLibraryGoLive(snapshot: StateSnapshot): void {
+  const pending = pendingLibraryGoLive;
+  const items = snapshot.schedule?.items;
+  if (!pending || !items) return;
+  // The newest item that wasn't there before: what was just added.
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (!pending.knownIds.has(items[i]!.id)) {
+      clearTimeout(pending.timer);
+      pendingLibraryGoLive = null;
+      sendCommand({ GoLive: { item_index: i, slide_index: null } });
+      return;
+    }
+  }
+}
+
 on('ctx-lib-golive', 'click', () => {
   if (currentContextMenuTarget) {
     if (currentContextMenuTarget.item) {
       if (currentContextMenuTarget.tab === 'scriptures' && isDualBibleMode) {
         const item = currentContextMenuTarget.item;
         const pVersion = (item.version || activeBibleVersion || 'Primary').toUpperCase();
-        addDualScriptureToSchedule(item, pVersion, secondaryBibleVersion, item.verses, currentDualSecondaryVerses);
+        goLiveOnceAdded(() => addDualScriptureToSchedule(item, pVersion, secondaryBibleVersion, item.verses, currentDualSecondaryVerses));
       } else {
-        addItemToSchedule(currentContextMenuTarget.tab, currentContextMenuTarget.item.id);
+        const { tab, item } = currentContextMenuTarget;
+        goLiveOnceAdded(() => addItemToSchedule(tab, item.id));
       }
-      setTimeout(() => sendCommand({ GoLive: { item_index: null, slide_index: 0 } }), 100);
     }
   }
   hideAllContextMenus();
@@ -3754,7 +3814,7 @@ on('ctx-lib-image', 'click', () => {
     const tab = currentContextMenuTarget.tab || currentTab;
     openMediaImagePicker({
       onSelectSlide: async (_filePath, cssBg) => {
-        item.theme_name = name;
+        // The picture goes on the slides; the item's theme (its fonts) is left as it was.
         if (item.slides) {
           item.slides.forEach((s: LibrarySlide) => s.background = cssBg);
         }
