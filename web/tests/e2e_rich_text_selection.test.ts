@@ -5,6 +5,16 @@ import { spawnTestServer, teardownTestServer, openSlideEditor, type SpawnedTestS
 // Verifies per-run rich text editing works against a REAL browser Selection/
 // Range API — a hand-mocked DOM (as other editor tests use) can't exercise
 // genuine partial-text selection splitting, so this needs a live browser.
+// Entering edit mode focuses the box and selects all its text a moment later (a timer in text_block.ts).
+// A selection the test makes before then is replaced by that one -- which, on a loaded machine, is when
+// this test used to fail. The focus and the select-all happen together, so the focus says it's done.
+async function editModeSettled(page: Page): Promise<void> {
+  await page.waitForFunction(() => {
+    const box = document.querySelector('.editor-slide-canvas-stage .slide-canvas-element[contenteditable="true"]');
+    return !!box && document.activeElement === box;
+  }, null, { timeout: 4000 });
+}
+
 describe("E2E Live Test: Per-Run Rich Text Selection Splitting", () => {
   let server: SpawnedTestServer;
   let browser: Browser;
@@ -43,6 +53,7 @@ describe("E2E Live Test: Per-Run Rich Text Selection Splitting", () => {
       if (await page.waitForSelector(editable, { timeout: 4000 }).then(() => true, () => false)) break;
     }
     await page.waitForSelector(editable, { timeout: 4000 });
+    await editModeSettled(page);
 
     const editingId = await page.evaluate(() =>
       (document.querySelector('.editor-slide-canvas-stage .slide-canvas-element[contenteditable="true"]') as HTMLElement | null)?.dataset.elementId ?? null
@@ -96,5 +107,23 @@ describe("E2E Live Test: Per-Run Rich Text Selection Splitting", () => {
     expect(boldRuns.length).toBe(1);
     expect(boldRuns[0].text).toBe('sweet');
     expect(boldRuns[0].text).not.toBe(before);
+  }, 60000);
+
+  test("Bold with the whole box selected, as edit mode leaves it, bolds the whole box", async () => {
+    await openSlideEditor(page, 'song');
+    const editable = '.editor-slide-canvas-stage .slide-canvas-element[contenteditable="true"]';
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await page.dblclick('.editor-slide-canvas-stage .slide-canvas-element');
+      if (await page.waitForSelector(editable, { timeout: 4000 }).then(() => true, () => false)) break;
+    }
+    await editModeSettled(page);
+    const id = await page.evaluate((sel) => (document.querySelector(sel) as HTMLElement).dataset.elementId!, editable);
+
+    // Restyling the whole box re-renders it; the box being replaced used to write its old, unstyled text
+    // back into the slide as it went (its blur), undoing the Bold.
+    await page.evaluate(() => (window as any).__debugApplyTextStyle({ bold: true }));
+    const runs = await page.evaluate((id) => (window as any).getCanvasSlideEditorDebugState().activeSlideElements.find((e: any) => e.id === id).block.runs, id);
+    expect(runs.length).toBeGreaterThan(0);
+    expect(runs.every((r: any) => r.bold)).toBe(true);
   }, 60000);
 });
