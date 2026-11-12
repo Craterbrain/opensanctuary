@@ -177,7 +177,15 @@ export class EditorCanvas {
            !c.classList.contains('canvas-magnetic-guide') &&
            !c.classList.contains('slide-canvas-bg-video')
     );
-    oldNodes.forEach(n => n.remove());
+    // A text box being edited blurs as it is removed (Chrome fires that while it's still attached), and its
+    // blur writes the box's text back into the model. That text is stale now -- whatever was typed already
+    // reached the model on each `input` -- so the write-back would undo the very change being rendered
+    // (Bold on a whole box being edited did nothing). Discarded boxes are cut off from the model first.
+    oldNodes.forEach(n => {
+      (n as HTMLElement).onblur = null;
+      (n as HTMLElement).oninput = null;
+      n.remove();
+    });
 
     // 3. Sort elements by z_index
     const sorted = [...this.currentSlide.elements].sort((a, b) => a.transform.z_index - b.transform.z_index);
