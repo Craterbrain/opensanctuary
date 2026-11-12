@@ -40,7 +40,8 @@ pub enum ShowCommand {
     MediaPreroll { target_pts: f64 },
 
     // Themes & Styling
-    SetItemTheme { item_index: usize, theme_name: String, background: Option<String> },
+    /// `theme_name: null` keeps the item without a named theme (a picture set as its background).
+    SetItemTheme { item_index: usize, theme_name: Option<String>, background: Option<String> },
     SetSlideBackground { item_index: Option<usize>, slide_index: usize, background: String },
     /// Sets (or clears, with `None`) a per-slide slideshow auto-advance duration
     /// override, in seconds. `slide_index` addresses `ScheduleItem.slides` directly
@@ -58,6 +59,9 @@ pub enum ShowCommand {
 
     // Schedule Manipulation
     AddToSchedule(ScheduleItem),
+    /// Adds `item` to the end of the schedule and sends that very item live, in one step (the library's
+    /// "Go Live"). The frontend sends `{"AddToSchedule":{"item_type","item_id","go_live":true}}`.
+    AddToScheduleAndGoLive(ScheduleItem),
     /// Swaps the schedule item at `item_index` for `item` in place (the editor saving a schedule item's
     /// changes back to the schedule). Keeps its position, expansion and theme choice, and follows it into
     /// the live/staged slot. The frontend sends `{"ReplaceScheduleItem":{"item_index","item_type","item_id"}}`
@@ -180,6 +184,10 @@ pub enum ShowCommand {
     // History
     Undo,
     Redo,
+    /// Undo, but only when the most recent change is still the removal of schedule item `item_id` (the
+    /// console's "Removed X -- Undo" placeholder). A plain Undo steps back over whatever happened last,
+    /// which by then may be something else entirely -- on this console or another.
+    UndoRemoval { item_id: String },
 }
 
 /// One edit within a `BatchSlideEdit` (the "Apply" button's full diff of

@@ -12,6 +12,26 @@ use crate::storage::xml_scan::{extract_attr, next_tag};
 /// One child element: `(name, attributes, inner XML)`. `inner` is empty for a self-closing tag.
 pub type Child<'a> = (&'a str, &'a str, &'a str);
 
+/// Runs `f` one level deeper in the nesting `depth` counts, or gives `too_deep()` once `limit` levels are
+/// open. The importers read nested structure (groups in groups, lists in lists, spans in spans) by
+/// recursion, and a crafted file nesting thousands deep would otherwise overflow the stack, which no
+/// error handling survives. Each kind of nesting keeps its own count (a thread-local, so imports on other
+/// threads don't share it), so a real file deep in one way isn't cut short for being deep in another.
+pub fn nested<R>(depth: &'static std::thread::LocalKey<std::cell::Cell<usize>>, limit: usize, too_deep: impl FnOnce() -> R, f: impl FnOnce() -> R) -> R {
+    struct Level(&'static std::thread::LocalKey<std::cell::Cell<usize>>);
+    impl Drop for Level {
+        fn drop(&mut self) {
+            self.0.with(|d| d.set(d.get().saturating_sub(1)));
+        }
+    }
+    if depth.with(|d| d.get()) >= limit {
+        return too_deep();
+    }
+    depth.with(|d| d.set(d.get() + 1));
+    let _level = Level(depth);
+    f()
+}
+
 /// The direct children of an element's inner XML, in document order -- unlike `next_tag`, which
 /// finds one named tag anywhere below, this walks one level only and copes with same-named
 /// nesting (a `<p:grpSp>` inside a `<p:grpSp>`).

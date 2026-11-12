@@ -84,7 +84,11 @@ fn replacement_for(old: &ScheduleItem, item: &ScheduleItem) -> ScheduleItem {
             item.arrangement = arrangement;
         }
     }
-    if old.theme_name.is_some() && item.theme_name != old.theme_name {
+    // A theme, or a picture the operator set as the slot's background (with no theme name).
+    let slot_has_look = old.theme_name.is_some() || old.background.is_some();
+    if slot_has_look && (item.theme_name != old.theme_name || item.background != old.background) {
+        item.theme_name = old.theme_name.clone();
+        item.background = old.background.clone();
         for slide in &mut item.slides {
             slide.background = old.background.clone();
         }
@@ -101,6 +105,22 @@ pub(super) fn plan_schedule_events(state: &ShowState, schedule: &Schedule, cmd: 
                 item: item.clone(),
                 index,
             });
+        }
+        ShowCommand::AddToScheduleAndGoLive(item) => {
+            // The live copy is the item exactly as the schedule will hold it (slides brought up to date,
+            // its slot id made unique), so `ItemWentLive` finds and selects this slot, not an older copy.
+            let index = schedule.items.len();
+            let mut item = item.clone();
+            for slide in &mut item.slides {
+                slide.synthesize_v2_if_needed();
+            }
+            item.id = unique_slot_id(&item.id, |id| schedule.items.iter().any(|i| i.id == id));
+            let first = super::live::visible_start(&item, 0, false);
+            events.push(ShowEvent::ScheduleItemAdded { item: item.clone(), index });
+            // An item hidden throughout is still added; it just can't go live (as GoLive refuses it).
+            if let Some(slide_index) = first {
+                events.push(ShowEvent::ItemWentLive { item: Some(item), slide_index });
+            }
         }
         ShowCommand::ReplaceScheduledCopies { item } => {
             // Every copy of this library item, wherever it is: the engine owns the slot id scheme.

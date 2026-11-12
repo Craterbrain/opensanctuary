@@ -163,8 +163,10 @@ pub fn expand_shorthand(app: &AppState, value: Value) -> Value {
             match item_for(app, t, id) {
                 Some(mut item) => {
                     crate::api::routes::apply_default_theme_if_unset(&mut item, &app.db);
+                    // The library's "Go Live": added and sent live as one command.
+                    let command = if add.get("go_live").and_then(Value::as_bool) == Some(true) { "AddToScheduleAndGoLive" } else { "AddToSchedule" };
                     if let Ok(v) = serde_json::to_value(item) {
-                        return serde_json::json!({ "AddToSchedule": v });
+                        return Value::Object(serde_json::Map::from_iter([(command.to_string(), v)]));
                     }
                 }
                 None => tracing::error!("Item not found in DB for AddToSchedule: {} {}", t, id),

@@ -947,12 +947,17 @@ pub fn parse_bible(bytes: &[u8], file_name: &str) -> Result<ParsedBible, BibleIm
             if !(lower.ends_with(".usfm") || lower.ends_with(".sfm") || lower.ends_with(".xml") || lower.ends_with(".txt") || lower.ends_with(".osis") || lower.ends_with(".usx")) {
                 continue;
             }
-            total += f.size();
-            if total > MAX_UNPACKED {
+            // The sizes the zip states can be false, so they only give an early no; the limit is kept on
+            // the bytes actually read, each file read no further than what is left of it.
+            if total.saturating_add(f.size()) > MAX_UNPACKED {
                 return bad("the zip unpacks to more text than is reasonable for a Bible");
             }
             let mut buf = Vec::new();
-            f.by_ref().take(MAX_UNPACKED).read_to_end(&mut buf).map_err(|_| BibleImportError("a file in the zip is unreadable".into()))?;
+            f.by_ref().take(MAX_UNPACKED - total + 1).read_to_end(&mut buf).map_err(|_| BibleImportError("a file in the zip is unreadable".into()))?;
+            total += buf.len() as u64;
+            if total > MAX_UNPACKED {
+                return bad("the zip unpacks to more text than is reasonable for a Bible");
+            }
             texts.push((name, decode_text(&buf)));
         }
     } else {
@@ -1068,9 +1073,11 @@ pub fn install(db: &Database, parsed: &ParsedBible, abbreviation: &str, replace:
         .collect();
     let db_err = |e: rusqlite::Error| BibleImportError(format!("database error: {e}"));
     if installed {
-        db.delete_installed_bible(&abbr).map_err(db_err)?;
+        // In one step: the old text goes only if the new text is written.
+        db.replace_bible(&abbr, &items).map_err(db_err)?;
+    } else {
+        db.insert_scriptures_batch(&items).map_err(db_err)?;
     }
-    db.insert_scriptures_batch(&items).map_err(db_err)?;
     let info = serde_json::json!({
         "abbreviation": abbr, "name": parsed.name, "language": parsed.language, "license": parsed.license, "attribution": source,
     });

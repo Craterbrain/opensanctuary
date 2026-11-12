@@ -214,7 +214,10 @@ minisign = "0.10.0"
 tokio-tungstenite = "0.24"
 
 [profile.release]
-panic = "abort"
+# Unwind (Rust's default), not abort: a bug hit while serving one request -- an importer meeting a file it
+# didn't expect, say -- then fails that request (the task or blocking job it ran on reports the panic),
+# instead of taking the live service down mid-song. The locks are written to recover from it
+# (`unwrap_or_else(|e| e.into_inner())`).
 opt-level = 3
 lto = "thin"
 

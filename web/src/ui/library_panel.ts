@@ -1803,7 +1803,8 @@ export function renderAssetPreview(item: LibraryItem, tabName: string) {
 
 let lastAddedItemGuard = { id: '', time: 0 };
 
-export async function addItemToSchedule(tabName: string, itemId: string) {
+/** `goLive`: the item goes live as it's added, in the same command (the library's "Go Live"). */
+export async function addItemToSchedule(tabName: string, itemId: string, goLive = false) {
   if (!ctx) return;
   const now = Date.now();
   if (lastAddedItemGuard.id === itemId && (now - lastAddedItemGuard.time) < 400) {
@@ -1836,10 +1837,10 @@ export async function addItemToSchedule(tabName: string, itemId: string) {
     }
   }
 
-  ctx.sendCommand({ AddToSchedule: { item_type: itemType, item_id: itemId } });
+  ctx.sendCommand({ AddToSchedule: goLive ? { item_type: itemType, item_id: itemId, go_live: true } : { item_type: itemType, item_id: itemId } });
 }
 
-export async function addDualScriptureToSchedule(primaryItem: any, pVersionParam: any, sVersionParam: any, primaryVerses: any[], secondaryVerses: any[]) {
+export async function addDualScriptureToSchedule(primaryItem: any, pVersionParam: any, sVersionParam: any, primaryVerses: any[], secondaryVerses: any[], goLive = false) {
   if (!ctx) return;
   if (!primaryItem) {
     ctx.showToast('No scripture selected to add', 'warning');
@@ -1980,7 +1981,7 @@ export async function addDualScriptureToSchedule(primaryItem: any, pVersionParam
     });
     if (res.ok) {
       const pres = await res.json();
-      addItemToSchedule('presentations', pres.id);
+      addItemToSchedule('presentations', pres.id, goLive);
       ctx.showToast(`✓ Added Dual Comparison (${pLabel} | ${sLabel}) to schedule!`, 'success');
       filterAndRenderCatalog();
     } else {

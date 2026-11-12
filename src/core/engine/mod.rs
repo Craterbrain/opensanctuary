@@ -94,7 +94,7 @@ impl ShowEngine {
             return Vec::new();
         }
 
-        if !matches!(cmd, ShowCommand::Undo | ShowCommand::Redo) {
+        if !matches!(cmd, ShowCommand::Undo | ShowCommand::Redo | ShowCommand::UndoRemoval { .. }) {
             self.undo_seq_stack.write().unwrap_or_else(|e| e.into_inner()).push(prev_seq);
             self.redo_seq_stack.write().unwrap_or_else(|e| e.into_inner()).clear();
         }
@@ -117,6 +117,20 @@ impl ShowEngine {
 
             // 2. Mutate state & schedule via deterministic reducer + update state sequence metadata in a single write lock
             {
+                // A reducer bug that panicked here would leave the state half changed, out of step with the
+                // event log that already holds the event. Release builds unwind (so a bug elsewhere fails
+                // only its request), so this one place still stops the process: a restart replays a log
+                // that agrees with itself, where carrying on would not.
+                struct AbortIfPanicking;
+                impl Drop for AbortIfPanicking {
+                    fn drop(&mut self) {
+                        if std::thread::panicking() {
+                            eprintln!("the show engine failed while applying an event; stopping so a restart can replay a consistent log");
+                            std::process::abort();
+                        }
+                    }
+                }
+                let _consistent = AbortIfPanicking;
                 let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
                 let mut schedule = self.schedule.write().unwrap_or_else(|e| e.into_inner());
                 Self::apply_event(&mut state, &mut schedule, &envelope.event);
@@ -157,6 +171,7 @@ impl ShowEngine {
             | ShowCommand::SetTransition(_) => overlays::plan_overlay_events(&state, &schedule, cmd),
 
             ShowCommand::AddToSchedule(_)
+            | ShowCommand::AddToScheduleAndGoLive(_)
             | ShowCommand::ReplaceScheduleItem { .. }
             | ShowCommand::ReplaceScheduledCopies { .. }
             | ShowCommand::AddScheduleHeader { .. }
@@ -203,7 +218,7 @@ impl ShowEngine {
             | ShowCommand::SetSlideCcliMetadata { .. }
             | ShowCommand::BatchSlideEdit { .. } => elements::plan_element_events(&state, &schedule, cmd),
 
-            ShowCommand::Undo | ShowCommand::Redo => self.plan_history_events(&state, cmd),
+            ShowCommand::Undo | ShowCommand::Redo | ShowCommand::UndoRemoval { .. } => self.plan_history_events(&state, cmd),
         }
     }
 

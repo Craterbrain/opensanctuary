@@ -3252,3 +3252,41 @@ fn test_pptx_import_survives_groups_nested_far_past_any_real_deck() {
     let done = std::thread::Builder::new().stack_size(2 * 1024 * 1024).spawn(move || PptxImporter::import_pptx_bytes(&bytes, "stem", &dir).map(|p| p.slides.len()).ok()).unwrap().join();
     assert_eq!(done.ok().flatten(), Some(1));
 }
+
+#[test]
+fn test_odp_import_survives_absurd_nesting() {
+    // Thousands of groups in groups, lists in lists and spans in spans (about 100 KB each): read by
+    // recursion, this used to overflow the stack, which aborts the whole server.
+    let deep = |open: &str, close: &str, middle: &str| format!("{}{}{}", open.repeat(4000), middle, close.repeat(4000));
+    let groups = deep("<draw:g>", "</draw:g>", r#"<draw:frame svg:x="1cm" svg:y="1cm" svg:width="5cm" svg:height="2cm"><draw:text-box><text:p>deep</text:p></draw:text-box></draw:frame>"#);
+    let lists = deep("<text:list><text:list-item>", "</text:list-item></text:list>", "<text:p>listed</text:p>");
+    let spans = deep("<text:span>", "</text:span>", "spanned");
+    let content_xml = format!(r##"<?xml version="1.0"?>
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+  xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+  xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0">
+<office:body><office:presentation>
+  <draw:page draw:name="page1">{groups}
+    <draw:frame svg:x="1cm" svg:y="4cm" svg:width="10cm" svg:height="2cm"><draw:text-box>{lists}<text:p>{spans}</text:p><text:p>shallow</text:p></draw:text-box></draw:frame>
+  </draw:page>
+</office:presentation></office:body>
+</office:document-content>"##);
+    let zip_bytes = make_zip(&[
+        ("mimetype", b"application/vnd.oasis.opendocument.presentation"),
+        ("content.xml", content_xml.as_bytes()),
+    ]);
+    // A small stack, as on the server's worker threads: without the nesting limit this overflows.
+    let pres = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(move || {
+            let tmp = tempfile::tempdir().unwrap();
+            os_next::storage::OdpImporter::import_odp_bytes(&zip_bytes, "Deep", &tmp.path().join("media/images")).map_err(|e| e.to_string())
+        })
+        .unwrap()
+        .join()
+        .expect("the import thread must not crash")
+        .expect("a deeply nested file still imports");
+    assert_eq!(pres.slides.len(), 1);
+    assert!(pres.slides[0].text.contains("shallow"), "what is within reach still comes in: {:?}", pres.slides[0].text);
+}
